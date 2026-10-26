@@ -61,7 +61,11 @@
   function openBoard(threadId) {
     if (!selected) return;
     const url = `/w/${selected.id}?${qs()}${threadId ? `&thread=${encodeURIComponent(threadId)}` : ""}`;
-    window.open(url, `pi-studio-${selected.id}`);
+    const tab = window.open(url, `pi-studio-${selected.id}`);
+    // A tab that already carries this name is only focused, not reloaded, so a board left open from
+    // an older build would keep its stale client. Navigating it again costs one reload and means the
+    // tab always runs the code the daemon is serving now.
+    if (tab) tab.location.replace(url);
   }
 
   function fill(node, rows) {

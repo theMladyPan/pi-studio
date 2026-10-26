@@ -16,7 +16,16 @@
   const liveText = document.getElementById("liveText");
   const liveClock = document.getElementById("liveClock");
   const resetBtn = document.getElementById("reset");
-  const token = new URLSearchParams(location.search).get("token") || "";
+  const params = new URLSearchParams(location.search);
+  const token = params.get("token") || "";
+  // The board is one page for every workspace; the path names the one this tab belongs to, and every
+  // board route has to carry it.
+  const workspace = (location.pathname.match(/^\/w\/([0-9a-f]{6,64})\/?$/) || [])[1] || "";
+  const auth = `token=${encodeURIComponent(token)}${workspace ? `&workspace=${encodeURIComponent(workspace)}` : ""}`;
+  // The path already says what this page is: `/w/<id>` is a board of threads, whose field lives
+  // inside a card. Waiting for a frame from the server to decide that left a board looking like a
+  // one-session board whenever the stream was slow, stale or dead.
+  if (workspace) document.body.classList.add("threads");
 
   // Kept in step with the code font size in index.html: 13px text, 20px rows.
   const LINE_HEIGHT = 20;
@@ -2825,7 +2834,7 @@
     if (!meta) return;
     // A board of threads has no single session behind it, so the field lives in the card and the
     // bottom bar is gone. Same client, two backends, one visual language.
-    document.body.classList.toggle("threads", meta.mode === "threads");
+    document.body.classList.toggle("threads", workspace !== "" || meta.mode === "threads");
     const wasRunning = metaRunning === true;
     metaRunning = meta.running === true;
     // Steering means nothing with no run in flight, so the composer follows the same state. Meta

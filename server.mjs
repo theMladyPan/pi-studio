@@ -102,6 +102,18 @@ function writeJsonFile(file, data) {
 	}
 }
 
+/** The commit this copy of the app was started from, or "unknown" outside a checkout. */
+function buildHash() {
+	const root = dirname(fileURLToPath(import.meta.url));
+	try {
+		const head = readFileSync(join(root, ".git", "HEAD"), "utf8").trim();
+		if (!head.startsWith("ref: ")) return head.slice(0, 7);
+		return readFileSync(join(root, ".git", head.slice(5).trim()), "utf8").trim().slice(0, 7);
+	} catch {
+		return "unknown";
+	}
+}
+
 function randomToken() {
 	return createHash("sha256").update(`${process.pid}-${Date.now()}-${Math.random()}`).digest("hex").slice(0, 32);
 }
@@ -1112,6 +1124,8 @@ server.listen(0, "127.0.0.1", () => {
 	writeJsonFile(STATE_FILE, { token, port, at: new Date().toISOString() });
 	const url = `http://127.0.0.1:${port}/?token=${token}`;
 	console.log(`pi-studio listening on ${url}`);
+	// Which build is answering matters the moment a tab looks wrong, so it is said out loud.
+	console.log(`build ${buildHash()}`);
 	if (workspaces.length) console.log(`${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"}, newest ${workspaces[0].name}`);
 	else console.log("no workspace yet — open one on the crossroads");
 	// The crossroads is where a desktop app starts, so it starts in the browser.
