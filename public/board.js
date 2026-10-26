@@ -2174,12 +2174,18 @@
   // ---------- composer -----------------------------------------------------
   const msgBox = document.getElementById("msg");
   const sendBtn = document.getElementById("send");
+  const forkBtn = document.getElementById("forkMode");
   const composerHint = document.getElementById("composerHint");
   const statCtx = document.getElementById("statCtx");
   const statCtxValue = document.getElementById("statCtxValue");
   const replyChip = document.getElementById("replyChip");
   const replyChipText = document.getElementById("replyChipText");
   let sendMode = "queue";
+  /**
+   * A comment on a card without a child goes to the thread that made it. Fork asks a new thread
+   * instead, which is what a clone of the card is for: same question, its own conversation.
+   */
+  let forkNext = false;
   /** A note that outranks the usual hint until it has been read. */
   let hintTimer = null;
 
@@ -2201,7 +2207,9 @@
         ? "sends now"
         : sendMode === "steer"
           ? "interrupts the run"
-          : "waits for this run to finish";
+          : forkNext && replyTarget
+            ? "asks a new thread"
+            : "waits for this run to finish";
   }
 
   /** Something the board did rather than the composer: say it, then go back to the usual hint. */
@@ -2236,13 +2244,23 @@
     for (const record of byId.values()) record.card.classList.toggle("replying", record === replyTarget);
     dockComposer(replyTarget);
     replyChip.hidden = !replyTarget;
+    // Forking only differs when there is a thread that would otherwise answer, so the button says
+    // nothing on a thread card or on a card nobody has asked about yet.
+    paintFork();
     if (replyTarget) {
       // A sticky is titled "you", so it is named by its own words instead.
       const name =
         replyTarget.data.type === "sticky"
           ? (replyTarget.data.text || "message").replace(/\s+/g, " ").trim().slice(0, 40)
           : replyTarget.titleEl.textContent;
-      replyChipText.textContent = `in “${name}”`;
+      // A card without a child is answered by the thread that made it, so the chip says where the
+      // answer will land instead of promising a reply on the card that was clicked.
+      const owner = replyTarget.data.type !== "thread" ? byId.get(replyTarget.data.threadRoot) : undefined;
+      replyChipText.textContent = forkNext && owner
+        ? `in “${name}” · a new thread answers`
+        : owner
+          ? `in “${name}” · ${owner.titleEl.textContent} answers`
+          : `in “${name}”`;
       msgBox.placeholder = "ask a follow-up about this card…  (esc to send to the board instead)";
       msgBox.focus();
     } else {
@@ -2252,6 +2270,23 @@
   }
 
   document.getElementById("replyChipClear").addEventListener("click", () => setReplyTarget(null));
+
+  function paintFork() {
+    const owner = replyTarget && replyTarget.data.type !== "thread" ? replyTarget.data.threadRoot : undefined;
+    forkBtn.hidden = !owner;
+    forkBtn.disabled = !owner;
+    forkBtn.classList.toggle("on", Boolean(owner) && forkNext);
+    forkBtn.title = forkNext
+      ? "a new thread will answer in its own conversation"
+      : "ask a new thread instead of the one that made this card";
+  }
+
+  forkBtn.addEventListener("click", () => {
+    forkNext = !forkNext;
+    paintFork();
+    if (replyTarget) setReplyTarget(replyTarget);
+    paintComposer();
+  });
 
   // ---------- the crossroads -------------------------------------------------
   // Choosing a workspace is not this page's job any more: it lives on `/`, in its own tab, so a board
@@ -2619,6 +2654,7 @@
     const body = JSON.stringify({
       id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
       cardId: replyTarget ? replyTarget.id : undefined,
+      fork: forkNext && replyTarget ? true : undefined,
       text,
       mode: sendMode,
       images: sentImages.map((image) => ({ data: image.data, mimeType: image.mimeType })),
@@ -2651,6 +2687,8 @@
       closePicker();
       // A thread is a conversation: the field stays in the card it just answered, so the next
       // message does not need the card clicked again. Escape puts it away.
+      // A fork is one send's choice, so the next comment goes to the owner again.
+      forkNext = false;
       if (replyTarget === sentTarget && sentTarget && byId.has(sentTarget.id)) setReplyTarget(sentTarget);
       else setReplyTarget(null);
       // With no run in flight the message is being sent, not queued behind one.

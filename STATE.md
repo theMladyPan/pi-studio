@@ -61,6 +61,12 @@ against real children; nothing has been checked in a browser.
   assumed.
 - **One map for cards without a child**: notes, sources and questions live in `board.cards`, saved
   under `cards` and read from an older file's `notes` too.
+- **Commenting on a card**: a thread answers in itself. A card without a child is asked of the thread
+  that made it — its `threadRoot` — and the card is quoted at the top of the message, so the agent
+  that wrote the note is the one that answers about it. `{"fork": true}` on `/message`, the composer's
+  `fork` button, asks a new thread under the card instead, with the same quote and its own
+  conversation. A card nobody made, or one whose thread has ended, starts that thread too. The card
+  shows what the human typed; only the child is given the quote. A queued message carries both.
 - **Sessions resume**: the child writes its session under the app's own session dir, the thread
   stores the id, and a message after a daemon restart resumes that session. Verified: after a
   restart the agent remembered the word it had answered in the previous run.
@@ -110,9 +116,9 @@ has been checked in a browser.
 ## Does not work yet
 
 - The answer appears when a turn ends; nothing streams into the card while it is generated.
-- Every card has the same composer, but only a thread does anything useful with it: a note, source or
-  question starts a thread of its own rather than gaining a child.
-- Feeding one card into another thread, and forking a thread, are designed and not built.
+- Forking a *thread* is not built: `fork` on a thread card does nothing (the button is hidden there),
+  because a real fork has to copy the session file and mark the copy `forkedFrom`.
+- Feeding a card into a thread other than the one that made it is designed and not built.
 - Rail rows carry no payloads (arguments, logs, outputs), no usage totals, no images.
 - `stop` aborts every running thread, not a chosen one; the rail is one list, not one per thread.
 - No attention to a workspace whose folder has been deleted or moved: opening it fails with a 404

@@ -926,9 +926,11 @@ function handleChildLine(board, thread, line) {
 		board.children.get(thread.id)?.stdin?.end();
 		const next = thread.queued.shift();
 		if (next) {
-			thread.turns.push({ text: next, status: "queued", mode: "queue", at: Date.now() });
+			// An older board file queued plain strings; a card quote travels with the message now.
+			const text = typeof next === "string" ? next : next.text;
+			thread.turns.push({ text, status: "queued", mode: "queue", at: Date.now() });
 			update(board, thread);
-			prompt(board, thread, next);
+			prompt(board, thread, typeof next === "string" ? next : next.message);
 		}
 	}
 }
@@ -1081,6 +1083,33 @@ function placedRect(body) {
 	return rect
 		? { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.w), h: Math.round(rect.h) }
 		: undefined;
+}
+
+/**
+ * What a card carries, quoted for the agent that is asked about it. A card without a child has no
+ * conversation of its own, so the quote is how the agent that is asked learns what it is being asked
+ * about. It is capped: the card is on the board, and the rest of a long note is not worth paying for
+ * twice.
+ */
+function cardPreamble(card) {
+	const title = String(card.title ?? card.path ?? card.type).replace(/\s+/g, " ").trim().slice(0, 60);
+	if (card.type === "source") {
+		const lines = String(card.content ?? "").split("\n");
+		const focus = Math.max(1, Math.min(card.line ?? 1, lines.length));
+		const from = Math.max(1, focus - 8);
+		const to = Math.min(lines.length, focus + 12);
+		const numbered = lines
+			.slice(from - 1, to)
+			.map((line, index) => `${from + index}| ${line}`)
+			.join("\n")
+			.slice(0, 1500);
+		return `[board reply · card ${card.id} · "${title}"]\nThe card shows ${card.path}, lines ${from}-${to}:\n${numbered || "(empty)"}\n\n`;
+	}
+	const body = String(card.type === "question" ? [card.question, card.answer ?? ""].join("\n") : (card.markdown ?? ""))
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, 1500);
+	return `[board reply · card ${card.id} · "${title}"]\nThe card says: ${body || "(empty)"}\n\n`;
 }
 
 /** The thread a card should cascade under, when the caller named one that exists. */
@@ -1305,15 +1334,23 @@ async function onMessage(req, res, board) {
 	if (!text) return void fail(res, 400, "empty message");
 	const mode = body.mode === "steer" ? "steer" : "queue";
 	const asked = typeof body.cardId === "string" ? body.cardId : "";
-	// A plain card has no child of its own, so a question asked on one starts a thread named after it.
-	const noteAsked = asked ? board.cards.get(asked) : undefined;
-	let thread = asked && !noteAsked ? board.threads.get(asked) : undefined;
-	if (asked && !noteAsked && !thread) return void fail(res, 409, "no such card");
+	const fork = body.fork === true;
+	// A thread answers about itself. A card without a child — a note, a source, a question — is asked
+	// of the thread that made it, quoted, so the agent that wrote it is the one that answers. A fork,
+	// or a thread that has since ended, starts a thread of its own under the card instead.
+	const askedCard = asked ? board.cards.get(asked) : undefined;
+	let thread = asked && !askedCard ? board.threads.get(asked) : undefined;
+	if (asked && !askedCard && !thread) return void fail(res, 409, "no such card");
+	const preamble = askedCard ? cardPreamble(askedCard) : "";
+	if (askedCard && !fork) {
+		const owner = askedCard.threadRoot ? board.threads.get(askedCard.threadRoot) : undefined;
+		if (owner && owner.status !== "dead") thread = owner;
+	}
 	if (!thread) {
 		// A message with no card behind it starts a thread of its own, named after what was asked.
 		thread = {
 			id: randomUUID(),
-			title: (noteAsked?.title ?? text).slice(0, 60),
+			title: (askedCard?.title ?? text).slice(0, 60),
 			sessionId: null,
 			status: "idle",
 			provider: PROVIDER,
@@ -1321,7 +1358,7 @@ async function onMessage(req, res, board) {
 			at: Date.now(),
 			turns: [],
 			queued: [],
-			...(noteAsked ? { threadRoot: noteAsked.id } : {}),
+			...(askedCard ? { threadRoot: askedCard.id } : {}),
 			folder: board.folder,
 		};
 		board.threads.set(thread.id, thread);
@@ -1329,6 +1366,8 @@ async function onMessage(req, res, board) {
 	}
 	if (thread.status === "dead") return void fail(res, 409, "thread ended");
 
+	// The card shows what the human typed; the child is told what card it is about.
+	const message = `${preamble}${text}`;
 	thread.turns.push({ text: text.slice(0, 4000), status: "queued", mode, at: Date.now() });
 	const index = thread.turns.length - 1;
 	update(board, thread);
@@ -1336,14 +1375,14 @@ async function onMessage(req, res, board) {
 	if (running && mode === "steer") {
 		// A steer joins the run in flight instead of waiting behind it.
 		try {
-			board.children.get(thread.id)?.stdin?.write(`${JSON.stringify({ id: randomUUID(), type: "steer", message: text })}\n`);
+			board.children.get(thread.id)?.stdin?.write(`${JSON.stringify({ id: randomUUID(), type: "steer", message })}\n`);
 		} catch (error) {
 			threadError(board, thread, `could not steer the child: ${error.message}`);
 		}
 	} else if (running) {
-		thread.queued.push(text);
+		thread.queued.push({ message, text });
 	} else {
-		prompt(board, thread, text);
+		prompt(board, thread, message);
 	}
 	answer(res, 200, { id: thread.id, turn: index });
 }
