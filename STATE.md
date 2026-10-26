@@ -82,6 +82,18 @@ against real children; nothing has been checked in a browser.
   is written nowhere: never onto the thread's own turn, which would overwrite an older answer.
   `anchorOf` keeps placement honest for cards a hidden child writes: they cascade under the newest card
   that child owns, and name that child as their owner.
+- **A run is stopped or killed where it is read.** The card of a thread carries `answersWith.running`
+  (or its own `sent` status) while a run is live, and its header turns that into one control: `■` asks
+  the child to abort, and the same control becomes `⊗` — kill — when the stop does not land. `POST
+  /stop` takes a card id and stops only that thread; without one it still stops everything, which is
+  what the header button means. `POST /kill` sends SIGKILL, marks the turn stopped, drains the queue
+  that nothing will now serve, and leaves the thread and its card in place, so the next message starts
+  a fresh child on the same session. An abort asked for before the child got going is repeated on the
+  run's first event, because there was no run to abort yet.
+- **A source card is titled by its file, then by its label**: `docs/notes.md - The list as it reads
+  now`. The path is made relative to the workspace, so a card says where it is before what it is.
+- **A card draws only what it has.** A thread card's `text` is empty by design — the turns are the
+  conversation — so an empty text draws no bubble and no state line.
 - **The rail is a stack of threads.** Every activity row says which thread wrote it, and a settled row
   is filed in that thread's foldable section: title, count, newest thread on top. A folded section is
   remembered for the session only. Rows still running stay in the strip above the log, so what is
@@ -208,7 +220,7 @@ has been checked in a browser.
 
 1. Stream the answer into the card, then rail payloads.
 2. Per-thread stop.
-4. A workspace entry that no longer resolves: say so and offer to forget it.
+3. A workspace entry that no longer resolves: say so and offer to forget it.
 
 ## Rules
 

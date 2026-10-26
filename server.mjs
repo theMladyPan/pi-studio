@@ -14,7 +14,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
@@ -651,7 +651,7 @@ function countSavedThreads(workspace) {
 // ---------- the board the client draws -------------------------------------
 
 /** A thread as the card the browser draws: a title, and the conversation under it. */
-function cardFor(thread) {
+function cardFor(thread, board = null) {
 	const answered = thread.turns.some((turn) => turn.status === "answered");
 	const status =
 		thread.status === "dead" ? "stopped" : thread.status === "running" ? "sent" : answered ? "answered" : "queued";
@@ -720,6 +720,8 @@ function plainCardFor(card, board = null) {
 			provider: owner.provider,
 			model: owner.model,
 			...(owner.thinking ? { thinking: owner.thinking } : {}),
+			// Stop and kill are per thread, and a plain card is where its thread is read.
+			running: owner.status === "running",
 		};
 	}
 	return shown;
@@ -731,7 +733,7 @@ function cardsFor(board) {
 	// both would show one conversation on two cards.
 	return [...board.threads.values()]
 		.filter((thread) => !thread.hidden)
-		.map(cardFor)
+		.map((thread) => cardFor(thread, board))
 		.concat([...board.cards.values()].map((card) => plainCardFor(card, board)));
 }
 
@@ -781,7 +783,7 @@ function nudgeWelcome() {
 }
 
 const card = (board, thread) => {
-	broadcast(board, { type: "card", card: cardFor(thread) });
+	broadcast(board, { type: "card", card: cardFor(thread, board) });
 	scheduleSave(board);
 	nudgeWelcome();
 };
@@ -789,7 +791,7 @@ const update = (board, thread) => {
 	// A thread that answers for a card is not drawn: what changes is that card, and broadcasting the
 	// thread would put a second card on the board for the same conversation.
 	if (!thread.hidden) {
-		broadcast(board, { type: "update", card: cardFor(thread) });
+		broadcast(board, { type: "update", card: cardFor(thread, board) });
 		return;
 	}
 	// A hidden thread is read through a card it answers for, so that card carries its state instead.
@@ -1017,6 +1019,9 @@ function prompt(board, thread, text, target = null) {
 	}
 	thread.status = "running";
 	thread.runStartedAt = Date.now();
+	// A stop pressed before the child got going has nothing to abort yet; `onStop` remembers it and the
+	// first event of the run repeats it.
+	thread.abortWanted = false;
 	update(board, thread);
 	try {
 		const child = ensureChild(board, thread);
@@ -1055,6 +1060,14 @@ function handleChildLine(board, thread, line) {
 			});
 		}
 		return;
+	}
+	if (thread.abortWanted && (event.type === "turn_start" || event.type === "message_start")) {
+		thread.abortWanted = false;
+		try {
+			board.children.get(thread.id)?.stdin?.write(`${JSON.stringify({ id: randomUUID(), type: "abort" })}\n`);
+		} catch {
+			// The child is gone; its exit says so.
+		}
 	}
 	if (event.type === "tool_execution_start") {
 		addRow(board, {
@@ -1106,6 +1119,7 @@ function handleChildLine(board, thread, line) {
 	}
 	if (event.type === "agent_settled") {
 		thread.status = "idle";
+		thread.abortWanted = false;
 		// A turn whose answer was redirected by a steer, or whose run was stopped, never gets a reply
 		// of its own. It reads as stopped rather than as a message still being worked on.
 		for (const turn of thread.turns) if (turn.status === "sent") turn.status = "stopped";
@@ -1116,6 +1130,9 @@ function handleChildLine(board, thread, line) {
 		}
 		thread.answering = null;
 		update(board, thread);
+		// The cards this thread answers through carried `answersWith.running` while it ran, and a card
+		// still offering a stop for a run that has finished is a button that cannot work.
+		refreshOwned(board, thread);
 		const next = thread.queued.shift();
 		if (next) {
 			// An older board file queued plain strings; a card quote travels with the message now.
@@ -1268,7 +1285,7 @@ async function onThread(req, res, board) {
 	// Creation does not spawn: the child starts on the first message, so an empty board costs nothing.
 	board.threads.set(thread.id, thread);
 	card(board, thread);
-	answer(res, 200, { threadId: thread.id, card: cardFor(thread) });
+	answer(res, 200, { threadId: thread.id, card: cardFor(thread, board) });
 }
 
 /** The card a key already addresses, so a caller that repeats itself revises instead of stacking. */
@@ -1298,6 +1315,7 @@ function placedRect(body) {
  */
 function cardPreamble(card, whole = false) {
 	const title = String(card.title ?? card.path ?? card.type).replace(/\s+/g, " ").trim().slice(0, 60);
+	let about;
 	if (card.type === "source") {
 		const lines = String(card.content ?? "").split("\n");
 		const focus = Math.max(1, Math.min(card.line ?? 1, lines.length));
@@ -1308,12 +1326,14 @@ function cardPreamble(card, whole = false) {
 			.map((line, index) => `${from + index}| ${line}`)
 			.join("\n")
 			.slice(0, 1500);
-		return `[board reply · card ${card.id} · "${title}"]\nThe card shows ${card.path}, lines ${from}-${to}:\n${numbered || "(empty)"}\n\n`;
+		about = `The card shows ${card.path}, lines ${from}-${to}:\n${numbered || "(empty)"}`;
+	} else {
+		const body = String(card.type === "question" ? [card.question, card.answer ?? ""].join("\n") : (card.markdown ?? ""))
+			.replace(/\s+/g, " ")
+			.trim()
+			.slice(0, 1500);
+		about = `The card says: ${body || "(empty)"}`;
 	}
-	const body = String(card.type === "question" ? [card.question, card.answer ?? ""].join("\n") : (card.markdown ?? ""))
-		.replace(/\s+/g, " ")
-		.trim()
-		.slice(0, 1500);
 	// A chain of comments is the card's own history. A thread that already answered on this card holds
 	// it in its own session, so it only needs a reminder. A fork, or a thread that has to be restarted,
 	// starts clean and gets the whole chain — it owns this card and nothing else, so what happened on
@@ -1329,7 +1349,7 @@ function cardPreamble(card, whole = false) {
 		.join("\n")
 		// The newest turns matter most, so cutting from the front keeps the end intact.
 		.slice(-(whole ? 4000 : 900));
-	return `[board reply · card ${card.id} · "${title}"]\nThe card says: ${body || "(empty)"}\n${chain ? `Earlier about this card:\n${chain}\n` : ""}\n`;
+	return `[board reply · card ${card.id} · "${title}"]\n${about}\n${chain ? `Earlier about this card:\n${chain}\n` : ""}\n`;
 }
 
 /** The thread a card should cascade under, when the caller named one that exists. */
@@ -1362,6 +1382,42 @@ function closeThread(board, thread) {
 	}
 	board.children.delete(thread.id);
 	board.threads.delete(thread.id);
+}
+
+/**
+ * End a child without ending its thread. The session file stays, so the next message starts a fresh
+ * child with the conversation it had; only the process goes.
+ */
+function killChild(board, thread) {
+	const child = board.children.get(thread.id);
+	if (!child) return false;
+	// The child stops being this thread's voice before it is killed, so its death is not the run failing.
+	board.children.delete(thread.id);
+	const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
+	const turn = thread.answering ? asked?.turns?.[thread.answering.turn] : thread.turns[thread.turns.length - 1];
+	if (turn && turn.status !== "answered") turn.status = "stopped";
+	// Nothing will arrive to drain the queue now, so what was waiting says stopped instead of waiting.
+	for (const next of thread.queued) {
+		const held = typeof next === "string" || !next.target ? undefined : board.cards.get(next.target.cardId);
+		const parked = held?.turns?.[next.target.turn];
+		if (parked && parked.status === "queued") {
+			parked.status = "stopped";
+			updateCard(board, held);
+		}
+	}
+	thread.queued = [];
+	thread.answering = null;
+	thread.abortWanted = false;
+	thread.status = "idle";
+	try {
+		// Stop asks the child to give up; kill is what happens when it does not.
+		child.kill("SIGKILL");
+	} catch {
+		// Already gone, which is what this wanted.
+	}
+	update(board, thread);
+	scheduleSave(board);
+	return true;
 }
 
 function forgetCard(board, cardId) {
@@ -1462,7 +1518,11 @@ async function onSource(req, res, board) {
 		return void fail(res, 409, error.message);
 	}
 	const key = field(body.key, 400) || wanted;
-	const title = field(body.title) || basename(wanted) || wanted;
+	// The head says which file first, so a card is recognisable without opening it, then what the caller
+	// called the place in it.
+	const named = relative(board.folder, resolve(board.folder, wanted)) || basename(wanted) || wanted;
+	const label = field(body.title, 200);
+	const title = label ? `${named} - ${label}` : named;
 	const line = Number.isFinite(body.line) && body.line > 0 ? Math.round(body.line) : undefined;
 	const root = rootOf(board, body);
 	const held = cardByKey(board, key, "source");
@@ -1749,7 +1809,7 @@ async function onModel(req, res, board) {
 	update(board, thread);
 	refreshOwned(board, thread);
 	const home = thread.hidden ? homeCard(board, thread) : undefined;
-	answer(res, 200, { card: home ? plainCardFor(home, board) : cardFor(thread) });
+	answer(res, 200, { card: home ? plainCardFor(home, board) : cardFor(thread, board) });
 }
 
 /** The thinking level, with the same shape: a thread's own, or the board's default for new ones. */
@@ -1772,7 +1832,7 @@ async function onThinking(req, res, board) {
 	update(board, thread);
 	refreshOwned(board, thread);
 	const home = thread.hidden ? homeCard(board, thread) : undefined;
-	answer(res, 200, { card: home ? plainCardFor(home, board) : cardFor(thread) });
+	answer(res, 200, { card: home ? plainCardFor(home, board) : cardFor(thread, board) });
 }
 
 async function onLayout(req, res, board) {
@@ -1822,10 +1882,19 @@ async function onClose(req, res, board) {
 	answer(res, 200, { closed: id, kept: kept.length });
 }
 
-function onStop(res, board) {
-	const running = [...board.threads.values()].filter((thread) => thread.status === "running");
-	if (!running.length) return void fail(res, 409, "no run in progress");
+async function onStop(req, res, board) {
+	// A card stops its own thread; no card stops everything, which is what the header button means.
+	const body = (await readJson(req, res)) ?? {};
+	const asked = body?.cardId ? threadForRuntime(board, field(body.cardId, 100)) : undefined;
+	const running = asked
+		? asked.status === "running"
+			? [asked]
+			: []
+		: [...board.threads.values()].filter((thread) => thread.status === "running");
+	if (!running.length) return void fail(res, 409, asked ? "this thread has no run in progress" : "no run in progress");
 	for (const thread of running) {
+		// A child still starting has no run to abort, so the request is kept for its first turn.
+		thread.abortWanted = true;
 		try {
 			// Abort lets the child settle and report; the kill is only for a child that will not.
 			board.children.get(thread.id)?.stdin?.write(`${JSON.stringify({ id: randomUUID(), type: "abort" })}\n`);
@@ -1834,6 +1903,16 @@ function onStop(res, board) {
 		}
 	}
 	answer(res, 200, { stopped: running.map((thread) => thread.id) });
+}
+
+/** Kill one thread's child. The thread stays, so its cards stay answerable. */
+async function onKill(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const thread = threadForRuntime(board, field(body.cardId, 100));
+	if (!thread) return void fail(res, 404, "no thread answers this card");
+	if (!killChild(board, thread)) return void fail(res, 409, "this thread has no child running");
+	answer(res, 200, { killed: thread.id });
 }
 
 /** The composer's file picker walks folders and answers with paths, never with file contents. */
@@ -2011,6 +2090,7 @@ const server = createServer((req, res) => {
 				"/close": onClose,
 				"/model": onModel,
 				"/thinking": onThinking,
+				"/kill": onKill,
 			};
 			const handler = routing[url.pathname];
 			if (handler) {
@@ -2022,8 +2102,7 @@ const server = createServer((req, res) => {
 			if (url.pathname === "/stop") {
 				const board = boardFrom(url, res);
 				if (!board) return;
-				req.resume();
-				onStop(res, board);
+				await onStop(req, res, board);
 				return;
 			}
 			// Everything the board had for a single session: kept honest by refusing rather than lying.

@@ -121,6 +121,13 @@
   .min { border: 0; background: transparent; color: var(--muted); font: 12px/1 system-ui;
     cursor: pointer; padding: 3px 5px; border-radius: 4px; }
   .min:hover { background: #21262d; color: var(--text); }
+  /* One slot for two jobs: a run to stop wears the red square, a child that only needs ending is
+     quiet until the pointer is on it. */
+  .stop { border: 0; background: transparent; color: var(--muted); font: 12px/1 system-ui;
+    cursor: pointer; padding: 3px 5px; border-radius: 4px; }
+  .stop:hover { background: #21262d; color: #f85149; }
+  .stop.killing { color: #6e7681; }
+  .stop.killing:hover { color: var(--muted); }
   /* Folded: the head is the whole card, and the real height stays saved for restoring. */
   .card.mini { height: auto !important; min-height: 0; }
   .card.mini .body, .card.mini .thread, .card.mini .resize { display: none; }

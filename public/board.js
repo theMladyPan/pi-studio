@@ -649,24 +649,29 @@
   /** A message from the user, with the agent's answer attached once it arrives. */
   function stickyBody(data) {
     const holder = el("div", "sticky-body");
-    const text = el("div", "sticky-text");
-    text.textContent = data.text || "";
-    holder.appendChild(text);
-    if (data.images) {
-      const shot = el("div", "sticky-status");
-      shot.textContent = `${data.images} image${data.images > 1 ? "s" : ""} attached`;
-      holder.appendChild(shot);
+    // A thread card keeps its conversation in the turns, and the daemon sends no text of its own: an
+    // empty one is not a message, so it draws no bubble and no state line beside it.
+    const said = String(data.text ?? "").trim();
+    if (said) {
+      const text = el("div", "sticky-text");
+      text.textContent = said;
+      holder.appendChild(text);
+      if (data.images) {
+        const shot = el("div", "sticky-status");
+        shot.textContent = `${data.images} image${data.images > 1 ? "s" : ""} attached`;
+        holder.appendChild(shot);
+      }
+      const status = el("div", `sticky-status ${data.status || "queued"}`);
+      status.textContent =
+        data.status === "answered"
+          ? "answered"
+          : data.status === "stopped"
+            ? "stopped"
+            : data.status === "sent"
+              ? "sent"
+              : `queued · ${data.mode === "steer" ? "steer" : "queue"}`;
+      holder.appendChild(status);
     }
-    const status = el("div", `sticky-status ${data.status || "queued"}`);
-    status.textContent =
-      data.status === "answered"
-        ? "answered"
-        : data.status === "stopped"
-          ? "stopped"
-          : data.status === "sent"
-            ? "sent"
-            : `queued · ${data.mode === "steer" ? "steer" : "queue"}`;
-    holder.appendChild(status);
     if (data.reply) {
       const reply = el("div", "sticky-reply note-body");
       reply.appendChild(renderMarkdown(data.reply));
@@ -832,6 +837,7 @@
       <span class="spacer"></span>
       <button type="button" class="ask-pill" aria-label="centre this question">answer needed</button>
       <span class="chip"></span>
+      <button class="stop" title="stop this thread" aria-label="stop this thread">■</button>
       <button class="min" title="minimize this card" aria-label="minimize this card">▾</button>
       <button class="reply" title="ask a follow-up about this card" aria-label="ask a follow-up about this card">↩</button>
       <button class="edit" title="edit this note" aria-label="edit this note">✎</button>
@@ -909,6 +915,20 @@
       reveal(event.target);
     });
 
+    head.querySelector(".stop").addEventListener("click", (event) => {
+      event.stopPropagation();
+      // The same control does what its own face says: stop while the run is going, then kill if the stop
+      // does not land. Nothing else remembers a mode for it.
+      const kill = threadState(entry.data).running && stopping.has(entry.id);
+      if (kill) stopping.delete(entry.id);
+      else stopping.add(entry.id);
+      void fetch(`/${kill ? "kill" : "stop"}?${auth}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cardId: entry.id }),
+      });
+    });
+
     head.querySelector(".min").addEventListener("click", (event) => {
       event.stopPropagation();
       const mini = !card.classList.contains("mini");
@@ -935,7 +955,7 @@
     head.addEventListener("pointerdown", (event) => {
       // Buttons in the header are for clicking, not for dragging the card. The middle button pans
       // the canvas even here, so it belongs to the workspace rather than to the card.
-      if (event.button !== 0 || event.target.closest(".close, .edit, .reply, .min, .ask-pill")) return;
+      if (event.button !== 0 || event.target.closest(".close, .edit, .reply, .min, .stop, .ask-pill")) return;
       event.preventDefault();
       card.classList.add("dragging");
       const sx = event.clientX;
@@ -998,6 +1018,19 @@
     return entry;
   }
 
+  /**
+   * What answers this card is doing. A thread card says it itself — the daemon sends `sent` while a run
+   * is live — and a plain card says it through the child that owns it.
+   */
+  function threadState(data) {
+    if (!data) return { running: false };
+    if (data.type === "sticky") return { running: data.status === "sent" };
+    return { running: data.answersWith?.running === true };
+  }
+
+  /** A thread that has been asked to stop. A stop that does not land turns into a kill. */
+  const stopping = new Set();
+
   /** The agent is blocked on this card until the question on it is answered. */
   function questionWants(data) {
     return Boolean(data) && data.type === "question" && data.status === "open";
@@ -1043,6 +1076,20 @@
     entry.askPill.style.display = isOpenQuestion ? "" : "none";
     const editBtn = entry.head.querySelector(".edit");
     if (editBtn) editBtn.style.display = data.type === "note" ? "" : "none";
+    // One slot, two meanings: stop the run that is going, or end the child that is sitting idle. A card
+    // with neither has nothing to stop, so it shows nothing.
+    const stopBtn = entry.head.querySelector(".stop");
+    const state = threadState(data);
+    if (stopBtn) {
+      // Gone quiet again, so the next stop starts over as a stop.
+      if (!state.running) stopping.delete(data.id);
+      const kill = state.running && stopping.has(data.id);
+      stopBtn.style.display = state.running ? "" : "none";
+      stopBtn.textContent = kill ? "⊗" : "■";
+      stopBtn.classList.toggle("killing", kill);
+      stopBtn.title = kill ? "kill this thread's child" : "stop this thread's run";
+      stopBtn.setAttribute("aria-label", stopBtn.title);
+    }
     const closeBtn = entry.head.querySelector(".close");
     // Closing an open question would leave the agent waiting for an answer with nothing on
     // screen to click, so the button appears only once it has been answered or has expired.
