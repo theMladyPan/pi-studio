@@ -62,6 +62,7 @@
     position: absolute; display: flex; flex-direction: column; overflow: hidden;
     background: var(--card); border: 1px solid var(--border); border-radius: 10px;
     box-shadow: 0 8px 24px rgba(1, 4, 9, .5); min-width: 220px; min-height: 120px;
+    transition: opacity .12s ease;
   }
   /* Selection is an outline, not a border colour: a card can then be active and still show its own
      state in the border, so waiting stays pink and replying stays amber. The width and the offset
@@ -577,6 +578,25 @@
   header button { font: 12px var(--mono); color: var(--muted); background: #161b22;
     border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
   header button:hover { color: var(--text); border-color: var(--border-bright); }
+  /* A selected card is the conversation being read, so the other threads step back rather than
+     disappear: still legible, plainly not what you are looking at. */
+  .card.dim { opacity: .7; }
+  #boardConfig { position: fixed; z-index: 2000; top: 46px; right: 12px; display: flex; flex-direction: column;
+    gap: 1px; width: 232px; padding: 8px; background: #0d1117; border: 1px solid var(--border-bright);
+    border-radius: 8px; box-shadow: 0 12px 32px rgba(1, 4, 9, .55); }
+  #boardConfig[hidden] { display: none; }
+  #boardConfig .cfg-head { margin: 0 0 4px; color: var(--muted); font: 10px var(--mono);
+    text-transform: uppercase; letter-spacing: .5px; }
+  /* Label above value: a model name is long, and a column of names reads better than three rows of
+     arguments about where each one ends. */
+  #boardConfig .cfg-row { display: block; width: 100%; padding: 4px 6px; border: 0; border-radius: 5px;
+    background: transparent; text-align: left; cursor: pointer; }
+  #boardConfig .cfg-row:hover { background: #161b22; }
+  #boardConfig .cfg-row span { display: block; color: var(--muted); font: 9px var(--mono);
+    text-transform: uppercase; letter-spacing: .6px; }
+  #boardConfig .cfg-row b { display: block; color: var(--accent); font: 12px var(--mono); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #boardConfig .cfg-note { margin: 6px 2px 0; color: var(--muted); font: 10px/1.45 var(--mono); }
   .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted);
     font-size: 14px; pointer-events: none; text-align: center; padding: 20px; }
   /* Each of the board's three animations repeats a state the text already spells out, so the board
@@ -608,7 +628,18 @@
   <button id="tidy">tidy</button>
   <button id="fit">fit all</button>
   <button id="reset">100%</button>
+  <button id="configBtn" title="this board's settings: default model, thinking, dimming" aria-haspopup="dialog" aria-expanded="false">⚙</button>
 </header>
+
+<!-- The board's own configuration. Model and level share the picker the composer uses, so there is
+     one list of models in the whole app. -->
+<div id="boardConfig" hidden role="dialog" aria-label="this board's settings">
+  <p class="cfg-head">this board</p>
+  <button type="button" class="cfg-row" id="cfgDim"><span>dim other threads</span><b id="cfgDimValue">on</b></button>
+  <button type="button" class="cfg-row" id="cfgModel"><span>default model</span><b id="cfgModelValue"></b></button>
+  <button type="button" class="cfg-row" id="cfgThinking"><span>default thinking</span><b id="cfgThinkingValue"></b></button>
+  <p class="cfg-note">new threads start with these. the crossroads sets the defaults for new boards.</p>
+</div>
 
 <aside id="rail">
   <div class="rail-head">cards <b id="railCardCount"></b><button id="railToggle" title="hide the rail">«</button></div>

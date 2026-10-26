@@ -45,6 +45,16 @@
   </section>
 
   <aside class="col facts" aria-live="polite">
+    <!-- What every board opened from here is born with. A board may change its own copy and nobody
+         else's, which is why this is not a global setting. -->
+    <p class="head">NEW BOARDS START WITH</p>
+    <dl id="defaults" class="defaults">
+      <dt>model</dt><dd><input id="defModel" list="modelList" spellcheck="false" autocomplete="off" /></dd>
+      <dt>thinking</dt><dd><select id="defThinking"></select></dd>
+      <dt>dim others</dt><dd><button id="defDim" type="button" title="dim the cards of other threads while one is selected">on</button></dd>
+    </dl>
+    <datalist id="modelList"></datalist>
+    <p class="hint" id="defNote"></p>
     <p class="head">WORKSPACE</p>
     <dl id="facts"></dl>
     <p class="head">AGENT</p>

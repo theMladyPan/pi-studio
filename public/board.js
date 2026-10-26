@@ -897,6 +897,8 @@
     });
     if (data.mini) setMini(card, true);
     paintCard(entry, data);
+    // A card that arrives while another is selected must not arrive brighter than the rest.
+    paintFocus();
 
     card.addEventListener(
       "pointerdown",
@@ -904,6 +906,7 @@
         if (event.button === 1) return;
         card.style.zIndex = z++;
         cards.forEach((c) => c.classList.toggle("active", c === card));
+        paintFocus();
       },
       true,
     );
@@ -912,6 +915,7 @@
     // it, so the outline, `r` and the digit keys follow the keyboard rather than the last click.
     card.addEventListener("focusin", (event) => {
       cards.forEach((c) => c.classList.toggle("active", c === card));
+      paintFocus();
       reveal(event.target);
     });
 
@@ -1016,6 +1020,31 @@
 
     updateEmpty();
     return entry;
+  }
+
+  /**
+   * The thread a card belongs to. A thread card is its own; a plain card belongs to the thread that
+   * made it, which is also the card it cascades under. Two cards share a family when they are the same
+   * conversation.
+   */
+  function familyOf(entry) {
+    const data = entry?.data ?? {};
+    if (!entry) return "";
+    return data.type === "sticky" ? entry.id : data.threadRoot || entry.id;
+  }
+
+  /**
+   * Reading one conversation dims the others, so a board of a dozen threads stays readable while the
+   * one you picked keeps its weight. With nothing selected, or with the feature off, everything is equal.
+   */
+  function paintFocus() {
+    const on = boardConfig.dimOthers !== false;
+    const selected = on ? cards.find((card) => card.classList.contains("active")) : undefined;
+    const family = selected ? familyOf(byId.get(selected.dataset.id)) : "";
+    for (const card of cards) {
+      const entry = byId.get(card.dataset.id);
+      card.classList.toggle("dim", Boolean(selected) && Boolean(entry) && familyOf(entry) !== family);
+    }
   }
 
   /**
@@ -1287,6 +1316,7 @@
     renumberQueue();
     recomputePill();
     updateEmpty();
+    paintFocus();
   }
 
   /** Free the rectangle a closed card was holding so later cards can fill the gap. */
@@ -1558,6 +1588,7 @@
     applyView();
     flashCard(card);
     cards.forEach((c) => c.classList.toggle("active", c === card));
+    paintFocus();
   }
 
   /** Centre a question and put the keyboard on its options, so the number keys are one press away. */
@@ -1686,6 +1717,7 @@
   viewport.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || event.target.closest(".card")) return;
     cards.forEach((c) => c.classList.remove("active"));
+    paintFocus();
     beginPan(event);
   });
 
@@ -2420,8 +2452,12 @@
   let catalog = null;
   /** Which chip opened the panel: "model", "thinking", or "" when it is closed. */
   let picking = "";
-  /** What a new thread starts with, kept as it is chosen. */
-  let startsWith = {};
+  /** The board's own settings: what a new thread starts with, and which features are on. */
+  let boardConfig = {};
+  /** Where the panel hangs off, when something other than the composer's chips opened it. */
+  let pickAnchor = null;
+  /** True when the picker is editing the board's defaults rather than one card's thread. */
+  let pickBoard = false;
 
   function pickNote(text) {
     const node = el("div", "pick-note");
@@ -2435,8 +2471,14 @@
    */
   function answeringRuntime() {
     if (!replyTarget) return null;
-    if (replyTarget.data.type === "thread") return replyTarget.data;
+    // A thread card is its own runtime; a plain card carries the runtime of the child that answers it.
+    if (replyTarget.data.type === "sticky") return replyTarget.data;
     return replyTarget.data.answersWith ?? null;
+  }
+
+  /** What the picker is editing: one card's thread, or the board's defaults. */
+  function pickRuntime() {
+    return pickBoard ? boardConfig : (answeringRuntime() ?? boardConfig);
   }
 
   function shortModel(model) {
@@ -2447,15 +2489,16 @@
     const answering = answeringRuntime();
     // With nothing to reply to, the chips speak for the board's default, which is whatever the
     // newest thread was started with until a new choice is made.
-    if (!answering && !startsWith.model) {
+    if (!answering && !boardConfig.model) {
       const newest = [...byId.values()]
-        .filter((entry) => entry.data.type === "thread")
+        .filter((entry) => entry.data.type === "sticky")
         .sort((left, right) => (right.data.at ?? 0) - (left.data.at ?? 0))[0];
       if (newest) {
-        startsWith = { provider: newest.data.provider, model: newest.data.model, thinking: newest.data.thinking };
+        boardConfig = { ...boardConfig, provider: newest.data.provider, model: newest.data.model, thinking: newest.data.thinking };
       }
     }
-    const runtime = answering ?? startsWith;
+    const runtime = answering ?? boardConfig;
+    paintConfig();
     modelChip.textContent = shortModel(runtime.model);
     thinkChip.textContent = runtime.thinking ? `think ${runtime.thinking}` : "think off";
     const where = answering ? "this card answers with" : "a new thread starts with";
@@ -2465,16 +2508,22 @@
 
   function closePick() {
     picking = "";
+    pickAnchor = null;
+    pickBoard = false;
     runtimePick.hidden = true;
     runtimeSearch.value = "";
   }
 
   function placeRuntimePick() {
-    const chip = (picking === "thinking" ? thinkChip : modelChip).getBoundingClientRect();
+    const chip = (pickAnchor ?? (picking === "thinking" ? thinkChip : modelChip)).getBoundingClientRect();
     const width = runtimePick.offsetWidth;
     const height = runtimePick.offsetHeight;
     runtimePick.style.left = `${Math.max(10, Math.min(window.innerWidth - width - 10, chip.left))}px`;
-    runtimePick.style.top = `${Math.max(10, chip.top - height - 8)}px`;
+    // Above the thing it hangs off, unless that would push it off the top: then below, so a panel in
+    // the corner does not have its own picker covering the row that opened it.
+    const above = chip.top - height - 8;
+    const top = above >= 10 ? above : Math.min(window.innerHeight - height - 10, chip.bottom + 8);
+    runtimePick.style.top = `${Math.max(10, top)}px`;
   }
 
   function pickRow(text, meta, on, onPick) {
@@ -2494,7 +2543,7 @@
 
   function drawModels(query) {
     const needle = query.trim().toLowerCase();
-    const here = answeringRuntime() ?? startsWith;
+    const here = pickRuntime();
     const models = (catalog?.models ?? []).filter(
       (one) => !needle || one.model.toLowerCase().includes(needle) || one.provider.toLowerCase().includes(needle),
     );
@@ -2517,7 +2566,7 @@
   }
 
   function drawLevels() {
-    const here = answeringRuntime() ?? startsWith;
+    const here = pickRuntime();
     const chosen = (catalog?.models ?? []).find((one) => one.provider === here.provider && one.model === here.model);
     // Pi clamps whatever it is given, so a model without reasoning only offers being off.
     const levels = chosen && chosen.thinking === false ? ["off"] : (catalog?.levels ?? []);
@@ -2528,12 +2577,14 @@
     runtimeList.replaceChildren(...(rows.length ? rows : [pickNote("no level to choose")]));
   }
 
-  async function openPick(which) {
-    if (picking === which) {
+  async function openPick(which, anchor = null, forBoard = false) {
+    if (picking === which && pickBoard === forBoard) {
       closePick();
       return;
     }
     picking = which;
+    pickAnchor = anchor;
+    pickBoard = forBoard;
     runtimePick.hidden = false;
     runtimeSearch.hidden = which !== "model";
     runtimeList.replaceChildren(pickNote("reading what this machine has…"));
@@ -2562,7 +2613,8 @@
   async function chooseRuntime(kind, value) {
     const body = kind === "model" ? { provider: value.provider, model: value.model } : { level: value };
     // A plain card's id is enough: the daemon finds the thread behind it, which the board never draws.
-    if (replyTarget) body.cardId = replyTarget.id;
+    // Editing the board's defaults sends no card, which is what makes it the default.
+    if (replyTarget && !pickBoard) body.cardId = replyTarget.id;
     try {
       const response = await fetch(`/${kind === "model" ? "model" : "thinking"}?${auth}`, {
         method: "POST",
@@ -2571,7 +2623,7 @@
       });
       if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
       const payload = await response.json();
-      if (payload.defaults) startsWith = { ...startsWith, ...payload.defaults };
+      if (payload.config) boardConfig = { ...boardConfig, ...payload.config };
       hintLine(kind === "model" ? `model: ${shortModel(value.model)}` : `thinking: ${value}`);
       closePick();
       paintRuntime();
@@ -2582,6 +2634,59 @@
 
   modelChip.addEventListener("click", () => void openPick("model"));
   thinkChip.addEventListener("click", () => void openPick("thinking"));
+
+  // ---------- this board's settings ------------------------------------------
+  const configBtn = document.getElementById("configBtn");
+  const configPanel = document.getElementById("boardConfig");
+  const cfgDim = document.getElementById("cfgDim");
+  const cfgDimValue = document.getElementById("cfgDimValue");
+  const cfgModel = document.getElementById("cfgModel");
+  const cfgModelValue = document.getElementById("cfgModelValue");
+  const cfgThinking = document.getElementById("cfgThinking");
+  const cfgThinkingValue = document.getElementById("cfgThinkingValue");
+
+  /** The daemon's copy of the configuration is the truth; whatever arrives is what the panel shows. */
+  function applyConfig(config) {
+    if (!config || !config.model) return;
+    boardConfig = { ...boardConfig, ...config };
+    paintRuntime();
+    paintFocus();
+  }
+
+  function paintConfig() {
+    cfgDimValue.textContent = boardConfig.dimOthers === false ? "off" : "on";
+    cfgModelValue.textContent = shortModel(boardConfig.model);
+    cfgThinkingValue.textContent = boardConfig.thinking || "off";
+  }
+
+  function shownConfig(on) {
+    configPanel.hidden = !on;
+    configBtn.setAttribute("aria-expanded", on ? "true" : "false");
+  }
+
+  configBtn.addEventListener("click", () => {
+    closePick();
+    shownConfig(configPanel.hidden);
+    paintConfig();
+  });
+
+  cfgDim.addEventListener("click", async () => {
+    const want = boardConfig.dimOthers === false;
+    try {
+      const response = await fetch(`/config?${auth}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dimOthers: want }),
+      });
+      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+      applyConfig((await response.json()).config);
+    } catch (error) {
+      hintLine(`could not change it: ${error.message || error}`, true);
+    }
+  });
+
+  cfgModel.addEventListener("click", () => void openPick("model", cfgModel, true));
+  cfgThinking.addEventListener("click", () => void openPick("thinking", cfgThinking, true));
   runtimeSearch.addEventListener("input", () => drawModels(runtimeSearch.value));
   window.addEventListener("resize", () => {
     if (!runtimePick.hidden) placeRuntimePick();
@@ -2589,18 +2694,25 @@
   document.addEventListener(
     "pointerdown",
     (event) => {
-      if (runtimePick.hidden || event.target.closest("#runtimePick, #modelPick, #thinkPick")) return;
-      closePick();
+      if (event.target.closest("#runtimePick, #modelPick, #thinkPick, #boardConfig, #configBtn")) return;
+      if (!runtimePick.hidden) closePick();
+      if (!configPanel.hidden) shownConfig(false);
     },
     true,
   );
-  // The panel takes Escape first, so closing it never sends the draft to the board instead.
+  // The panels take Escape first, so closing one never sends the draft to the board instead.
   document.addEventListener(
     "keydown",
     (event) => {
-      if (event.key !== "Escape" || runtimePick.hidden) return;
+      if (event.key !== "Escape") return;
+      if (!runtimePick.hidden) {
+        event.stopPropagation();
+        closePick();
+        return;
+      }
+      if (configPanel.hidden) return;
       event.stopPropagation();
-      closePick();
+      shownConfig(false);
     },
     true,
   );
@@ -3194,10 +3306,7 @@
     metaRunning = meta.running === true;
     // What the daemon starts a new thread with. The chips say this when no card is being answered, so
     // they cannot be left guessing from whichever thread happens to be newest.
-    if (meta.defaults && meta.defaults.model) {
-      startsWith = { ...meta.defaults };
-      paintRuntime();
-    }
+    applyConfig(meta.config);
     // Steering means nothing with no run in flight, so the composer follows the same state. Meta
     // also arrives at every assistant message, so only a run boundary repaints: a repaint would
     // wipe the "sent" or "failed: …" line the composer is showing while the stream is alive.
@@ -3459,6 +3568,9 @@
         if (record && typeof payload.mini === "boolean") setMini(record.card, payload.mini);
       } else if (payload.type === "remove") {
         dropCard({ id: payload.id });
+      } else if (payload.type === "config") {
+        // Another tab changed this board's settings, so this one follows without a reload.
+        applyConfig(payload.config);
       } else if (payload.type === "activity") {
         applyActivity(payload.row);
       } else if (payload.type === "card" || payload.type === "update") {

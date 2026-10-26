@@ -74,9 +74,25 @@ async function modelCatalog() {
 	return catalog;
 }
 
+/**
+ * A board's configuration: what a new thread starts with, and which behaviours are on. Kept per board
+ * because two workspaces want different models, and because a feature like dimming is a taste about
+ * one workspace's canvas, not a global setting.
+ * @typedef {object} BoardConfig
+ * @property {string} [provider]
+ * @property {string} [model]
+ * @property {string} [thinking]
+ * @property {boolean} [dimOthers] dim the cards of every other thread while one is selected
+ */
+
+/** A board's configuration as the browser reads it, with the daemon's own model filled in. */
+function activeConfig(board) {
+	return { ...runtimeDefaults(board), dimOthers: board.config?.dimOthers !== false };
+}
+
 /** What a new thread starts with: the last choice made on this board, else the daemon's own. */
 function runtimeDefaults(board) {
-	const chosen = board.defaults ?? {};
+	const chosen = board.config ?? {};
 	return {
 		provider: typeof chosen.provider === "string" && chosen.provider ? chosen.provider : PROVIDER,
 		model: typeof chosen.model === "string" && chosen.model ? chosen.model : MODEL,
@@ -315,8 +331,31 @@ const workspaces = (() => {
 		}));
 })();
 
+/** What a new board is born with, set on the crossroads and shared by every workspace opened after it. */
+let homeDefaults = (() => {
+	const saved = readJsonFile(WORKSPACES_FILE, null);
+	const held = saved?.defaults;
+	if (!held || typeof held !== "object") return {};
+	const known = {};
+	if (typeof held.provider === "string" && held.provider) known.provider = held.provider;
+	if (typeof held.model === "string" && held.model) known.model = held.model;
+	if (THINKING_LEVELS.includes(held.thinking)) known.thinking = held.thinking;
+	if (typeof held.dimOthers === "boolean") known.dimOthers = held.dimOthers;
+	return known;
+})();
+
 function saveWorkspaces() {
-	writeJsonFile(WORKSPACES_FILE, { version: STATE_VERSION, workspaces });
+	writeJsonFile(WORKSPACES_FILE, { version: STATE_VERSION, workspaces, defaults: homeDefaults });
+}
+
+/** The crossroads' defaults with the daemon's own model filled in, so the page can show them. */
+function activeHomeDefaults() {
+	return {
+		provider: homeDefaults.provider ?? PROVIDER,
+		model: homeDefaults.model ?? MODEL,
+		...(homeDefaults.thinking ? { thinking: homeDefaults.thinking } : {}),
+		dimOthers: homeDefaults.dimOthers !== false,
+	};
 }
 
 /** @type {Map<string, Board>} boards that this daemon has loaded, one per workspace. */
@@ -358,7 +397,7 @@ function saveBoard(board) {
 		workspace: { id: board.id, folder: board.folder, name: board.name },
 		savedAt: Date.now(),
 		activity: board.activity.slice(-MAX_ACTIVITY),
-		...(board.defaults ? { defaults: board.defaults } : {}),
+		config: activeConfig(board),
 		threads: [...board.threads.values()].map((thread) => ({
 			id: thread.id,
 			title: thread.title,
@@ -515,7 +554,10 @@ function boardFor(workspace) {
 		saveTimer: null,
 	};
 	const saved = readJsonFile(boardFile(workspace), null);
-	if (saved && saved.defaults && typeof saved.defaults === "object") board.defaults = saved.defaults;
+	// A board is born with the crossroads' defaults; its own file takes over from there. Boards saved
+	// before this was called `config` kept the same three fields under `defaults`.
+	const born = saved?.config && typeof saved.config === "object" ? saved.config : saved?.defaults;
+	board.config = { ...homeDefaults, ...(born && typeof born === "object" ? born : {}) };
 	if (saved && saved.version === STATE_VERSION && Array.isArray(saved.threads)) {
 		for (const raw of saved.threads.slice(-MAX_THREADS)) {
 			const thread = restoredThread(raw, workspace.folder);
@@ -744,8 +786,8 @@ function boardMeta(board) {
 		cwd: board.folder,
 		port,
 		model: MODEL,
-		// What the next thread starts with, so the composer's chips can say it instead of guessing.
-		defaults: runtimeDefaults(board),
+		// The board's configuration: what the next thread starts with, and which features are on.
+		config: activeConfig(board),
 		tokensIn: 0,
 		tokensOut: 0,
 		cost: 0,
@@ -1240,6 +1282,32 @@ async function onOpenWorkspace(req, res) {
 	const board = boardFor(workspace);
 	nudgeWelcome();
 	answer(res, 200, { workspace: describeWorkspace(workspace), board: { id: board.id }, cards: [...board.threads.values()].map(cardFor) });
+}
+
+/**
+ * The crossroads' defaults. A model has to exist on this machine, because a default that cannot run is
+ * a board that cannot start a thread.
+ */
+async function onDefaults(req, res) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const next = { ...homeDefaults };
+	if (typeof body.dimOthers === "boolean") next.dimOthers = body.dimOthers;
+	if (typeof body.thinking === "string") {
+		if (!THINKING_LEVELS.includes(body.thinking)) return void fail(res, 400, `a level is one of ${THINKING_LEVELS.join(", ")}`);
+		next.thinking = body.thinking;
+	}
+	if (typeof body.provider === "string" && typeof body.model === "string") {
+		const { models } = await modelCatalog();
+		if (!models.some((one) => one.provider === body.provider && one.model === body.model)) {
+			return void fail(res, 409, "this machine cannot run that model");
+		}
+		next.provider = body.provider;
+		next.model = body.model;
+	}
+	homeDefaults = next;
+	saveWorkspaces();
+	answer(res, 200, { defaults: activeHomeDefaults() });
 }
 
 /** A real folder dialog, because a browser cannot be told an absolute path any other way. */
@@ -1794,9 +1862,10 @@ async function onModel(req, res, board) {
 	const thread = threadForRuntime(board, body.cardId);
 	if (!thread || thread.status === "dead") {
 		// Nothing answers this card any more, so the choice belongs where the next child comes from.
-		board.defaults = { ...(board.defaults ?? {}), provider, model };
+		board.config = { ...(board.config ?? {}), provider, model };
 		scheduleSave(board);
-		return void answer(res, 200, { defaults: board.defaults });
+		broadcast(board, { type: "config", config: activeConfig(board) });
+		return void answer(res, 200, { config: activeConfig(board) });
 	}
 	thread.provider = provider;
 	thread.model = model;
@@ -1820,9 +1889,10 @@ async function onThinking(req, res, board) {
 	if (!THINKING_LEVELS.includes(level)) return void fail(res, 400, `a level is one of ${THINKING_LEVELS.join(", ")}`);
 	const thread = threadForRuntime(board, body.cardId);
 	if (!thread || thread.status === "dead") {
-		board.defaults = { ...(board.defaults ?? {}), thinking: level };
+		board.config = { ...(board.config ?? {}), thinking: level };
 		scheduleSave(board);
-		return void answer(res, 200, { defaults: board.defaults });
+		broadcast(board, { type: "config", config: activeConfig(board) });
+		return void answer(res, 200, { config: activeConfig(board) });
 	}
 	thread.thinking = level;
 	const child = board.children.get(thread.id);
@@ -1903,6 +1973,21 @@ async function onStop(req, res, board) {
 		}
 	}
 	answer(res, 200, { stopped: running.map((thread) => thread.id) });
+}
+
+/**
+ * Change what the board is configured with. Only the switches live here: the model and the thinking
+ * level keep their own routes, which already know how to validate against the catalog and how to tell
+ * a running child.
+ */
+async function onConfig(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	if (typeof body.dimOthers !== "boolean") return void fail(res, 400, "dimOthers must be true or false");
+	board.config = { ...(board.config ?? {}), dimOthers: body.dimOthers };
+	scheduleSave(board);
+	broadcast(board, { type: "config", config: activeConfig(board) });
+	answer(res, 200, { config: activeConfig(board) });
 }
 
 /** Kill one thread's child. The thread stays, so its cards stay answerable. */
@@ -2043,6 +2128,16 @@ const server = createServer((req, res) => {
 			answer(res, 200, { workspaces: workspaces.map(describeWorkspace) });
 			return;
 		}
+		// What every board opened from here is born with. The crossroads sets it; a board may then
+		// change its own copy without touching the next workspace.
+		if (req.method === "GET" && url.pathname === "/defaults") {
+			answer(res, 200, { defaults: activeHomeDefaults(), levels: THINKING_LEVELS });
+			return;
+		}
+		if (req.method === "POST" && url.pathname === "/defaults") {
+			await onDefaults(req, res);
+			return;
+		}
 		if (req.method === "POST" && url.pathname === "/workspace") {
 			await onOpenWorkspace(req, res);
 			return;
@@ -2091,6 +2186,7 @@ const server = createServer((req, res) => {
 				"/model": onModel,
 				"/thinking": onThinking,
 				"/kill": onKill,
+				"/config": onConfig,
 			};
 			const handler = routing[url.pathname];
 			if (handler) {

@@ -24,6 +24,11 @@
     open: document.getElementById("open"),
     openHint: document.getElementById("openHint"),
     facts: document.getElementById("facts"),
+    defModel: document.getElementById("defModel"),
+    defThinking: document.getElementById("defThinking"),
+    defDim: document.getElementById("defDim"),
+    defNote: document.getElementById("defNote"),
+    modelList: document.getElementById("modelList"),
     agent: document.getElementById("agent"),
     state: document.getElementById("state"),
   };
@@ -31,6 +36,62 @@
   /** @type {any[]} */
   let workspaces = [];
   let selected = null;
+  /** What a new board is born with, read from the daemon and written back as it is changed. */
+  let defaults = {};
+
+  /** A model is `provider/model` here, because that is the only spelling that is unambiguous. */
+  const modelKey = (one) => `${one.provider}/${one.model}`;
+
+  function paintDefaults() {
+    nodes.defModel.value = defaults.model ? `${defaults.provider}/${defaults.model}` : "";
+    nodes.defThinking.value = defaults.thinking || "off";
+    nodes.defDim.textContent = defaults.dimOthers === false ? "off" : "on";
+  }
+
+  async function saveDefaults(patch) {
+    nodes.defNote.textContent = "";
+    try {
+      const response = await fetch(`/defaults?${qs()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!response.ok) throw new Error((await response.text()).slice(0, 120) || response.statusText);
+      defaults = (await response.json()).defaults;
+      paintDefaults();
+      nodes.defNote.textContent = "saved";
+    } catch (error) {
+      nodes.defNote.textContent = `not saved: ${error.message || error}`;
+      paintDefaults();
+    }
+  }
+
+  async function loadDefaults() {
+    try {
+      const [held, catalog] = await Promise.all([
+        fetch(`/defaults?${qs()}`).then((response) => response.json()),
+        fetch(`/models?${qs()}`).then((response) => response.json()),
+      ]);
+      defaults = held.defaults ?? {};
+      nodes.defThinking.replaceChildren(
+        ...(held.levels ?? []).map((level) => {
+          const option = el("option", "", level);
+          option.value = level;
+          return option;
+        }),
+      );
+      nodes.modelList.replaceChildren(
+        ...(catalog.models ?? []).map((one) => {
+          const option = el("option", "", modelKey(one));
+          option.value = modelKey(one);
+          return option;
+        }),
+      );
+      paintDefaults();
+    } catch (error) {
+      nodes.defNote.textContent = `could not read the defaults: ${error.message || error}`;
+    }
+  }
 
   const el = (tag, cls, text) => {
     const node = document.createElement(tag);
@@ -258,6 +319,21 @@
 
   nodes.open.addEventListener("click", () => openBoard());
 
+  // A typed model is only a default once the daemon says this machine can run it, so the field is
+  // painted back from the answer rather than trusted as typed.
+  nodes.defModel.addEventListener("change", () => {
+    const typed = nodes.defModel.value.trim();
+    const cut = typed.indexOf("/");
+    if (cut < 1) {
+      nodes.defNote.textContent = "a model is provider/model";
+      paintDefaults();
+      return;
+    }
+    void saveDefaults({ provider: typed.slice(0, cut), model: typed.slice(cut + 1) });
+  });
+  nodes.defThinking.addEventListener("change", () => void saveDefaults({ thinking: nodes.defThinking.value }));
+  nodes.defDim.addEventListener("click", () => void saveDefaults({ dimOthers: defaults.dimOthers === false }));
+
   document.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !nodes.newForm.hidden) return; // the form owns Enter
     if (event.key === "Enter" && selected && document.activeElement === document.body) openBoard();
@@ -268,6 +344,7 @@
     return;
   }
 
+  void loadDefaults();
   void load();
 
   // Counts on this page are live: a thread that starts or settles elsewhere shows up here.
