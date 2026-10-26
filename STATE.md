@@ -31,11 +31,15 @@ against real children; nothing has been checked in a browser.
   `board_note`, `board_source`, `board_ask`. A child started by hand, with no daemon behind it,
   registers nothing. The tools say what the human should see; card type, placement, cascade and keys
   stay the daemon's decision, so the verbs are not pi's.
-- **A thread also gets research tools**: `-ne` keeps discovery off, so nothing a user installed
-  starts inside a child by surprise — the old board extension would open a second board in every
-  thread. `PI_STUDIO_CHILD_EXTENSIONS` (default `exa-search,fetch-content`) names what a thread may
-  load, and `PI_STUDIO_TOOLS` names the allowlist; a tool the child is given must be in both. A
-  browser and the YouTrack gateway are deliberately not there.
+- **A thread has the tools a console pi has**: it loads every extension installed here, and no
+  allowlist is passed unless `PI_STUDIO_TOOLS` asks for one (`PI_STUDIO_CHILD_EXTENSIONS` names an
+  exact list instead of discovering). `-ne` keeps discovery off so that list is explicit and `-e`
+  loads what it names. Three things are left out by default, and
+  `PI_STUDIO_CHILD_EXCLUDE` changes that: `dashboard`, because it registers the same tool names as
+  the bridge and would open a board server and rewrite its state file once per running thread;
+  `browser-screenshot` and `ytrack`, because one drives the human's browser and the other answers
+  through a 2FA gateway. Test scripts in that folder are skipped too — `test-delegate-retry.mts`
+  exports no factory, so pi refuses to load it and the thread dies before it can answer.
 - **What a thread is told**: `--append-system-prompt` says it is one thread on a board, in which
   folder, that the human reads cards rather than a terminal log, and that a fenced svg block in a
   note draws a picture.
@@ -89,6 +93,12 @@ answer posted from another request reached the card and the child's turn ("You c
 answer to the same question was refused with 409, an ask with no question or with one option was
 refused with 400. A child asked to search the web used `exa_search` and answered with the result, and
 the rail showed the tool row, which proves the research extensions load inside a thread.
+
+With the whole extension folder in play: a child loaded the installed extensions, called `exa_search`,
+then `board_note`, and its note landed on the pi-studio board (so the bridge's tool names survive the
+folder being loaded), with clean stderr and no extra listening port — the dashboard was left out and
+did not open a second board. A first run died on `test-delegate-retry.mts` ("does not export a valid
+factory function"), which is why test scripts are skipped now.
 
 Notes, against a daemon on a throwaway `HOME` and a scratch folder: created with and without a
 `rect`, refused when the markdown is blank, carried in the `snapshot` and in `GET /state`, edited

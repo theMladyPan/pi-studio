@@ -29,25 +29,75 @@ const WORKSPACES_FILE = join(STATE_DIR, "workspaces.json");
 const PROVIDER = process.env.PI_STUDIO_PROVIDER ?? "klotilda";
 const MODEL = process.env.PI_STUDIO_MODEL ?? "deepseek-ai/DeepSeek-V4.1-Flash-1017";
 /**
- * An allowlist, so every tool a thread is given has to be named here: the built-in four, the board's
- * verbs, and the tools of the extensions below.
+ * Left to itself a thread has the same tools as a pi started in a terminal: the built-in four plus
+ * whatever is installed here. `PI_STUDIO_TOOLS` narrows that to a named allowlist instead.
  */
-const TOOLS =
-	process.env.PI_STUDIO_TOOLS ?? "read,bash,edit,write,board_note,board_source,board_ask,exa_search,fetch_content";
+const TOOLS = process.env.PI_STUDIO_TOOLS ?? "";
 /** The extension a child loads so a thread can draw on the board it belongs to. */
 const BRIDGE = join(dirname(PUBLIC_DIR), "bridge", "child-bridge.mjs");
 /**
- * Extensions a thread may use. `-ne` keeps discovery off, so nothing a user installed starts inside a
- * child by surprise — the old board extension would open a second board in every thread. Web
- * research is named on purpose; a browser and the YouTrack gateway are not: a child does not drive
- * this machine's browser, and it does not talk to the 2FA gateway on the human's behalf.
+ * Extensions a thread may load: everything installed on this machine, less what cannot come along.
+ *
+ *   dashboard        it is the old board, it registers the same tool names as the bridge, and it
+ *                    would open a board server and rewrite its state file once per running thread
+ *   browser-screenshot, ytrack
+ *                    one drives the human's browser, the other answers through a 2FA gateway; neither
+ *                    is a thing a thread does on its own
+ *
+ * `-ne` keeps discovery off so the list is this one, plainly; `-e` still loads what it names.
+ * `PI_STUDIO_CHILD_EXCLUDE` changes the exclusions, `PI_STUDIO_CHILD_EXTENSIONS` names an exact list.
  */
-const CHILD_EXTENSIONS = (process.env.PI_STUDIO_CHILD_EXTENSIONS ?? "exa-search,fetch-content")
-	.split(",")
-	.map((name) => name.trim())
-	.filter(Boolean)
-	.map((name) => (name.includes("/") ? name : join(extensionsDir(), name, "index.ts")))
-	.filter((path) => existsSync(path));
+const CHILD_EXCLUDE = new Set(
+	(process.env.PI_STUDIO_CHILD_EXCLUDE ?? "dashboard,browser-screenshot,ytrack")
+		.split(",")
+		.map((name) => name.trim())
+		.filter(Boolean),
+);
+
+/**
+ * A test script in the extensions folder is not an extension: it exports no factory, so pi refuses to
+ * load it and the thread dies before it can answer. Shipped extensions are never named like this.
+ */
+function isTestFile(name) {
+	return /^test[-.]/.test(name) || /\.test\./.test(name) || /\.spec\./.test(name);
+}
+
+/** Every extension this machine has installed, minus the exclusions above. */
+function installedExtensions() {
+	const named = process.env.PI_STUDIO_CHILD_EXTENSIONS;
+	if (named) {
+		return named
+			.split(",")
+			.map((name) => name.trim())
+			.filter(Boolean)
+			.map((name) => (name.includes("/") ? name : join(extensionsDir(), name, "index.ts")))
+			.filter((path) => existsSync(path));
+	}
+	const dir = extensionsDir();
+	let entries;
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return [];
+	}
+	const found = [];
+	for (const entry of entries) {
+		const bare = entry.name.replace(/\.(ts|mts|js|mjs)$/, "");
+		if (entry.name.startsWith(".") || CHILD_EXCLUDE.has(entry.name) || CHILD_EXCLUDE.has(bare)) continue;
+		const full = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			const entryPoint = ["index.ts", "index.js", "index.mjs"]
+				.map((name) => join(full, name))
+				.find((path) => existsSync(path));
+			if (entryPoint) found.push(entryPoint);
+		} else if (/\.(ts|mts|js|mjs)$/.test(entry.name) && !entry.name.endsWith(".d.ts") && !isTestFile(entry.name)) {
+			found.push(full);
+		}
+	}
+	return found;
+}
+
+const CHILD_EXTENSIONS = installedExtensions();
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_ACTIVITY = 300;
 const MAX_THREADS = 200;
@@ -728,8 +778,8 @@ function childArgv(board, thread) {
 		// and the research tools, without anything else coming along.
 		...(existsSync(BRIDGE) ? ["-e", BRIDGE] : []),
 		...CHILD_EXTENSIONS.flatMap((path) => ["-e", path]),
-		"--tools",
-		TOOLS,
+		// No allowlist unless one was asked for: a thread gets the tools a console pi gets.
+		...(TOOLS ? ["--tools", TOOLS] : []),
 		"--append-system-prompt",
 		boardPrompt(board, thread),
 		"--provider",
