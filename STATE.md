@@ -1,7 +1,9 @@
 # pi-studio — where this stands
 
-Written when the app moved out of the extensions repository. Everything here was verified by curl
-against real children; nothing has been checked in a browser.
+Written when the app moved out of the extensions repository. What the board does was verified by curl
+against real children, and the commits that built each part report what was seen in a browser; the
+check that was actually run for the tree as it stands is `npm run check`. Where a claim rests on a
+commit's own account rather than on a check run now, the section below says so.
 
 ## Works
 
@@ -20,8 +22,8 @@ against real children; nothing has been checked in a browser.
 - **Workspaces**: `GET /workspaces` lists what has been opened with the facts the crossroads shows
   (thread count, running count, last activity, git branch and dirty count, session size, whether the
   folder still exists); `POST /workspace {folder}` registers and loads one. State lives in
-  `~/.pi/agent/state/pi-studio/`: `daemon.json` (token, port), `workspaces.json`, `boards/<id>.json`,
-  `sessions/<id>/`.
+  `~/.pi/agent/state/pi-studio/`: `daemon.json` (token, port), `workspaces.json` (the list plus the
+  crossroads defaults), `boards/<id>.json`, `sessions/<id>/`.
 - **Threads** are cards: `POST /thread` creates one in the open workspace, `POST /message {cardId,
   text, mode}` prompts it. The child is spawned on the first message, one per thread, and shut down
   when it settles.
@@ -99,16 +101,24 @@ against real children; nothing has been checked in a browser.
   remembered for the session only. Rows still running stay in the strip above the log, so what is
   happening now is visible however far the log is scrolled.
 - **What answers is a choice, per thread.** `provider`, `model` and `thinking` live on the thread and
-  are saved with it; `board.defaults` is what the next thread starts with, taken from the newest thread
+  are saved with it; `board.config` is what the next thread starts with, taken from the newest thread
   until a choice is made. `GET /models` reads `pi --list-models` once and keeps it for ten minutes, so
   the picker works before any child exists. `POST /model` and `POST /thinking` take a card id — a card
   resolves to the thread that answers for it — or no id at all, which sets the board's default. A live
   child is told with `set_model` and `set_thinking_level`; a sleeping one starts with `--thinking` next
   time. Every card a thread answers for is re-broadcast after the change, because the card carries the
   runtime in `answersWith`.
+- **Settings live in two places.** `GET /defaults` and `POST /defaults {provider?, model?, thinking?,
+  dimOthers?}` on the crossroads set what every board opened from there is born with, kept in
+  `workspaces.json`; a model is refused with 409 unless this machine can actually run it. A board keeps
+  its own copy in `board.config`, spread over the crossroads defaults when it is created, and
+  `POST /config {dimOthers}` changes one switch there without touching the next workspace. `dimOthers`
+  is the one feature so far: the cards of other threads step back to 70% opacity while one is selected.
+  `meta.config` is what the client reads, and `POST /model` with no card writes the board's own default.
+  The board's panel reuses the composer's model list, so there is one catalogue in the app.
 - **Ownership survives a restart or is repaired.** `answersWith` is only reported for an owner that is
-  still alive; a choice made on a card whose thread has ended lands on `board.defaults`, which is where
-  the next child comes from anyway, and `meta.defaults` tells the client what that is. A board file
+  still alive; a choice made on a card whose thread has ended lands on `board.config`, which is where
+  the next child comes from anyway. A board file
   that lost half a pair — a child with no card, a card naming a thread that is gone — is repaired when
   it is read, and the crossroads counts only threads that are drawn.
 - **A turn is drawn in the card it was written on.** An existing owner thread answering for its card
@@ -124,6 +134,11 @@ against real children; nothing has been checked in a browser.
   restart the agent remembered the word it had answered in the previous run.
 - **Steering and queueing** per thread; a turn a steer displaced reads `stopped`.
 - **Layout**: `POST /layout {cardId, rect, mini}` is saved with the board and restored on open.
+- **Clean and new**: `POST /clean` forgets activity rows whose thread is gone or dead, the dead threads
+  and their children, and the ownership their cards still pointed at, so a note left behind starts a
+  fresh child when it is asked again. Nothing that can answer is touched. `POST /new` empties the board
+  in the same workspace and keeps its settings; the button turns into `sure?` for four seconds first.
+  Both answer with a snapshot, which the client already replays, so every open tab rebuilds.
 - **Persistence**: board saved on a 500 ms debounce and flushed on stop and on a workspace switch;
   a restart reopens the last workspace.
 - `GET /browse` for the composer's file picker. Token gate on every data route (403 without it).
@@ -133,7 +148,8 @@ against real children; nothing has been checked in a browser.
 Three files on the crossroads (`welcome.html`, `welcome.css`, `welcome.js`) and the board's
 established client (`index.html`, `board.js`), which is unchanged apart from reading its workspace id
 from the path, carrying `&workspace=` on its routes, and its `board of <name>` label opening the
-crossroads in a tab. No framework, no build step.
+crossroads in a tab. The board gained a corner panel for its own settings and the `clean` and `new`
+buttons beside them; the crossroads gained the defaults panel. No framework, no build step.
 
 ## Fixed on the way
 
@@ -142,6 +158,9 @@ crossroads in a tab. No framework, no build step.
   nowhere, and closing the card stops the turn and clears `thread.answering`.
 - A model or level chosen while a child was shutting down ended the thread with "write after end": the
   `stdin` write is now guarded by `writable`, and a choice made on a dead thread goes to the defaults.
+- A thread card's chips showed the board default, because it looked for a card type that no longer
+  exists. It now reports its own model and level. The model picker also opens below its anchor when
+  there is no room above, so it stops covering the corner panel it was opened from.
 - A card made by a hidden child was owned by the *card* it cascaded under, not by the child, because
   `rootOf` returned one id for two jobs. Placement and ownership are decided separately now.
 - `pi --list-models` had no timeout, and an empty answer was never cached, so a machine with no
@@ -205,22 +224,33 @@ text, place and fold after a daemon restart, closed through `POST /close`, and a
 note started a thread named after it. Editing a card id that is not a note answers 409. Nothing here
 has been checked in a browser.
 
+Reported by the commits that added the settings and the clean/new verbs, both against a real daemon
+and neither re-checked since: crossroads defaults set, and refused with 409 for a model this machine
+cannot run or 400 for a level pi does not name; a new board inheriting them; a board changing its own
+`dimOthers` without moving the crossroads default; a thread starting with the inherited model and
+level; `POST /model` with no card landing in `board.config`. Cleaning removed exactly the rows of a
+closed thread and kept the open one's card and rows; `new` emptied cards, threads and activity and kept
+model and level. Those commits say the panel, the picker, the dimming on a five-card board, both
+buttons and the `sure?` arming were seen in a browser. `npm run check` passes on the current tree.
+
 ## Does not work yet
 
 - The answer appears when a turn ends; nothing streams into the card while it is generated.
 - Forking a *thread* is not built: `fork` on a thread card does nothing (the button is hidden there),
   because a real fork has to copy the session file and mark the copy `forkedFrom`.
 - Feeding a card into a thread other than the one that made it is designed and not built.
-- Rail rows carry no payloads (arguments, logs, outputs), no usage totals, no images.
-- `stop` aborts every running thread, not a chosen one.
-- No attention to a workspace whose folder has been deleted or moved: opening it fails with a 404
-  and the entry stays in the list.
+- Rail rows carry no payloads (arguments, logs, outputs), no usage totals, no images. `GET
+  /activity/<id>` answers 404 rather than pretending an empty detail exists.
+- A workspace whose folder has been deleted or moved says `folder missing` at the crossroads, with its
+  open button disabled and `that folder no longer exists` where the hint goes, but there is no way to
+  forget the entry and it stays in the list.
 
 ## Next, in order
 
-1. Stream the answer into the card, then rail payloads.
-2. Per-thread stop.
-3. A workspace entry that no longer resolves: say so and offer to forget it.
+1. Stream the answer into the card, then rail payloads. pi already writes `message_update` with a
+   `text_delta` on the same stdout `handleChildLine` reads, and only `turn_end` is acted on.
+2. A workspace entry that no longer resolves: offer to forget it.
+3. Fork a thread, then feeding a card into another thread.
 
 ## Rules
 
