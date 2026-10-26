@@ -75,6 +75,11 @@ against real children; nothing has been checked in a browser.
   conversation moves to a fresh session while the card stays where it is. `plainCardFor` carries
   `answersWith` (provider, model, thinking) so the composer can name and change what answers a card
   without the thread behind it ever being drawn.
+- **A card and its child live and die together.** Closing a card closes the thread behind it, drops
+  its child process and forgets a run that was answering for it; the same happens when a card is pruned
+  for room. A reply whose card is gone is written nowhere — never onto the thread's own turn, which
+  would overwrite an older answer. `anchorOf` keeps placement honest for cards a hidden child writes:
+  they cascade under the card that child serves, and name that child as their owner.
 - **What answers is a choice, per thread.** `provider`, `model` and `thinking` live on the thread and
   are saved with it; `board.defaults` is what the next thread starts with, taken from the newest thread
   until a choice is made. `GET /models` reads `pi --list-models` once and keeps it for ten minutes, so
@@ -83,6 +88,11 @@ against real children; nothing has been checked in a browser.
   child is told with `set_model` and `set_thinking_level`; a sleeping one starts with `--thinking` next
   time. Every card a thread answers for is re-broadcast after the change, because the card carries the
   runtime in `answersWith`.
+- **Ownership survives a restart or is repaired.** `answersWith` is only reported for an owner that is
+  still alive; a choice made on a card whose thread has ended lands on `board.defaults`, which is where
+  the next child comes from anyway, and `meta.defaults` tells the client what that is. A board file
+  that lost half a pair — a child with no card, a card naming a thread that is gone — is repaired when
+  it is read, and the crossroads counts only threads that are drawn.
 - **A turn is drawn in the card it was written on.** An existing owner thread answering for its card
   keeps the question on that card: `card.turns` fills in, `thread.answering` remembers which card the
   run in flight writes back to, and the answer lands there, so a chain of comments reads under the
@@ -108,6 +118,16 @@ from the path, carrying `&workspace=` on its routes, and its `board of <name>` l
 crossroads in a tab. No framework, no build step.
 
 ## Fixed on the way
+
+- A reply could land on the wrong card: when the card a run was answering for was closed mid-run,
+  `turn_end` fell back to the thread's own last turn and overwrote an older answer. It now writes
+  nowhere, and closing the card stops the turn and clears `thread.answering`.
+- A model or level chosen while a child was shutting down ended the thread with "write after end": the
+  `stdin` write is now guarded by `writable`, and a choice made on a dead thread goes to the defaults.
+- A card made by a hidden child was owned by the *card* it cascaded under, not by the child, because
+  `rootOf` returned one id for two jobs. Placement and ownership are decided separately now.
+- `pi --list-models` had no timeout, and an empty answer was never cached, so a machine with no
+  credentials spawned pi on every open of the picker.
 
 - `update()` broadcast a thread that serves a card as if it were a card, so changing a model put a
   second card on the board for the same conversation. It now broadcasts the card the thread serves.
@@ -142,6 +162,12 @@ then `board_note`, and its note landed on the pi-studio board (so the bridge's t
 folder being loaded), with clean stderr and no extra listening port — the dashboard was left out and
 did not open a second board. A first run died on `test-delegate-retry.mts` ("does not export a valid
 factory function"), which is why test scripts are skipped now.
+
+Against real children, after the review: a fork's child owning the card with its question on the card
+and no card of its own, a note written by that hidden child cascading under the card it serves and owned
+by the child, the card's chain intact across both, the crossroads listing only drawn threads, and
+closing the card removing its child. A choice made on a closed card landed on the board default and the
+next thread started with it.
 
 Seen in a browser (the only part of this app that has been): the note card with its comment chain, the
 composer docked in it, the model and thinking chips reading `claude-sonnet-5-5` and `think medium`, the

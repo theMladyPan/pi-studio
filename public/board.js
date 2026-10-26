@@ -3078,6 +3078,12 @@
     document.body.classList.toggle("threads", workspace !== "" || meta.mode === "threads");
     const wasRunning = metaRunning === true;
     metaRunning = meta.running === true;
+    // What the daemon starts a new thread with. The chips say this when no card is being answered, so
+    // they cannot be left guessing from whichever thread happens to be newest.
+    if (meta.defaults && meta.defaults.model) {
+      startsWith = { ...meta.defaults };
+      paintRuntime();
+    }
     // Steering means nothing with no run in flight, so the composer follows the same state. Meta
     // also arrives at every assistant message, so only a run boundary repaints: a repaint would
     // wipe the "sent" or "failed: …" line the composer is showing while the stream is alive.

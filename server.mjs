@@ -47,7 +47,7 @@ async function modelCatalog() {
 	const cli = piCli();
 	let table = "";
 	try {
-		const result = await run(cli.command, [...cli.args, "--list-models"], { maxBuffer: 8 * 1024 * 1024 });
+		const result = await run(cli.command, [...cli.args, "--list-models"], { maxBuffer: 8 * 1024 * 1024, timeout: 20_000 });
 		table = String(result.stdout ?? "");
 	} catch (error) {
 		table = String(error.stdout ?? "");
@@ -66,13 +66,12 @@ async function modelCatalog() {
 			images: images === "yes",
 		});
 	}
-	// A machine with no credentials still has a board, so an empty table is answered with the levels
-	// and no models rather than with an error.
-	if (models.length) {
-		catalog = { models, levels: THINKING_LEVELS };
-		catalogAt = Date.now();
-	}
-	return catalog ?? { models: [], levels: THINKING_LEVELS };
+	// A machine with no credentials still has a board, so an empty table is answered with the levels and
+	// no models rather than with an error. The empty answer is kept too: otherwise every open of the
+	// picker would spawn pi again.
+	catalog = { models, levels: THINKING_LEVELS };
+	catalogAt = Date.now();
+	return catalog;
 }
 
 /** What a new thread starts with: the last choice made on this board, else the daemon's own. */
@@ -527,6 +526,14 @@ function boardFor(workspace) {
 		for (const row of (Array.isArray(saved.activity) ? saved.activity : []).slice(-MAX_ACTIVITY)) {
 			if (row && typeof row.id === "string" && row.status !== "running") board.activity.push(row);
 		}
+		// A card and the child that answers for it belong together, and pruning can part them. Repair it
+		// here rather than let a card quietly re-fork because a thread id in it means nothing.
+		for (const thread of [...board.threads.values()]) {
+			if (thread.behind && !board.cards.has(thread.behind)) board.threads.delete(thread.id);
+		}
+		for (const card of board.cards.values()) {
+			if (card.ownerThread && !board.threads.has(card.ownerThread)) delete card.ownerThread;
+		}
 	}
 	boards.set(board.id, board);
 	return board;
@@ -604,7 +611,9 @@ function sessionFacts(workspace) {
 /** The one workspace that matters to a tab: what is on it, and the last thing that happened. */
 function describeWorkspace(workspace) {
 	const board = boards.get(workspace.id);
-	const threads = [...(board?.threads.values() ?? [])];
+	// A thread that serves a card is not a thread anyone can open: counting it would report more
+	// threads than the board has cards.
+	const threads = [...(board?.threads.values() ?? [])].filter((thread) => !thread.behind);
 	const rows = board?.activity ?? readJsonFile(boardFile(workspace), null)?.activity ?? [];
 	const last = [...rows].reverse().find((row) => row?.startedAt || row?.at);
 	const facts = folderFacts(workspace.folder);
@@ -698,8 +707,11 @@ function plainCardFor(card, board = null) {
 	if (card.ownerThread) shown.ownerThread = card.ownerThread;
 	// The card carries the runtime of whoever answers it, so the composer's pickers can name and change
 	// it without the thread that serves the card ever being drawn.
-	const owner = board && card.ownerThread ? board.threads.get(card.ownerThread) : undefined;
-	if (owner) {
+	// Boards written before ownership was its own field have only the thread that made the card, and a
+	// thread that has ended answers nothing: the next child will, and that is what the pickers show.
+	const ownerId = card.ownerThread ?? card.threadRoot;
+	const owner = board && ownerId ? board.threads.get(ownerId) : undefined;
+	if (owner && owner.status !== "dead") {
 		shown.answersWith = {
 			provider: owner.provider,
 			model: owner.model,
@@ -726,6 +738,8 @@ function boardMeta(board) {
 		cwd: board.folder,
 		port,
 		model: MODEL,
+		// What the next thread starts with, so the composer's chips can say it instead of guessing.
+		defaults: runtimeDefaults(board),
 		tokensIn: 0,
 		tokensOut: 0,
 		cost: 0,
@@ -1010,6 +1024,15 @@ function handleChildLine(board, thread, line) {
 			threadError(board, thread, `prompt rejected: ${event.error ?? "unknown reason"}`);
 		} else if (event.command === "prompt" && event.data?.disposition === "handled") {
 			threadError(board, thread, "the message was handled as a command, so no run started");
+		} else if ((event.command === "set_model" || event.command === "set_thinking_level") && event.success === false) {
+			// The chip already shows the choice, so a refusal has to be said out loud.
+			addRow(board, {
+				id: randomUUID(),
+				kind: "reply",
+				status: "error",
+				startedAt: Date.now(),
+				text: `${event.command} refused: ${event.error ?? "unknown reason"}`,
+			});
 		}
 		return;
 	}
@@ -1040,15 +1063,17 @@ function handleChildLine(board, thread, line) {
 			.join("")
 			.trim();
 		if (!text) return;
+		// When the run was answering for a card, only that card may receive the reply. Falling back to
+		// the thread's own turn would overwrite an older answer with a card's answer.
 		const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
-		const turn = asked ? asked.turns?.[thread.answering.turn] : thread.turns[thread.turns.length - 1];
+		const turn = thread.answering ? asked?.turns?.[thread.answering.turn] : thread.turns[thread.turns.length - 1];
 		if (turn) {
 			turn.reply = text;
 			turn.status = "answered";
 		}
 		addRow(board, { id: randomUUID(), kind: "reply", status: "ok", startedAt: Date.now(), text: text.slice(0, 4000) });
 		if (turn && asked) updateCard(board, asked);
-		else update(board, thread);
+		else if (!thread.answering) update(board, thread);
 		return;
 	}
 	if (event.type === "agent_settled") {
@@ -1285,12 +1310,45 @@ function rootOf(board, body) {
 	return root && board.threads.has(root) ? root : undefined;
 }
 
+/**
+ * Where a card a thread writes should cascade. Usually the thread's own card, but a child that answers
+ * for a card has no card of its own, so its notes land under the card it serves.
+ */
+function anchorOf(board, threadId) {
+	const thread = threadId ? board.threads.get(threadId) : undefined;
+	return thread?.behind ?? threadId;
+}
+
+/**
+ * A card that leaves the board takes its child with it. Nothing can reach a thread the board cannot
+ * draw, so keeping one alive would leave a session and a process behind every closed note; and a run
+ * that was answering for the card must not write its reply onto some other card's turn.
+ */
+function forgetCard(board, cardId) {
+	for (const thread of [...board.threads.values()]) {
+		if (thread.answering?.cardId === cardId) {
+			const turn = board.cards.get(cardId)?.turns?.[thread.answering.turn];
+			if (turn && turn.status !== "answered") turn.status = "stopped";
+			thread.answering = null;
+		}
+		if (thread.behind !== cardId) continue;
+		try {
+			board.children.get(thread.id)?.stdin?.end();
+		} catch {
+			// The child is already gone, which is what this wanted.
+		}
+		board.children.delete(thread.id);
+		board.threads.delete(thread.id);
+	}
+}
+
 /** Keep the board bounded: the oldest plain card goes when a new one arrives and there is no room. */
 function makeRoom(board) {
 	while (board.cards.size >= MAX_PLAIN_CARDS) {
 		const oldest = [...board.cards.values()].sort((a, b) => a.at - b.at)[0];
 		if (!oldest) break;
 		board.cards.delete(oldest.id);
+		forgetCard(board, oldest.id);
 		broadcast(board, { type: "remove", id: oldest.id });
 	}
 }
@@ -1329,7 +1387,7 @@ async function onNote(req, res, board) {
 		markdown,
 		at: Date.now(),
 		...(key ? { key } : {}),
-		...(root ? { threadRoot: root, ownerThread: root } : {}),
+		...(root ? { threadRoot: anchorOf(board, root), ownerThread: root } : {}),
 	};
 	const rect = placedRect(body);
 	if (rect) note.rect = rect;
@@ -1397,7 +1455,7 @@ async function onSource(req, res, board) {
 		key,
 		at: Date.now(),
 		...(line ? { line } : {}),
-		...(root ? { threadRoot: root, ownerThread: root } : {}),
+		...(root ? { threadRoot: anchorOf(board, root), ownerThread: root } : {}),
 	};
 	board.cards.set(card.id, card);
 	broadcast(board, { type: "card", card: plainCardFor(card, board) });
@@ -1457,7 +1515,9 @@ async function onAsk(req, res, board) {
 		status: "open",
 		at: Date.now(),
 		expiresAt: Date.now() + ASK_TIMEOUT_MS,
-		...(rootOf(board, body) ? { threadRoot: rootOf(board, body), ownerThread: rootOf(board, body) } : {}),
+		...(rootOf(board, body)
+			? { threadRoot: anchorOf(board, rootOf(board, body)), ownerThread: rootOf(board, body) }
+			: {}),
 	};
 	board.cards.set(card.id, card);
 	broadcast(board, { type: "card", card: plainCardFor(card, board) });
@@ -1560,7 +1620,8 @@ async function onMessage(req, res, board) {
 	let index;
 	if (askedCard) {
 		askedCard.turns = askedCard.turns ?? [];
-		askedCard.turns.push({ text: text.slice(0, 4000), status: "queued", mode, at: Date.now() });
+		// A steer joins the run in flight, so the turn is already being acted on.
+		askedCard.turns.push({ text: text.slice(0, 4000), status: mode === "steer" ? "sent" : "queued", mode, at: Date.now() });
 		index = askedCard.turns.length - 1;
 		target = { cardId: askedCard.id, turn: index };
 		updateCard(board, askedCard);
@@ -1624,17 +1685,19 @@ async function onModel(req, res, board) {
 		return void fail(res, 409, `${provider}/${model} is not a model this machine has`);
 	}
 	const thread = threadForRuntime(board, body.cardId);
-	if (!thread) {
+	if (!thread || thread.status === "dead") {
+		// Nothing answers this card any more, so the choice belongs where the next child comes from.
 		board.defaults = { ...(board.defaults ?? {}), provider, model };
 		scheduleSave(board);
 		return void answer(res, 200, { defaults: board.defaults });
 	}
 	thread.provider = provider;
 	thread.model = model;
-	try {
-		board.children.get(thread.id)?.stdin?.write(`${JSON.stringify({ id: randomUUID(), type: "set_model", provider, modelId: model })}\n`);
-	} catch {
-		// A child that cannot take it now is started with this model next time.
+	// A child whose stdin is closing is not this thread's voice any more; the next one starts with the
+	// choice. Writing to it would end the thread with "write after end".
+	const child = board.children.get(thread.id);
+	if (child?.stdin?.writable) {
+		child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "set_model", provider, modelId: model })}\n`);
 	}
 	update(board, thread);
 	refreshOwned(board, thread);
@@ -1648,16 +1711,15 @@ async function onThinking(req, res, board) {
 	const level = field(body.level, 20);
 	if (!THINKING_LEVELS.includes(level)) return void fail(res, 400, `a level is one of ${THINKING_LEVELS.join(", ")}`);
 	const thread = threadForRuntime(board, body.cardId);
-	if (!thread) {
+	if (!thread || thread.status === "dead") {
 		board.defaults = { ...(board.defaults ?? {}), thinking: level };
 		scheduleSave(board);
 		return void answer(res, 200, { defaults: board.defaults });
 	}
 	thread.thinking = level;
-	try {
-		board.children.get(thread.id)?.stdin?.write(`${JSON.stringify({ id: randomUUID(), type: "set_thinking_level", level })}\n`);
-	} catch {
-		// Same as the model: the next child is started with it.
+	const child = board.children.get(thread.id);
+	if (child?.stdin?.writable) {
+		child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "set_thinking_level", level })}\n`);
 	}
 	update(board, thread);
 	refreshOwned(board, thread);
@@ -1687,6 +1749,7 @@ async function onClose(req, res, board) {
 	const plain = board.cards.get(id);
 	if (plain) {
 		board.cards.delete(id);
+		forgetCard(board, id);
 		broadcast(board, { type: "remove", id });
 		scheduleSave(board);
 		answer(res, 200, { closed: id });
