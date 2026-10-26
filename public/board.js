@@ -3265,6 +3265,15 @@
     }
   }
 
+  // The selection is a reading position, so Escape gives it up: the board stops dimming and the wheel
+  // goes back to moving the board. A panel or an editor takes Escape first and stops it there.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (!document.querySelector(".card.active")) return;
+    for (const card of cards) card.classList.remove("active");
+    paintFocus();
+  });
+
   // `r` opens a thread on the card you last clicked and `q` closes it. The composer keeps its
   // own keys, so a message being typed is never cut short.
   document.addEventListener("keydown", (event) => {
