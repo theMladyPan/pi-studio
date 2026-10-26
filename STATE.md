@@ -67,6 +67,22 @@ against real children; nothing has been checked in a browser.
   `fork` button, asks a new thread under the card instead, with the same quote and its own
   conversation. A card nobody made, or one whose thread has ended, starts that thread too. The card
   shows what the human typed; only the child is given the quote. A queued message carries both.
+- **A card has a thread behind it, not a thread card beside it.** `threadRoot` on a plain card is where
+  the card cascades; `ownerThread` is the thread that answers comments on it; and a thread whose
+  `behind` names a card is never drawn — the card is the surface. A comment on a card that already has
+  an owner is answered by that thread, and the question and answer are kept in `card.turns`. A fork, or
+  a card nobody answers for yet, starts a child with `behind` set and hands the card to it, so the
+  conversation moves to a fresh session while the card stays where it is. `plainCardFor` carries
+  `answersWith` (provider, model, thinking) so the composer can name and change what answers a card
+  without the thread behind it ever being drawn.
+- **What answers is a choice, per thread.** `provider`, `model` and `thinking` live on the thread and
+  are saved with it; `board.defaults` is what the next thread starts with, taken from the newest thread
+  until a choice is made. `GET /models` reads `pi --list-models` once and keeps it for ten minutes, so
+  the picker works before any child exists. `POST /model` and `POST /thinking` take a card id — a card
+  resolves to the thread that answers for it — or no id at all, which sets the board's default. A live
+  child is told with `set_model` and `set_thinking_level`; a sleeping one starts with `--thinking` next
+  time. Every card a thread answers for is re-broadcast after the change, because the card carries the
+  runtime in `answersWith`.
 - **A turn is drawn in the card it was written on.** An existing owner thread answering for its card
   keeps the question on that card: `card.turns` fills in, `thread.answering` remembers which card the
   run in flight writes back to, and the answer lands there, so a chain of comments reads under the
@@ -92,6 +108,13 @@ from the path, carrying `&workspace=` on its routes, and its `board of <name>` l
 crossroads in a tab. No framework, no build step.
 
 ## Fixed on the way
+
+- `update()` broadcast a thread that serves a card as if it were a card, so changing a model put a
+  second card on the board for the same conversation. It now broadcasts the card the thread serves.
+- `applyMessage` skipped the record update when nothing visible had changed, which left
+  `answersWith` stale and the composer's chips showing the old model. The paint is skipped, the data is
+  not.
+- The chips were blank until the first card update, because the snapshot path never repainted them.
 
 - A queued message was killed by the `stdin.end()` that ran before the queue drained: the next message
   started a child that the old child's exit handler then declared dead, so the turn read as stopped.
@@ -119,6 +142,12 @@ then `board_note`, and its note landed on the pi-studio board (so the bridge's t
 folder being loaded), with clean stderr and no extra listening port — the dashboard was left out and
 did not open a second board. A first run died on `test-delegate-retry.mts` ("does not export a valid
 factory function"), which is why test scripts are skipped now.
+
+Seen in a browser (the only part of this app that has been): the note card with its comment chain, the
+composer docked in it, the model and thinking chips reading `claude-sonnet-5-5` and `think medium`, the
+model picker listing 590 models grouped by provider with a search field, and each choice repainting the
+chip and landing on the thread behind the card. A fork put its question and answer on the note and
+opened no card.
 
 Card chains, against real children: a note's comment and its answer land on the note while the thread
 card keeps only its own turn; a second comment chains under the first and the child answers about the

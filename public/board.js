@@ -1158,7 +1158,12 @@
     if (existing) {
       if (!replaying && !quiet) {
         // An identical re-broadcast would only wipe a selection and reset a scrolled body.
-        if (!cardChanged(existing.data, data)) return;
+        if (!cardChanged(existing.data, data)) {
+          // The paint is skipped, but the record still has to be current: what answers a card is not
+          // drawn on it, and a stale copy would leave the composer's pickers showing an old model.
+          existing.data = data;
+          return;
+        }
         markUpdated(existing);
       }
       paintCard(existing, data);
@@ -2247,20 +2252,18 @@
     // Forking only differs when there is a thread that would otherwise answer, so the button says
     // nothing on a thread card or on a card nobody has asked about yet.
     paintFork();
+    // The model and thinking chips name the thread that answers this card.
+    paintRuntime();
     if (replyTarget) {
       // A sticky is titled "you", so it is named by its own words instead.
       const name =
         replyTarget.data.type === "sticky"
           ? (replyTarget.data.text || "message").replace(/\s+/g, " ").trim().slice(0, 40)
           : replyTarget.titleEl.textContent;
-      // A card without a child is answered by the thread that made it, so the chip says where the
-      // answer will land instead of promising a reply on the card that was clicked.
-      const owner = replyTarget.data.type !== "thread" ? byId.get(replyTarget.data.threadRoot) : undefined;
-      replyChipText.textContent = forkNext && owner
-        ? `in “${name}” · a new thread answers`
-        : owner
-          ? `in “${name}” · ${owner.titleEl.textContent} answers`
-          : `in “${name}”`;
+      // A card is answered by a thread that has no card of its own, so there is no name to show: the
+      // chip names the card, and says when a fork is the thing that will answer.
+      const owned = replyTarget.data.type !== "thread" && Boolean(replyTarget.data.answersWith);
+      replyChipText.textContent = forkNext && owned ? `in “${name}” · a new thread answers` : `in “${name}”`;
       msgBox.placeholder = "ask a follow-up about this card…  (esc to send to the board instead)";
       msgBox.focus();
     } else {
@@ -2272,10 +2275,12 @@
   document.getElementById("replyChipClear").addEventListener("click", () => setReplyTarget(null));
 
   function paintFork() {
-    const owner = replyTarget && replyTarget.data.type !== "thread" ? replyTarget.data.threadRoot : undefined;
-    forkBtn.hidden = !owner;
-    forkBtn.disabled = !owner;
-    forkBtn.classList.toggle("on", Boolean(owner) && forkNext);
+    // Forking only differs when something already answers the card, and that something is the thread
+    // behind it: `answersWith` is how the card reports having one.
+    const owned = Boolean(replyTarget && replyTarget.data.type !== "thread" && replyTarget.data.answersWith);
+    forkBtn.hidden = !owned;
+    forkBtn.disabled = !owned;
+    forkBtn.classList.toggle("on", owned && forkNext);
     forkBtn.title = forkNext
       ? "a new thread will answer in its own conversation"
       : "ask a new thread instead of the one that made this card";
@@ -2287,6 +2292,204 @@
     if (replyTarget) setReplyTarget(replyTarget);
     paintComposer();
   });
+
+  // ---------- what answers ---------------------------------------------------
+  // A card answers with the model and thinking level of the thread behind it, so the two chips
+  // follow the card being replied to and edit that thread. With no card chosen they edit what the
+  // next thread starts with.
+  const modelChip = document.getElementById("modelPick");
+  const thinkChip = document.getElementById("thinkPick");
+  const runtimePick = document.getElementById("runtimePick");
+  const runtimeSearch = document.getElementById("runtimeSearch");
+  const runtimeList = document.getElementById("runtimeList");
+  /** {models, levels} from the daemon, read on the first open of either chip. */
+  let catalog = null;
+  /** Which chip opened the panel: "model", "thinking", or "" when it is closed. */
+  let picking = "";
+  /** What a new thread starts with, kept as it is chosen. */
+  let startsWith = {};
+
+  function pickNote(text) {
+    const node = el("div", "pick-note");
+    node.textContent = text;
+    return node;
+  }
+
+  /**
+   * What the message will be answered with. A thread card carries its own runtime; a card that has a
+   * thread behind it carries that thread's, because the thread itself is never drawn.
+   */
+  function answeringRuntime() {
+    if (!replyTarget) return null;
+    if (replyTarget.data.type === "thread") return replyTarget.data;
+    return replyTarget.data.answersWith ?? null;
+  }
+
+  function shortModel(model) {
+    return String(model ?? "").split("/").pop() || "model";
+  }
+
+  function paintRuntime() {
+    const answering = answeringRuntime();
+    // With nothing to reply to, the chips speak for the board's default, which is whatever the
+    // newest thread was started with until a new choice is made.
+    if (!answering && !startsWith.model) {
+      const newest = [...byId.values()]
+        .filter((entry) => entry.data.type === "thread")
+        .sort((left, right) => (right.data.at ?? 0) - (left.data.at ?? 0))[0];
+      if (newest) {
+        startsWith = { provider: newest.data.provider, model: newest.data.model, thinking: newest.data.thinking };
+      }
+    }
+    const runtime = answering ?? startsWith;
+    modelChip.textContent = shortModel(runtime.model);
+    thinkChip.textContent = runtime.thinking ? `think ${runtime.thinking}` : "think off";
+    const where = answering ? "this card answers with" : "a new thread starts with";
+    modelChip.title = `${where} ${runtime.provider ?? ""}/${runtime.model ?? ""}`;
+    thinkChip.title = `${answering ? "this card" : "a new thread"} thinks at ${runtime.thinking || "off"}`;
+  }
+
+  function closePick() {
+    picking = "";
+    runtimePick.hidden = true;
+    runtimeSearch.value = "";
+  }
+
+  function placeRuntimePick() {
+    const chip = (picking === "thinking" ? thinkChip : modelChip).getBoundingClientRect();
+    const width = runtimePick.offsetWidth;
+    const height = runtimePick.offsetHeight;
+    runtimePick.style.left = `${Math.max(10, Math.min(window.innerWidth - width - 10, chip.left))}px`;
+    runtimePick.style.top = `${Math.max(10, chip.top - height - 8)}px`;
+  }
+
+  function pickRow(text, meta, on, onPick) {
+    const row = el("button", on ? "pick-row on" : "pick-row");
+    row.type = "button";
+    const name = el("span");
+    name.textContent = text;
+    row.appendChild(name);
+    if (meta) {
+      const aside = el("span", "pick-meta");
+      aside.textContent = meta;
+      row.appendChild(aside);
+    }
+    row.addEventListener("click", onPick);
+    return row;
+  }
+
+  function drawModels(query) {
+    const needle = query.trim().toLowerCase();
+    const here = answeringRuntime() ?? startsWith;
+    const models = (catalog?.models ?? []).filter(
+      (one) => !needle || one.model.toLowerCase().includes(needle) || one.provider.toLowerCase().includes(needle),
+    );
+    const rows = [];
+    let group = "";
+    // The list is long, so it is grouped by provider and cut short: a search narrows it, and past
+    // a couple of hundred rows scrolling is slower than typing.
+    for (const one of models.slice(0, 200)) {
+      if (one.provider !== group) {
+        group = one.provider;
+        const head = el("div", "pick-group");
+        head.textContent = group;
+        rows.push(head);
+      }
+      const on = one.provider === here.provider && one.model === here.model;
+      const meta = [one.context, one.thinking ? "thinks" : "", one.images ? "images" : ""].filter(Boolean).join(" · ");
+      rows.push(pickRow(one.model, meta, on, () => void chooseRuntime("model", one)));
+    }
+    runtimeList.replaceChildren(...(rows.length ? rows : [pickNote("no model matches")]));
+  }
+
+  function drawLevels() {
+    const here = answeringRuntime() ?? startsWith;
+    const chosen = (catalog?.models ?? []).find((one) => one.provider === here.provider && one.model === here.model);
+    // Pi clamps whatever it is given, so a model without reasoning only offers being off.
+    const levels = chosen && chosen.thinking === false ? ["off"] : (catalog?.levels ?? []);
+    // No level is stored until one is chosen, and that means pi's own default, which reads as off.
+    const current = here.thinking || "off";
+    const rows = levels.map((level) => pickRow(level, "", level === current, () => void chooseRuntime("thinking", level)));
+    if (chosen && chosen.thinking === false) rows.push(pickNote(`${shortModel(here.model)} does not think`));
+    runtimeList.replaceChildren(...(rows.length ? rows : [pickNote("no level to choose")]));
+  }
+
+  async function openPick(which) {
+    if (picking === which) {
+      closePick();
+      return;
+    }
+    picking = which;
+    runtimePick.hidden = false;
+    runtimeSearch.hidden = which !== "model";
+    runtimeList.replaceChildren(pickNote("reading what this machine has…"));
+    if (!catalog) {
+      try {
+        const response = await fetch(`/models?${auth}`);
+        if (!response.ok) throw new Error("the daemon would not list models");
+        catalog = await response.json();
+      } catch (error) {
+        runtimeList.replaceChildren(pickNote(error.message || "could not read the models"));
+        return;
+      }
+    }
+    if (picking !== which) return; // closed while the catalog was loading
+    if (which === "model") {
+      runtimeSearch.value = "";
+      drawModels("");
+      runtimeSearch.focus();
+    } else {
+      drawLevels();
+    }
+    placeRuntimePick();
+  }
+
+  /** Hand the choice to the daemon: this card's thread, or the default for a new one. */
+  async function chooseRuntime(kind, value) {
+    const body = kind === "model" ? { provider: value.provider, model: value.model } : { level: value };
+    // A plain card's id is enough: the daemon finds the thread behind it, which the board never draws.
+    if (replyTarget) body.cardId = replyTarget.id;
+    try {
+      const response = await fetch(`/${kind === "model" ? "model" : "thinking"}?${auth}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+      const payload = await response.json();
+      if (payload.defaults) startsWith = { ...startsWith, ...payload.defaults };
+      hintLine(kind === "model" ? `model: ${shortModel(value.model)}` : `thinking: ${value}`);
+      closePick();
+      paintRuntime();
+    } catch (error) {
+      hintLine(`could not set it: ${error.message || error}`, true);
+    }
+  }
+
+  modelChip.addEventListener("click", () => void openPick("model"));
+  thinkChip.addEventListener("click", () => void openPick("thinking"));
+  runtimeSearch.addEventListener("input", () => drawModels(runtimeSearch.value));
+  window.addEventListener("resize", () => {
+    if (!runtimePick.hidden) placeRuntimePick();
+  });
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (runtimePick.hidden || event.target.closest("#runtimePick, #modelPick, #thinkPick")) return;
+      closePick();
+    },
+    true,
+  );
+  // The panel takes Escape first, so closing it never sends the draft to the board instead.
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Escape" || runtimePick.hidden) return;
+      event.stopPropagation();
+      closePick();
+    },
+    true,
+  );
 
   // ---------- the crossroads -------------------------------------------------
   // Choosing a workspace is not this page's job any more: it lives on `/`, in its own tab, so a board
@@ -3120,6 +3323,9 @@
         // Every thread comes back in the order the human chose, not the order the server lists.
         applyAllThreadOrder();
         sawFirstCard = (payload.cards || []).length > 0;
+        // The chips say what a thread answers with, and the snapshot is the first time any thread is
+        // known: without this they stay blank until some other card changes.
+        paintRuntime();
         // Armed on the first snapshot even when it is empty: the usual start is an empty snapshot
         // and the first card frames through the new-card path, and the first reconnect must not
         // throw that framing away.
@@ -3141,6 +3347,7 @@
         // transition into blocking the agent, not on the state the tab already shows.
         const wasOpen = known && questionWants(byId.get(payload.card.id).data);
         applyMessage(payload.card, payload.quiet === true);
+        paintRuntime();
         // A quiet repaint and a card the tab already holds are not news; only an arrival or a
         // question that has just started blocking the agent is worth a blink in a background tab.
         const record = byId.get(payload.card.id);
@@ -3156,6 +3363,7 @@
   window.BOARD_START = () => {
     applyView();
     updateEmpty();
+    paintRuntime();
     if (!token) {
       // No stream exists here, so nothing on the page is stale: only the header says why the board
       // is blank.
