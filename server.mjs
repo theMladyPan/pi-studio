@@ -2302,7 +2302,33 @@ process.on("exit", () => {
 });
 
 let port = 0;
-server.listen(0, "127.0.0.1", () => {
+
+/**
+ * The port the last daemon printed, so a restart keeps the URL a tab is already on. A development
+ * reload is the reason: a fresh port per restart would make every edit a new link. If something else
+ * has taken it, fall back to any free port rather than refuse to start.
+ */
+function lastPort() {
+	const saved = readJsonFile(STATE_FILE, null);
+	const held = Number(saved?.port);
+	return Number.isInteger(held) && held > 0 && held < 65536 ? held : 0;
+}
+
+function startListening(wanted) {
+	server.listen(wanted, "127.0.0.1", onListening);
+}
+
+server.on("error", (error) => {
+	if (error?.code === "EADDRINUSE" && port === 0 && lastPort() !== 0) {
+		console.error(`pi-studio: port ${lastPort()} is taken, using any free port`);
+		startListening(0);
+		return;
+	}
+	console.error(`pi-studio: ${error?.stack ?? error}`);
+	process.exit(1);
+});
+
+function onListening() {
 	port = server.address().port;
 	writeJsonFile(STATE_FILE, { token, port, at: new Date().toISOString() });
 	const url = `http://127.0.0.1:${port}/?token=${token}`;
@@ -2319,4 +2345,7 @@ server.listen(0, "127.0.0.1", () => {
 			// A machine without a browser opener still has the URL above.
 		}
 	}
-});
+}
+
+// A named port wins, then the one this daemon used last, then anything free.
+startListening(Number(process.env.PI_STUDIO_PORT) || lastPort());

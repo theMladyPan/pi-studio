@@ -12,6 +12,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check public/board.js"
+    "check": "node --check server.mjs && node --check public/board.js",
+    "dev": "node --watch server.mjs --no-open"
   }
 }
