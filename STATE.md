@@ -25,6 +25,20 @@ against real children; nothing has been checked in a browser.
 - **Threads** are cards: `POST /thread` creates one in the open workspace, `POST /message {cardId,
   text, mode}` prompts it. The child is spawned on the first message, one per thread, and shut down
   when it settles.
+- **A thread draws on its own board.** Every child is started with `-ne -e bridge/child-bridge.mjs`
+  and four environment variables (`PI_STUDIO_URL`, `PI_STUDIO_TOKEN`, `PI_STUDIO_WORKSPACE`,
+  `PI_STUDIO_THREAD`), and the bridge registers three tools that post to the board's own routes:
+  `board_note`, `board_source`, `board_ask`. A child started by hand, with no daemon behind it,
+  registers nothing. The tools say what the human should see; card type, placement, cascade and keys
+  stay the daemon's decision, so the verbs are not pi's.
+- **A thread also gets research tools**: `-ne` keeps discovery off, so nothing a user installed
+  starts inside a child by surprise — the old board extension would open a second board in every
+  thread. `PI_STUDIO_CHILD_EXTENSIONS` (default `exa-search,fetch-content`) names what a thread may
+  load, and `PI_STUDIO_TOOLS` names the allowlist; a tool the child is given must be in both. A
+  browser and the YouTrack gateway are deliberately not there.
+- **What a thread is told**: `--append-system-prompt` says it is one thread on a board, in which
+  folder, that the human reads cards rather than a terminal log, and that a fenced svg block in a
+  note draws a picture.
 - **Notes** are the cards with no child behind them. `POST /card/note {markdown, title?, rect?}`
   puts one on the board, `POST /edit {cardId, markdown}` rewrites it, and `POST /layout` and
   `POST /close` treat a note like a thread. A message asked on a note starts a thread named after
@@ -32,6 +46,17 @@ against real children; nothing has been checked in a browser.
   with their text, place and fold. A `key` makes a note stable: the same key revises that card
   instead of stacking another, which is what a running agent stepping through a job needs. A note
   holds at most 100 000 characters and the board keeps 200 of them.
+- **Source cards**: `POST /card/source {path, line?, title?, key?}` reads a file from the workspace
+  and shows it on the board, refusing anything outside the folder, a folder, a binary, or more than
+  200 000 bytes. The key defaults to the path, so opening the same file again refreshes that card.
+- **Questions**: `POST /card/ask {question, options[], allowFreeText?, title?}` puts a question on
+  the board and holds the request open; `POST /answer {cardId, answer}` settles it and the click
+  travels back in the held response. Five minutes with no answer expires it, closing the tab expires
+  it, and a question restored from disk is always expired because the agent that was waiting is gone.
+  A question nobody answered is not a failure: the tool tells the child to decide and say what it
+  assumed.
+- **One map for cards without a child**: notes, sources and questions live in `board.cards`, saved
+  under `cards` and read from an older file's `notes` too.
 - **Sessions resume**: the child writes its session under the app's own session dir, the thread
   stores the id, and a message after a daemon restart resumes that session. Verified: after a
   restart the agent remembered the word it had answered in the previous run.
@@ -56,6 +81,15 @@ a second workspace with its own thread and reply at the same time, both restored
 restart, crossroads showing both with their last activity. `POST /pick-folder` is untested because
 running it opens a dialog on the human's screen.
 
+The board verbs, against real children on a throwaway `HOME`: a child asked to make a note and open a
+file did both (`board_note` with a key revised one card; `board_source` opened `notes.txt` at line 2),
+each card cascading under the thread that asked for it, and the thread still answered in its own
+card. A child asked a question with `board_ask`, the card appeared while the request was held, an
+answer posted from another request reached the card and the child's turn ("You chose tabs"), a second
+answer to the same question was refused with 409, an ask with no question or with one option was
+refused with 400. A child asked to search the web used `exa_search` and answered with the result, and
+the rail showed the tool row, which proves the research extensions load inside a thread.
+
 Notes, against a daemon on a throwaway `HOME` and a scratch folder: created with and without a
 `rect`, refused when the markdown is blank, carried in the `snapshot` and in `GET /state`, edited
 (the stored markdown and `updatedAt` change), moved and folded through `POST /layout`, restored with
@@ -65,9 +99,10 @@ has been checked in a browser.
 
 ## Does not work yet
 
-- A thread cannot draw notes, sources or ask questions: no board verbs, so it only answers in its
-  own card. Notes exist, but only the human puts them there.
 - The answer appears when a turn ends; nothing streams into the card while it is generated.
+- Every card has the same composer, but only a thread does anything useful with it: a note, source or
+  question starts a thread of its own rather than gaining a child.
+- Feeding one card into another thread, and forking a thread, are designed and not built.
 - Rail rows carry no payloads (arguments, logs, outputs), no usage totals, no images.
 - `stop` aborts every running thread, not a chosen one; the rail is one list, not one per thread.
 - No attention to a workspace whose folder has been deleted or moved: opening it fails with a 404
@@ -75,11 +110,8 @@ has been checked in a browser.
 
 ## Next, in order
 
-1. Board verbs for children (`POST /card/note`, `/card/source`, `/card/ask`) plus a thin `slave.ts` a
-   child loads with `-e`, so a thread can put things on the board. `/card/note` is done for the
-   human's client; the child still has no way in.
-2. Stream the answer into the card, then rail payloads.
-3. Per-thread stop, and the rail grouped by thread.
+1. Stream the answer into the card, then rail payloads.
+2. Per-thread stop, and the rail grouped by thread.
 4. A workspace entry that no longer resolves: say so and offer to forget it.
 
 ## Rules

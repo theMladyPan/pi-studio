@@ -28,13 +28,36 @@ const STATE_FILE = join(STATE_DIR, "daemon.json");
 const WORKSPACES_FILE = join(STATE_DIR, "workspaces.json");
 const PROVIDER = process.env.PI_STUDIO_PROVIDER ?? "klotilda";
 const MODEL = process.env.PI_STUDIO_MODEL ?? "deepseek-ai/DeepSeek-V4.1-Flash-1017";
-const TOOLS = "read,bash,edit,write";
+/**
+ * An allowlist, so every tool a thread is given has to be named here: the built-in four, the board's
+ * verbs, and the tools of the extensions below.
+ */
+const TOOLS =
+	process.env.PI_STUDIO_TOOLS ?? "read,bash,edit,write,board_note,board_source,board_ask,exa_search,fetch_content";
+/** The extension a child loads so a thread can draw on the board it belongs to. */
+const BRIDGE = join(dirname(PUBLIC_DIR), "bridge", "child-bridge.mjs");
+/**
+ * Extensions a thread may use. `-ne` keeps discovery off, so nothing a user installed starts inside a
+ * child by surprise — the old board extension would open a second board in every thread. Web
+ * research is named on purpose; a browser and the YouTrack gateway are not: a child does not drive
+ * this machine's browser, and it does not talk to the 2FA gateway on the human's behalf.
+ */
+const CHILD_EXTENSIONS = (process.env.PI_STUDIO_CHILD_EXTENSIONS ?? "exa-search,fetch-content")
+	.split(",")
+	.map((name) => name.trim())
+	.filter(Boolean)
+	.map((name) => (name.includes("/") ? name : join(extensionsDir(), name, "index.ts")))
+	.filter((path) => existsSync(path));
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_ACTIVITY = 300;
 const MAX_THREADS = 200;
-const MAX_NOTES = 200;
+const MAX_PLAIN_CARDS = 200;
 /** A note is markdown the board repaints on every change, so its size has a ceiling. */
 const MAX_NOTE_CHARS = 100_000;
+/** A source card carries a whole file, so the ceiling is higher and still finite. */
+const MAX_SOURCE_CHARS = 200_000;
+/** A question whose agent is waiting holds that child's turn open, so it cannot wait forever. */
+const ASK_TIMEOUT_MS = 5 * 60_000;
 const STATE_VERSION = 1;
 const BROWSE_LIMIT = 200;
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
@@ -71,16 +94,28 @@ const OPEN_BROWSER = !process.argv.includes("--no-open");
  */
 
 /**
- * A note is a card with no child behind it: markdown the human reads, drags and edits.
- * @typedef {object} Note
+ * A card with no child behind it: markdown a note carries, or a file a source card shows. The daemon
+ * keeps them beside the threads and the client draws them by `type`.
+ * @typedef {object} PlainCard
  * @property {string} id
+ * @property {"note"|"source"|"question"} type
  * @property {string} title
- * @property {string} markdown
+ * @property {string} [question]
+ * @property {string[]} [options]
+ * @property {boolean} [allowFreeText]
+ * @property {"open"|"answered"|"expired"} [status]
+ * @property {string} [answer]
+ * @property {number} [expiresAt]
+ * @property {string} [markdown]
+ * @property {string} [path]
+ * @property {string} [content]
+ * @property {number} [line]
+ * @property {string} [key]
+ * @property {string} [threadRoot]
  * @property {number} at
  * @property {number} [updatedAt]
  * @property {{x:number,y:number,w:number,h:number}} [rect]
  * @property {boolean} [mini]
- * @property {string} [key]
  */
 
 /**
@@ -90,7 +125,8 @@ const OPEN_BROWSER = !process.argv.includes("--no-open");
  * @property {string} folder
  * @property {string} name
  * @property {Map<string, Thread>} threads
- * @property {Map<string, Note>} notes
+ * @property {Map<string, PlainCard>} cards
+ * @property {Map<string, {resolve: (value: {status: string, answer?: string}) => void}>} askers
  * @property {object[]} activity
  * @property {Map<string, import("node:child_process").ChildProcess>} children
  * @property {Set<import("node:http").ServerResponse>} clients
@@ -222,15 +258,26 @@ function saveBoard(board) {
 			...(thread.mini ? { mini: true } : {}),
 			...(thread.threadRoot ? { threadRoot: thread.threadRoot } : {}),
 		})),
-		notes: [...board.notes.values()].map((note) => ({
-			id: note.id,
-			title: note.title,
-			markdown: note.markdown,
-			at: note.at,
-			...(note.updatedAt ? { updatedAt: note.updatedAt } : {}),
-			...(note.key ? { key: note.key } : {}),
-			...(note.rect ? { rect: note.rect } : {}),
-			...(note.mini ? { mini: true } : {}),
+		cards: [...board.cards.values()].map((card) => ({
+			id: card.id,
+			type: card.type,
+			title: card.title,
+			at: card.at,
+			...(typeof card.markdown === "string" ? { markdown: card.markdown } : {}),
+			...(typeof card.path === "string" ? { path: card.path } : {}),
+			...(typeof card.content === "string" ? { content: card.content } : {}),
+			...(Number.isFinite(card.line) ? { line: card.line } : {}),
+			...(typeof card.question === "string" ? { question: card.question } : {}),
+			...(Array.isArray(card.options) ? { options: card.options } : {}),
+			...(card.type === "question" ? { allowFreeText: card.allowFreeText !== false } : {}),
+			...(typeof card.status === "string" ? { status: card.status } : {}),
+			...(typeof card.answer === "string" ? { answer: card.answer } : {}),
+			...(Number.isFinite(card.expiresAt) ? { expiresAt: card.expiresAt } : {}),
+			...(card.updatedAt ? { updatedAt: card.updatedAt } : {}),
+			...(card.key ? { key: card.key } : {}),
+			...(card.threadRoot ? { threadRoot: card.threadRoot } : {}),
+			...(card.rect ? { rect: card.rect } : {}),
+			...(card.mini ? { mini: true } : {}),
 		})),
 	};
 	writeJsonFile(boardFile(board), payload);
@@ -282,20 +329,37 @@ function restoredThread(raw, folder) {
 	};
 }
 
-/** Rebuild a note from its file. One without markdown is nothing, so it is dropped. */
-function restoredNote(raw) {
-	if (!raw || typeof raw !== "object" || typeof raw.id !== "string" || typeof raw.markdown !== "string") return null;
+/** Rebuild a plain card from its file. One without the body its type needs is nothing, so it goes. */
+function restoredPlainCard(raw) {
+	if (!raw || typeof raw !== "object" || typeof raw.id !== "string") return null;
+	// Files written before source cards existed carried notes under their own key and no type.
+	const type = raw.type === "source" || raw.type === "question" ? raw.type : "note";
+	if (type === "note" && typeof raw.markdown !== "string") return null;
+	if (type === "source" && (typeof raw.path !== "string" || typeof raw.content !== "string")) return null;
+	if (type === "question" && typeof raw.question !== "string") return null;
 	const rect = cleanRect(raw.rect);
-	return {
+	const card = {
 		id: raw.id,
-		title: typeof raw.title === "string" && raw.title ? raw.title : "note",
-		markdown: raw.markdown,
+		type,
+		title: typeof raw.title === "string" && raw.title ? raw.title : type,
 		at: Number.isFinite(raw.at) ? raw.at : Date.now(),
+		...(type === "note"
+			? { markdown: raw.markdown }
+			: type === "source"
+				? { path: raw.path, content: raw.content }
+				: { question: raw.question, options: Array.isArray(raw.options) ? raw.options.filter((one) => typeof one === "string") : [] }),
+		// A question is answered by an agent that was waiting for it, and that agent is gone: whatever
+		// the file says, a restored question is settled.
+		...(type === "question" ? { status: "expired", allowFreeText: raw.allowFreeText !== false } : {}),
+		...(typeof raw.answer === "string" ? { answer: raw.answer } : {}),
 		...(Number.isFinite(raw.updatedAt) ? { updatedAt: raw.updatedAt } : {}),
+		...(Number.isFinite(raw.line) ? { line: raw.line } : {}),
 		...(typeof raw.key === "string" && raw.key ? { key: raw.key } : {}),
+		...(typeof raw.threadRoot === "string" && raw.threadRoot ? { threadRoot: raw.threadRoot } : {}),
 		...(rect ? { rect } : {}),
 		...(raw.mini ? { mini: true } : {}),
 	};
+	return card;
 }
 
 /** Load a workspace's board into memory, or hand back the one already there. */
@@ -313,7 +377,8 @@ function boardFor(workspace) {
 		folder: workspace.folder,
 		name: workspace.name,
 		threads: new Map(),
-		notes: new Map(),
+		cards: new Map(),
+		askers: new Map(),
 		activity: [],
 		children: new Map(),
 		clients: new Set(),
@@ -325,9 +390,11 @@ function boardFor(workspace) {
 			const thread = restoredThread(raw, workspace.folder);
 			if (thread && !board.threads.has(thread.id)) board.threads.set(thread.id, thread);
 		}
-		for (const raw of (Array.isArray(saved.notes) ? saved.notes : []).slice(-MAX_NOTES)) {
-			const note = restoredNote(raw);
-			if (note && !board.notes.has(note.id)) board.notes.set(note.id, note);
+		// A board written before source cards existed kept its notes under `notes`.
+		const plain = Array.isArray(saved.cards) ? saved.cards : Array.isArray(saved.notes) ? saved.notes : [];
+		for (const raw of plain.slice(-MAX_PLAIN_CARDS)) {
+			const card = restoredPlainCard(raw);
+			if (card && !board.cards.has(card.id)) board.cards.set(card.id, card);
 		}
 		for (const row of (Array.isArray(saved.activity) ? saved.activity : []).slice(-MAX_ACTIVITY)) {
 			if (row && typeof row.id === "string" && row.status !== "running") board.activity.push(row);
@@ -467,28 +534,40 @@ function cardFor(thread) {
 	return card;
 }
 
-/** A note as the card the browser draws: markdown under a title, with no run behind it. */
-function noteFor(note) {
-	const card = {
-		id: note.id,
-		type: "note",
-		title: note.title,
-		at: note.at,
+/** A plain card as the browser draws it: markdown under a title, or a file, with no run behind it. */
+function plainCardFor(card) {
+	const shown = {
+		id: card.id,
+		type: card.type,
+		title: card.title,
+		at: card.at,
 		text: "",
 		status: "answered",
 		mode: "queue",
 		images: 0,
-		markdown: note.markdown,
+		...(card.type === "note"
+			? { markdown: card.markdown }
+			: card.type === "source"
+				? { path: card.path, content: card.content, ...(Number.isFinite(card.line) ? { line: card.line } : {}) }
+				: {
+						question: card.question,
+						options: card.options,
+						allowFreeText: card.allowFreeText !== false,
+						status: card.status ?? "expired",
+						...(card.answer ? { answer: card.answer } : {}),
+						...(Number.isFinite(card.expiresAt) ? { expiresAt: card.expiresAt } : {}),
+					}),
 	};
-	if (note.updatedAt) card.updatedAt = note.updatedAt;
-	if (note.rect) card.rect = note.rect;
-	if (note.mini) card.mini = true;
-	return card;
+	if (card.updatedAt) shown.updatedAt = card.updatedAt;
+	if (card.rect) shown.rect = card.rect;
+	if (card.mini) shown.mini = true;
+	if (card.threadRoot) shown.threadRoot = card.threadRoot;
+	return shown;
 }
 
-/** Every card on a board: the threads, then the notes the human put there. */
+/** Every card on a board: the threads, then the cards the human and the agents put there. */
 function cardsFor(board) {
-	return [...board.threads.values()].map(cardFor).concat([...board.notes.values()].map(noteFor));
+	return [...board.threads.values()].map(cardFor).concat([...board.cards.values()].map(plainCardFor));
 }
 
 function boardMeta(board) {
@@ -575,12 +654,21 @@ function threadError(board, thread, message) {
  * The CLI a child needs. Same order as the rest of the tooling: the script this process is already
  * running pi from, then the managed install, then the `pi` binary on PATH.
  */
+/** Where pi keeps the install this app drives, and the extensions beside it. */
+function installRoot() {
+	return process.env.PI_MANAGED_INSTALL_ROOT ?? join(homedir(), ".pi", "agent", "install");
+}
+
+function extensionsDir() {
+	return join(dirname(installRoot()), "extensions");
+}
+
 function piCli() {
 	const script = process.argv[1];
 	if (script && existsSync(script) && (basename(script) === "pi" || script.includes("pi-coding-agent"))) {
 		return { command: process.execPath, args: [script] };
 	}
-	const root = process.env.PI_MANAGED_INSTALL_ROOT ?? join(homedir(), ".pi", "agent", "install");
+	const root = installRoot();
 	try {
 		const version = readFileSync(join(root, "current-version"), "utf8").trim();
 		const cli = join(root, "releases", version, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js");
@@ -613,6 +701,17 @@ function firstLine(result) {
 	return text.split("\n").map((line) => line.trim()).find((line) => line.length > 0)?.slice(0, 140) ?? "";
 }
 
+/** The thread's own card, and the board around it, said plainly enough that an agent uses it. */
+function boardPrompt(board, thread) {
+	return [
+		`You are thread "${thread.title}" on a board, working in the folder ${board.folder}.`,
+		"The human reads cards on that board, not a terminal log.",
+		"Your answer is shown inside your own card, so write it as prose for a person, and keep long material out of it.",
+		"board_note puts a note on the board: use it for a diagram (a fenced svg block draws a picture), a table, a file tree, a todo list you will keep revising under the same key, or a finding worth keeping visible.",
+		"board_source shows the human a real file from this workspace, scrolled to a line, instead of quoting it at them.",
+	].join("\n");
+}
+
 function childArgv(board, thread) {
 	// A child writes its session where pi-studio keeps them, not in pi's own session list: this app
 	// owns these conversations, and a thread that already has one resumes it so the card stays
@@ -625,8 +724,14 @@ function childArgv(board, thread) {
 		sessionDir(board),
 		...session,
 		"-ne",
+		// `-ne` stops discovery, and an explicit `-e` still loads: that is how a thread gets its verbs
+		// and the research tools, without anything else coming along.
+		...(existsSync(BRIDGE) ? ["-e", BRIDGE] : []),
+		...CHILD_EXTENSIONS.flatMap((path) => ["-e", path]),
 		"--tools",
 		TOOLS,
+		"--append-system-prompt",
+		boardPrompt(board, thread),
 		"--provider",
 		thread.provider,
 		"--model",
@@ -643,6 +748,14 @@ function ensureChild(board, thread) {
 		cwd: board.folder,
 		shell: false,
 		stdio: ["pipe", "pipe", "pipe"],
+		// The bridge reads these: where the board is, what it may write to, and whose card it is.
+		env: {
+			...process.env,
+			PI_STUDIO_URL: `http://127.0.0.1:${port}`,
+			PI_STUDIO_TOKEN: token,
+			PI_STUDIO_WORKSPACE: board.id,
+			PI_STUDIO_THREAD: thread.id,
+		},
 	});
 	board.children.set(thread.id, child);
 	// A child that died between two messages turns the next write into EPIPE. That is a card error,
@@ -901,63 +1014,238 @@ async function onThread(req, res, board) {
 	answer(res, 200, { threadId: thread.id, card: cardFor(thread) });
 }
 
+/** The card a key already addresses, so a caller that repeats itself revises instead of stacking. */
+function cardByKey(board, key, type) {
+	if (!key) return undefined;
+	return [...board.cards.values()].find((card) => card.key === key && card.type === type);
+}
+
+/** A string field from a request body, trimmed and cut short. */
+function field(value, limit = 80) {
+	return typeof value === "string" && value.trim() ? value.trim().slice(0, limit) : "";
+}
+
+/** Where a card goes when the caller gave it a place, rounded to whole pixels. */
+function placedRect(body) {
+	const rect = cleanRect(body.rect);
+	return rect
+		? { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.w), h: Math.round(rect.h) }
+		: undefined;
+}
+
+/** The thread a card should cascade under, when the caller named one that exists. */
+function rootOf(board, body) {
+	const root = field(body.threadRoot, 100);
+	return root && board.threads.has(root) ? root : undefined;
+}
+
+/** Keep the board bounded: the oldest plain card goes when a new one arrives and there is no room. */
+function makeRoom(board) {
+	while (board.cards.size >= MAX_PLAIN_CARDS) {
+		const oldest = [...board.cards.values()].sort((a, b) => a.at - b.at)[0];
+		if (!oldest) break;
+		board.cards.delete(oldest.id);
+		broadcast(board, { type: "remove", id: oldest.id });
+	}
+}
+
 async function onNote(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const markdown = typeof body.markdown === "string" ? body.markdown : "";
 	if (!markdown.trim()) return void fail(res, 400, "empty note");
 	if (markdown.length > MAX_NOTE_CHARS) return void fail(res, 413, `a note holds at most ${MAX_NOTE_CHARS} characters`);
-	const title = typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 80) : "";
-	const key = typeof body.key === "string" && body.key.trim() ? body.key.trim().slice(0, 80) : "";
+	const title = field(body.title);
+	const key = field(body.key);
+	const root = rootOf(board, body);
 	// A key makes the card stable: saying the same thing twice revises one note instead of stacking
 	// a second copy of it on the board, which is what a running agent stepping through a job does.
-	const held = key ? [...board.notes.values()].find((note) => note.key === key) : undefined;
+	const held = cardByKey(board, key, "note");
 	if (held) {
 		held.markdown = markdown;
 		held.updatedAt = Date.now();
 		if (title) held.title = title;
-		const rect = cleanRect(body.rect);
-		if (rect) held.rect = { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.w), h: Math.round(rect.h) };
-		broadcast(board, { type: "update", card: noteFor(held) });
+		if (root) held.threadRoot = root;
+		const rect = placedRect(body);
+		if (rect) held.rect = rect;
+		broadcast(board, { type: "update", card: plainCardFor(held) });
 		scheduleSave(board);
-		answer(res, 200, { cardId: held.id, card: noteFor(held), updated: true });
+		answer(res, 200, { cardId: held.id, card: plainCardFor(held), updated: true });
 		return;
 	}
-	// Notes are the cheapest thing an agent can make, so the board keeps a bounded number of them.
-	while (board.notes.size >= MAX_NOTES) {
-		const oldest = [...board.notes.values()].sort((a, b) => a.at - b.at)[0];
-		if (!oldest) break;
-		board.notes.delete(oldest.id);
-		broadcast(board, { type: "remove", id: oldest.id });
-	}
+	makeRoom(board);
 	const note = {
 		id: randomUUID(),
+		type: "note",
 		title: title || "note",
 		markdown,
 		at: Date.now(),
 		...(key ? { key } : {}),
+		...(root ? { threadRoot: root } : {}),
 	};
-	const rect = cleanRect(body.rect);
-	if (rect) note.rect = { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.w), h: Math.round(rect.h) };
-	board.notes.set(note.id, note);
-	broadcast(board, { type: "card", card: noteFor(note) });
+	const rect = placedRect(body);
+	if (rect) note.rect = rect;
+	board.cards.set(note.id, note);
+	broadcast(board, { type: "card", card: plainCardFor(note) });
 	scheduleSave(board);
-	answer(res, 200, { cardId: note.id, card: noteFor(note) });
+	answer(res, 200, { cardId: note.id, card: plainCardFor(note) });
+}
+
+/** Read a file inside the workspace, refusing anything that leaves it. */
+function readInsideWorkspace(folder, wanted) {
+	const target = resolve(folder, String(wanted ?? ""));
+	const root = resolve(folder);
+	if (target !== root && !target.startsWith(`${root}/`)) {
+		throw new Error(`${wanted} is outside the workspace`);
+	}
+	const stat = statSync(target, { throwIfNoEntry: false });
+	if (!stat) throw new Error(`${wanted} does not exist`);
+	if (!stat.isFile()) throw new Error(`${wanted} is not a file`);
+	if (stat.size > MAX_SOURCE_CHARS) throw new Error(`${wanted} is larger than ${MAX_SOURCE_CHARS} bytes`);
+	const content = readFileSync(target, "utf8");
+	// A binary file read as text is a card full of replacement characters, so say so instead.
+	if (content.includes("\u0000")) throw new Error(`${wanted} is not a text file`);
+	return content;
+}
+
+async function onSource(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const wanted = field(body.path, 400);
+	if (!wanted) return void fail(res, 400, "path is required");
+	let content;
+	try {
+		content = readInsideWorkspace(board.folder, wanted);
+	} catch (error) {
+		return void fail(res, 409, error.message);
+	}
+	const key = field(body.key, 400) || wanted;
+	const title = field(body.title) || basename(wanted) || wanted;
+	const line = Number.isFinite(body.line) && body.line > 0 ? Math.round(body.line) : undefined;
+	const root = rootOf(board, body);
+	const held = cardByKey(board, key, "source");
+	if (held) {
+		// The file may have changed since the card was opened, which is the point of opening it again.
+		held.path = wanted;
+		held.content = content;
+		held.title = title;
+		held.updatedAt = Date.now();
+		if (line) held.line = line;
+		else delete held.line;
+		if (root) held.threadRoot = root;
+		broadcast(board, { type: "update", card: plainCardFor(held) });
+		scheduleSave(board);
+		const lines = content.split("\n").length;
+		answer(res, 200, { cardId: held.id, card: { ...plainCardFor(held), lines }, updated: true });
+		return;
+	}
+	makeRoom(board);
+	const card = {
+		id: randomUUID(),
+		type: "source",
+		title,
+		path: wanted,
+		content,
+		key,
+		at: Date.now(),
+		...(line ? { line } : {}),
+		...(root ? { threadRoot: root } : {}),
+	};
+	board.cards.set(card.id, card);
+	broadcast(board, { type: "card", card: plainCardFor(card) });
+	scheduleSave(board);
+	answer(res, 200, { cardId: card.id, card: { ...plainCardFor(card), lines: content.split("\n").length } });
 }
 
 /** The note the human edited: the text is theirs, so it is stored as written. */
 async function onEdit(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
-	const note = board.notes.get(String(body.cardId ?? ""));
+	const held = board.cards.get(String(body.cardId ?? ""));
+	const note = held && held.type === "note" ? held : undefined;
 	if (!note) return void fail(res, 409, "not an editable note");
 	if (typeof body.markdown !== "string") return void fail(res, 400, "markdown is required");
 	if (body.markdown.length > MAX_NOTE_CHARS) return void fail(res, 413, `a note holds at most ${MAX_NOTE_CHARS} characters`);
 	note.markdown = body.markdown;
 	note.updatedAt = Date.now();
-	broadcast(board, { type: "update", card: noteFor(note) });
+	broadcast(board, { type: "update", card: plainCardFor(note) });
 	scheduleSave(board);
-	answer(res, 200, { card: noteFor(note) });
+	answer(res, 200, { card: plainCardFor(note) });
+}
+
+/** Settle a question, tell whoever was waiting, and keep the card honest about what happened. */
+function settleQuestion(board, card, status, answer) {
+	card.status = status;
+	card.updatedAt = Date.now();
+	if (answer) card.answer = answer;
+	broadcast(board, { type: "update", card: plainCardFor(card) });
+	scheduleSave(board);
+	const waiting = board.askers.get(card.id);
+	board.askers.delete(card.id);
+	if (waiting) waiting.resolve({ status, answer });
+}
+
+/**
+ * Ask the human, and hold this request open until they answer.
+ *
+ * The response stays open for as long as the child's turn is waiting, because the answer travels
+ * back in it: option clicked, words typed, or a failure the tool can read and act on.
+ */
+async function onAsk(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const question = field(body.question, 2000);
+	const options = (Array.isArray(body.options) ? body.options : []).map((one) => field(one, 120)).filter(Boolean);
+	if (!question) return void fail(res, 400, "a question needs words");
+	if (options.length < 2) return void fail(res, 400, "a question needs two to four options");
+	makeRoom(board);
+	const card = {
+		id: randomUUID(),
+		type: "question",
+		title: field(body.title) || "question",
+		question,
+		options: options.slice(0, 4),
+		allowFreeText: body.allowFreeText !== false,
+		status: "open",
+		at: Date.now(),
+		expiresAt: Date.now() + ASK_TIMEOUT_MS,
+		...(rootOf(board, body) ? { threadRoot: rootOf(board, body) } : {}),
+	};
+	board.cards.set(card.id, card);
+	broadcast(board, { type: "card", card: plainCardFor(card) });
+	scheduleSave(board);
+
+	const settled = await new Promise((resolve) => {
+		const timer = setTimeout(() => {
+			settleQuestion(board, card, "expired");
+		}, ASK_TIMEOUT_MS);
+		board.askers.set(card.id, {
+			resolve: (value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+		});
+		// A closed tab must not leave the child's turn waiting for a click nobody can make.
+		res.on("close", () => {
+			if (card.status !== "open") return;
+			settleQuestion(board, card, "expired");
+		});
+	});
+	if (settled.status === "answered") answer(res, 200, { cardId: card.id, answer: settled.answer ?? "" });
+	else fail(res, 409, "nobody answered this question");
+}
+
+/** The human's click, arriving from whichever tab they were looking at. */
+async function onAnswer(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const card = board.cards.get(String(body.cardId ?? ""));
+	if (!card || card.type !== "question") return void fail(res, 404, "no such question");
+	if (card.status !== "open") return void fail(res, 409, "that question is already settled");
+	const reply = field(body.answer, 2000);
+	if (!reply) return void fail(res, 400, "empty answer");
+	settleQuestion(board, card, "answered", reply);
+	answer(res, 200, { cardId: card.id });
 }
 
 async function onMessage(req, res, board) {
@@ -967,8 +1255,8 @@ async function onMessage(req, res, board) {
 	if (!text) return void fail(res, 400, "empty message");
 	const mode = body.mode === "steer" ? "steer" : "queue";
 	const asked = typeof body.cardId === "string" ? body.cardId : "";
-	// A note has no child of its own, so a question asked on one starts a thread named after it.
-	const noteAsked = asked ? board.notes.get(asked) : undefined;
+	// A plain card has no child of its own, so a question asked on one starts a thread named after it.
+	const noteAsked = asked ? board.cards.get(asked) : undefined;
 	let thread = asked && !noteAsked ? board.threads.get(asked) : undefined;
 	if (asked && !noteAsked && !thread) return void fail(res, 409, "no such card");
 	if (!thread) {
@@ -1014,8 +1302,8 @@ async function onLayout(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const id = String(body.cardId ?? "");
-	// A note is dragged and resized like a thread, and its place is kept the same way.
-	const held = board.threads.get(id) ?? board.notes.get(id);
+	// A plain card is dragged and resized like a thread, and its place is kept the same way.
+	const held = board.threads.get(id) ?? board.cards.get(id);
 	const rect = body.rect;
 	if (!held || !rect) return void fail(res, 409, "no such card");
 	const clamp = (value) => Math.max(0, Math.min(40000, Math.round(Number.isFinite(Number(value)) ? Number(value) : 0)));
@@ -1030,9 +1318,9 @@ async function onClose(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const id = String(body.cardId ?? "");
-	const note = board.notes.get(id);
-	if (note) {
-		board.notes.delete(id);
+	const plain = board.cards.get(id);
+	if (plain) {
+		board.cards.delete(id);
 		broadcast(board, { type: "remove", id });
 		scheduleSave(board);
 		answer(res, 200, { closed: id });
@@ -1224,7 +1512,10 @@ const server = createServer((req, res) => {
 			const routing = {
 				"/thread": onThread,
 				"/card/note": onNote,
+				"/card/source": onSource,
+				"/card/ask": onAsk,
 				"/edit": onEdit,
+				"/answer": onAnswer,
 				"/message": onMessage,
 				"/layout": onLayout,
 				"/close": onClose,
@@ -1245,7 +1536,6 @@ const server = createServer((req, res) => {
 			}
 			// Everything the board had for a single session: kept honest by refusing rather than lying.
 			if (url.pathname === "/compact") return void fail(res, 409, "compaction belongs to the child, and no run is waiting on it");
-			if (url.pathname === "/answer") return void fail(res, 409, "questions are not wired to the daemon yet");
 		}
 		fail(res, 404, "not found");
 	})().catch((error) => {
