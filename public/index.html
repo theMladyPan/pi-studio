@@ -581,6 +581,8 @@
   /* A selected card is the conversation being read, so the other threads step back rather than
      disappear: still legible, plainly not what you are looking at. */
   .card.dim { opacity: .7; }
+  /* The second press of `new` is the confirmation, so the button says so. */
+  header button.armed { color: #f85149; border-color: rgba(248, 81, 73, .5); }
   #boardConfig { position: fixed; z-index: 2000; top: 46px; right: 12px; display: flex; flex-direction: column;
     gap: 1px; width: 232px; padding: 8px; background: #0d1117; border: 1px solid var(--border-bright);
     border-radius: 8px; box-shadow: 0 12px 32px rgba(1, 4, 9, .55); }
@@ -628,6 +630,8 @@
   <button id="tidy">tidy</button>
   <button id="fit">fit all</button>
   <button id="reset">100%</button>
+  <button id="cleanBtn" title="forget dead threads and their logs">clean</button>
+  <button id="newBtn" title="start over in this workspace: same folder, same settings, empty board">new</button>
   <button id="configBtn" title="this board's settings: default model, thinking, dimming" aria-haspopup="dialog" aria-expanded="false">⚙</button>
 </header>
 

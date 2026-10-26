@@ -818,6 +818,58 @@ function broadcast(board, payload) {
 	send(board.clients, payload);
 }
 
+/** Rebuild every open tab from the board as it stands, after something large changed at once. */
+function resync(board) {
+	broadcast(board, { type: "snapshot", cards: cardsFor(board), activity: board.activity, meta: boardMeta(board) });
+}
+
+/** The activity rows of a thread that is still here and still alive. */
+function liveThreadIds(board) {
+	const ids = new Set();
+	for (const thread of board.threads.values()) if (thread.status !== "dead") ids.add(thread.id);
+	return ids;
+}
+
+/**
+ * Clean: forget what belongs to threads that are gone or dead. A dead thread's card goes too — it
+ * cannot answer again, and its logs are the part of the rail nobody reads twice. What such a thread
+ * owned stays on the board, owned by nobody, so its next comment starts a fresh child.
+ */
+function cleanBoard(board) {
+	const alive = liveThreadIds(board);
+	const removed = [];
+	for (const thread of [...board.threads.values()]) {
+		if (thread.status !== "dead") continue;
+		removed.push(thread.id);
+		board.threads.delete(thread.id);
+		board.children.get(thread.id)?.kill("SIGKILL");
+		board.children.delete(thread.id);
+	}
+	for (const card of board.cards.values()) {
+		if (card.ownerThread && !alive.has(card.ownerThread)) delete card.ownerThread;
+	}
+	const before = board.activity.length;
+	board.activity = board.activity.filter((row) => {
+		const id = row.thread?.id;
+		return id ? alive.has(id) : false;
+	});
+	scheduleSave(board);
+	return { removed, rows: before - board.activity.length };
+}
+
+/** New: the same workspace and the same settings, with nothing on the board. */
+function clearBoard(board) {
+	for (const thread of [...board.threads.values()]) {
+		board.children.get(thread.id)?.kill("SIGKILL");
+		board.children.delete(thread.id);
+		board.threads.delete(thread.id);
+	}
+	board.cards.clear();
+	board.activity = [];
+	board.askers.clear();
+	scheduleSave(board);
+}
+
 /** The crossroads shows counts, so it hears about every change that alters one. */
 function nudgeWelcome() {
 	if (!welcomeClients.size) return;
@@ -1975,6 +2027,24 @@ async function onStop(req, res, board) {
 	answer(res, 200, { stopped: running.map((thread) => thread.id) });
 }
 
+/** Forget dead threads and their logs. Safe: nothing that can answer is touched. */
+async function onClean(req, res, board) {
+	req.resume();
+	const result = cleanBoard(board);
+	resync(board);
+	nudgeWelcome();
+	answer(res, 200, result);
+}
+
+/** Start over in this workspace, keeping the board's settings. */
+async function onNew(req, res, board) {
+	req.resume();
+	clearBoard(board);
+	resync(board);
+	nudgeWelcome();
+	answer(res, 200, { cleared: true });
+}
+
 /**
  * Change what the board is configured with. Only the switches live here: the model and the thinking
  * level keep their own routes, which already know how to validate against the catalog and how to tell
@@ -2187,6 +2257,8 @@ const server = createServer((req, res) => {
 				"/thinking": onThinking,
 				"/kill": onKill,
 				"/config": onConfig,
+				"/clean": onClean,
+				"/new": onNew,
 			};
 			const handler = routing[url.pathname];
 			if (handler) {

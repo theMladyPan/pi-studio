@@ -2664,6 +2664,52 @@
     configBtn.setAttribute("aria-expanded", on ? "true" : "false");
   }
 
+  // ---------- clean and new ------------------------------------------------
+  // Cleaning is safe, so it happens on the click. Starting over throws away every card, so the same
+  // button turns into a question and the second click is the answer.
+  const cleanBtn = document.getElementById("cleanBtn");
+  const newBtn = document.getElementById("newBtn");
+  let newArmed = 0;
+
+  async function postBoardAction(path) {
+    try {
+      const response = await fetch(`/${path}?${auth}`, { method: "POST" });
+      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+      return await response.json();
+    } catch (error) {
+      hintLine(`could not ${path === "new" ? "start over" : "clean"}: ${error.message || error}`, true);
+      return null;
+    }
+  }
+
+  cleanBtn.addEventListener("click", async () => {
+    const result = await postBoardAction("clean");
+    if (!result) return;
+    hintLine(result.removed.length ? `cleaned ${result.removed.length} dead thread${result.removed.length > 1 ? "s" : ""} and ${result.rows} rows` : "nothing to clean");
+  });
+
+  newBtn.addEventListener("click", async () => {
+    const now = Date.now();
+    if (now - newArmed > 4000) {
+      newArmed = now;
+      newBtn.textContent = "sure?";
+      newBtn.classList.add("armed");
+      setTimeout(() => {
+        if (Date.now() - newArmed < 4000) return;
+        newBtn.textContent = "new";
+        newBtn.classList.remove("armed");
+      }, 4200);
+      return;
+    }
+    newArmed = 0;
+    newBtn.textContent = "new";
+    newBtn.classList.remove("armed");
+    const result = await postBoardAction("new");
+    if (!result) return;
+    // The board arrives as a fresh snapshot, so there is nothing to clear here.
+    hintLine("a new board in the same workspace");
+  });
+
   configBtn.addEventListener("click", () => {
     closePick();
     shownConfig(configPanel.hidden);
