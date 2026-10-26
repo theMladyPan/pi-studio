@@ -1466,9 +1466,10 @@
 
   // ---------- view ---------------------------------------------------------
   /**
-   * Ctrl (or Cmd) plus wheel zooms around the pointer. A plain wheel over the empty canvas pans
-   * the view: panning moves nothing on the board, so a stray scroll still cannot rearrange it,
-   * while a wheel over a card keeps scrolling that card.
+   * Ctrl (or Cmd) plus wheel zooms around the pointer. Otherwise the selection decides what the
+   * wheel moves: with a card selected the wheel scrolls that card, wherever the pointer happens to
+   * be, and with nothing selected it pans the board. Panning moves nothing on the board, so a stray
+   * scroll still cannot rearrange it.
    */
   /** Tell the server where a card sits, so placement survives a refresh. */
   function saveLayout(cardId, rect, mini) {
@@ -1653,9 +1654,17 @@
 
   viewport.addEventListener("wheel", (event) => {
     if (!event.ctrlKey && !event.metaKey) {
-      // Only the empty canvas pans. The rail, composer and picker sit outside the viewport, and a
-      // wheel over a card scrolls that card.
-      if (event.target.closest(".card")) return;
+      // One target per wheel, chosen by what is selected rather than by what the pointer is over: a
+      // board you are reading a card on keeps still while you scroll that card, and a board with
+      // nothing selected pans wherever the pointer happens to be.
+      const selected = document.querySelector(".card.active");
+      const scroller = selected?.querySelector(".card-scroll");
+      const room = scroller ? scroller.scrollHeight - scroller.clientHeight : 0;
+      if (room > 1) {
+        event.preventDefault();
+        scroller.scrollTop += wheelPixels(event, event.deltaY) || wheelPixels(event, event.deltaX);
+        return;
+      }
       event.preventDefault();
       view.x -= wheelPixels(event, event.deltaX);
       view.y -= wheelPixels(event, event.deltaY);
