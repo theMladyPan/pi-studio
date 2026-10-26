@@ -1,0 +1,17 @@
+{
+  "name": "pi-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local daemon that owns pi agents: a workspace is a folder, a thread on its board is an agent.",
+  "type": "module",
+  "bin": {
+    "pi-studio": "./bin/pi-studio"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check public/board.js"
+  }
+}

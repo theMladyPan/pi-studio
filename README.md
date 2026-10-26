@@ -1,0 +1,51 @@
+# pi-studio
+
+A local daemon that owns pi agents and gives them a board. A **workspace** is a folder. On that
+folder's board, a **thread** is one card and one `pi --mode rpc` child process: you type into the
+card, the agent answers there, and you can steer it while it runs.
+
+It replaces the dashboard extension, which was a view of a single pi session and could never
+supervise more than one agent.
+
+## Run it
+
+```bash
+node server.mjs          # prints http://127.0.0.1:<port>/?token=<token>
+```
+
+or, with the repository in `PATH` or linked into `~/.local/bin`:
+
+```bash
+pi-studio
+```
+
+There is no build step and no dependency to install: Node 22 or newer and a working `pi` on the
+same machine are the whole requirement.
+
+## How it works
+
+- **Workspaces** are folders you have opened before. The start screen lists them, newest first, and
+  takes a folder path for a new one. A workspace's board, its threads and their layout live in
+  `~/.pi/agent/state/pi-studio/boards/<id>.json`.
+- **Threads** are cards. A thread is created with `+` and starts its agent on the first message. A
+  thread's pi session is written under `~/.pi/agent/state/pi-studio/sessions/<workspace>/`, so a
+  restart of the daemon resumes the conversation instead of starting over.
+- **Steering**: send with `steer` to redirect a run in flight, or `queue` to wait behind it.
+- **One client, one visual language.** `public/` holds the board client. It is the one the
+  dashboard extension used, copied in when this became its own application.
+
+The daemon listens on loopback only. The token in the URL guards every data route.
+
+## Layout
+
+```
+server.mjs        the daemon: workspaces, threads, children, routes
+public/           the board client (index.html with its styles, board.js)
+bin/pi-studio     the wrapper: one word to start it
+STATE.md          what works, what does not, and what is next
+```
+
+## What it does not do yet
+
+Cards a thread draws for you (notes, sources, questions), rail payloads, usage totals, images, and
+per-thread stop. `STATE.md` keeps that list current.

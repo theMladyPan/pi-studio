@@ -1,0 +1,9 @@
+#!/usr/bin/env node
+// Starts the pi-studio daemon. Its own file so `pi-studio` can sit in PATH without the repository
+// being on it, and so the app is one word to run from any folder.
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const here = dirname(fileURLToPath(import.meta.url));
+process.argv[1] = join(here, "..", "server.mjs");
+await import("../server.mjs");
