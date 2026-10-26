@@ -1205,6 +1205,7 @@
     occupied.length = 0;
     freshCount = 0;
     clearRailCards();
+    clearRailLog();
     paintPill();
     sawFirstCard = false;
     updateEmpty();
@@ -2142,6 +2143,71 @@
     return tail.length < flat.length ? `…${tail}` : tail;
   }
 
+  // Settled rows are filed under the thread that wrote them, one foldable section per thread, newest
+  // thread on top. A running row stays in the strip above: that strip is what you look at while a run
+  // is in flight, and the sections are what you read afterwards.
+  const railSections = new Map();
+  /** A section the reader folded shut. Session only: a reload shows everything again. */
+  const foldedSections = new Set();
+  let heldRows = 0;
+
+  function applyFold(entry) {
+    entry.section.classList.toggle("folded", foldedSections.has(entry.id));
+    entry.head.setAttribute("aria-expanded", foldedSections.has(entry.id) ? "false" : "true");
+  }
+
+  function railSection(row) {
+    const id = row.thread?.id || "";
+    let entry = railSections.get(id);
+    if (!entry) {
+      const section = el("section", "rail-thread");
+      const head = el("button", "rail-thread-head");
+      head.type = "button";
+      head.append(el("span", "chev"), el("span", "rail-thread-title"), el("span", "rail-thread-count"));
+      const body = el("div", "rail-thread-body");
+      section.append(head, body);
+      head.addEventListener("click", () => {
+        if (foldedSections.has(id)) foldedSections.delete(id);
+        else foldedSections.add(id);
+        applyFold(entry);
+      });
+      entry = { section, head, body, id, title: "" };
+      railSections.set(id, entry);
+      applyFold(entry);
+    }
+    const title = row.thread?.title || "earlier";
+    if (title !== entry.title) {
+      entry.title = title;
+      entry.head.children[1].textContent = title;
+      entry.head.title = title;
+    }
+    return entry;
+  }
+
+  /** The log is a tail, not a history: the oldest row of the oldest section goes first, then the shell. */
+  function trimRail() {
+    while (heldRows > 200) {
+      const section = railLog.lastElementChild;
+      const row = section?.querySelector(".rail-thread-body")?.lastElementChild;
+      if (!section || !row) {
+        section?.remove();
+        if (section) for (const [id, entry] of railSections) if (entry.section === section) railSections.delete(id);
+        return;
+      }
+      for (const [id, elem] of actEls) if (elem === row) actEls.delete(id);
+      row.remove();
+      heldRows--;
+    }
+  }
+
+  function clearRailLog() {
+    railLog.replaceChildren();
+    railSections.clear();
+    foldedSections.clear();
+    actEls.clear();
+    heldRows = 0;
+  }
+
   function applyActivity(row) {
     // A row that just settled gets one fetch, the one that carries its full output. A running row
     // is polled by fetchActDetail itself.
@@ -2162,13 +2228,14 @@
     if (row.status === "running") {
       railNow.prepend(node);
     } else {
-      railLog.prepend(node);
-      while (railLog.childElementCount > 200) {
-        const last = railLog.lastElementChild;
-        if (!last) break;
-        for (const [id, elem] of actEls) if (elem === last) actEls.delete(id);
-        last.remove();
-      }
+      const section = railSection(row);
+      section.body.prepend(node);
+      section.head.children[2].textContent = String(section.body.childElementCount);
+      // The thread that just spoke goes on top, so a board with many threads reads like a stack of
+      // conversations rather than one long line of tool calls.
+      railLog.prepend(section.section);
+      heldRows++;
+      trimRail();
     }
     const running = railNow.childElementCount ? String(railNow.childElementCount) : "";
     railRunning.textContent = running;

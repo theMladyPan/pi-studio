@@ -68,18 +68,24 @@ against real children; nothing has been checked in a browser.
   conversation. A card nobody made, or one whose thread has ended, starts that thread too. The card
   shows what the human typed; only the child is given the quote. A queued message carries both.
 - **A card has a thread behind it, not a thread card beside it.** `threadRoot` on a plain card is where
-  the card cascades; `ownerThread` is the thread that answers comments on it; and a thread whose
-  `behind` names a card is never drawn — the card is the surface. A comment on a card that already has
+  the card cascades; `ownerThread` is the thread that answers comments on it; and a thread marked
+  `hidden` is never drawn — the card is the surface. A comment on a card that already has
   an owner is answered by that thread, and the question and answer are kept in `card.turns`. A fork, or
-  a card nobody answers for yet, starts a child with `behind` set and hands the card to it, so the
+  a card nobody answers for yet, starts a hidden child and hands the card to it, so the
   conversation moves to a fresh session while the card stays where it is. `plainCardFor` carries
   `answersWith` (provider, model, thinking) so the composer can name and change what answers a card
   without the thread behind it ever being drawn.
-- **A card and its child live and die together.** Closing a card closes the thread behind it, drops
-  its child process and forgets a run that was answering for it; the same happens when a card is pruned
-  for room. A reply whose card is gone is written nowhere — never onto the thread's own turn, which
-  would overwrite an older answer. `anchorOf` keeps placement honest for cards a hidden child writes:
-  they cascade under the card that child serves, and name that child as their owner.
+- **A child lives while it has a card.** Closing the thread's own card does not end its child: the
+  thread turns `hidden` and keeps answering the notes it owns, which are where that conversation is
+  read. Closing the last card it answers for ends it — the child process goes, and so does a run that
+  was writing for it — and the same happens when a card is pruned for room. A reply whose card is gone
+  is written nowhere: never onto the thread's own turn, which would overwrite an older answer.
+  `anchorOf` keeps placement honest for cards a hidden child writes: they cascade under the newest card
+  that child owns, and name that child as their owner.
+- **The rail is a stack of threads.** Every activity row says which thread wrote it, and a settled row
+  is filed in that thread's foldable section: title, count, newest thread on top. A folded section is
+  remembered for the session only. Rows still running stay in the strip above the log, so what is
+  happening now is visible however far the log is scrolled.
 - **What answers is a choice, per thread.** `provider`, `model` and `thinking` live on the thread and
   are saved with it; `board.defaults` is what the next thread starts with, taken from the newest thread
   until a choice is made. `GET /models` reads `pi --list-models` once and keeps it for ten minutes, so
@@ -194,14 +200,14 @@ has been checked in a browser.
   because a real fork has to copy the session file and mark the copy `forkedFrom`.
 - Feeding a card into a thread other than the one that made it is designed and not built.
 - Rail rows carry no payloads (arguments, logs, outputs), no usage totals, no images.
-- `stop` aborts every running thread, not a chosen one; the rail is one list, not one per thread.
+- `stop` aborts every running thread, not a chosen one.
 - No attention to a workspace whose folder has been deleted or moved: opening it fails with a 404
   and the entry stays in the list.
 
 ## Next, in order
 
 1. Stream the answer into the card, then rail payloads.
-2. Per-thread stop, and the rail grouped by thread.
+2. Per-thread stop.
 4. A workspace entry that no longer resolves: say so and offer to forget it.
 
 ## Rules

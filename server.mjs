@@ -198,7 +198,9 @@ const OPEN_BROWSER = !process.argv.includes("--no-open");
  * @property {number} [runStartedAt]
  * @property {string} [stderrTail]
  * @property {string} [threadRoot]
- * @property {string} [behind] the card this thread answers for, when it is not drawn itself
+ * @property {boolean} [hidden] the thread is not drawn as a card of its own; the cards it answers for
+ *   are where it is read. A child forked onto a card starts hidden, and a thread whose own card is closed
+ *   while it still owns cards becomes hidden rather than dying.
  */
 
 /**
@@ -369,7 +371,7 @@ function saveBoard(board) {
 			...(thread.rect ? { rect: thread.rect } : {}),
 			...(thread.mini ? { mini: true } : {}),
 			...(thread.threadRoot ? { threadRoot: thread.threadRoot } : {}),
-			...(thread.behind ? { behind: thread.behind } : {}),
+			...(thread.hidden ? { hidden: true } : {}),
 		})),
 		cards: [...board.cards.values()].map((card) => ({
 			id: card.id,
@@ -445,7 +447,9 @@ function restoredThread(raw, folder) {
 		...(rect ? { rect } : {}),
 		...(raw.mini ? { mini: true } : {}),
 		...(typeof raw.threadRoot === "string" && raw.threadRoot ? { threadRoot: raw.threadRoot } : {}),
-		...(typeof raw.behind === "string" && raw.behind ? { behind: raw.behind } : {}),
+		// Boards saved before this was a plain flag said `behind: <cardId>`; the id is not needed now that
+		// ownership decides which cards a thread answers for.
+		...(raw.hidden === true || (typeof raw.behind === "string" && raw.behind) ? { hidden: true } : {}),
 		folder,
 	};
 }
@@ -529,7 +533,7 @@ function boardFor(workspace) {
 		// A card and the child that answers for it belong together, and pruning can part them. Repair it
 		// here rather than let a card quietly re-fork because a thread id in it means nothing.
 		for (const thread of [...board.threads.values()]) {
-			if (thread.behind && !board.cards.has(thread.behind)) board.threads.delete(thread.id);
+			if (thread.hidden && !ownedCards(board, thread.id).length) board.threads.delete(thread.id);
 		}
 		for (const card of board.cards.values()) {
 			if (card.ownerThread && !board.threads.has(card.ownerThread)) delete card.ownerThread;
@@ -613,7 +617,7 @@ function describeWorkspace(workspace) {
 	const board = boards.get(workspace.id);
 	// A thread that serves a card is not a thread anyone can open: counting it would report more
 	// threads than the board has cards.
-	const threads = [...(board?.threads.values() ?? [])].filter((thread) => !thread.behind);
+	const threads = [...(board?.threads.values() ?? [])].filter((thread) => !thread.hidden);
 	const rows = board?.activity ?? readJsonFile(boardFile(workspace), null)?.activity ?? [];
 	const last = [...rows].reverse().find((row) => row?.startedAt || row?.at);
 	const facts = folderFacts(workspace.folder);
@@ -726,7 +730,7 @@ function cardsFor(board) {
 	// A thread that answers for a card is not a card of its own: that card is the surface, and drawing
 	// both would show one conversation on two cards.
 	return [...board.threads.values()]
-		.filter((thread) => !thread.behind)
+		.filter((thread) => !thread.hidden)
 		.map(cardFor)
 		.concat([...board.cards.values()].map((card) => plainCardFor(card, board)));
 }
@@ -784,8 +788,13 @@ const card = (board, thread) => {
 const update = (board, thread) => {
 	// A thread that answers for a card is not drawn: what changes is that card, and broadcasting the
 	// thread would put a second card on the board for the same conversation.
-	const shown = thread.behind ? board.cards.get(thread.behind) : thread;
-	if (shown) broadcast(board, { type: "update", card: thread.behind ? plainCardFor(shown, board) : cardFor(shown) });
+	if (!thread.hidden) {
+		broadcast(board, { type: "update", card: cardFor(thread) });
+		return;
+	}
+	// A hidden thread is read through a card it answers for, so that card carries its state instead.
+	const shown = homeCard(board, thread);
+	if (shown) broadcast(board, { type: "update", card: plainCardFor(shown, board) });
 	scheduleSave(board);
 	nudgeWelcome();
 };
@@ -795,6 +804,9 @@ const updateCard = (board, held) => {
 	scheduleSave(board);
 	nudgeWelcome();
 };
+
+/** A row says which thread wrote it, so the rail can group a thread's work into one section. */
+const threadRef = (thread) => ({ id: thread.id, title: thread.title });
 
 function addRow(board, row) {
 	board.activity.push(row);
@@ -823,7 +835,14 @@ function threadError(board, thread, message) {
 		updateCard(board, asked);
 	}
 	thread.answering = null;
-	addRow(board, { id: randomUUID(), kind: "reply", status: "error", startedAt: Date.now(), text: message });
+	addRow(board, {
+		id: randomUUID(),
+		kind: "reply",
+		status: "error",
+		startedAt: Date.now(),
+		text: message,
+		thread: threadRef(thread),
+	});
 	update(board, thread);
 	board.children.get(thread.id)?.stdin?.end();
 }
@@ -1032,6 +1051,7 @@ function handleChildLine(board, thread, line) {
 				status: "error",
 				startedAt: Date.now(),
 				text: `${event.command} refused: ${event.error ?? "unknown reason"}`,
+				thread: threadRef(thread),
 			});
 		}
 		return;
@@ -1044,6 +1064,7 @@ function handleChildLine(board, thread, line) {
 			label: describeTool(event.toolName, event.args ?? {}),
 			status: "running",
 			startedAt: Date.now(),
+			thread: threadRef(thread),
 		});
 		return;
 	}
@@ -1071,7 +1092,14 @@ function handleChildLine(board, thread, line) {
 			turn.reply = text;
 			turn.status = "answered";
 		}
-		addRow(board, { id: randomUUID(), kind: "reply", status: "ok", startedAt: Date.now(), text: text.slice(0, 4000) });
+		addRow(board, {
+			id: randomUUID(),
+			kind: "reply",
+			status: "ok",
+			startedAt: Date.now(),
+			text: text.slice(0, 4000),
+			thread: threadRef(thread),
+		});
 		if (turn && asked) updateCard(board, asked);
 		else if (!thread.answering) update(board, thread);
 		return;
@@ -1316,7 +1344,8 @@ function rootOf(board, body) {
  */
 function anchorOf(board, threadId) {
 	const thread = threadId ? board.threads.get(threadId) : undefined;
-	return thread?.behind ?? threadId;
+	if (!thread?.hidden) return threadId;
+	return homeCard(board, thread)?.id ?? threadId;
 }
 
 /**
@@ -1324,6 +1353,17 @@ function anchorOf(board, threadId) {
  * draw, so keeping one alive would leave a session and a process behind every closed note; and a run
  * that was answering for the card must not write its reply onto some other card's turn.
  */
+/** The child goes with its last card. Nothing can reach a thread the board cannot draw. */
+function closeThread(board, thread) {
+	try {
+		board.children.get(thread.id)?.stdin?.end();
+	} catch {
+		// The child is already gone, which is what this wanted.
+	}
+	board.children.delete(thread.id);
+	board.threads.delete(thread.id);
+}
+
 function forgetCard(board, cardId) {
 	for (const thread of [...board.threads.values()]) {
 		if (thread.answering?.cardId === cardId) {
@@ -1331,14 +1371,10 @@ function forgetCard(board, cardId) {
 			if (turn && turn.status !== "answered") turn.status = "stopped";
 			thread.answering = null;
 		}
-		if (thread.behind !== cardId) continue;
-		try {
-			board.children.get(thread.id)?.stdin?.end();
-		} catch {
-			// The child is already gone, which is what this wanted.
-		}
-		board.children.delete(thread.id);
-		board.threads.delete(thread.id);
+	}
+	// A child lives while it has a card, so a hidden one that has just lost its last card goes with it.
+	for (const thread of [...board.threads.values()]) {
+		if (thread.hidden && !ownedCards(board, thread.id).length) closeThread(board, thread);
 	}
 }
 
@@ -1596,7 +1632,7 @@ async function onMessage(req, res, board) {
 			at: Date.now(),
 			turns: [],
 			queued: [],
-			...(askedCard ? { threadRoot: askedCard.id, behind: askedCard.id } : {}),
+			...(askedCard ? { threadRoot: askedCard.id, hidden: true } : {}),
 			folder: board.folder,
 		};
 		board.threads.set(thread.id, thread);
@@ -1650,6 +1686,17 @@ async function onMessage(req, res, board) {
  * Every card this thread answers for carries its runtime, so a model or level change has to reach those
  * cards as well as the thread's own card. A card that is not told keeps showing the old model.
  */
+/** The cards a thread answers for. In creation order, so the newest is last. */
+function ownedCards(board, threadId) {
+	return [...board.cards.values()].filter((card) => card.ownerThread === threadId);
+}
+
+/** The card a hidden thread is read through: the newest one it answers for. */
+function homeCard(board, thread) {
+	const owned = ownedCards(board, thread.id);
+	return owned[owned.length - 1];
+}
+
 function refreshOwned(board, thread) {
 	for (const held of board.cards.values()) {
 		if (held.ownerThread === thread.id) updateCard(board, held);
@@ -1701,7 +1748,8 @@ async function onModel(req, res, board) {
 	}
 	update(board, thread);
 	refreshOwned(board, thread);
-	answer(res, 200, { card: thread.behind ? plainCardFor(board.cards.get(thread.behind), board) : cardFor(thread) });
+	const home = thread.hidden ? homeCard(board, thread) : undefined;
+	answer(res, 200, { card: home ? plainCardFor(home, board) : cardFor(thread) });
 }
 
 /** The thinking level, with the same shape: a thread's own, or the board's default for new ones. */
@@ -1723,7 +1771,8 @@ async function onThinking(req, res, board) {
 	}
 	update(board, thread);
 	refreshOwned(board, thread);
-	answer(res, 200, { card: thread.behind ? plainCardFor(board.cards.get(thread.behind), board) : cardFor(thread) });
+	const home = thread.hidden ? homeCard(board, thread) : undefined;
+	answer(res, 200, { card: home ? plainCardFor(home, board) : cardFor(thread) });
 }
 
 async function onLayout(req, res, board) {
@@ -1757,13 +1806,20 @@ async function onClose(req, res, board) {
 	}
 	const thread = board.threads.get(id);
 	if (!thread) return void fail(res, 404, "no such card");
-	board.threads.delete(id);
-	board.children.get(id)?.kill("SIGKILL");
-	board.children.delete(id);
-	broadcast(board, { type: "remove", id });
+	// Closing this card closes the thread card, not the child's life: a child lives while it has a card,
+	// so one that still answers notes keeps running where those notes are read. The last card ends it.
+	const kept = ownedCards(board, thread.id);
+	if (kept.length) {
+		thread.hidden = true;
+		broadcast(board, { type: "remove", id });
+		refreshOwned(board, thread);
+	} else {
+		closeThread(board, thread);
+		broadcast(board, { type: "remove", id });
+	}
 	scheduleSave(board);
 	nudgeWelcome();
-	answer(res, 200, { closed: id });
+	answer(res, 200, { closed: id, kept: kept.length });
 }
 
 function onStop(res, board) {
