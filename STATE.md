@@ -25,6 +25,13 @@ against real children; nothing has been checked in a browser.
 - **Threads** are cards: `POST /thread` creates one in the open workspace, `POST /message {cardId,
   text, mode}` prompts it. The child is spawned on the first message, one per thread, and shut down
   when it settles.
+- **Notes** are the cards with no child behind them. `POST /card/note {markdown, title?, rect?}`
+  puts one on the board, `POST /edit {cardId, markdown}` rewrites it, and `POST /layout` and
+  `POST /close` treat a note like a thread. A message asked on a note starts a thread named after
+  it, cascading under the note through `threadRoot`. Notes are saved with the board and come back
+  with their text, place and fold. A `key` makes a note stable: the same key revises that card
+  instead of stacking another, which is what a running agent stepping through a job needs. A note
+  holds at most 100 000 characters and the board keeps 200 of them.
 - **Sessions resume**: the child writes its session under the app's own session dir, the thread
   stores the id, and a message after a daemon restart resumes that session. Verified: after a
   restart the agent remembered the word it had answered in the previous run.
@@ -49,10 +56,17 @@ a second workspace with its own thread and reply at the same time, both restored
 restart, crossroads showing both with their last activity. `POST /pick-folder` is untested because
 running it opens a dialog on the human's screen.
 
+Notes, against a daemon on a throwaway `HOME` and a scratch folder: created with and without a
+`rect`, refused when the markdown is blank, carried in the `snapshot` and in `GET /state`, edited
+(the stored markdown and `updatedAt` change), moved and folded through `POST /layout`, restored with
+text, place and fold after a daemon restart, closed through `POST /close`, and a message asked on a
+note started a thread named after it. Editing a card id that is not a note answers 409. Nothing here
+has been checked in a browser.
+
 ## Does not work yet
 
 - A thread cannot draw notes, sources or ask questions: no board verbs, so it only answers in its
-  own card.
+  own card. Notes exist, but only the human puts them there.
 - The answer appears when a turn ends; nothing streams into the card while it is generated.
 - Rail rows carry no payloads (arguments, logs, outputs), no usage totals, no images.
 - `stop` aborts every running thread, not a chosen one; the rail is one list, not one per thread.
@@ -61,8 +75,9 @@ running it opens a dialog on the human's screen.
 
 ## Next, in order
 
-1. Board verbs over HTTP for children (`POST /card/note`, `/card/source`, `/card/ask`) plus a thin
-   `slave.ts` a child loads with `-e`, so a thread can put things on the board.
+1. Board verbs for children (`POST /card/note`, `/card/source`, `/card/ask`) plus a thin `slave.ts` a
+   child loads with `-e`, so a thread can put things on the board. `/card/note` is done for the
+   human's client; the child still has no way in.
 2. Stream the answer into the card, then rail payloads.
 3. Per-thread stop, and the rail grouped by thread.
 4. A workspace entry that no longer resolves: say so and offer to forget it.

@@ -32,6 +32,9 @@ const TOOLS = "read,bash,edit,write";
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_ACTIVITY = 300;
 const MAX_THREADS = 200;
+const MAX_NOTES = 200;
+/** A note is markdown the board repaints on every change, so its size has a ceiling. */
+const MAX_NOTE_CHARS = 100_000;
 const STATE_VERSION = 1;
 const BROWSE_LIMIT = 200;
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
@@ -64,6 +67,20 @@ const OPEN_BROWSER = !process.argv.includes("--no-open");
  * @property {boolean} [mini]
  * @property {number} [runStartedAt]
  * @property {string} [stderrTail]
+ * @property {string} [threadRoot]
+ */
+
+/**
+ * A note is a card with no child behind it: markdown the human reads, drags and edits.
+ * @typedef {object} Note
+ * @property {string} id
+ * @property {string} title
+ * @property {string} markdown
+ * @property {number} at
+ * @property {number} [updatedAt]
+ * @property {{x:number,y:number,w:number,h:number}} [rect]
+ * @property {boolean} [mini]
+ * @property {string} [key]
  */
 
 /**
@@ -73,6 +90,7 @@ const OPEN_BROWSER = !process.argv.includes("--no-open");
  * @property {string} folder
  * @property {string} name
  * @property {Map<string, Thread>} threads
+ * @property {Map<string, Note>} notes
  * @property {object[]} activity
  * @property {Map<string, import("node:child_process").ChildProcess>} children
  * @property {Set<import("node:http").ServerResponse>} clients
@@ -178,7 +196,14 @@ function savedTurn(turn) {
 	};
 }
 
-/** Write one board: its threads, their turns, their layout and their session ids. */
+/** A saved card position, or undefined when the file holds something that is not one. */
+function cleanRect(rect) {
+	return rect && Number.isFinite(rect.x) && Number.isFinite(rect.y) && rect.w > 0 && rect.h > 0
+		? { x: rect.x, y: rect.y, w: rect.w, h: rect.h }
+		: undefined;
+}
+
+/** Write one board: its threads, their turns, their layout and their session ids, and its notes. */
 function saveBoard(board) {
 	const payload = {
 		version: STATE_VERSION,
@@ -195,6 +220,17 @@ function saveBoard(board) {
 			turns: thread.turns.map(savedTurn),
 			...(thread.rect ? { rect: thread.rect } : {}),
 			...(thread.mini ? { mini: true } : {}),
+			...(thread.threadRoot ? { threadRoot: thread.threadRoot } : {}),
+		})),
+		notes: [...board.notes.values()].map((note) => ({
+			id: note.id,
+			title: note.title,
+			markdown: note.markdown,
+			at: note.at,
+			...(note.updatedAt ? { updatedAt: note.updatedAt } : {}),
+			...(note.key ? { key: note.key } : {}),
+			...(note.rect ? { rect: note.rect } : {}),
+			...(note.mini ? { mini: true } : {}),
 		})),
 	};
 	writeJsonFile(boardFile(board), payload);
@@ -228,10 +264,7 @@ function restoredThread(raw, folder) {
 			at: Number.isFinite(turn.at) ? turn.at : Date.now(),
 			...(typeof turn.reply === "string" ? { reply: turn.reply } : {}),
 		}));
-	const rect =
-		raw.rect && Number.isFinite(raw.rect.x) && Number.isFinite(raw.rect.y) && raw.rect.w > 0 && raw.rect.h > 0
-			? { x: raw.rect.x, y: raw.rect.y, w: raw.rect.w, h: raw.rect.h }
-			: undefined;
+	const rect = cleanRect(raw.rect);
 	return {
 		id: raw.id,
 		title: typeof raw.title === "string" && raw.title ? raw.title : "thread",
@@ -244,7 +277,24 @@ function restoredThread(raw, folder) {
 		queued: [],
 		...(rect ? { rect } : {}),
 		...(raw.mini ? { mini: true } : {}),
+		...(typeof raw.threadRoot === "string" && raw.threadRoot ? { threadRoot: raw.threadRoot } : {}),
 		folder,
+	};
+}
+
+/** Rebuild a note from its file. One without markdown is nothing, so it is dropped. */
+function restoredNote(raw) {
+	if (!raw || typeof raw !== "object" || typeof raw.id !== "string" || typeof raw.markdown !== "string") return null;
+	const rect = cleanRect(raw.rect);
+	return {
+		id: raw.id,
+		title: typeof raw.title === "string" && raw.title ? raw.title : "note",
+		markdown: raw.markdown,
+		at: Number.isFinite(raw.at) ? raw.at : Date.now(),
+		...(Number.isFinite(raw.updatedAt) ? { updatedAt: raw.updatedAt } : {}),
+		...(typeof raw.key === "string" && raw.key ? { key: raw.key } : {}),
+		...(rect ? { rect } : {}),
+		...(raw.mini ? { mini: true } : {}),
 	};
 }
 
@@ -263,6 +313,7 @@ function boardFor(workspace) {
 		folder: workspace.folder,
 		name: workspace.name,
 		threads: new Map(),
+		notes: new Map(),
 		activity: [],
 		children: new Map(),
 		clients: new Set(),
@@ -273,6 +324,10 @@ function boardFor(workspace) {
 		for (const raw of saved.threads.slice(-MAX_THREADS)) {
 			const thread = restoredThread(raw, workspace.folder);
 			if (thread && !board.threads.has(thread.id)) board.threads.set(thread.id, thread);
+		}
+		for (const raw of (Array.isArray(saved.notes) ? saved.notes : []).slice(-MAX_NOTES)) {
+			const note = restoredNote(raw);
+			if (note && !board.notes.has(note.id)) board.notes.set(note.id, note);
 		}
 		for (const row of (Array.isArray(saved.activity) ? saved.activity : []).slice(-MAX_ACTIVITY)) {
 			if (row && typeof row.id === "string" && row.status !== "running") board.activity.push(row);
@@ -407,7 +462,33 @@ function cardFor(thread) {
 	};
 	if (thread.rect) card.rect = thread.rect;
 	if (thread.mini) card.mini = true;
+	// The client cascades a card under the one its reply was asked on, and a note can be that one.
+	if (thread.threadRoot) card.threadRoot = thread.threadRoot;
 	return card;
+}
+
+/** A note as the card the browser draws: markdown under a title, with no run behind it. */
+function noteFor(note) {
+	const card = {
+		id: note.id,
+		type: "note",
+		title: note.title,
+		at: note.at,
+		text: "",
+		status: "answered",
+		mode: "queue",
+		images: 0,
+		markdown: note.markdown,
+	};
+	if (note.updatedAt) card.updatedAt = note.updatedAt;
+	if (note.rect) card.rect = note.rect;
+	if (note.mini) card.mini = true;
+	return card;
+}
+
+/** Every card on a board: the threads, then the notes the human put there. */
+function cardsFor(board) {
+	return [...board.threads.values()].map(cardFor).concat([...board.notes.values()].map(noteFor));
 }
 
 function boardMeta(board) {
@@ -820,6 +901,65 @@ async function onThread(req, res, board) {
 	answer(res, 200, { threadId: thread.id, card: cardFor(thread) });
 }
 
+async function onNote(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const markdown = typeof body.markdown === "string" ? body.markdown : "";
+	if (!markdown.trim()) return void fail(res, 400, "empty note");
+	if (markdown.length > MAX_NOTE_CHARS) return void fail(res, 413, `a note holds at most ${MAX_NOTE_CHARS} characters`);
+	const title = typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 80) : "";
+	const key = typeof body.key === "string" && body.key.trim() ? body.key.trim().slice(0, 80) : "";
+	// A key makes the card stable: saying the same thing twice revises one note instead of stacking
+	// a second copy of it on the board, which is what a running agent stepping through a job does.
+	const held = key ? [...board.notes.values()].find((note) => note.key === key) : undefined;
+	if (held) {
+		held.markdown = markdown;
+		held.updatedAt = Date.now();
+		if (title) held.title = title;
+		const rect = cleanRect(body.rect);
+		if (rect) held.rect = { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.w), h: Math.round(rect.h) };
+		broadcast(board, { type: "update", card: noteFor(held) });
+		scheduleSave(board);
+		answer(res, 200, { cardId: held.id, card: noteFor(held), updated: true });
+		return;
+	}
+	// Notes are the cheapest thing an agent can make, so the board keeps a bounded number of them.
+	while (board.notes.size >= MAX_NOTES) {
+		const oldest = [...board.notes.values()].sort((a, b) => a.at - b.at)[0];
+		if (!oldest) break;
+		board.notes.delete(oldest.id);
+		broadcast(board, { type: "remove", id: oldest.id });
+	}
+	const note = {
+		id: randomUUID(),
+		title: title || "note",
+		markdown,
+		at: Date.now(),
+		...(key ? { key } : {}),
+	};
+	const rect = cleanRect(body.rect);
+	if (rect) note.rect = { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.w), h: Math.round(rect.h) };
+	board.notes.set(note.id, note);
+	broadcast(board, { type: "card", card: noteFor(note) });
+	scheduleSave(board);
+	answer(res, 200, { cardId: note.id, card: noteFor(note) });
+}
+
+/** The note the human edited: the text is theirs, so it is stored as written. */
+async function onEdit(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const note = board.notes.get(String(body.cardId ?? ""));
+	if (!note) return void fail(res, 409, "not an editable note");
+	if (typeof body.markdown !== "string") return void fail(res, 400, "markdown is required");
+	if (body.markdown.length > MAX_NOTE_CHARS) return void fail(res, 413, `a note holds at most ${MAX_NOTE_CHARS} characters`);
+	note.markdown = body.markdown;
+	note.updatedAt = Date.now();
+	broadcast(board, { type: "update", card: noteFor(note) });
+	scheduleSave(board);
+	answer(res, 200, { card: noteFor(note) });
+}
+
 async function onMessage(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
@@ -827,13 +967,15 @@ async function onMessage(req, res, board) {
 	if (!text) return void fail(res, 400, "empty message");
 	const mode = body.mode === "steer" ? "steer" : "queue";
 	const asked = typeof body.cardId === "string" ? body.cardId : "";
-	let thread = asked ? board.threads.get(asked) : undefined;
-	if (asked && !thread) return void fail(res, 409, "no such card");
+	// A note has no child of its own, so a question asked on one starts a thread named after it.
+	const noteAsked = asked ? board.notes.get(asked) : undefined;
+	let thread = asked && !noteAsked ? board.threads.get(asked) : undefined;
+	if (asked && !noteAsked && !thread) return void fail(res, 409, "no such card");
 	if (!thread) {
 		// A message with no card behind it starts a thread of its own, named after what was asked.
 		thread = {
 			id: randomUUID(),
-			title: text.slice(0, 60),
+			title: (noteAsked?.title ?? text).slice(0, 60),
 			sessionId: null,
 			status: "idle",
 			provider: PROVIDER,
@@ -841,6 +983,7 @@ async function onMessage(req, res, board) {
 			at: Date.now(),
 			turns: [],
 			queued: [],
+			...(noteAsked ? { threadRoot: noteAsked.id } : {}),
 			folder: board.folder,
 		};
 		board.threads.set(thread.id, thread);
@@ -870,21 +1013,31 @@ async function onMessage(req, res, board) {
 async function onLayout(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
-	const thread = board.threads.get(String(body.cardId ?? ""));
+	const id = String(body.cardId ?? "");
+	// A note is dragged and resized like a thread, and its place is kept the same way.
+	const held = board.threads.get(id) ?? board.notes.get(id);
 	const rect = body.rect;
-	if (!thread || !rect) return void fail(res, 409, "no such card");
+	if (!held || !rect) return void fail(res, 409, "no such card");
 	const clamp = (value) => Math.max(0, Math.min(40000, Math.round(Number.isFinite(Number(value)) ? Number(value) : 0)));
-	thread.rect = { x: clamp(rect.x), y: clamp(rect.y), w: clamp(rect.w), h: clamp(rect.h) };
-	if (typeof body.mini === "boolean") thread.mini = body.mini;
-	broadcast(board, { type: "move", id: thread.id, rect: thread.rect, mini: thread.mini === true });
+	held.rect = { x: clamp(rect.x), y: clamp(rect.y), w: clamp(rect.w), h: clamp(rect.h) };
+	if (typeof body.mini === "boolean") held.mini = body.mini;
+	broadcast(board, { type: "move", id: held.id, rect: held.rect, mini: held.mini === true });
 	scheduleSave(board);
-	answer(res, 200, { placed: thread.id });
+	answer(res, 200, { placed: held.id });
 }
 
 async function onClose(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const id = String(body.cardId ?? "");
+	const note = board.notes.get(id);
+	if (note) {
+		board.notes.delete(id);
+		broadcast(board, { type: "remove", id });
+		scheduleSave(board);
+		answer(res, 200, { closed: id });
+		return;
+	}
 	const thread = board.threads.get(id);
 	if (!thread) return void fail(res, 404, "no such card");
 	board.threads.delete(id);
@@ -1018,7 +1171,7 @@ const server = createServer((req, res) => {
 			if (!board) return;
 			send(new Set([res]), {
 				type: "snapshot",
-				cards: [...board.threads.values()].map(cardFor),
+				cards: cardsFor(board),
 				activity: board.activity,
 				meta: boardMeta(board),
 			});
@@ -1061,7 +1214,7 @@ const server = createServer((req, res) => {
 			answer(res, 200, {
 				workspace: describeWorkspace({ id: board.id, folder: board.folder, name: board.name, openedAt: 0 }),
 				threads: [...board.threads.values()].map((thread) => ({ ...thread, live: board.children.has(thread.id) })),
-				cards: [...board.threads.values()].map(cardFor),
+				cards: cardsFor(board),
 				activity: board.activity,
 				meta: boardMeta(board),
 			});
@@ -1070,6 +1223,8 @@ const server = createServer((req, res) => {
 		if (req.method === "POST") {
 			const routing = {
 				"/thread": onThread,
+				"/card/note": onNote,
+				"/edit": onEdit,
 				"/message": onMessage,
 				"/layout": onLayout,
 				"/close": onClose,
@@ -1091,7 +1246,6 @@ const server = createServer((req, res) => {
 			// Everything the board had for a single session: kept honest by refusing rather than lying.
 			if (url.pathname === "/compact") return void fail(res, 409, "compaction belongs to the child, and no run is waiting on it");
 			if (url.pathname === "/answer") return void fail(res, 409, "questions are not wired to the daemon yet");
-			if (url.pathname === "/edit") return void fail(res, 409, "not an editable note");
 		}
 		fail(res, 404, "not found");
 	})().catch((error) => {
