@@ -135,7 +135,8 @@ const OPEN_BROWSER = !process.argv.includes("--no-open");
  * @property {string} model
  * @property {number} at
  * @property {Turn[]} turns
- * @property {string[]} queued
+ * @property {(string|{message: string, text: string, target?: {cardId: string, turn: number}})[]} queued
+ * @property {{cardId: string, turn: number}|null} [answering]
  * @property {{x:number,y:number,w:number,h:number}} [rect]
  * @property {boolean} [mini]
  * @property {number} [runStartedAt]
@@ -162,6 +163,7 @@ const OPEN_BROWSER = !process.argv.includes("--no-open");
  * @property {number} [line]
  * @property {string} [key]
  * @property {string} [threadRoot]
+ * @property {Turn[]} [turns] what was asked about this card, and what came back
  * @property {number} at
  * @property {number} [updatedAt]
  * @property {{x:number,y:number,w:number,h:number}} [rect]
@@ -326,6 +328,7 @@ function saveBoard(board) {
 			...(card.updatedAt ? { updatedAt: card.updatedAt } : {}),
 			...(card.key ? { key: card.key } : {}),
 			...(card.threadRoot ? { threadRoot: card.threadRoot } : {}),
+			...(card.turns?.length ? { turns: card.turns.map(savedTurn) } : {}),
 			...(card.rect ? { rect: card.rect } : {}),
 			...(card.mini ? { mini: true } : {}),
 		})),
@@ -350,9 +353,8 @@ function flushBoard(board) {
 }
 
 /** Rebuild a thread from its file, never as something that is still running. */
-function restoredThread(raw, folder) {
-	if (!raw || typeof raw !== "object" || typeof raw.id !== "string") return null;
-	const turns = (Array.isArray(raw.turns) ? raw.turns : [])
+function restoredTurns(raw) {
+	return (Array.isArray(raw) ? raw : [])
 		.filter((turn) => turn && typeof turn.text === "string")
 		.map((turn) => ({
 			text: String(turn.text),
@@ -361,6 +363,11 @@ function restoredThread(raw, folder) {
 			at: Number.isFinite(turn.at) ? turn.at : Date.now(),
 			...(typeof turn.reply === "string" ? { reply: turn.reply } : {}),
 		}));
+}
+
+function restoredThread(raw, folder) {
+	if (!raw || typeof raw !== "object" || typeof raw.id !== "string") return null;
+	const turns = restoredTurns(raw.turns);
 	const rect = cleanRect(raw.rect);
 	return {
 		id: raw.id,
@@ -406,6 +413,10 @@ function restoredPlainCard(raw) {
 		...(Number.isFinite(raw.line) ? { line: raw.line } : {}),
 		...(typeof raw.key === "string" && raw.key ? { key: raw.key } : {}),
 		...(typeof raw.threadRoot === "string" && raw.threadRoot ? { threadRoot: raw.threadRoot } : {}),
+		...(() => {
+			const turns = restoredTurns(raw.turns);
+			return turns.length ? { turns } : {};
+		})(),
 		...(rect ? { rect } : {}),
 		...(raw.mini ? { mini: true } : {}),
 	};
@@ -595,6 +606,7 @@ function plainCardFor(card) {
 		status: "answered",
 		mode: "queue",
 		images: 0,
+		...(card.turns?.length ? { turns: card.turns } : {}),
 		...(card.type === "note"
 			? { markdown: card.markdown }
 			: card.type === "source"
@@ -673,6 +685,12 @@ const update = (board, thread) => {
 	scheduleSave(board);
 	nudgeWelcome();
 };
+/** A card without a child changes the same way, and is broadcast in its own shape. */
+const updateCard = (board, held) => {
+	broadcast(board, { type: "update", card: plainCardFor(held) });
+	scheduleSave(board);
+	nudgeWelcome();
+};
 
 function addRow(board, row) {
 	board.activity.push(row);
@@ -693,6 +711,14 @@ function threadError(board, thread, message) {
 	thread.status = "dead";
 	const last = thread.turns[thread.turns.length - 1];
 	if (last && last.status !== "answered") last.status = "stopped";
+	// A question that was written on a card is stuck in the same way the thread's own turn is.
+	const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
+	const cardTurn = asked?.turns?.[thread.answering.turn];
+	if (cardTurn && cardTurn.status !== "answered") {
+		cardTurn.status = "stopped";
+		updateCard(board, asked);
+	}
+	thread.answering = null;
 	addRow(board, { id: randomUUID(), kind: "reply", status: "error", startedAt: Date.now(), text: message });
 	update(board, thread);
 	board.children.get(thread.id)?.stdin?.end();
@@ -826,11 +852,15 @@ function ensureChild(board, thread) {
 		thread.stderrTail = `${thread.stderrTail ?? ""}${text}`.slice(-1000);
 		process.stderr.write(`[${board.name}/${thread.title}] ${text}`);
 	});
+	// A child replaced by a fresh one is not this thread's voice any more: its exit is its own business.
+	const mine = () => board.children.get(thread.id) === child;
 	child.on("error", (error) => {
+		if (!mine()) return;
 		board.children.delete(thread.id);
 		threadError(board, thread, `child failed to start: ${error.message}`);
 	});
 	child.on("close", (code, signal) => {
+		if (!mine()) return;
 		board.children.delete(thread.id);
 		// An exit after `agent_settled` is the orderly shutdown this daemon asked for. An exit while a
 		// run is live is the child dying mid-answer.
@@ -846,9 +876,21 @@ function ensureChild(board, thread) {
 }
 
 /** One prompt, either a new question or what was waiting behind the run in flight. */
-function prompt(board, thread, text) {
-	const turn = thread.turns[thread.turns.length - 1];
-	if (turn) turn.status = "sent";
+function prompt(board, thread, text, target = null) {
+	// A question written on a card is answered on that card, and the run in flight remembers which
+	// one, so the reply lands where the human typed rather than on the thread's own card.
+	thread.answering = target;
+	if (target) {
+		const held = board.cards.get(target.cardId);
+		const turn = held?.turns?.[target.turn];
+		if (held && turn) {
+			turn.status = "sent";
+			updateCard(board, held);
+		}
+	} else {
+		const turn = thread.turns[thread.turns.length - 1];
+		if (turn) turn.status = "sent";
+	}
 	thread.status = "running";
 	thread.runStartedAt = Date.now();
 	update(board, thread);
@@ -907,13 +949,15 @@ function handleChildLine(board, thread, line) {
 			.join("")
 			.trim();
 		if (!text) return;
-		const turn = thread.turns[thread.turns.length - 1];
+		const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
+		const turn = asked ? asked.turns?.[thread.answering.turn] : thread.turns[thread.turns.length - 1];
 		if (turn) {
 			turn.reply = text;
 			turn.status = "answered";
 		}
 		addRow(board, { id: randomUUID(), kind: "reply", status: "ok", startedAt: Date.now(), text: text.slice(0, 4000) });
-		update(board, thread);
+		if (turn && asked) updateCard(board, asked);
+		else update(board, thread);
 		return;
 	}
 	if (event.type === "agent_settled") {
@@ -921,17 +965,34 @@ function handleChildLine(board, thread, line) {
 		// A turn whose answer was redirected by a steer, or whose run was stopped, never gets a reply
 		// of its own. It reads as stopped rather than as a message still being worked on.
 		for (const turn of thread.turns) if (turn.status === "sent") turn.status = "stopped";
+		const parked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
+		if (parked) {
+			for (const turn of parked.turns ?? []) if (turn.status === "sent") turn.status = "stopped";
+			updateCard(board, parked);
+		}
+		thread.answering = null;
 		update(board, thread);
-		// Nothing runs after settle, so closing stdin is what lets the child exit.
-		board.children.get(thread.id)?.stdin?.end();
 		const next = thread.queued.shift();
 		if (next) {
 			// An older board file queued plain strings; a card quote travels with the message now.
 			const text = typeof next === "string" ? next : next.text;
-			thread.turns.push({ text, status: "queued", mode: "queue", at: Date.now() });
-			update(board, thread);
-			prompt(board, thread, typeof next === "string" ? next : next.message);
+			const target = typeof next === "string" ? null : (next.target ?? null);
+			if (target) {
+				const held = board.cards.get(target.cardId);
+				if (held?.turns?.[target.turn]) {
+					held.turns[target.turn].status = "queued";
+					updateCard(board, held);
+				}
+			} else {
+				thread.turns.push({ text, status: "queued", mode: "queue", at: Date.now() });
+				update(board, thread);
+			}
+			prompt(board, thread, typeof next === "string" ? next : next.message, target);
+			return;
 		}
+		// Nothing follows, so closing stdin is what lets the child exit. Doing it before the queue was
+		// drained killed the run the next message started.
+		board.children.get(thread.id)?.stdin?.end();
 	}
 }
 
@@ -1109,7 +1170,18 @@ function cardPreamble(card) {
 		.replace(/\s+/g, " ")
 		.trim()
 		.slice(0, 1500);
-	return `[board reply · card ${card.id} · "${title}"]\nThe card says: ${body || "(empty)"}\n\n`;
+	// A chain of comments is the card's own history, so a fresh child — a fork, or a thread that has
+	// to be restarted — still knows what was already said about it.
+	const chain = (card.turns ?? [])
+		.slice(-3)
+		.map((turn, index, all) => {
+			const asked = String(turn.text ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+			const said = String(turn.reply ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+			return `- asked: ${asked}${said ? `\n  answered: ${said}` : ""}`;
+		})
+		.join("\n")
+		.slice(0, 900);
+	return `[board reply · card ${card.id} · "${title}"]\nThe card says: ${body || "(empty)"}\n${chain ? `Earlier about this card:\n${chain}\n` : ""}\n`;
 }
 
 /** The thread a card should cascade under, when the caller named one that exists. */
@@ -1342,9 +1414,15 @@ async function onMessage(req, res, board) {
 	let thread = asked && !askedCard ? board.threads.get(asked) : undefined;
 	if (asked && !askedCard && !thread) return void fail(res, 409, "no such card");
 	const preamble = askedCard ? cardPreamble(askedCard) : "";
+	// Only an existing thread answering for its own card keeps the question on that card. A fork, or
+	// a card nobody made, gets a thread of its own, and a thread card is where its turns belong.
+	let answeredByOwner = false;
 	if (askedCard && !fork) {
 		const owner = askedCard.threadRoot ? board.threads.get(askedCard.threadRoot) : undefined;
-		if (owner && owner.status !== "dead") thread = owner;
+		if (owner && owner.status !== "dead") {
+			thread = owner;
+			answeredByOwner = true;
+		}
 	}
 	if (!thread) {
 		// A message with no card behind it starts a thread of its own, named after what was asked.
@@ -1366,11 +1444,23 @@ async function onMessage(req, res, board) {
 	}
 	if (thread.status === "dead") return void fail(res, 409, "thread ended");
 
-	// The card shows what the human typed; the child is told what card it is about.
+	// The card shows what the human typed; the child is told what card it is about. A comment on a
+	// card is kept on that card, so its chain reads there and the thread card keeps only what was
+	// asked on it directly.
 	const message = `${preamble}${text}`;
-	thread.turns.push({ text: text.slice(0, 4000), status: "queued", mode, at: Date.now() });
-	const index = thread.turns.length - 1;
-	update(board, thread);
+	let target = null;
+	let index;
+	if (askedCard && answeredByOwner) {
+		askedCard.turns = askedCard.turns ?? [];
+		askedCard.turns.push({ text: text.slice(0, 4000), status: "queued", mode, at: Date.now() });
+		index = askedCard.turns.length - 1;
+		target = { cardId: askedCard.id, turn: index };
+		updateCard(board, askedCard);
+	} else {
+		thread.turns.push({ text: text.slice(0, 4000), status: "queued", mode, at: Date.now() });
+		index = thread.turns.length - 1;
+		update(board, thread);
+	}
 	const running = thread.status === "running";
 	if (running && mode === "steer") {
 		// A steer joins the run in flight instead of waiting behind it.
@@ -1380,9 +1470,9 @@ async function onMessage(req, res, board) {
 			threadError(board, thread, `could not steer the child: ${error.message}`);
 		}
 	} else if (running) {
-		thread.queued.push({ message, text });
+		thread.queued.push({ message, text, target });
 	} else {
-		prompt(board, thread, message);
+		prompt(board, thread, message, target);
 	}
 	answer(res, 200, { id: thread.id, turn: index });
 }

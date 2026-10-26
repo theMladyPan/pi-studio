@@ -67,6 +67,14 @@ against real children; nothing has been checked in a browser.
   `fork` button, asks a new thread under the card instead, with the same quote and its own
   conversation. A card nobody made, or one whose thread has ended, starts that thread too. The card
   shows what the human typed; only the child is given the quote. A queued message carries both.
+- **A turn is drawn in the card it was written on.** An existing owner thread answering for its card
+  keeps the question on that card: `card.turns` fills in, `thread.answering` remembers which card the
+  run in flight writes back to, and the answer lands there, so a chain of comments reads under the
+  note instead of on the thread's card. A fork, or a card nobody made, gets a thread of its own and the
+  turn lives on that thread card. The chain is quoted into the preamble — last three turns, 200
+  characters each — so a fresh child, a fork or a restarted thread still knows what was already said
+  about the card. Card turns survive a restart; a turn in flight when the daemon stopped reads as
+  stopped.
 - **Sessions resume**: the child writes its session under the app's own session dir, the thread
   stores the id, and a message after a daemon restart resumes that session. Verified: after a
   restart the agent remembered the word it had answered in the previous run.
@@ -82,6 +90,12 @@ Three files on the crossroads (`welcome.html`, `welcome.css`, `welcome.js`) and 
 established client (`index.html`, `board.js`), which is unchanged apart from reading its workspace id
 from the path, carrying `&workspace=` on its routes, and its `board of <name>` label opening the
 crossroads in a tab. No framework, no build step.
+
+## Fixed on the way
+
+- A queued message was killed by the `stdin.end()` that ran before the queue drained: the next message
+  started a child that the old child's exit handler then declared dead, so the turn read as stopped.
+  A child is closed only when nothing is waiting, and a replaced child's exit is ignored.
 
 ## Verified by curl
 
@@ -105,6 +119,11 @@ then `board_note`, and its note landed on the pi-studio board (so the bridge's t
 folder being loaded), with clean stderr and no extra listening port — the dashboard was left out and
 did not open a second board. A first run died on `test-delegate-retry.mts` ("does not export a valid
 factory function"), which is why test scripts are skipped now.
+
+Card chains, against real children: a note's comment and its answer land on the note while the thread
+card keeps only its own turn; a second comment chains under the first and the child answers about the
+previous question; a fork makes its own thread card and leaves the note's chain alone; the chain comes
+back after a restart; a comment written while the owner was busy waited, then answered on the card.
 
 Notes, against a daemon on a throwaway `HOME` and a scratch folder: created with and without a
 `rect`, refused when the markdown is blank, carried in the `snapshot` and in `GET /state`, edited
