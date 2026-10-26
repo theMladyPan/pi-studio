@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pi-studio</title>
+<link rel="stylesheet" href="/welcome.css" />
+</head>
+<body>
+<main id="crossroads">
+  <aside class="col workspaces">
+    <button id="newWorkspace" class="new" type="button">+ New workspace</button>
+    <form id="newForm" class="new-form" hidden>
+      <label for="folder">folder</label>
+      <div class="row">
+        <input id="folder" spellcheck="false" placeholder="~/projekty/something" autocomplete="off" />
+        <button id="browse" type="button" title="pick a folder from this machine">browse…</button>
+      </div>
+      <div class="row">
+        <button id="create" type="submit" class="primary">open</button>
+        <button id="cancelNew" type="button">cancel</button>
+      </div>
+      <p class="err" id="newError" role="status" aria-live="polite"></p>
+    </form>
+    <p class="head" id="recentHead">RECENT</p>
+    <ul id="wsList" aria-label="workspaces"></ul>
+    <p class="empty" id="wsEmpty" hidden>no workspace yet — name a folder above</p>
+  </aside>
+
+  <section class="col preview" aria-live="polite">
+    <h1 id="wsName">pi-studio</h1>
+    <p id="wsPath" class="path"></p>
+    <div id="preview">
+      <p class="hint" id="previewHint">Pick a workspace on the left, or open a folder to begin.</p>
+      <div id="previewBody" hidden>
+        <p class="head">LAST THREADS</p>
+        <ul id="threads"></ul>
+        <p class="hint" id="lastActivity"></p>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="open" class="primary big" type="button" disabled>Open workspace</button>
+      <span class="hint" id="openHint">opens in a new tab, and reuses it next time</span>
+    </div>
+  </section>
+
+  <aside class="col facts" aria-live="polite">
+    <p class="head">WORKSPACE</p>
+    <dl id="facts"></dl>
+    <p class="head">AGENT</p>
+    <dl id="agent"></dl>
+    <p class="head">STATE</p>
+    <dl id="state"></dl>
+  </aside>
+</main>
+<script src="/welcome.js"></script>
+</body>
+</html>

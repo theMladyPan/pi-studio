@@ -556,7 +556,7 @@
     }
     let problem = "";
     try {
-      const response = await fetch(`/answer?token=${encodeURIComponent(token)}`, {
+      const response = await fetch(`/answer?${auth}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cardId: entry.id, answer }),
@@ -1199,7 +1199,7 @@
   /** Close a card here and on the server, so a refresh does not bring it back. */
   function closeCard(entry) {
     dropCard(entry);
-    void fetch(`/close?token=${encodeURIComponent(token)}`, {
+    void fetch(`/close?${auth}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cardId: entry.id }),
@@ -1383,7 +1383,7 @@
     const body = { cardId, rect: { x: rect.x, y: rect.y, w: rect.w, h: rect.h } };
     // Only sent when it is asked for, so an ordinary move never clears a folded card.
     if (typeof mini === "boolean") body.mini = mini;
-    return fetch(`/layout?token=${encodeURIComponent(token)}`, {
+    return fetch(`/layout?${auth}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1427,7 +1427,7 @@
     entry.data = { ...entry.data, markdown };
     paintCard(entry, entry.data);
     try {
-      await fetch(`/edit?token=${encodeURIComponent(token)}`, {
+      await fetch(`/edit?${auth}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cardId: entry.id, markdown }),
@@ -2011,7 +2011,7 @@
     actPanelAskedAt = Date.now();
     let running = false;
     try {
-      const response = await fetch(`/activity/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`);
+      const response = await fetch(`/activity/${encodeURIComponent(id)}?${auth}`);
       // A slow answer for a panel the user already closed must not paint over the next one.
       if (actPanelId !== id) return;
       if (!response.ok) {
@@ -2209,7 +2209,7 @@
     statCtx.disabled = true;
     hintLine("compacting…");
     try {
-      const response = await fetch(`/compact?token=${encodeURIComponent(token)}`, { method: "POST" });
+      const response = await fetch(`/compact?${auth}`, { method: "POST" });
       if (!response.ok) hintLine((await response.text()).trim() || "could not compact", true);
     } catch {
       hintLine("could not reach the board server", true);
@@ -2244,94 +2244,11 @@
 
   document.getElementById("replyChipClear").addEventListener("click", () => setReplyTarget(null));
 
-  // ---------- workspaces ----------------------------------------------------
-  // A workspace is a folder with a board. The daemon keeps the list and the boards; this panel is
-  // only how the human picks one, which is why it can be dismissed once a board is open.
-  const wsPanel = document.getElementById("workspaces");
-  const wsList = document.getElementById("wsList");
-  const wsFolder = document.getElementById("wsFolder");
-  const wsError = document.getElementById("wsError");
-  let hasWorkspace = false;
-
-  function showWorkspaces() {
-    wsPanel.hidden = false;
-    const first = wsList.querySelector("button") || wsFolder;
-    first.focus();
-  }
-
-  function hideWorkspaces() {
-    wsPanel.hidden = true;
-  }
-
-  function paintWorkspaces(list, activeId) {
-    wsList.replaceChildren();
-    for (const workspace of list) {
-      const row = el("li", workspace.id === activeId ? "active" : "");
-      const button = el("button", "ws-open");
-      button.type = "button";
-      const name = el("b", "");
-      name.textContent = workspace.name || workspace.folder;
-      const where = el("span", "ws-meta");
-      const count = Number(workspace.threads) || 0;
-      where.textContent = `${count} thread${count === 1 ? "" : "s"} · ${workspace.folder}`;
-      button.append(name, where);
-      button.addEventListener("click", () => void openWorkspace({ id: workspace.id }));
-      row.append(button);
-      wsList.append(row);
-    }
-    if (!list.length) {
-      const empty = el("li", "ws-empty");
-      empty.textContent = "no workspace yet — name a folder below";
-      wsList.append(empty);
-    }
-  }
-
-  async function loadWorkspaces() {
-    try {
-      const response = await fetch(`/workspaces?token=${encodeURIComponent(token)}`);
-      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
-      const data = await response.json();
-      paintWorkspaces(data.workspaces || [], data.active);
-      // With nothing open the panel is the only thing worth doing, so it comes up by itself.
-      if (!data.active) showWorkspaces();
-    } catch (error) {
-      wsError.textContent = `could not read workspaces: ${error.message || error}`;
-      showWorkspaces();
-    }
-  }
-
-  async function openWorkspace(body) {
-    wsError.textContent = "";
-    try {
-      const response = await fetch(`/workspace?token=${encodeURIComponent(token)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!response.ok) throw new Error((await response.text()).slice(0, 120) || response.statusText);
-      hideWorkspaces();
-      wsFolder.value = "";
-      void loadWorkspaces();
-    } catch (error) {
-      wsError.textContent = `could not open that workspace: ${error.message || error}`;
-    }
-  }
-
-  document.getElementById("wsNew").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const folder = wsFolder.value.trim();
-    if (folder) void openWorkspace({ folder });
-  });
-  wsPanel.addEventListener("keydown", (event) => {
-    // Escape only puts the panel away when there is a board behind it to go back to.
-    if (event.key === "Escape" && hasWorkspace) {
-      event.preventDefault();
-      hideWorkspaces();
-    }
-  });
+  // ---------- the crossroads -------------------------------------------------
+  // Choosing a workspace is not this page's job any more: it lives on `/`, in its own tab, so a board
+  // never has to be paused to pick another one. The header label goes back there.
   document.getElementById("sess").addEventListener("click", () => {
-    void loadWorkspaces();
-    showWorkspaces();
+    window.open(`/?token=${encodeURIComponent(token)}`, "pi-studio-crossroads");
   });
 
   for (const button of document.querySelectorAll("#composer .modes button[data-mode]")) {
@@ -2703,7 +2620,7 @@
       // request silently. One retry turns that into a delivered message.
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          response = await fetch(`/message?token=${encodeURIComponent(token)}`, {
+          response = await fetch(`/message?${auth}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body,
@@ -2764,15 +2681,9 @@
   }
 
   newThreadBtn.addEventListener("click", async () => {
-    // A thread lives on a workspace's board, so with none open the question is which folder.
-    if (!hasWorkspace) {
-      void loadWorkspaces();
-      showWorkspaces();
-      return;
-    }
     newThreadBtn.disabled = true;
     try {
-      const response = await fetch(`/thread?token=${encodeURIComponent(token)}`, {
+      const response = await fetch(`/thread?${auth}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "{}",
@@ -2793,7 +2704,7 @@
     stopBtn.disabled = true;
     stopBtn.textContent = "stopping…";
     try {
-      await fetch(`/stop?token=${encodeURIComponent(token)}`, { method: "POST" });
+      await fetch(`/stop?${auth}`, { method: "POST" });
     } catch {
       stopBtn.disabled = false;
       stopBtn.textContent = "stop";
@@ -2937,9 +2848,8 @@
       stopBtn.disabled = false;
       stopBtn.textContent = "stop";
     }
-    // A workspace is the folder the board belongs to, so the label names it and clicking it lets
-    // the human continue another one or open a fresh folder.
-    hasWorkspace = Boolean(meta.workspace);
+    // The label names the workspace this tab belongs to; clicking it goes back to the crossroads,
+    // where another one can be opened in a tab of its own.
     const folder = meta.workspace?.name || meta.folder || "session";
     const sess = document.getElementById("sess");
     sess.innerHTML = "";
@@ -2948,7 +2858,7 @@
     name.textContent = folder;
     sess.append(name);
     sess.title = meta.workspace
-      ? `${meta.workspace.folder} · click to switch workspace`
+      ? `${meta.workspace.folder} · click for the crossroads`
       : `${meta.cwd || folder} · port ${meta.port}`;
     setBaseTitle(`pi - ${folder}`);
     const model = document.getElementById("statModel");
@@ -3124,7 +3034,7 @@
   }
 
   function connect() {
-    const source = new EventSource(`/events?token=${encodeURIComponent(token)}`);
+    const source = new EventSource(`/events?${auth}`);
     source.onopen = () => setLive(true);
     source.onerror = () => {
       // The browser tells the two failures apart: an HTTP error, such as a token the board no
@@ -3199,8 +3109,6 @@
   window.BOARD_START = () => {
     applyView();
     updateEmpty();
-    // Which workspace is open is the daemon's answer, not this tab's memory.
-    void loadWorkspaces();
     if (!token) {
       // No stream exists here, so nothing on the page is stale: only the header says why the board
       // is blank.

@@ -5,11 +5,23 @@ against real children; nothing has been checked in a browser.
 
 ## Works
 
-- `server.mjs`, Node builtins only, `node server.mjs` or `bin/pi-studio`.
-- **Workspaces**: `GET /workspaces` lists what has been opened (folder, name, thread count, newest
-  first, plus which one is open); `POST /workspace {id | folder}` opens one, creating it if the
-  folder is new. State lives in `~/.pi/agent/state/pi-studio/`: `daemon.json` (token, port),
-  `workspaces.json`, `boards/<id>.json`, `sessions/<id>/`.
+- `server.mjs`, Node builtins only, `node server.mjs` or `bin/pi-studio`. It opens the crossroads in a
+  browser unless started with `--no-open`.
+- **Two surfaces**: `/` is the crossroads (workspaces, a preview of one, facts about it), `/w/<id>` is
+  that workspace's board in its own tab. The crossroads opens a board with
+  `window.open('/w/<id>', 'pi-studio-<id>')`, so asking twice focuses the tab instead of stacking
+  duplicates. A thread row in the preview opens the board on that thread (`&thread=<id>`).
+- **Boards are independent**: threads, children, activity and the event stream are keyed by
+  workspace, so two tabs work at once and neither can disturb the other. Closing a tab kills
+  nothing — children belong to the daemon and keep running.
+- **Folder picker**: `POST /pick-folder` runs `zenity --file-selection --directory`, because a browser
+  cannot be handed an absolute path. Falls back to typing a path when zenity is missing; a path that
+  does not exist is refused rather than created.
+- **Workspaces**: `GET /workspaces` lists what has been opened with the facts the crossroads shows
+  (thread count, running count, last activity, git branch and dirty count, session size, whether the
+  folder still exists); `POST /workspace {folder}` registers and loads one. State lives in
+  `~/.pi/agent/state/pi-studio/`: `daemon.json` (token, port), `workspaces.json`, `boards/<id>.json`,
+  `sessions/<id>/`.
 - **Threads** are cards: `POST /thread` creates one in the open workspace, `POST /message {cardId,
   text, mode}` prompts it. The child is spawned on the first message, one per thread, and shut down
   when it settles.
@@ -24,9 +36,18 @@ against real children; nothing has been checked in a browser.
 
 ## Client
 
-`public/index.html` and `public/board.js` are the board's established client, copied in. Two
-additions: a start screen (`#workspaces`) listing workspaces and taking a folder to open, and the
-`+` button. The header's `board of <name>` label is a button that reopens the start screen.
+Three files on the crossroads (`welcome.html`, `welcome.css`, `welcome.js`) and the board's
+established client (`index.html`, `board.js`), which is unchanged apart from reading its workspace id
+from the path, carrying `&workspace=` on its routes, and its `board of <name>` label opening the
+crossroads in a tab. No framework, no build step.
+
+## Verified by curl
+
+Crossroads served and reachable, `GET /workspaces` empty then populated, workspace opened, board page
+served at `/w/<id>`, board snapshot with its workspace in meta, thread and reply in one workspace,
+a second workspace with its own thread and reply at the same time, both restored after a daemon
+restart, crossroads showing both with their last activity. `POST /pick-folder` is untested because
+running it opens a dialog on the human's screen.
 
 ## Does not work yet
 

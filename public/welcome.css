@@ -1,0 +1,116 @@
+/* The crossroads. Same palette as the board so the two read as one application. */
+:root {
+  --bg: #0b0d10;
+  --panel: #12151a;
+  --panel-2: #161b22;
+  --raised: #1a1f27;
+  --border: #1f242c;
+  --border-2: #2a303a;
+  --text: #e6edf3;
+  --dim: #c9d1d9;
+  --muted: #8b949e;
+  --accent: #3b82f6;
+  --ok: #3fb950;
+  --warn: #e3b341;
+  --bad: #f85149;
+  --mono: ui-monospace, SFMono-Regular, Menlo, "DejaVu Sans Mono", monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+button, input { font: inherit; color: inherit; }
+button {
+  background: var(--raised);
+  border: 1px solid var(--border-2);
+  border-radius: 7px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: #3a424e; }
+button:focus-visible, input:focus-visible, li:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+button:disabled { opacity: .5; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #06101f; font-weight: 600; }
+button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+button.big { padding: 10px 18px; font-size: 13px; }
+input {
+  background: #0d1117;
+  border: 1px solid var(--border-2);
+  border-radius: 7px;
+  padding: 7px 10px;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+#crossroads {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 260px;
+  height: 100%;
+  min-height: 100vh;
+}
+.col { min-width: 0; overflow: auto; }
+.col.workspaces, .col.facts { background: var(--panel); }
+.col.workspaces { border-right: 1px solid var(--border); padding: 16px 14px; }
+.col.facts { border-left: 1px solid var(--border); padding: 16px 16px; }
+.col.preview { padding: 28px 32px; display: flex; flex-direction: column; gap: 10px; }
+
+.head {
+  margin: 18px 0 6px;
+  color: var(--muted);
+  font: 9px/1 var(--mono);
+  letter-spacing: .8px;
+  text-transform: uppercase;
+}
+.hint, .empty { color: var(--muted); font-size: 11.5px; margin: 0; }
+.err { color: var(--bad); font-size: 11.5px; margin: 2px 0 0; min-height: 1em; }
+
+button.new { width: 100%; text-align: left; background: var(--panel-2); }
+.new-form { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding: 10px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; }
+.new-form label { color: var(--muted); font: 9px/1 var(--mono); text-transform: uppercase; letter-spacing: .8px; }
+.new-form .row { display: flex; gap: 6px; }
+.new-form input { flex: 1; }
+
+#wsList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+#wsList li {
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+}
+#wsList li:hover { background: var(--panel-2); }
+#wsList li[aria-selected="true"] { background: #1b2432; border-color: var(--border-2); }
+#wsList .name { display: flex; align-items: center; gap: 6px; font: 12.5px var(--mono); }
+#wsList .sub { color: var(--muted); font: 10.5px var(--mono); overflow-wrap: anywhere; }
+#wsList .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; }
+#wsList .dot.running { background: var(--warn); }
+#wsList .dot.idle { background: var(--ok); }
+#wsList .missing { color: var(--bad); }
+
+h1 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -.2px; }
+.path { margin: 0; color: var(--muted); font: 11.5px var(--mono); overflow-wrap: anywhere; }
+#previewBody { display: flex; flex-direction: column; }
+#threads { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+#threads li {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: 7px; border: 1px solid transparent; cursor: pointer;
+}
+#threads li:hover { background: var(--panel-2); border-color: var(--border); }
+#threads .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+#threads .when { color: var(--muted); font: 10.5px var(--mono); }
+.actions { margin-top: auto; display: flex; align-items: center; gap: 12px; padding-top: 20px; }
+
+dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
+dt { color: var(--muted); font: 10.5px var(--mono); }
+dd { margin: 0; font: 11px var(--mono); overflow-wrap: anywhere; }
+dd.good { color: var(--ok); }
+dd.warn { color: var(--warn); }
+dd.bad { color: var(--bad); }

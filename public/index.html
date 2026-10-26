@@ -456,44 +456,6 @@
   #newThread:disabled { opacity: .55; cursor: progress; }
   #newThread:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 
-  /* The start screen: a list of folders that already have a board, and a field to open a new one. */
-  #workspaces {
-    position: fixed; inset: 0; z-index: 2400; display: grid; place-items: center;
-    background: rgba(5,8,12,.72); backdrop-filter: blur(3px);
-  }
-  #workspaces[hidden] { display: none; }
-  .ws-panel {
-    width: min(560px, calc(100vw - 48px)); max-height: calc(100vh - 96px); overflow: auto;
-    display: flex; flex-direction: column; gap: 10px; padding: 18px 20px;
-    background: #0f141b; border: 1px solid var(--border); border-radius: 10px;
-    box-shadow: 0 18px 48px rgba(0,0,0,.55);
-  }
-  .ws-panel h2 { margin: 0; font: 600 15px var(--mono); color: var(--text); }
-  .ws-hint { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
-  #wsList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-  #wsList .ws-open {
-    width: 100%; text-align: left; display: flex; flex-direction: column; gap: 2px;
-    padding: 9px 11px; background: #161b22; color: var(--text);
-    border: 1px solid var(--border); border-radius: 7px; font: inherit; cursor: pointer;
-  }
-  #wsList .ws-open:hover, #wsList .ws-open:focus-visible { border-color: var(--accent); }
-  #wsList .active .ws-open { border-color: var(--accent); background: #172033; }
-  #wsList .ws-open b { font: 12.5px var(--mono); }
-  #wsList .ws-meta { color: var(--muted); font: 11px var(--mono); overflow-wrap: anywhere; }
-  #wsList .ws-empty { color: var(--muted); font: 12px var(--mono); padding: 6px 2px; }
-  #wsNew { display: flex; gap: 8px; }
-  #wsNew input {
-    flex: 1; min-width: 0; padding: 8px 10px; color: var(--text); background: #0d1117;
-    border: 1px solid var(--border); border-radius: 7px; font: 12px var(--mono);
-  }
-  #wsNew input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  #wsNew button {
-    padding: 8px 14px; color: #0d1117; background: var(--accent); border: none;
-    border-radius: 7px; font: 600 12px var(--mono); cursor: pointer;
-  }
-  .sess { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
-  .sess:hover b, .sess:focus-visible b { text-decoration: underline; }
-
   #picker { position: fixed; z-index: 2000; display: flex; flex-direction: column; gap: 6px;
     padding: 8px; background: rgba(13,17,23,.98); border: 1px solid var(--border-bright);
     border-radius: 10px; box-shadow: 0 18px 40px rgba(0,0,0,.55); }
@@ -628,19 +590,6 @@
     </div>
     <span class="hintline" id="composerHint" role="status" aria-live="polite"></span>
     <button id="send">send</button>
-  </div>
-</div>
-
-<div id="workspaces" role="dialog" aria-modal="true" aria-labelledby="wsTitle" hidden>
-  <div class="ws-panel">
-    <h2 id="wsTitle">pi-studio</h2>
-    <p class="ws-hint">A workspace is a folder. Its board, its threads and the pi sessions behind them live there.</p>
-    <ul id="wsList"></ul>
-    <form id="wsNew">
-      <input id="wsFolder" placeholder="open another folder…" spellcheck="false" aria-label="folder to open" />
-      <button id="wsOpen" type="submit">open</button>
-    </form>
-    <p class="ws-hint" id="wsError" role="status" aria-live="polite"></p>
   </div>
 </div>
 

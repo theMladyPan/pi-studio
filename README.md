@@ -10,7 +10,8 @@ supervise more than one agent.
 ## Run it
 
 ```bash
-node server.mjs          # prints http://127.0.0.1:<port>/?token=<token>
+node server.mjs          # prints the URL and opens the crossroads in your browser
+node server.mjs --no-open   # for a service, or when you open it yourself
 ```
 
 or, with the repository in `PATH` or linked into `~/.local/bin`:
@@ -24,8 +25,9 @@ same machine are the whole requirement.
 
 ## How it works
 
-- **Workspaces** are folders you have opened before. The start screen lists them, newest first, and
-  takes a folder path for a new one. A workspace's board, its threads and their layout live in
+- **Workspaces** are folders you have opened before. The crossroads at `/` lists them, newest first,
+  previews the selected one, and opens it as a board in a tab of its own (`/w/<id>`); asking again
+  reuses that tab. The folder dialog is the machine's own, through `zenity`. A workspace's board, its threads and their layout live in
   `~/.pi/agent/state/pi-studio/boards/<id>.json`.
 - **Threads** are cards. A thread is created with `+` and starts its agent on the first message. A
   thread's pi session is written under `~/.pi/agent/state/pi-studio/sessions/<workspace>/`, so a
