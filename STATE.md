@@ -44,7 +44,12 @@ commit's own account rather than on a check run now, the section below says so.
   exports no factory, so pi refuses to load it and the thread dies before it can answer.
 - **What a thread is told**: `--append-system-prompt` says it is one thread on a board, in which
   folder, that the human reads cards rather than a terminal log, and that a fenced svg block in a
-  note draws a picture.
+  note draws a picture. It is also told that other threads may be working in the same folder, so it
+  takes a git worktree before changing files — `git worktree add -b thread/<slug> .agents/<slug> HEAD`,
+  with the slug taken from the thread's title — and that `.agents/` has to be in `.gitignore` or the
+  main tree fills with the worktree, which `git status` does show. A question that only reads files
+  needs none, and a folder that is not a repository is worked in as it is. Three examples of right and
+  wrong are in the prompt, because the rule alone reads as a suggestion.
 - **An answer arrives as it is written.** `message_update` from the child carries `text_delta`, and
   the daemon buffers it per content block, puts it on the turn in flight and re-broadcasts the card
   that holds that turn — the note when a note is being answered, the thread's own card otherwise — at
@@ -263,6 +268,11 @@ Notes, against a daemon on a throwaway `HOME` and a scratch folder: created with
 text, place and fold after a daemon restart, closed through `POST /close`, and a message asked on a
 note started a thread named after it. Editing a card id that is not a note answers 409. Nothing here
 has been checked in a browser.
+
+How several threads are kept off each other's tree: a child asked to create two documents in a git
+workspace ran `git worktree add -b thread/draft-docs .agents/draft-docs HEAD`, wrote both files inside
+it, left the main tree clean, and reported the path it used. The daemon does not create or remove a
+worktree; the child does, on being told to.
 
 Streaming, against real children on a throwaway `HOME` whose `~/.pi/agent` is symlinked so pi keeps
 its credentials: a 250-word answer reached the browser as 8 frames growing 216 → 1432 characters,

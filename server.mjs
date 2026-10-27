@@ -1019,6 +1019,30 @@ function firstLine(result) {
 	return text.split("\n").map((line) => line.trim()).find((line) => line.length > 0)?.slice(0, 140) ?? "";
 }
 
+/**
+ * What a thread is told about changing files. Boards run several threads on one folder at once, so a
+ * thread that edits in place fights the others; a worktree gives it a tree of its own. The examples
+ * are here because the rule alone reads like a suggestion.
+ */
+function worktreePrompt(board, thread) {
+	const slug = thread.title
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-|-$/g, "")
+		.slice(0, 40) || "work";
+	return [
+		`Other threads may be working in ${board.folder} at the same time. Take a git worktree before you change files.`,
+		`  git worktree add -b thread/${slug} .agents/${slug} HEAD`,
+		"Then work inside it and say the path when you report. `git worktree list` shows what is taken; pick a slug from the job, not from the clock.",
+		"Keep the folder out of the main tree: `.agents/` has to be in `.gitignore`, or `git status` there fills up with your worktree.",
+		"A question that only reads files needs no worktree. If the folder is not a git repository, or the change is one line nothing else touches, work in place and say so.",
+		"Examples of right and wrong:",
+		`- right: ${board.folder} is a repo and the job is to rewrite the parser: \`git worktree add -b thread/${slug} .agents/${slug} HEAD\`, then edit files under .agents/${slug}/.`,
+		"- right: \"how does the router pick a board?\" is answered with reads, and creates nothing.",
+		"- wrong: editing parser.ts in the folder itself while three other threads have the same tree open.",
+	].join("\n");
+}
+
 /** The thread's own card, and the board around it, said plainly enough that an agent uses it. */
 function boardPrompt(board, thread) {
 	return [
@@ -1027,6 +1051,7 @@ function boardPrompt(board, thread) {
 		"Your answer is shown inside your own card, so write it as prose for a person, and keep long material out of it.",
 		"board_note puts a note on the board: use it for a diagram (a fenced svg block draws a picture), a table, a file tree, a todo list you will keep revising under the same key, or a finding worth keeping visible.",
 		"board_source shows the human a real file from this workspace, scrolled to a line, instead of quoting it at them.",
+		worktreePrompt(board, thread),
 	].join("\n");
 }
 
