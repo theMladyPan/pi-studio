@@ -633,6 +633,25 @@
     white-space: pre-wrap; overflow-wrap: anywhere; }
   #actDetail .cut { color: var(--amber); font: 11px var(--mono); }
   #actDetail .gone { color: var(--muted); font: 11px var(--mono); }
+  /* The parts of a call a renderer lays out: an argument list, code with a gutter, a diff, a picture. */
+  #actDetail .act-kv { display: flex; flex-direction: column; gap: 2px; font: 11px var(--mono); }
+  #actDetail .act-row { display: flex; gap: 8px; }
+  #actDetail .act-row .k { flex: none; min-width: 60px; color: var(--muted); }
+  #actDetail .act-row .v { color: #c9d1d9; overflow-wrap: anywhere; }
+  #actDetail .act-code { border: 1px solid var(--border); border-radius: 6px; background: #0d1117;
+    max-height: 46vh; overflow: auto; padding: 6px 0; font: 11px/1.45 var(--mono); }
+  #actDetail .act-line { display: flex; gap: 8px; padding: 0 8px; }
+  #actDetail .act-line .n { flex: none; width: 34px; text-align: right; color: #484f58; user-select: none; }
+  #actDetail .act-line .t { white-space: pre; color: #c9d1d9; }
+  #actDetail .act-diff .act-line.add { background: rgba(63, 185, 80, .12); }
+  #actDetail .act-diff .act-line.del { background: rgba(248, 81, 73, .12); }
+  #actDetail .act-diff .act-line.hunk { color: #8b949e; }
+  #actDetail .act-img { max-width: 100%; border: 1px solid var(--border); border-radius: 6px; background: #0d1117; }
+  #actDetail .act-options { margin: 0; padding-left: 18px; color: #c9d1d9; font-size: 12.5px; }
+  #actDetail .act-note { font-size: 13px; color: #c9d1d9; }
+  #actDetail .act-note .svg-wrap { margin: 8px 0; background: #0d1117; border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px; }
+  #actDetail .act-note .svg-wrap svg { max-width: 100%; height: auto; display: block; }
 
   /* sticky card */
   .sticky-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }

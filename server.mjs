@@ -317,6 +317,8 @@ function installedExtensions() {
 const CHILD_EXTENSIONS = installedExtensions();
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_ACTIVITY = 300;
+/** One row of the rail keeps what the panel draws, and the rail is filed to disk on every change. */
+const MAX_ROW_CHARS = 64_000;
 const MAX_THREADS = 200;
 const MAX_PLAIN_CARDS = 200;
 /** A note is markdown the board repaints on every change, so its size has a ceiling. */
@@ -545,7 +547,7 @@ function saveBoard(board) {
 		version: STATE_VERSION,
 		workspace: { id: board.id, folder: board.folder, name: board.name },
 		savedAt: Date.now(),
-		activity: board.activity.slice(-MAX_ACTIVITY),
+		activity: board.activity.slice(-MAX_ACTIVITY).map(diskRow),
 		config: activeConfig(board),
 		trees: board.trees,
 		threads: [...board.threads.values()].map((thread) => ({
@@ -1589,8 +1591,20 @@ function addRow(board, row) {
 function patchRow(board, id, patch) {
 	const row = board.activity.find((candidate) => candidate.id === id);
 	if (!row) return;
+	// A row learns what was cut in two steps, so a later patch adds to that list rather than replacing it.
+	if (Array.isArray(patch.cut)) patch.cut = [...new Set([...(row.cut || []), ...patch.cut])];
 	Object.assign(row, patch);
 	broadcast(board, { type: "activity", row });
+}
+
+/**
+ * A row as the board file keeps it. A picture a screenshot returned is worth the memory it takes while
+ * the daemon runs, and not worth writing a megabyte of base64 into the state file every time, so the
+ * file remembers only that there was one.
+ */
+function diskRow(row) {
+	if (!Array.isArray(row.images) || !row.images.length) return row;
+	return { ...row, images: row.images.map(({ mime }) => ({ mime, dropped: true })) };
 }
 
 /** Something the daemon cannot paper over: the card shows it as stopped and the console says why. */
@@ -1687,14 +1701,86 @@ function headline(text) {
 	);
 }
 
-/** What a rail row says once the call is over: its first line of output, cut short. */
-function firstLine(result) {
+/** The text a tool result carries, in the order the tool said it. */
+function resultText(result) {
 	const content = Array.isArray(result?.content) ? result.content : [];
-	const text = content
+	return content
 		.filter((part) => part?.type === "text")
 		.map((part) => String(part.text ?? ""))
 		.join("\n");
-	return text.split("\n").map((line) => line.trim()).find((line) => line.length > 0)?.slice(0, 140) ?? "";
+}
+
+/** What a rail row says once the call is over: its first line of output, cut short. */
+function firstLine(result) {
+	return resultText(result).split("\n").map((line) => line.trim()).find((line) => line.length > 0)?.slice(0, 140) ?? "";
+}
+
+/** A field of a row, cut to the ceiling and saying whether it was. */
+function ceiling(value) {
+	const text = String(value ?? "");
+	return { text: text.slice(0, MAX_ROW_CHARS), cut: text.length > MAX_ROW_CHARS };
+}
+
+/**
+ * A tool's arguments with any one string cut to the ceiling, so a call that carries a whole file keeps
+ * its shape and the panel still knows what tool it is looking at.
+ */
+function keptArgs(args, cut) {
+	if (!args || typeof args !== "object") return args;
+	const hold = (value) => {
+		if (typeof value !== "string") return value;
+		const held = ceiling(value);
+		if (held.cut) cut.add("args");
+		return held.text;
+	};
+	// One level is enough: the arguments pi tools take are a flat record, or a list of flat records.
+	const keep = (one) => {
+		if (!one || typeof one !== "object") return hold(one);
+		const out = {};
+		for (const [key, value] of Object.entries(one)) out[key] = hold(value);
+		return out;
+	};
+	if (Array.isArray(args)) return args.map(keep);
+	const out = {};
+	for (const [key, value] of Object.entries(args)) out[key] = Array.isArray(value) ? value.map(keep) : keep(value);
+	return out;
+}
+
+/**
+ * What a finished call leaves behind: the words it said, the diff it made, its exit code, and the
+ * picture it took. The panel draws these fields; nothing here is a JSON dump of the result, which is
+ * why most of what a row used to weigh is gone.
+ */
+function rowResult(result) {
+	// A tool may hand its result over as bare text rather than as parts.
+	if (typeof result === "string") return { output: ceiling(result).text };
+	const content = Array.isArray(result?.content) ? result.content : [];
+	const cut = new Set();
+	const said = ceiling(resultText(result));
+	if (said.cut) cut.add("output");
+	// A tool that said nothing in words still has to be readable, so its JSON is the last resort.
+	const dump = !said.text && result !== undefined ? ceiling(JSON.stringify(result, null, 2)) : null;
+	if (dump?.cut) cut.add("output");
+	const output = said.text || dump?.text || "";
+	const details = result?.details && typeof result.details === "object" ? result.details : {};
+	const structured = result?.structuredContent && typeof result.structuredContent === "object" ? result.structuredContent : {};
+	const diff = typeof details.diff === "string" && details.diff ? ceiling(details.diff) : null;
+	if (diff?.cut) cut.add("diff");
+	// Only the newest picture is kept: a screenshot is read while the row is open, and a row holds one.
+	const image = [...content].reverse().find((part) => part?.type === "image" && part.data);
+	return {
+		output,
+		...(diff ? { diff: diff.text } : {}),
+		...(Number.isFinite(structured.exit_code) ? { exitCode: structured.exit_code } : {}),
+		...(resultsTruncated(structured) ? { truncated: true } : {}),
+		...(image ? { images: [{ mime: String(image.mimeType || "image/png"), data: String(image.data) }] } : {}),
+		...(cut.size ? { cut: [...cut] } : {}),
+	};
+}
+
+/** Whether the tool itself says it cut what it returned, which is worth saying in the panel. */
+function resultsTruncated(structured) {
+	return structured.truncated === true || structured.truncated === "true";
 }
 
 /** The last line a child wrote on stderr, which is often the only explanation there is. */
@@ -2087,15 +2173,18 @@ function handleChildLine(board, thread, line) {
 		return;
 	}
 	if (event.type === "tool_execution_start") {
+		const cut = new Set();
+		const args = keptArgs(event.args, cut);
 		addRow(board, {
 			id: String(event.toolCallId),
 			kind: "tool",
 			tool: String(event.toolName ?? "tool"),
-			label: describeTool(event.toolName, event.args ?? {}),
+			label: describeTool(event.toolName, args ?? {}),
 			status: "running",
 			startedAt: Date.now(),
 			thread: threadRef(thread),
-			args: event.args,
+			args,
+			...(cut.size ? { cut: [...cut] } : {}),
 		});
 		return;
 	}
@@ -2104,7 +2193,7 @@ function handleChildLine(board, thread, line) {
 			status: event.isError ? "error" : "ok",
 			durationMs: typeof event.durationMs === "number" ? event.durationMs : undefined,
 			summary: firstLine(event.result),
-			output: typeof event.result === "string" ? event.result : JSON.stringify(event.result, null, 2),
+			...rowResult(event.result),
 		});
 		return;
 	}
