@@ -174,6 +174,16 @@ commit's own account rather than on a check run now, the section below says so.
   is written nowhere: never onto the thread's own turn, which would overwrite an older answer.
   `anchorOf` keeps placement honest for cards a hidden child writes: they cascade under the newest card
   that child owns, and name that child as their owner.
+- **A closed card comes back in one click.** Closing a thread card that still owns notes keeps the
+  thread, and `closedAt` records when it was put away, so the board can offer it back instead of leaving
+  it in the file where nothing can reach it. `POST /reopen {cardId}` clears `hidden` and `closedAt`,
+  broadcasts the card where it was and answers `{reopened}`; an id the board does not hold is 404, and a
+  card already drawn is 409. The snapshot and `GET /state` carry `closed`, and the rail draws it under
+  `closed` as one row per put-away thread that says `reopen`; the row goes when the board says the list
+  changed, so two tabs agree. A thread hidden because a card is where it is read is not in that list:
+  nobody closed it. Boards written before `closedAt` existed carry only `hidden`, so a hidden thread with
+  no card behind it is read as one the human closed. A closed *note* is still gone — its text lives on
+  the card, and the card is what `POST /close` deletes.
 - **A run is stopped or killed where it is read, and only there.** The thread's own activity section
   carries the one control: `■` asks the child to abort, and the same control becomes `⊗` — kill —
   when the stop does not land. It was on the card's header too, with the same stop-then-kill state

@@ -1510,6 +1510,7 @@
     freshCount = 0;
     clearRailCards();
     clearRailLog();
+    applyClosed([]);
     paintPill();
     sawFirstCard = false;
     updateEmpty();
@@ -2645,6 +2646,57 @@
     railCards.replaceChildren();
     railRows.clear();
     paintRailCount();
+  }
+
+  // A card the human closed while it still held a conversation is not gone: the board keeps it, and
+  // the rail offers it back. The list is the board's, not this tab's, so a second tab sees the same
+  // closed cards and the one that puts a card back takes the row from both.
+  const railClosed = document.getElementById("railClosed");
+  const railClosedHead = document.getElementById("railClosedHead");
+  const railClosedCount = document.getElementById("railClosedCount");
+
+  /** Redrawn whole: the list is short, and the server only says it when it changes. */
+  function applyClosed(rows) {
+    railClosed.replaceChildren();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const button = el("button", "rail-card");
+      button.type = "button";
+      button.dataset.id = row.id;
+      const name = row.title || "thread";
+      const turns = Number(row.turns) || 0;
+      const dot = el("span", "dot");
+      dot.className = `dot ${dotKind("sticky")}`;
+      const title = el("span", "rail-title");
+      title.textContent = name;
+      const state = el("span", "rail-state");
+      // The row's one action is the reason it is here, so the action is what the row says.
+      state.textContent = "reopen";
+      button.append(dot, title, state);
+      button.title = `${name} · closed ${agoText(Date.now() - (Number(row.closedAt) || Date.now()))} ago · ${turns} turn${turns === 1 ? "" : "s"} · click to put it back`;
+      button.setAttribute("aria-label", `reopen the card ${name}`);
+      button.addEventListener("click", () => reopenCard(row, name));
+      railClosed.appendChild(button);
+    }
+    railClosedHead.hidden = railClosed.childElementCount === 0;
+    railClosedCount.textContent = railClosed.childElementCount ? String(railClosed.childElementCount) : "";
+  }
+
+  /**
+   * Put a closed card back. The card comes with the turns it had and lands where it was, so this is one
+   * request: the row goes when the board says the list has changed, not when the click lands.
+   */
+  function reopenCard(row, name) {
+    void fetch(`/reopen?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: row.id }),
+    })
+      .then(async (response) => {
+        if (response.ok) return;
+        const said = (await response.text()).trim();
+        hintLine(said === "no such card" ? `${name} is no longer on the board` : `could not reopen ${name}`, true);
+      })
+      .catch(() => hintLine("could not reach the board server", true));
   }
 
   function actRow(row) {
@@ -4546,6 +4598,7 @@
         try {
           for (const row of payload.activity || []) applyActivity(row);
           for (const card of payload.cards || []) applyMessage(card);
+          applyClosed(payload.closed);
         } finally {
           replaying = false;
         }
@@ -4585,6 +4638,8 @@
         // question that has just started blocking the agent is worth a blink in a background tab.
         const record = byId.get(payload.card.id);
         if ((!known && payload.quiet !== true) || (record && !wasOpen && questionWants(record.data))) startFlash();
+      } else if (payload.type === "closed") {
+        applyClosed(payload.closed);
       } else if (payload.type === "hint") {
         hintLine(payload.text || "");
       } else if (payload.type === "clear") {
