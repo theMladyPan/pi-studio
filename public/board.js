@@ -1028,8 +1028,10 @@
     if (held) {
       // One thread: everything the daemon knows about it, because that is what a selection asks.
       const stats = held.stats ?? {};
+      // Who answered, named in full: a footer that said only `deepseek-v4.1` left the reader guessing
+      // which endpoint it came from.
       const where = [held.provider, held.model].filter(Boolean).join("/");
-      model.innerHTML = where ? `<em>${shortModel(held.model)}</em>` : "";
+      model.textContent = where;
       model.title = where;
       tokens.innerHTML = stats.input || stats.output ? `↑${shortNum(stats.input)} ↓${shortNum(stats.output)}${stats.cacheRead ? ` cache ${shortNum(stats.cacheRead)}` : ""}` : "";
       cost.textContent = money(stats.cost);
@@ -1060,8 +1062,9 @@
       }
     }
     const meta = boardMetaCache ?? {};
-    model.innerHTML = meta.model ? `<em>${shortModel(meta.model)}</em>` : "";
-    model.title = `the board's default · ${meta.model ?? ""}`;
+    const where = [boardConfig.provider, meta.model].filter(Boolean).join("/");
+    model.textContent = where;
+    model.title = `the board's default · ${where}`;
     tokens.innerHTML = meta.tokensIn || meta.tokensOut ? `↑${shortNum(meta.tokensIn)} ↓${shortNum(meta.tokensOut)}${cache ? ` cache ${shortNum(cache)}` : ""}` : "";
     cost.textContent = money(meta.cost);
     footCtx.textContent = context ? `ctx ${compact(context)}${max ? `/${compact(max)} · ${Math.round((context / max) * 100)}%` : ""}` : "";
