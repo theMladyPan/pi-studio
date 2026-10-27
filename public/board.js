@@ -1010,6 +1010,29 @@
     return entry;
   }
 
+  /** What the daemon last said about each thread, taken from the cards that speak for it. */
+  const threadFacts = new Map();
+
+  function compact(number) {
+    const value = Number(number) || 0;
+    if (value < 1000) return String(Math.round(value));
+    if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}k`;
+    return `${(value / 1_000_000).toFixed(1)}m`;
+  }
+
+  /** A section says what its thread costs and offers the stop the card's head also offers. */
+  function paintSections() {
+    for (const entry of railSections.values()) {
+      const held = threadFacts.get(entry.id);
+      const stats = held?.stats;
+      const bits = [];
+      if (stats?.context) bits.push(`${compact(stats.context)}${stats.contextMax ? `/${compact(stats.contextMax)}` : ""} ctx`);
+      if (stats?.cost) bits.push(`$${stats.cost < 1 ? stats.cost.toFixed(2) : compact(stats.cost)}`);
+      entry.head.children[3].textContent = bits.join(" · ");
+      entry.head.children[4].hidden = held?.running !== true;
+    }
+  }
+
   /**
    * The thread a card belongs to. A thread card is its own; a plain card belongs to the thread that
    * made it, which is also the card it cascades under. Two cards share a family when they are the same
@@ -2276,7 +2299,22 @@
       const section = el("section", "rail-thread");
       const head = el("button", "rail-thread-head");
       head.type = "button";
-      head.append(el("span", "chev"), el("span", "rail-thread-title"), el("span", "rail-thread-count"));
+      head.append(
+        el("span", "chev"),
+        el("span", "rail-thread-title"),
+        el("span", "rail-thread-count"),
+        el("span", "rail-thread-stats"),
+        el("button", "rail-thread-stop"),
+      );
+      const stop = head.children[4];
+      stop.type = "button";
+      stop.textContent = "■";
+      stop.title = "stop this thread's run";
+      stop.addEventListener("click", (event) => {
+        // The section's own press must not fold it, which is what the head's click does.
+        event.stopPropagation();
+        stopThread(id);
+      });
       const body = el("div", "rail-thread-body");
       section.append(head, body);
       head.addEventListener("click", () => {
@@ -2533,6 +2571,20 @@
     }
     const runtime = answering ?? boardConfig;
     paintConfig();
+    // One pass over the cards says what every thread is doing and what it has spent, because a card is
+    // where a thread is read — its own card, or the card a hidden child answers for.
+    threadFacts.clear();
+    for (const entry of byId.values()) {
+      const data = entry.data || {};
+      const id = data.type === "sticky" ? entry.id : data.answersWith?.thread;
+      if (!id) continue;
+      threadFacts.set(id, {
+        cardId: entry.id,
+        stats: data.type === "sticky" ? data.stats : data.answersWith?.stats,
+        running: data.type === "sticky" ? data.status === "sent" : data.answersWith?.running === true,
+      });
+    }
+    paintSections();
     modelChip.textContent = shortModel(runtime.model);
     thinkChip.textContent = runtime.thinking ? `think ${runtime.thinking}` : "think off";
     const where = answering ? "this card answers with" : "a new thread starts with";
@@ -2609,6 +2661,20 @@
     const rows = levels.map((level) => pickRow(level, "", level === current, () => void chooseRuntime("thinking", level)));
     if (chosen && chosen.thinking === false) rows.push(pickNote(`${shortModel(here.model)} does not think`));
     runtimeList.replaceChildren(...(rows.length ? rows : [pickNote("no level to choose")]));
+  }
+
+  /** Stop one thread from its section, and kill it if the stop does not land. */
+  function stopThread(threadId) {
+    const held = threadFacts.get(threadId);
+    if (!held) return;
+    const kill = stopping.has(threadId);
+    if (kill) stopping.delete(threadId);
+    else stopping.add(threadId);
+    void fetch(`/${kill ? "kill" : "stop"}?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: held.cardId }),
+    });
   }
 
   async function openPick(which, anchor = null, forBoard = false) {

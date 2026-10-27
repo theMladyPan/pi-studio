@@ -370,6 +370,13 @@
   #railLog .rail-thread-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; color: var(--text); }
   #railLog .rail-thread-count { flex: none; }
+  #railLog .rail-thread-stats { flex: none; color: var(--muted); font: 10px var(--mono); }
+  #railLog .rail-thread-stats:empty { display: none; }
+  /* The stop sits where the thread's own numbers are, because both belong to that thread. */
+  #railLog .rail-thread-stop { flex: none; padding: 0 3px; border: 0; border-radius: 4px;
+    background: transparent; color: #f85149; font: 10px/1 system-ui; cursor: pointer; }
+  #railLog .rail-thread-stop:hover { background: rgba(248, 81, 73, .14); color: #ff7b72; }
+  #railLog .rail-thread-stop[hidden] { display: none; }
   #railLog .rail-thread-body { display: flex; flex-direction: column; gap: 4px; }
   #railLog .rail-thread.folded .rail-thread-body { display: none; }
   .act { border-radius: 6px; padding: 5px 7px; background: #0f141b; border: 1px solid #1c2128;

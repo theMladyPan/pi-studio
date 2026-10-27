@@ -405,6 +405,7 @@ function saveBoard(board) {
 			provider: thread.provider,
 			model: thread.model,
 			...(thread.thinking ? { thinking: thread.thinking } : {}),
+			...(thread.stats ? { stats: thread.stats } : {}),
 			at: thread.at,
 			turns: thread.turns.map(savedTurn),
 			...(thread.rect ? { rect: thread.rect } : {}),
@@ -480,6 +481,7 @@ function restoredThread(raw, folder) {
 		provider: typeof raw.provider === "string" ? raw.provider : PROVIDER,
 		model: typeof raw.model === "string" ? raw.model : MODEL,
 		...(THINKING_LEVELS.includes(raw.thinking) ? { thinking: raw.thinking } : {}),
+		...(raw.stats && typeof raw.stats === "object" ? { stats: raw.stats } : {}),
 		at: Number.isFinite(raw.at) ? raw.at : Date.now(),
 		turns,
 		queued: [],
@@ -718,6 +720,7 @@ function cardFor(thread, board = null) {
 	card.provider = thread.provider;
 	card.model = thread.model;
 	if (thread.thinking) card.thinking = thread.thinking;
+	if (thread.stats) card.stats = thread.stats;
 	return card;
 }
 
@@ -764,6 +767,8 @@ function plainCardFor(card, board = null) {
 			...(owner.thinking ? { thinking: owner.thinking } : {}),
 			// Stop and kill are per thread, and a plain card is where its thread is read.
 			running: owner.status === "running",
+			thread: owner.id,
+			...(owner.stats ? { stats: owner.stats } : {}),
 		};
 	}
 	return shown;
@@ -788,9 +793,20 @@ function boardMeta(board) {
 		model: MODEL,
 		// The board's configuration: what the next thread starts with, and which features are on.
 		config: activeConfig(board),
-		tokensIn: 0,
-		tokensOut: 0,
-		cost: 0,
+		// The board's own totals, summed from every thread: what this workspace has spent, which is the
+		// number the header shows while a section shows one thread's share.
+		...(() => {
+			let input = 0;
+			let output = 0;
+			let cost = 0;
+			for (const thread of board.threads.values()) {
+				if (!thread.stats) continue;
+				input += thread.stats.input ?? 0;
+				output += thread.stats.output ?? 0;
+				cost += thread.stats.cost ?? 0;
+			}
+			return { tokensIn: input, tokensOut: output, cost };
+		})(),
 		// The client draws a board of threads: no bottom composer, a + that starts one, and the field
 		// inside the card being answered.
 		mode: "threads",
@@ -1134,7 +1150,26 @@ function handleChildLine(board, thread, line) {
 		return;
 	}
 	if (event.type === "response") {
-		if (event.command === "get_state" && typeof event.data?.sessionId === "string") {
+		if (event.command === "get_session_stats" && event.data?.tokens) {
+			const data = event.data;
+			// Context is what the last request carried, so it is the number a compaction turns on; the
+			// totals are what this thread has spent since it started.
+			thread.stats = {
+				input: data.tokens.input ?? 0,
+				output: data.tokens.output ?? 0,
+				cacheRead: data.tokens.cacheRead ?? 0,
+				total: data.tokens.total ?? 0,
+				cost: typeof data.cost === "number" ? data.cost : 0,
+				...(data.contextUsage ? { context: data.contextUsage.tokens ?? data.contextUsage.used } : {}),
+				...(data.contextUsage?.maxTokens ? { contextMax: data.contextUsage.maxTokens } : {}),
+			};
+			if (thread.pendingClose) {
+				thread.pendingClose = false;
+				board.children.get(thread.id)?.stdin?.end();
+			}
+			update(board, thread);
+			scheduleSave(board);
+		} else if (event.command === "get_state" && typeof event.data?.sessionId === "string") {
 			thread.sessionId = event.data.sessionId;
 			update(board, thread);
 		} else if (event.command === "prompt" && event.success === false) {
@@ -1245,9 +1280,18 @@ function handleChildLine(board, thread, line) {
 			prompt(board, thread, typeof next === "string" ? next : next.message, target);
 			return;
 		}
-		// Nothing follows, so closing stdin is what lets the child exit. Doing it before the queue was
-		// drained killed the run the next message started.
-		board.children.get(thread.id)?.stdin?.end();
+		// What the run spent is only known to the child, so it is asked before stdin closes. The close
+		// waits for the answer.
+		const child = board.children.get(thread.id);
+		if (child?.stdin?.writable) {
+			thread.pendingClose = true;
+			try {
+				child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "get_session_stats" })}\n`);
+			} catch {
+				thread.pendingClose = false;
+				child.stdin.end();
+			}
+		}
 	}
 }
 
