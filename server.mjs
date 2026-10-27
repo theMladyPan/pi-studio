@@ -823,12 +823,13 @@ const GIT_TICK = 3000;
 
 /**
  * A ref as the strip draws it: the name on the pill, and what kind of name it is. `HEAD -> dev` is
- * the branch this checkout stands on, `tag: v1` is a tag, anything under a remote's name is remote.
+ * the branch this checkout stands on, a bare `HEAD` is a detached one, `tag: v1` is a tag, and
+ * anything under a remote's name is remote.
  */
 function refName(raw, remotes) {
-	const head = raw.startsWith("HEAD -> ");
+	const head = raw === "HEAD" || raw.startsWith("HEAD -> ");
 	const tag = raw.startsWith("tag: ");
-	const name = head ? raw.slice(8) : tag ? raw.slice(5) : raw;
+	const name = raw === "HEAD" ? "HEAD" : head ? raw.slice(8) : tag ? raw.slice(5) : raw;
 	const kind = head
 		? "head"
 		: tag
@@ -842,11 +843,14 @@ function refName(raw, remotes) {
 /**
  * The commits the strip draws, newest first over every ref, with the parents it needs for its lanes
  * and the refs it draws as pills. One `git log`, about 6 ms in a repository of this size.
+ *
+ * Hashes are the full ones, on both sides: `%h` is as long as `core.abbrev` says, so a repository
+ * that shortens nothing and a checkout reporting seven characters would never match a commit.
  */
 function gitGraph(repo, remotes) {
 	const log = gitIn(
 		repo,
-		["log", "--all", "--topo-order", "-n", String(GIT_ROWS), "--pretty=format:%h\u001f%p\u001f%D\u001f%s"],
+		["log", "--all", "--topo-order", "-n", String(GIT_ROWS), "--pretty=format:%H\u001f%P\u001f%D\u001f%s"],
 		3000,
 	);
 	if (!log.ok) return [];
@@ -878,7 +882,8 @@ function gitStatusOf(path) {
 	const state = { head: "", branch: "", detached: true, ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicts: 0 };
 	for (const line of out.out.split("\n")) {
 		if (!line) continue;
-		if (line.startsWith("# branch.oid ")) state.head = line.slice(13).trim().slice(0, 7);
+		// The whole oid, because that is what `gitGraph` puts on a commit and what a strip matches on.
+		if (line.startsWith("# branch.oid ")) state.head = line.slice(13).trim();
 		else if (line.startsWith("# branch.head ")) {
 			const name = line.slice(14).trim();
 			state.detached = name === "(detached)";
@@ -935,11 +940,21 @@ function gitPicture(board) {
 	return { repo, root, trees, graph: gitGraph(repo, remotes), at: Date.now() };
 }
 
+/**
+ * What the picture says, without the moment it was read. The clock is in the payload so a tab can say
+ * how old it is, and it must not be part of the change test: a repository nobody touched is not news.
+ */
+function gitFingerprint(picture) {
+	if (!picture) return "";
+	const { at, ...said } = picture;
+	return JSON.stringify(said);
+}
+
 /** Rebuild the picture and tell the open tabs, but only when something really changed. */
 function refreshGit(board, force = false) {
 	if (!force && !board.clients.size) return null;
 	const picture = gitPicture(board);
-	const stamp = picture ? JSON.stringify(picture) : "";
+	const stamp = gitFingerprint(picture);
 	if (!force && stamp === board.gitStamp) return board.git;
 	board.gitStamp = stamp;
 	board.git = picture;
@@ -1646,7 +1661,13 @@ function broadcast(board, payload) {
 
 /** Rebuild every open tab from the board as it stands, after something large changed at once. */
 function resync(board) {
-	broadcast(board, { type: "snapshot", cards: cardsFor(board), activity: board.activity, meta: boardMeta(board) });
+	// A snapshot is everything a tab draws, and the strip is part of that: a sweep retires worktrees,
+	// so the graph is read again here rather than left as the last tick found it. Without this the
+	// strip vanished on `clean` and `new`, because a snapshot without `git` reads as "no repository".
+	const git = gitPicture(board);
+	board.git = git;
+	board.gitStamp = gitFingerprint(git);
+	broadcast(board, { type: "snapshot", cards: cardsFor(board), activity: board.activity, meta: boardMeta(board), git });
 }
 
 /** The activity rows of a thread that is still here and still alive. */

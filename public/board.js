@@ -2403,15 +2403,18 @@
 
   // ---------- git strip ----------------------------------------------------
   // The workspace's branches, under the minimap: the daemon reads the graph and this draws it. One
-  // lane per branch, refs as pills, a halo on a lane a thread is working in, an amber ring where a
-  // tree is dirty. It draws what arrives on the stream and nothing else, so it costs the board no
-  // requests of its own.
-  // A commit gets a row tall enough for its refs and its subject: a pill line, the dot, a caption.
-  // Twenty-six rows fit the column at 1080, which is the whole point of the taller spacing.
-  const GIT_ROW = 34;
+  // lane per branch, refs as pills on the dot's own line, the subject under it, an amber ring where
+  // work is uncommitted and a breathing halo where a thread is running. It draws what arrives on the
+  // stream and nothing else, so it costs the board no requests of its own.
+  // Twenty rows are what the column is sized for, and a row is tall enough for a pill above its dot
+  // and a caption under it. The first dot sits low enough that its pill is on the canvas.
   const GIT_LANE = 13;
   const GIT_LANE_X = 12;
-  const GIT_TOP = 6;
+  const GIT_TEXT_GAP = 12;
+  const GIT_PAD_TOP = 16;
+  const GIT_TARGET_ROWS = 20;
+  const GIT_MIN_STEP = 26;
+  const GIT_MAX_STEP = 40;
   const GIT_FONT = '9.5px ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace';
   const TAU = Math.PI * 2;
   // A lane keeps its colour by its index. The order is stable for a repository nobody is rebasing
@@ -2504,17 +2507,16 @@
   }
 
   /**
-   * A ref name as a pill can carry it. The branch's own tail is what tells two of them apart, so a
-   * long name keeps its type and loses the middle of its slug.
+   * A ref name as a pill can carry it. The end of a name is what tells two branches apart — a thread's
+   * branch ends with its own id — so a long one keeps its type, an ellipsis and its tail.
    */
   function shortRef(name) {
-    if (name.length <= 16) return name;
-    const parts = name.split("/");
-    if (parts.length === 1) return `${name.slice(0, 15)}\u2026`;
-    const head = parts[0];
-    const tail = parts[parts.length - 1];
-    if (head.length + tail.length + 1 <= 16) return `${head}/${tail}`;
-    return `${head}/${tail.slice(0, Math.max(2, 15 - head.length))}\u2026`;
+    if (name.length <= 18) return name;
+    const [head, ...rest] = name.split("/");
+    const tail = rest.join("/");
+    const id = /([0-9a-f]{8})$/.exec(tail);
+    if (id && head.length + id[1].length + 2 <= 18) return `${head}/\u2026${id[1]}`;
+    return `\u2026${name.slice(-17)}`;
   }
 
   /** One ref as a pill on the commit's own line; `y` is where the row's dot sits. */
@@ -2533,19 +2535,23 @@
   }
 
   /**
-   * A junction with right angles and a 3px corner: a merge bends at the middle of its row and joins
-   * the lane it belongs to, instead of curving across it or hooking past it.
+   * One segment of the history: straight when the two lanes line up, and a right angle with a 3px
+   * corner when they do not. It runs from one commit's dot to the next commit's dot, so it is drawn
+   * once and both of its ends are dots that exist.
    */
-  function elbow(x0, y, x1, mid, bottom) {
-    const radius = Math.min(3, Math.abs(x1 - x0) / 2, (bottom - y) / 3);
-    const dir = Math.sign(x1 - x0) || 1;
+  function link(x0, y0, x1, y1) {
     gitCtx.beginPath();
-    gitCtx.moveTo(x0, y);
-    gitCtx.lineTo(x0, mid - radius);
-    gitCtx.quadraticCurveTo(x0, mid, x0 + dir * radius, mid);
-    gitCtx.lineTo(x1 - dir * radius, mid);
-    gitCtx.quadraticCurveTo(x1, mid, x1, mid + radius);
-    gitCtx.lineTo(x1, bottom);
+    gitCtx.moveTo(x0, y0);
+    if (x0 !== x1) {
+      const mid = (y0 + y1) / 2;
+      const radius = Math.min(3, Math.abs(x1 - x0) / 2, (y1 - y0) / 3);
+      const dir = Math.sign(x1 - x0);
+      gitCtx.lineTo(x0, mid - radius);
+      gitCtx.quadraticCurveTo(x0, mid, x0 + dir * radius, mid);
+      gitCtx.lineTo(x1 - dir * radius, mid);
+      gitCtx.quadraticCurveTo(x1, mid, x1, mid + radius);
+    }
+    gitCtx.lineTo(x1, y1);
     gitCtx.stroke();
   }
 
@@ -2561,99 +2567,80 @@
     gitCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     gitCtx.clearRect(0, 0, width, height);
     if (!gitShown || !gitLayout) return;
-    const shown = Math.min(gitLayout.rows.length, Math.floor((height - GIT_TOP) / GIT_ROW));
+    // The row grows with the window, so the column shows about twenty commits at any height rather
+    // than a fixed spacing that leaves a band empty or clips a handful.
+    const step = Math.max(GIT_MIN_STEP, Math.min(GIT_MAX_STEP, Math.floor((height - GIT_PAD_TOP) / GIT_TARGET_ROWS)));
+    const rows = gitLayout.rows;
+    const shown = Math.min(rows.length, Math.max(1, Math.floor((height - GIT_PAD_TOP) / step)));
     if (shown <= 0) return;
     // Lanes crowd the left edge as branches pile up, so the spacing gives way before the text does.
     const lanes = Math.max(1, gitLayout.width);
-    const step = Math.min(GIT_LANE, Math.max(7, Math.floor((72 - GIT_LANE_X) / Math.max(1, lanes - 1))));
-    const laneX = (index) => GIT_LANE_X + index * step;
-    const textX = laneX(Math.max(1, lanes - 1)) + 12;
+    const laneStep = Math.min(GIT_LANE, Math.max(7, Math.floor((70 - GIT_LANE_X) / Math.max(1, lanes - 1))));
+    const laneX = (index) => GIT_LANE_X + index * laneStep;
+    const textX = laneX(lanes - 1) + GIT_TEXT_GAP;
     const colour = (index) => GIT_COLOURS[index % GIT_COLOURS.length];
 
-    // Which commits are worth a ring, and how much is uncommitted under each: the checkout's own
-    // work and every tree a thread has, because a tree is where the work actually is.
+    // How much uncommitted work stands on a commit, and how many threads are working there. Two
+    // trees on one base are two indicators, so both are counted instead of one of them winning.
     const dirty = new Map();
-    const live = new Set();
-    if (gitShown.root?.dirty) dirty.set(gitShown.root.head, gitShown.root.dirty);
+    const live = new Map();
+    const addDirty = (head, count) => {
+      if (head && count) dirty.set(head, (dirty.get(head) ?? 0) + count);
+    };
+    addDirty(gitShown.root?.head, gitShown.root?.dirty);
     for (const tree of gitShown.trees ?? []) {
-      if (tree.dirty) dirty.set(tree.head, Math.max(tree.dirty, dirty.get(tree.head) ?? 0));
-      if (tree.live) live.add(tree.head);
+      addDirty(tree.head, tree.dirty);
+      if (tree.live && tree.head) live.set(tree.head, (live.get(tree.head) ?? 0) + 1);
     }
 
     gitCtx.font = GIT_FONT;
     gitCtx.textBaseline = "alphabetic";
-    gitCtx.lineWidth = 2.4;
+    gitCtx.lineWidth = 2.2;
 
     for (let index = 0; index < shown; index += 1) {
-      const row = gitLayout.rows[index];
-      const y = GIT_TOP + index * GIT_ROW;
-      const mid = y + GIT_ROW / 2;
-      const bottom = y + GIT_ROW;
+      const row = rows[index];
+      const next = index + 1 < shown ? rows[index + 1] : null;
+      const y = GIT_PAD_TOP + index * step;
       const nodeX = laneX(row.lane);
       const commit = row.commit;
-      const merged = new Set();
 
-      // Lanes already open above this row pass through it, dimmed, unless they end on this commit.
-      gitCtx.globalAlpha = 0.5;
-      for (let column = 0; column < row.before.length; column += 1) {
-        if (!row.before[column] || column === row.lane || row.before[column] === commit.hash) continue;
+      // One segment per lane the commit leaves behind, from this dot to where that lane stands on the
+      // next row: a lane born here starts at the dot, and one the next commit ends stops at that
+      // commit's dot. Both ends come from the layout, so no line can fall short of a dot it belongs to.
+      // Every segment is drawn at the same strength, because a lane that fades where it passes a commit
+      // reads as two different lanes.
+      for (let column = 0; column < row.after.length; column += 1) {
+        const hash = row.after[column];
+        if (!hash) continue;
+        const born = column === row.lane || row.moves.includes(column);
+        const ends = Boolean(next) && next.commit.hash === hash;
         gitCtx.strokeStyle = colour(column);
-        gitCtx.beginPath();
-        gitCtx.moveTo(laneX(column), y);
-        gitCtx.lineTo(laneX(column), bottom);
-        gitCtx.stroke();
+        link(born ? nodeX : laneX(column), y, ends ? laneX(next.lane) : laneX(column), y + step);
       }
-      // A lane that was waiting for this commit bends into the node's lane at the row's middle.
-      gitCtx.globalAlpha = 0.9;
-      for (let column = 0; column < row.before.length; column += 1) {
-        if (row.before[column] !== commit.hash || column === row.lane || merged.has(column)) continue;
-        merged.add(column);
-        gitCtx.strokeStyle = colour(column);
-        elbow(laneX(column), y, nodeX, mid, bottom);
-      }
-      // The first parent keeps the lane, so the lane runs on below the node.
-      gitCtx.globalAlpha = 0.9;
-      gitCtx.strokeStyle = colour(row.lane);
-      if (row.after[row.lane]) {
-        gitCtx.beginPath();
-        gitCtx.moveTo(nodeX, mid);
-        gitCtx.lineTo(nodeX, bottom);
-        gitCtx.stroke();
-      }
-      // Each further parent takes the nearest free lane, and bends into it at the row's middle.
-      for (const into of row.moves) {
-        if (merged.has(into)) continue;
-        gitCtx.strokeStyle = colour(into);
-        elbow(nodeX, y, laneX(into), mid, bottom);
-      }
-      gitCtx.globalAlpha = 1;
 
       const merge = commit.parents.length > 1;
-      const radius = merge ? 5.5 : 4;
-      // A thread working in this commit's tree breathes a halo round the dot it stands on.
-      if (live.has(commit.hash)) {
-        gitCtx.globalAlpha = 0.14 + 0.3 * gitPulse;
-        gitCtx.fillStyle = colour(row.lane);
+      const radius = merge ? 6.4 : 5.2;
+      // A thread working here breathes, and two threads on one commit breathe as two rings.
+      const running = live.get(commit.hash) ?? 0;
+      gitCtx.fillStyle = colour(row.lane);
+      for (let at = 0; at < running; at += 1) {
+        gitCtx.globalAlpha = 0.12 + 0.26 * gitPulse;
         gitCtx.beginPath();
-        gitCtx.arc(nodeX, y, radius + 3 + 4 * gitPulse, 0, TAU);
+        gitCtx.arc(nodeX, y, radius + 3 + at * 3.4 + 3.5 * gitPulse, 0, TAU);
         gitCtx.fill();
-        gitCtx.globalAlpha = 1;
       }
-      // Hollow, so the dotted board reads through the ring and the branch colour is the only ink.
-      gitCtx.fillStyle = "#0d1117";
+      // A filled dot: hollow read as a gap in the line on a board already covered in dots.
+      gitCtx.globalAlpha = 1;
       gitCtx.beginPath();
       gitCtx.arc(nodeX, y, radius, 0, TAU);
       gitCtx.fill();
-      gitCtx.strokeStyle = colour(row.lane);
-      gitCtx.lineWidth = 2.6;
-      gitCtx.stroke();
-      gitCtx.lineWidth = 2.4;
-      // The amber ring says there is work here; the number beside the refs says how much.
-      if (dirty.has(commit.hash)) {
-        gitCtx.globalAlpha = 0.85;
+      // The amber ring says work is uncommitted here; the number on the right says how much.
+      const uncommitted = dirty.get(commit.hash) ?? 0;
+      if (uncommitted) {
+        gitCtx.globalAlpha = 0.9;
         gitCtx.strokeStyle = "#d29922";
         gitCtx.beginPath();
-        gitCtx.arc(nodeX, y, radius + 3.2, 0, TAU);
+        gitCtx.arc(nodeX, y, radius + 3, 0, TAU);
         gitCtx.stroke();
         gitCtx.globalAlpha = 1;
       }
@@ -2661,19 +2648,21 @@
       // The refs on the commit's own line, above; its subject is the caption under the dot.
       let cursor = textX;
       for (const ref of commit.refs.slice(0, 2)) {
-        const room = width - 6 - cursor;
-        if (room < 28) break;
+        const room = width - 24 - cursor;
+        if (room < 26) break;
         cursor = drawPill(ref.name, cursor, y, room, ref.kind);
-      }
-      if (dirty.has(commit.hash)) {
-        const count = String(dirty.get(commit.hash));
-        gitCtx.fillStyle = "#d29922";
-        gitCtx.fillText(count, cursor + 1, y - 3);
       }
       const subject = fitted(commit.subject, width - 6 - textX);
       if (subject) {
         gitCtx.fillStyle = "#8b949e";
         gitCtx.fillText(subject, textX, y + 11);
+      }
+      // Right aligned, so a long pill never pushes the count off the edge of the strip.
+      if (uncommitted) {
+        gitCtx.textAlign = "right";
+        gitCtx.fillStyle = "#d29922";
+        gitCtx.fillText(String(uncommitted), width - 4, y - 3);
+        gitCtx.textAlign = "left";
       }
     }
   }
@@ -2706,7 +2695,8 @@
 
   /** A new picture from the daemon: repaint only when it says something the last one did not. */
   function applyGit(picture) {
-    const stamp = picture ? JSON.stringify(picture) : "";
+    // The moment it was read is not news; only what it says is.
+    const stamp = picture ? JSON.stringify({ ...picture, at: 0 }) : "";
     if (stamp === gitStamp) return;
     gitStamp = stamp;
     gitShown = picture && picture.graph?.length ? picture : null;

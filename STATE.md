@@ -301,13 +301,21 @@ commit's own account rather than on a check run now, the section below says so.
   on the commit a running thread is standing on. It has no panel and takes no clicks, so the board
   reads and pans through it; the map's toggle moves it up and `body.git-on` is what shows it at all.
   The daemon reads the disk, never the page: `gitGraph` is one `git log --all --topo-order`
-  (`-n 40`, refs from `%D`) and `gitStatusOf` is one `git status --porcelain=v2` per checkout. A
-  commit gets a 34px row: its refs as pills on the dot's own line, its subject as the caption under
-  it, so 22 commits fill the column at 1080. Junctions are right angles with a 3px corner and dots
-  are hollow rings, so the board's dots read through the graph; a merge opens the nearest free lane,
-  because a one-column bend reads as a fork and a five-column one reads as a line across the graph. A
-  board with a tab open is watched every 3 s, the fingerprint is compared and only a real change is
-  broadcast as `{type:"git"}`, plus a look 400 ms after a turn settles; with no tab open nothing runs.
+  (`-n 40`, refs from `%D`, full hashes on both sides so a worktree's `branch.oid` finds its commit)
+  and `gitStatusOf` is one `git status --porcelain=v2` per checkout. A commit gets a row whose height
+  is derived from the column, so about twenty commits fill it at any window height (38px and 20 rows
+  at 1080, 26px and 17 rows at 768); the row holds its refs as pills on the dot's own line and its
+  subject as the caption under it, with the first dot low enough that its pill is on the canvas. Each
+  segment is drawn from one dot to the next dot, one per lane, so a line cannot stop short of the dot
+  it belongs to; junctions are right angles with a 3px corner, lanes run at one strength, and dots are
+  filled circles, because a hollow one on a board of dots reads as a gap. A merge opens the nearest
+  free lane, because a one-column bend reads as a fork and a five-column one reads as a line across
+  the graph. Two worktrees on one commit draw two halos and their uncommitted counts are added,
+  and a long branch shortens to `feat/…<its id>` so two threads stay apart.
+  A board with a tab open is watched every 3 s, and the fingerprint is taken over the picture without
+  its `at`, so only a real change is broadcast as `{type:"git"}`; a `snapshot` carries the picture too,
+  because `clean` and `new` arrive as snapshots and a snapshot without it hid the strip. Plus a look
+  400 ms after a turn settles; with no tab open nothing runs.
   Measured: 6 ms for the graph, 2–3 ms per tree, so eight trees cost about 40 ms of a core.
   It says nothing when the folder is not a repository, and it will not claim insertions or remote
   drift: neither is readable without a `diff` or a fetch.
