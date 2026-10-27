@@ -3257,6 +3257,121 @@
   const cfgModelValue = document.getElementById("cfgModelValue");
   const cfgThinking = document.getElementById("cfgThinking");
   const cfgThinkingValue = document.getElementById("cfgThinkingValue");
+  const cfgTools = document.getElementById("cfgTools");
+
+  /**
+   * The tools a thread can be given, as the daemon sees them: pi's own four by name, and the extension
+   * folders installed on this machine. Read on the first open of the panel and kept, because only a
+   * daemon restart with a new extension installed changes the answer.
+   */
+  let toolCatalogue = null;
+  let toolsTrouble = "";
+
+  async function loadTools() {
+    if (toolCatalogue || toolsTrouble) return toolCatalogue;
+    try {
+      const response = await fetch(`/tools?${auth}`);
+      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+      toolCatalogue = await response.json();
+    } catch (error) {
+      toolsTrouble = error.message || String(error);
+    }
+    return toolCatalogue;
+  }
+
+  /** One change to the board's configuration, and the configuration the daemon now holds. */
+  async function postConfig(patch) {
+    try {
+      const response = await fetch(`/config?${auth}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+      applyConfig((await response.json()).config);
+      return true;
+    } catch (error) {
+      footNote(`could not change it: ${error.message || error}`);
+      return false;
+    }
+  }
+
+  /**
+   * A checkbox row. The box is redrawn from the daemon's answer, so a refused change puts it back.
+   * `partial` is the group switch: some of its entries are off, so it reads as neither on nor off.
+   */
+  function checkRow(label, checked, patchFor, partial = false) {
+    const row = el("label", checked ? "cfg-check" : "cfg-check off");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = checked;
+    box.indeterminate = partial;
+    box.addEventListener("change", async () => {
+      box.disabled = true;
+      const ok = await postConfig(patchFor(box.checked));
+      // Redrawn from the configuration the daemon now holds, which is what the next thread gets.
+      toolsPaintedFor = "";
+      paintTools();
+      if (!ok) box.disabled = false;
+    });
+    const text = el("span");
+    text.textContent = label;
+    row.append(box, text);
+    return row;
+  }
+
+  /**
+   * The checkbox list, rebuilt only when it would look different. A board repaints on every message,
+   * and a list re-made on each token would take the box out from under a click.
+   */
+  let toolsPaintedFor = "";
+  function paintTools() {
+    if (!cfgTools || configPanel.hidden) return;
+    const toolsOff = boardConfig.toolsOff ?? [];
+    const extensionsOff = boardConfig.extensionsOff ?? [];
+    const signature = JSON.stringify([toolsOff, extensionsOff, toolCatalogue ? "tools" : toolsTrouble]);
+    if (signature === toolsPaintedFor) return;
+    toolsPaintedFor = signature;
+    if (!toolCatalogue) {
+      const said = el("p", "cfg-note");
+      said.textContent = toolsTrouble ? `the tool list is unavailable: ${toolsTrouble}` : "asking the daemon for its tools…";
+      cfgTools.replaceChildren(said);
+      return;
+    }
+    const builtin = toolCatalogue.builtin ?? [];
+    const extensions = (toolCatalogue.extensions ?? []).map((one) => one.name);
+    const rows = [];
+    // Each group opens with the switch for the whole list, so the default is one click away from any
+    // state the boxes have been left in. The switch carries the group's name and the rows under it
+    // are what it covers.
+    const group = (label, off, all, patchFor) => {
+      const row = checkRow(label, off.length === 0, patchFor, off.length > 0 && off.length < all.length);
+      row.classList.add("cfg-all");
+      rows.push(row);
+    };
+    group("built-in", toolsOff, builtin, (on) => ({ toolsOff: on ? [] : [...builtin] }));
+    for (const name of builtin) {
+      rows.push(
+        checkRow(name, !toolsOff.includes(name), (on) => ({
+          toolsOff: on ? toolsOff.filter((one) => one !== name) : [...toolsOff, name],
+        })),
+      );
+    }
+    group("extensions", extensionsOff, extensions, (on) => ({ extensionsOff: on ? [] : [...extensions] }));
+    for (const name of extensions) {
+      rows.push(
+        checkRow(name, !extensionsOff.includes(name), (on) => ({
+          extensionsOff: on ? extensionsOff.filter((one) => one !== name) : [...extensionsOff, name],
+        })),
+      );
+    }
+    if (!extensions.length) {
+      const said = el("p", "cfg-note");
+      said.textContent = "no extensions installed beside the board's own bridge";
+      rows.push(said);
+    }
+    cfgTools.replaceChildren(...rows);
+  }
 
   /** The daemon's copy of the configuration is the truth; whatever arrives is what the panel shows. */
   function applyConfig(config) {
@@ -3270,6 +3385,7 @@
     cfgDimValue.textContent = boardConfig.dimOthers === false ? "off" : "on";
     cfgModelValue.textContent = shortModel(boardConfig.model);
     cfgThinkingValue.textContent = boardConfig.thinking || "off";
+    paintTools();
   }
 
   function shownConfig(on) {
@@ -3338,25 +3454,21 @@
     hintLine("a new board in the same workspace");
   });
 
-  configBtn.addEventListener("click", () => {
+  configBtn.addEventListener("click", async () => {
     closePick();
-    shownConfig(configPanel.hidden);
+    const opening = configPanel.hidden;
+    shownConfig(opening);
     paintConfig();
+    // The tool list comes from the daemon, so the first open asks for it and the panel says so until
+    // it lands.
+    if (opening && !toolCatalogue && !toolsTrouble) {
+      await loadTools();
+      paintTools();
+    }
   });
 
-  cfgDim.addEventListener("click", async () => {
-    const want = boardConfig.dimOthers === false;
-    try {
-      const response = await fetch(`/config?${auth}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dimOthers: want }),
-      });
-      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
-      applyConfig((await response.json()).config);
-    } catch (error) {
-      hintLine(`could not change it: ${error.message || error}`, true);
-    }
+  cfgDim.addEventListener("click", () => {
+    void postConfig({ dimOthers: boardConfig.dimOthers === false });
   });
 
   cfgModel.addEventListener("click", () => void openPick("model", cfgModel, true));

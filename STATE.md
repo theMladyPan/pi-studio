@@ -49,12 +49,21 @@ commit's own account rather than on a check run now, the section below says so.
 - **A thread has the tools a console pi has**: it loads every extension installed here, and no
   allowlist is passed unless `PI_STUDIO_TOOLS` asks for one (`PI_STUDIO_CHILD_EXTENSIONS` names an
   exact list instead of discovering). `-ne` keeps discovery off so that list is explicit and `-e`
-  loads what it names. Three things are left out by default, and
-  `PI_STUDIO_CHILD_EXCLUDE` changes that: `dashboard`, because it registers the same tool names as
-  the bridge and would open a board server and rewrite its state file once per running thread;
-  `browser-screenshot` and `ytrack`, because one drives the human's browser and the other answers
-  through a 2FA gateway. Test scripts in that folder are skipped too — `test-delegate-retry.mts`
-  exports no factory, so pi refuses to load it and the thread dies before it can answer.
+  loads what it names. Two things are left out by default, and `PI_STUDIO_CHILD_EXCLUDE` changes
+  that: `dashboard`, because it registers the same tool names as the bridge and would open a board
+  server and rewrite its state file once per running thread; and `ytrack`, because it answers
+  through a 2FA gateway that expects a human at the keyboard. `browser-screenshot` used to be left
+  out with them and is now loaded: its runner launches its own headless chromium on a throwaway
+  profile in a temp folder, so it takes a picture of a page without touching the human's browser.
+  Test scripts in that folder are skipped too — `test-delegate-retry.mts` exports no factory, so pi
+  refuses to load it and the thread dies before it can answer.
+- **What a thread is allowed to do is a switch on the board.** The settings panel draws a checkbox
+  per built-in tool (`read`, `bash`, `edit`, `write`) and per installed extension, each group led by
+  a switch for the whole list that reads `mixed` when half of it is off. The built-in boxes go out as
+  `--exclude-tools`, which pi applies after every other selection option, and an unboxed extension is
+  simply not passed as `-e`. The switches are stored per board as `toolsOff` and `extensionsOff`, so
+  they land on the next child that starts, which is how a running thread keeps what it began with.
+  The list itself comes from `GET /tools` and is read the first time the panel opens.
 - **What a thread is told**: `--append-system-prompt` says it is one thread on a board, in which
   folder, that the human reads cards rather than a chat log, and that its chat answer is a pointer of
   a line or two naming the cards it wrote as `[[key]]`, that a card must carry the very key the

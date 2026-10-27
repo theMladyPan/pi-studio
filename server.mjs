@@ -203,9 +203,25 @@ function resolveScope(patterns, models) {
  * @property {boolean} [dimOthers] dim the cards of every other thread while one is selected
  */
 
+/**
+ * pi's own default tool selection, which is what a thread starts with. The board may leave some of
+ * them out of a new thread, and names them with the very names pi uses.
+ */
+const BUILTIN_TOOLS = ["read", "bash", "edit", "write"];
+
 /** A board's configuration as the browser reads it, with the daemon's own model filled in. */
 function activeConfig(board) {
-	return { ...runtimeDefaults(board), dimOthers: board.config?.dimOthers !== false };
+	const chosen = board.config ?? {};
+	return {
+		...runtimeDefaults(board),
+		dimOthers: chosen.dimOthers !== false,
+		// Which tools a new thread is not given: built-in ones by name, extensions by folder. The panel
+		// draws a checkbox per entry from these two lists, so they are always readable, never absent.
+		toolsOff: Array.isArray(chosen.toolsOff) ? chosen.toolsOff.filter((name) => BUILTIN_TOOLS.includes(name)) : [],
+		extensionsOff: Array.isArray(chosen.extensionsOff)
+			? chosen.extensionsOff.filter((name) => CHILD_EXTENSIONS.some((one) => one.name === name))
+			: [],
+	};
 }
 
 /** What a new thread starts with: the last choice made on this board, else the daemon's own. */
@@ -225,19 +241,25 @@ const TOOLS = process.env.PI_STUDIO_TOOLS ?? "";
 /** The extension a child loads so a thread can draw on the board it belongs to. */
 const BRIDGE = join(dirname(PUBLIC_DIR), "bridge", "child-bridge.mjs");
 /**
- * Extensions a thread may load: everything installed on this machine, less what cannot come along.
+ * Extensions a thread may load: everything installed on this machine, less the two that cannot come
+ * along at all.
  *
  *   dashboard        it is the old board, it registers the same tool names as the bridge, and it
  *                    would open a board server and rewrite its state file once per running thread
- *   browser-screenshot, ytrack
- *                    one drives the human's browser, the other answers through a 2FA gateway; neither
- *                    is a thing a thread does on its own
+ *   ytrack           it answers through a 2FA gateway, which is a console pi with a human at the
+ *                    keyboard, not a thread working on its own
+ *
+ * `browser-screenshot` used to be left out with them and is now loaded. It runs a headless chromium
+ * on a throwaway profile in a temp folder, not the human's own browser, so a thread may drive a page
+ * and read the picture the tool writes. Anything else a board does not want in a thread is the
+ * panel's business: the two lists there subtract extensions and built-in tools per board, by the
+ * names pi itself uses.
  *
  * `-ne` keeps discovery off so the list is this one, plainly; `-e` still loads what it names.
  * `PI_STUDIO_CHILD_EXCLUDE` changes the exclusions, `PI_STUDIO_CHILD_EXTENSIONS` names an exact list.
  */
 const CHILD_EXCLUDE = new Set(
-	(process.env.PI_STUDIO_CHILD_EXCLUDE ?? "dashboard,browser-screenshot,ytrack")
+	(process.env.PI_STUDIO_CHILD_EXCLUDE ?? "dashboard,ytrack")
 		.split(",")
 		.map((name) => name.trim())
 		.filter(Boolean),
@@ -251,7 +273,10 @@ function isTestFile(name) {
 	return /^test[-.]/.test(name) || /\.test\./.test(name) || /\.spec\./.test(name);
 }
 
-/** Every extension this machine has installed, minus the exclusions above. */
+/**
+ * Every extension this machine has installed, minus the exclusions above, as a name the panel can
+ * show and the path pi loads. The name is the folder, or the file without its extension.
+ */
 function installedExtensions() {
 	const named = process.env.PI_STUDIO_CHILD_EXTENSIONS;
 	if (named) {
@@ -259,8 +284,11 @@ function installedExtensions() {
 			.split(",")
 			.map((name) => name.trim())
 			.filter(Boolean)
-			.map((name) => (name.includes("/") ? name : join(extensionsDir(), name, "index.ts")))
-			.filter((path) => existsSync(path));
+			.map((name) => ({
+				name: basename(name).replace(/\.(ts|mts|js|mjs)$/, "") || name,
+				path: name.includes("/") ? name : join(extensionsDir(), name, "index.ts"),
+			}))
+			.filter((one) => existsSync(one.path));
 	}
 	const dir = extensionsDir();
 	let entries;
@@ -278,9 +306,9 @@ function installedExtensions() {
 			const entryPoint = ["index.ts", "index.js", "index.mjs"]
 				.map((name) => join(full, name))
 				.find((path) => existsSync(path));
-			if (entryPoint) found.push(entryPoint);
+			if (entryPoint) found.push({ name: entry.name, path: entryPoint });
 		} else if (/\.(ts|mts|js|mjs)$/.test(entry.name) && !entry.name.endsWith(".d.ts") && !isTestFile(entry.name)) {
-			found.push(full);
+			found.push({ name: bare, path: full });
 		}
 	}
 	return found;
@@ -1752,6 +1780,22 @@ function boardPrompt(board, thread) {
 	].join("\n");
 }
 
+/**
+ * The extensions this board's threads load: what this machine has, less the folders the panel turned
+ * off. A board is one human's answer to what these agents may do, so the switches are kept per board
+ * and read when a child is spawned, which is why they land on the next thread.
+ */
+function extensionsFor(board) {
+	const off = new Set(board.config?.extensionsOff ?? []);
+	return CHILD_EXTENSIONS.filter((one) => !off.has(one.name)).map((one) => one.path);
+}
+
+/** The built-in tools this board does not hand a new thread. */
+function toolsOffFor(board) {
+	const off = board.config?.toolsOff;
+	return Array.isArray(off) ? off.filter((name) => BUILTIN_TOOLS.includes(name)) : [];
+}
+
 function childArgv(board, thread) {
 	// A child writes its session where pi-studio keeps them, not in pi's own session list: this app
 	// owns these conversations, and a thread that already has one resumes it so the card stays
@@ -1778,9 +1822,12 @@ function childArgv(board, thread) {
 		// `-ne` stops discovery, and an explicit `-e` still loads: that is how a thread gets its verbs
 		// and the research tools, without anything else coming along.
 		...(existsSync(BRIDGE) ? ["-e", BRIDGE] : []),
-		...CHILD_EXTENSIONS.flatMap((path) => ["-e", path]),
+		...extensionsFor(board).flatMap((path) => ["-e", path]),
 		// No allowlist unless one was asked for: a thread gets the tools a console pi gets.
 		...(TOOLS ? ["--tools", TOOLS] : []),
+		// What the board itself leaves out, by pi's own tool names. `--exclude-tools` is applied after
+		// every other selection option, so a tool the panel turned off stays off.
+		...(toolsOffFor(board).length ? ["--exclude-tools", toolsOffFor(board).join(",")] : []),
 		"--append-system-prompt",
 		boardPrompt(board, thread),
 		"--provider",
@@ -3028,12 +3075,38 @@ async function onNew(req, res, board) {
  * Change what the board is configured with. Only the switches live here: the model and the thinking
  * level keep their own routes, which already know how to validate against the catalog and how to tell
  * a running child.
+ *
+ * A body may carry any of the three, so one checkbox is one request and never has to repeat the rest.
  */
 async function onConfig(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
-	if (typeof body.dimOthers !== "boolean") return void fail(res, 400, "dimOthers must be true or false");
-	board.config = { ...(board.config ?? {}), dimOthers: body.dimOthers };
+	const next = { ...(board.config ?? {}) };
+	let changed = false;
+	if (typeof body.dimOthers === "boolean") {
+		next.dimOthers = body.dimOthers;
+		changed = true;
+	}
+	// The built-in tools a new thread is not given, by the names pi itself uses. A name this pi does
+	// not have is dropped rather than refused: the panel cannot offer one, and an old board file may
+	// hold a tool a later pi stopped shipping.
+	if (body.toolsOff !== undefined) {
+		if (!Array.isArray(body.toolsOff)) return void fail(res, 400, "toolsOff must be a list of tool names");
+		next.toolsOff = body.toolsOff.filter((name) => BUILTIN_TOOLS.includes(name));
+		changed = true;
+	}
+	// The extensions a new thread does not load, by folder name. An unknown name is a mistake in the
+	// request, so it is refused instead of quietly accepted as a no-op.
+	if (body.extensionsOff !== undefined) {
+		if (!Array.isArray(body.extensionsOff)) return void fail(res, 400, "extensionsOff must be a list of extension names");
+		const known = new Set(CHILD_EXTENSIONS.map((one) => one.name));
+		const unknown = body.extensionsOff.filter((name) => !known.has(name));
+		if (unknown.length) return void fail(res, 400, `no such extension: ${unknown.join(", ")}`);
+		next.extensionsOff = body.extensionsOff;
+		changed = true;
+	}
+	if (!changed) return void fail(res, 400, "nothing to change: dimOthers, toolsOff or extensionsOff");
+	board.config = next;
 	scheduleSave(board);
 	broadcast(board, { type: "config", config: activeConfig(board) });
 	answer(res, 200, { config: activeConfig(board) });
@@ -3252,6 +3325,17 @@ const server = createServer((req, res) => {
 				console.error(`pi-studio: pi's scope pattern ${JSON.stringify(pattern)} matched no model here`);
 			}
 			answer(res, 200, { models, levels, scope, scoped, problems });
+			return;
+		}
+		if (req.method === "GET" && url.pathname === "/tools") {
+			// What the settings panel draws: pi's own four by name, and the extension folders this
+			// machine has. Read once when the panel first opens, so installing an extension shows up
+			// after a daemon restart rather than mid-session.
+			answer(res, 200, {
+				builtin: BUILTIN_TOOLS,
+				extensions: CHILD_EXTENSIONS.map((one) => ({ name: one.name })),
+				folder: extensionsDir(),
+			});
 			return;
 		}
 		if (req.method === "GET" && url.pathname === "/state") {
