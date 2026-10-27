@@ -287,6 +287,14 @@ commit's own account rather than on a check run now, the section below says so.
   repaints, after which the card no longer reads as editing and the click would open a fresh editor.
   A textarea carries no height of its own, so the card's height is measured before the swap and
   becomes the editor's floor; without that an auto-sized card collapsed to its minimum.
+- **The board has a minimap.** A 208×140 canvas sits under the header at the right, the corner the
+  `+` button and the footer leave free. Every card is a rectangle in its kind's colour, the window
+  you are looking through is drawn over them and the rest is dimmed; a folded card is drawn at
+  header height, because that is the size on the board. It draws `cards[]` and `view`, so nothing
+  about it reaches the daemon, and it repaints once a frame from `applyView`, `placeCard`, the drag
+  and resize moves and `setMini`, plus a `ResizeObserver` on the viewport. A press puts the window
+  on that point, a drag keeps it under the pointer, a press on a card centres that card, and `m` or
+  the header's `map` button hides it, remembered in `localStorage`.
 - **Persistence**: board saved on a 500 ms debounce and flushed on stop and on a workspace switch;
   a restart reopens the last workspace.
 - `GET /browse` for the composer's file picker. Token gate on every data route (403 without it).

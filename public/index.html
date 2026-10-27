@@ -58,6 +58,16 @@
      shown at, so it stays sharp instead of waiting for a repaint to catch up. */
   #world { position: absolute; top: 0; left: 0; zoom: 1; }
 
+  /* The board at a glance: every card as a rectangle, the window you are looking through over them.
+     It hangs under the header at the right, because the + button and the footer own the bottom edge. */
+  #minimap {
+    position: fixed; top: 56px; right: 12px; z-index: 9; display: none;
+    width: 208px; height: 140px; border-radius: 8px; border: 1px solid var(--border-bright);
+    background: rgba(13,17,23,.94); box-shadow: 0 8px 24px rgba(1,4,9,.5);
+    cursor: crosshair; touch-action: none;
+  }
+  body.map-on #minimap { display: block; }
+
   .card {
     position: absolute; display: flex; flex-direction: column; overflow: hidden;
     background: var(--card); border: 1px solid var(--border); border-radius: 10px;
@@ -686,7 +696,7 @@
 </head>
 <body>
 <header>
-  <span class="brand" title="ctrl+wheel: zoom · wheel or drag background: pan · middle-drag anywhere: pan · drag a card: move · ctrl+drag a card: select its text · corner: resize · esc: unselect · f: fit · 0: 100% · n: next · r: reply · q: close · o: thread order">pi</span>
+  <span class="brand" title="ctrl+wheel: zoom · wheel or drag background: pan · middle-drag anywhere: pan · drag a card: move · ctrl+drag a card: select its text · corner: resize · esc: unselect · f: fit · 0: 100% · m: map · n: next · r: reply · q: close · o: thread order">pi</span>
   <button class="sess" id="sess" type="button" title="switch workspace"></button>
   <!-- Polite, so the state is spoken when it changes; the elapsed clock is decoration that ticks
        every second and is hidden, so it is never read out. -->
@@ -702,6 +712,7 @@
   <button id="tidy">tidy</button>
   <button id="fit">fit all</button>
   <button id="reset">100%</button>
+  <button id="mapBtn" aria-pressed="true" title="hide the board overview (m)">map</button>
   <button id="cleanBtn" title="forget dead threads and their logs">clean</button>
   <button id="newBtn" title="start over in this workspace: same folder, same settings, empty board">new</button>
   <button id="configBtn" title="this board's settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
@@ -783,6 +794,10 @@
   <div id="world"></div>
   <div class="empty" id="empty">press + to start a thread</div>
 </div>
+
+<!-- The board at a glance, drawn from the cards this page already holds. It is a mouse handle on
+     the view; the keyboard has f, 0 and n for the same journeys. -->
+<canvas id="minimap" role="img" aria-label="the board at a glance: click or drag to move the view"></canvas>
 
 <div id="picker" role="dialog" aria-label="attach files or folders" hidden>
   <div class="p-row">
