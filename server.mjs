@@ -124,6 +124,16 @@ function patternToRegExp(pattern) {
 }
 
 /**
+ * The one model a partial pattern names, chosen the way pi chooses: an alias id beats a dated one, and
+ * the later id beats the earlier, so `sonnet` means `claude-sonnet-4-5` rather than the snapshot with a
+ * date on it. A catalogue order decides nothing.
+ */
+function bestPartial(matches) {
+	const aliases = matches.filter((one) => one.model.endsWith("-latest") || !/-\d{8}$/.test(one.model));
+	return [...(aliases.length ? aliases : matches)].sort((left, right) => right.model.localeCompare(left.model))[0];
+}
+
+/**
  * Pi's scope patterns resolved against the catalogue the daemon already has, in the order pi wrote
  * them. Pi matches these with minimatch plus a fuzzy match on model names; the catalogue read from
  * `--list-models` carries names for no model, so the fuzzy half is the one thing this cannot do. A
@@ -168,10 +178,16 @@ function resolveScope(patterns, models) {
 			for (const one of matched) add(one);
 			continue;
 		}
-		// What is left is a piece of an id, the one fuzzy spelling a catalogue without names still allows.
+		// What is left is a piece of an id. Pi answers that with one model, not with every model the piece
+		// appears in, so a scope cannot widen unnoticed by a pattern meant to name a single model.
 		const partial = models.filter((one) => one.model.toLowerCase().includes(needle));
-		if (!partial.length) problems.push(pattern);
-		for (const one of partial) add(one);
+		if (!partial.length) {
+			problems.push(pattern);
+			continue;
+		}
+		const best = bestPartial(partial);
+		// The same id on several providers is the one tie pi keeps.
+		for (const one of partial.filter((candidate) => candidate.model === best.model)) add(one);
 	}
 	return { scoped, problems };
 }

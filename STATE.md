@@ -209,18 +209,19 @@ commit's own account rather than on a check run now, the section below says so.
 - **The models offered first are pi's own scope.** `GET /models` also reads `enabledModels` from
   `settings.json` in the agent directory (`PI_CODING_AGENT_DIR`, else `~/.pi/agent`), which is the key
   `/scoped-models` writes. Nothing in pi-studio stores that list, so there is nothing to keep in sync:
-  pi is its only editor. It is read on every call rather than cached with the catalogue, so an edit
-  made in a console pi lands on the next open of the picker; the client refetches `/models` each time
-  the picker opens for the same reason. Patterns resolve in pi's order — `provider/id` first, then the
-  same id on every provider that offers it, then globs on `provider/id` and on the bare id, then a
-  piece of an id — and a trailing `:level` is cut away, since the level is not the picker's business.
-  pi's fuzzy match on model *names* cannot be reproduced: `pi --list-models` prints no names. A pattern
-  that matches nothing is listed in `problems` and said once on stderr instead of disappearing, because
-  a scope quietly smaller than pi's is the failure this is meant to prevent. The picker opens on the
-  scope and swaps to the whole catalogue with one row, remembered in `localStorage` as
-  `board.allModels`; the model a running thread answers with keeps its row, marked `not scoped`, when
-  pi's scope no longer names it. Only the agent-level file is read — a project `.pi/settings.json` can
-  override the list for one folder, and a board there would then show wider than its children cycle.
+  pi is its only editor. It is read on every call rather than cached with the catalogue, and the client
+  refetches `/models` each time the picker opens, so an edit made in a console pi lands on the next open.
+  Patterns resolve in pi's order — `provider/id` first, then the same id on every provider that offers
+  it, then globs on `provider/id` and on the bare id, then the one model a piece of an id names, an alias
+  before a dated snapshot as pi chooses it — and a trailing `:level` is cut away. pi's fuzzy match on
+  model *names* cannot be reproduced, because `pi --list-models` prints no names.
+  A pattern that matches nothing is listed in `problems`, said once on stderr, and shown as a note in
+  both lists — including the full one, which is the only list left when nothing in the scope resolved.
+  The picker opens on the scope, names the provider on each row because a scope has one heading, and
+  swaps to the whole catalogue with one row, remembered in `localStorage` as `board.allModels`. The
+  model a running thread answers with keeps its row, marked `not scoped`, when pi's scope no longer
+  names it. Only the agent-level file is read: a project `.pi/settings.json` can override the list for
+  one folder, and a board there would then show wider than its children cycle.
 - **Ownership survives a restart or is repaired.** `answersWith` is only reported for an owner that is
   still alive; a choice made on a card whose thread has ended lands on `board.config`, which is where
   the next child comes from anyway. A board file
