@@ -147,6 +147,13 @@
   .turn-status.sent { color: var(--accent); }
   /* The agent's answer is the thing you came to read, so it reads at the card's own size. */
   .turn-a { padding: 0; color: #c9d1d9; font-size: 14px; }
+  /* An answer with no words yet draws nothing, and the caret is what says text is still arriving. */
+  .turn-a:empty { display: none; }
+  .turn-a .caret { display: inline-block; width: 6px; height: 13px; margin-left: 3px;
+    vertical-align: -1px; border-radius: 1px; background: var(--accent);
+    animation: caret-blink 1.1s steps(2, start) infinite; }
+  @keyframes caret-blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .turn-a .caret { animation: none; } }
 
   /* Markdown tables: a wide one scrolls sideways instead of bursting the card. */
   .table-wrap { overflow-x: auto; margin: 6px 0 10px; }
@@ -389,6 +396,8 @@
   .act.error .dot { background: var(--red); }
   .act.error { border-color: rgba(248,81,73,.45); }
   .act .name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act .who { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--muted); font: 10px var(--mono); }
   .act .ms { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; }
   .act .target, .act .note { color: var(--muted); font-size: 11px; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }

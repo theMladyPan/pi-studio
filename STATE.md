@@ -45,6 +45,23 @@ commit's own account rather than on a check run now, the section below says so.
 - **What a thread is told**: `--append-system-prompt` says it is one thread on a board, in which
   folder, that the human reads cards rather than a terminal log, and that a fenced svg block in a
   note draws a picture.
+- **An answer arrives as it is written.** `message_update` from the child carries `text_delta`, and
+  the daemon buffers it per content block, puts it on the turn in flight and re-broadcasts the card
+  that holds that turn — the note when a note is being answered, the thread's own card otherwise — at
+  most ten times a second. `turn.streaming` makes the card draw a caret; it is set when the message is
+  asked, so the caret covers the wait before the first word and the tool calls after it, and it is
+  cleared by `agent_settled`, a stop, a kill or a dead child, in every case with the card re-sent.
+  A finished block replaces the buffered text with its own authoritative content. The turn's answer is
+  every assistant message of the run joined by a blank line, so a run that talks, calls a tool and
+  talks again keeps both halves; a message pi reports as `aborted` or `error` settles the turn as
+  `stopped` rather than `answered`, and one it is about to retry does not leave its half behind to be
+  read twice. A tick itself writes nothing to the board file, though an unrelated save during a run
+  carries the half sentence to disk, where it is stored as `stopped`. On the client a growing reply
+  repaints only that turn's answer, and while the card's own body is unchanged only the conversation
+  is painted, so a note being answered keeps the reader's selection. The card's height fits once, when
+  the run settles, because every growth would otherwise write the card's place to the daemon ten times
+  a second. A reader already at the bottom is carried along; one who scrolled up is left where they
+  are.
 - **Notes** are the cards with no child behind them. `POST /card/note {markdown, title?, rect?}`
   puts one on the board, `POST /edit {cardId, markdown}` rewrites it, and `POST /layout` and
   `POST /close` treat a note like a thread. A message asked on a note starts a thread named after
@@ -100,7 +117,8 @@ commit's own account rather than on a check run now, the section below says so.
 - **The rail is a stack of threads.** Every activity row says which thread wrote it, and a settled row
   is filed in that thread's foldable section: title, count, newest thread on top. A folded section is
   remembered for the session only. Rows still running stay in the strip above the log, so what is
-  happening now is visible however far the log is scrolled.
+  happening now is visible however far the log is scrolled; that strip belongs to no section, so a
+  running row names its own thread beside the tool.
 - **What answers is a choice, per thread.** `provider`, `model` and `thinking` live on the thread and
   are saved with it; `board.config` is what the next thread starts with, taken from the newest thread
   until a choice is made. `GET /models` reads `pi --list-models` once and keeps it for ten minutes, so
@@ -246,6 +264,21 @@ text, place and fold after a daemon restart, closed through `POST /close`, and a
 note started a thread named after it. Editing a card id that is not a note answers 409. Nothing here
 has been checked in a browser.
 
+Streaming, against real children on a throwaway `HOME` whose `~/.pi/agent` is symlinked so pi keeps
+its credentials: a 250-word answer reached the browser as 8 frames growing 216 → 1432 characters,
+104–189 ms apart, ending `answered` with the caret cleared; a longer one showed the caret alone for
+11 seconds while the child started and thought, then grew to 1280 characters over 10 frames; a run
+told to say READY, run `ls` and say DONE ended with one answer holding both halves; a run stopped once
+186 characters had arrived kept those characters and read `stopped`. A thread that owned a note of its
+own streamed thirteen frames to its own card and left the note untouched, which is what a review of the
+first draft found broken: the tick had been aimed at the newest card the thread owned. A card closed
+while its run was writing is pinned to a turn that does not exist, so the reply lands nowhere instead
+of on the thread's older answer; that is reasoning from the code, not a run. Those runs also found a
+bug: the flush timer lived on the thread, and `GET /state` serialises whole threads, so a pending timer
+made that request throw "Converting circular structure to JSON". Timers live in a `WeakMap` now. The
+caret and the incremental repaint have not been seen in a browser; the client half is checked by
+`node --check` and by reading it, not by eye.
+
 Reported by the commits that added the settings and the clean/new verbs, both against a real daemon
 and neither re-checked since: crossroads defaults set, and refused with 409 for a model this machine
 cannot run or 400 for a level pi does not name; a new board inheriting them; a board changing its own
@@ -257,7 +290,6 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
 
 ## Does not work yet
 
-- The answer appears when a turn ends; nothing streams into the card while it is generated.
 - Forking a *thread* is not built: `fork` on a thread card does nothing (the button is hidden there),
   because a real fork has to copy the session file and mark the copy `forkedFrom`.
 - Feeding a card into a thread other than the one that made it is designed and not built.
@@ -286,15 +318,15 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
 
 ## Next, in order
 
-1. Stream the answer into the card, then rail payloads. pi already writes `message_update` with a
-   `text_delta` on the same stdout `handleChildLine` reads, and only `turn_end` is acted on.
-2. A workspace entry that no longer resolves: offer to forget it.
-3. Fork a thread, then feeding a card into another thread.
-4. Brainstorm how to organize subagents on a board — potentially replace `delegate`.
-5. HTML artifacts: a card that renders a whole html file, not only source text.
-6. Home screen redesign — the crossroads (`/`, `welcome.html`/`welcome.css`/`welcome.js`).
-7. A debug view of the raw stream from a pi child: the stdout lines `handleChildLine` parses, line by
+1. A workspace entry that no longer resolves: offer to forget it.
+2. Fork a thread, then feeding a card into another thread.
+3. Brainstorm how to organize subagents on a board — potentially replace `delegate`.
+4. HTML artifacts: a card that renders a whole html file, not only source text.
+5. Home screen redesign — the crossroads (`/`, `welcome.html`/`welcome.css`/`welcome.js`).
+6. A debug view of the raw stream from a pi child: the stdout lines `handleChildLine` parses, line by
    line and unfiltered, beside the 1000-character `stderrTail` that is kept today.
+7. Retire the board in the pi extensions repo. The `dashboard` extension duplicates this app, which is
+   why children exclude it by name; once this one is the only board it can go.
 
 ## Rules
 

@@ -937,13 +937,20 @@ function patchRow(board, id, patch) {
 function threadError(board, thread, message) {
 	console.error(`pi-studio: ${board.name}/${thread.title}: ${message}`);
 	thread.status = "dead";
+	stopStream(thread);
 	const last = thread.turns[thread.turns.length - 1];
-	if (last && last.status !== "answered") last.status = "stopped";
+	if (last) {
+		// What was being written stays as the child left it, but nothing is writing it now.
+		last.streaming = false;
+		if (last.status !== "answered") last.status = "stopped";
+	}
 	// A question that was written on a card is stuck in the same way the thread's own turn is.
 	const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
 	const cardTurn = asked?.turns?.[thread.answering.turn];
-	if (cardTurn && cardTurn.status !== "answered") {
-		cardTurn.status = "stopped";
+	if (cardTurn) {
+		cardTurn.streaming = false;
+		if (cardTurn.status !== "answered") cardTurn.status = "stopped";
+		// Unconditional: a caret cleared on the daemon and not on the browser blinks for ever.
 		updateCard(board, asked);
 	}
 	thread.answering = null;
@@ -1121,23 +1128,87 @@ function prompt(board, thread, text, target = null) {
 		const turn = held?.turns?.[target.turn];
 		if (held && turn) {
 			turn.status = "sent";
+			// The caret says a run is writing this turn, from the moment it is asked: the first word
+			// can take seconds, and a card that looks idle until then is a card that looks stuck.
+			turn.streaming = true;
 			updateCard(board, held);
 		}
 	} else {
 		const turn = thread.turns[thread.turns.length - 1];
-		if (turn) turn.status = "sent";
+		if (turn) {
+			turn.status = "sent";
+			turn.streaming = true;
+		}
 	}
 	thread.status = "running";
 	thread.runStartedAt = Date.now();
 	// A stop pressed before the child got going has nothing to abort yet; `onStop` remembers it and the
 	// first event of the run repeats it.
 	thread.abortWanted = false;
+	// A new run starts with nothing said yet, whatever the last one left behind.
+	thread.streamDone = "";
+	thread.streamParts = new Map();
 	update(board, thread);
 	try {
 		const child = ensureChild(board, thread);
 		child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "prompt", message: text })}\n`);
 	} catch (error) {
 		threadError(board, thread, `could not send to the child: ${error.message}`);
+	}
+}
+
+/**
+ * How often a running answer reaches the browser. Deltas arrive far faster than anyone can read, and
+ * every tick costs a whole card.
+ */
+const STREAM_MS = 100;
+
+/** The turn a running answer is written into, and the card that holds it when there is one. */
+function liveTurn(board, thread) {
+	const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
+	const turn = thread.answering ? asked?.turns?.[thread.answering.turn] : thread.turns[thread.turns.length - 1];
+	return { turn, card: asked };
+}
+
+/** The answer as it reads this instant: the messages that finished, then the one still arriving. */
+function runText(thread) {
+	const arriving = [...(thread.streamParts?.values() ?? [])].join("");
+	return [thread.streamDone ?? "", arriving].filter((part) => part).join("\n\n");
+}
+
+/**
+ * The flush a thread has pending, kept off the thread itself: `/state` serialises whole threads, and a
+ * Node timer is a circular object that would make that request throw.
+ */
+const streamTimers = new WeakMap();
+
+/** A flush still pending belongs to a run that is over, and is worth nothing. */
+function stopStream(thread) {
+	const pending = streamTimers.get(thread);
+	if (pending) clearTimeout(pending);
+	streamTimers.delete(thread);
+}
+
+/**
+ * Put what the child has said so far on the turn and tell the browsers. The board file is not
+ * written: half a sentence is not a thing to reopen tomorrow.
+ */
+function streamTick(board, thread) {
+	streamTimers.delete(thread);
+	// A child that has been written off is not producing an answer any more, whatever it still sends.
+	if (thread.status !== "running") return;
+	const { turn, card: held } = liveTurn(board, thread);
+	if (!turn) return;
+	turn.reply = runText(thread);
+	turn.streaming = true;
+	// The card that holds the turn is the one to repaint: a run answering a note writes the note's
+	// turn, and a run answering its own card writes the card. Falling back to `homeCard` while the
+	// thread is drawn would repaint an unrelated note the thread once wrote.
+	if (held) broadcast(board, { type: "update", card: plainCardFor(held, board), quiet: true });
+	else if (!thread.hidden) broadcast(board, { type: "update", card: cardFor(thread, board), quiet: true });
+	else {
+		const shown = homeCard(board, thread);
+		if (shown) broadcast(board, { type: "update", card: plainCardFor(shown, board), quiet: true });
 	}
 }
 
@@ -1200,6 +1271,25 @@ function handleChildLine(board, thread, line) {
 			// The child is gone; its exit says so.
 		}
 	}
+	if (event.type === "message_update") {
+		const next = event.assistantMessageEvent;
+		const at = Number.isInteger(next?.contentIndex) ? next.contentIndex : 0;
+		// A finished block is authoritative, so a delta dropped on the way cannot leave a hole.
+		// Thinking and tool arguments ride the same stream and stay off the card.
+		if (next?.type === "text_delta" || next?.type === "text_end") {
+			thread.streamParts ??= new Map();
+			const said = next.type === "text_end" ? String(next.content ?? "") : `${thread.streamParts.get(at) ?? ""}${String(next.delta ?? "")}`;
+			thread.streamParts.set(at, said);
+		} else {
+			return;
+		}
+		if (!streamTimers.has(thread)) {
+			const pending = setTimeout(() => streamTick(board, thread), STREAM_MS);
+			pending.unref?.();
+			streamTimers.set(thread, pending);
+		}
+		return;
+	}
 	if (event.type === "tool_execution_start") {
 		addRow(board, {
 			id: String(event.toolCallId),
@@ -1227,14 +1317,34 @@ function handleChildLine(board, thread, line) {
 			.map((block) => String(block.text ?? ""))
 			.join("")
 			.trim();
-		if (!text) return;
 		// When the run was answering for a card, only that card may receive the reply. Falling back to
 		// the thread's own turn would overwrite an older answer with a card's answer.
-		const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
-		const turn = thread.answering ? asked?.turns?.[thread.answering.turn] : thread.turns[thread.turns.length - 1];
+		const { turn, card: asked } = liveTurn(board, thread);
+		// The answer is what the whole run said. A run that talks, calls a tool and talks again would
+		// otherwise drop its first half the moment its second arrived.
+		const said = [thread.streamDone ?? "", text].filter(Boolean).join("\n\n");
+		const aborted = message.stopReason === "aborted";
+		const failed = message.stopReason === "error";
+		// A message pi is about to retry is not half an answer: keeping it would make the retry's full
+		// text read twice.
+		thread.streamDone = failed ? "" : said;
+		thread.streamParts = new Map();
+		stopStream(thread);
+		if (!text) {
+			// A message of nothing but tool calls settles nothing: the turn keeps what has arrived and
+			// the caret stays until a message has words in it.
+			if (turn?.streaming) {
+				turn.reply = said;
+				if (asked) updateCard(board, asked);
+				else update(board, thread);
+			}
+			return;
+		}
 		if (turn) {
-			turn.reply = text;
-			turn.status = "answered";
+			turn.reply = said;
+			// An aborted or failed message is not an answer, however much of it arrived before it was
+			// cut. Saying `answered` over half a sentence would be a card that lies.
+			turn.status = aborted || failed ? "stopped" : "answered";
 		}
 		addRow(board, {
 			id: randomUUID(),
@@ -1251,12 +1361,20 @@ function handleChildLine(board, thread, line) {
 	if (event.type === "agent_settled") {
 		thread.status = "idle";
 		thread.abortWanted = false;
+		stopStream(thread);
 		// A turn whose answer was redirected by a steer, or whose run was stopped, never gets a reply
-		// of its own. It reads as stopped rather than as a message still being worked on.
-		for (const turn of thread.turns) if (turn.status === "sent") turn.status = "stopped";
+		// of its own. It reads as stopped rather than as a message still being worked on, and the
+		// caret goes because nothing is being written any more.
+		for (const turn of thread.turns) {
+			turn.streaming = false;
+			if (turn.status === "sent") turn.status = "stopped";
+		}
 		const parked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
 		if (parked) {
-			for (const turn of parked.turns ?? []) if (turn.status === "sent") turn.status = "stopped";
+			for (const turn of parked.turns ?? []) {
+				turn.streaming = false;
+				if (turn.status === "sent") turn.status = "stopped";
+			}
 			updateCard(board, parked);
 		}
 		thread.answering = null;
@@ -1561,7 +1679,11 @@ function killChild(board, thread) {
 	board.children.delete(thread.id);
 	const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
 	const turn = thread.answering ? asked?.turns?.[thread.answering.turn] : thread.turns[thread.turns.length - 1];
-	if (turn && turn.status !== "answered") turn.status = "stopped";
+	if (turn) {
+		turn.streaming = false;
+		if (turn.status !== "answered") turn.status = "stopped";
+	}
+	stopStream(thread);
 	// Nothing will arrive to drain the queue now, so what was waiting says stopped instead of waiting.
 	for (const next of thread.queued) {
 		const held = typeof next === "string" || !next.target ? undefined : board.cards.get(next.target.cardId);
@@ -1581,6 +1703,8 @@ function killChild(board, thread) {
 	} catch {
 		// Already gone, which is what this wanted.
 	}
+	// A note that was being answered has to be told, or its caret blinks for ever.
+	if (asked) updateCard(board, asked);
 	update(board, thread);
 	scheduleSave(board);
 	return true;
@@ -1590,8 +1714,13 @@ function forgetCard(board, cardId) {
 	for (const thread of [...board.threads.values()]) {
 		if (thread.answering?.cardId === cardId) {
 			const turn = board.cards.get(cardId)?.turns?.[thread.answering.turn];
-			if (turn && turn.status !== "answered") turn.status = "stopped";
-			thread.answering = null;
+			if (turn) {
+				turn.streaming = false;
+				if (turn.status !== "answered") turn.status = "stopped";
+			}
+			// Pinned to nowhere rather than forgotten: a run still going would otherwise fall back to
+			// the thread's own last turn and overwrite an older answer with this card's.
+			thread.answering = { cardId, turn: -1 };
 		}
 	}
 	// A child lives while it has a card, so a hidden one that has just lost its last card goes with it.

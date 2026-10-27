@@ -595,6 +595,35 @@
     warn.textContent = problem;
   }
 
+  /**
+   * The answer of one turn, drawn again from the text as it now reads. A run writes into this
+   * element about ten times a second, so it is the one node that gets repainted on its own instead
+   * of the card being rebuilt around it.
+   */
+  function paintAnswer(wrap, turn) {
+    const answer = wrap.querySelector(".turn-a");
+    if (!answer) return;
+    answer.replaceChildren();
+    if (turn.reply) {
+      const body = renderMarkdown(turn.reply);
+      answer.appendChild(body);
+      // The caret is the only thing that says the text is still arriving: the status line says
+      // `sent` for a run that is going, which reads the same as one that has stalled.
+      if (turn.streaming) {
+        const caret = el("span", "caret");
+        caret.setAttribute("aria-hidden", "true");
+        // Inside the last paragraph, so it sits after the last word instead of on a line of its own.
+        const lastBlock = body.lastElementChild;
+        if (lastBlock && lastBlock.tagName === "P") lastBlock.append(caret);
+        else answer.appendChild(caret);
+      }
+    } else if (turn.streaming) {
+      const caret = el("span", "caret");
+      caret.setAttribute("aria-hidden", "true");
+      answer.appendChild(caret);
+    }
+  }
+
   /** One follow-up exchange: your question, what happened to it, then the answer. */
   function turnNode(turn) {
     const wrap = el("div", `turn ${turn.status || "queued"}`);
@@ -616,12 +645,16 @@
       shot.textContent = `${turn.images} image${turn.images > 1 ? "s" : ""} attached`;
       wrap.appendChild(shot);
     }
-    if (turn.reply) {
-      const answer = el("div", "turn-a note-body");
-      answer.appendChild(renderMarkdown(turn.reply));
-      wrap.appendChild(answer);
-    }
+    // Always there, even before the answer has a word: an empty one draws nothing, and having it
+    // from the start means a growing answer is one element to fill, not a node to add.
+    wrap.appendChild(el("div", "turn-a note-body"));
+    paintAnswer(wrap, turn);
     return wrap;
+  }
+
+  /** What a turn draws besides its answer. A turn that changes here has to be redrawn whole. */
+  function turnShape(turn) {
+    return [turn.text, turn.status, turn.mode, turn.images].join("\u0000");
   }
 
   /**
@@ -637,8 +670,30 @@
     const fresh = turns.length > seen.count || (Boolean(last?.reply) && !seen.answered);
     entry.threadSeen = { count: turns.length, answered: Boolean(last?.reply) };
     entry.thread.hidden = turns.length === 0;
-    entry.thread.replaceChildren(...turns.map(turnNode));
-    if (!fresh) return;
+    // Reading position: an answer growing under someone who is already at the bottom keeps them
+    // there; someone who scrolled up to read is left where they are.
+    const atBottom = entry.scroll.scrollHeight - entry.scroll.scrollTop - entry.scroll.clientHeight < 24;
+    // A reply arriving in deltas would otherwise rebuild the whole conversation ten times a second,
+    // taking the column's scroll and any selection being read with it. While nothing but the last
+    // answer moves, only that answer is repainted.
+    const drawn = entry.turnNodes ?? (entry.turnNodes = []);
+    const settled =
+      drawn.length === turns.length && turns.every((turn, at) => turnShape(turn) === turnShape(drawn[at].turn));
+    if (settled) {
+      const at = turns.length - 1;
+      const before = at >= 0 ? drawn[at].turn : null;
+      const moved =
+        before && (turns[at].reply !== before.reply || Boolean(turns[at].streaming) !== Boolean(before.streaming));
+      if (moved) {
+        paintAnswer(drawn[at].node, turns[at]);
+        drawn[at].turn = { ...turns[at] };
+      }
+    } else {
+      const nodes = turns.map(turnNode);
+      entry.thread.replaceChildren(...nodes);
+      entry.turnNodes = turns.map((turn, at) => ({ turn: { ...turn }, node: nodes[at] }));
+    }
+    if (!fresh && !(Boolean(last?.streaming) && atBottom)) return;
     // The note above the thread can be taller than the card, so the answer would land below the
     // fold with nothing moving: the card's own column scrolls down to it.
     requestAnimationFrame(() => {
@@ -1240,6 +1295,9 @@
    */
   function fitContent(entry, data) {
     if (entry.card.dataset.sized === "user" || entry.card.classList.contains("mini")) return;
+    // An answer still being written would make the card grow, and grow it again, and every growth
+    // writes this card's place to the daemon. It fits once, when the run has settled.
+    if (Array.isArray(data.turns) && data.turns.some((turn) => turn.streaming)) return;
     const answeredSticky = data.type === "sticky" && Boolean(data.reply);
     const threaded = Array.isArray(data.turns) && data.turns.length > 0;
     // A question grows too: long options and the free-text row would otherwise hide behind the
@@ -1327,6 +1385,17 @@
     flashCard(card);
   }
 
+  /**
+   * What a card's body is built from. A quiet refresh that leaves all of this alone only has its
+   * conversation repainted, so a note being answered does not lose the reader's selection ten times
+   * a second.
+   */
+  function bodySame(before, after) {
+    return ["type", "markdown", "text", "path", "content", "line", "question", "status", "answer", "details"].every(
+      (field) => before[field] === after[field],
+    );
+  }
+
   function applyMessage(data, quiet = false) {
     const existing = byId.get(data.id);
     if (existing) {
@@ -1339,6 +1408,11 @@
           return;
         }
         markUpdated(existing);
+      }
+      if (quiet && !replaying && bodySame(existing.data, data)) {
+        existing.data = data;
+        paintThread(existing, data);
+        return;
       }
       paintCard(existing, data);
       return;
@@ -2127,6 +2201,14 @@
     name.textContent = row.kind === "reply" ? "answer" : thinking ? "thinking" : row.label || row.tool || "tool";
     if (row.tool) name.title = row.tool;
     top.appendChild(name);
+    // A running row waits in the strip above the log, where no section names the thread that is
+    // working, so the row says it itself. A settled row is filed under its thread and needs no label.
+    if (row.status === "running" && row.thread?.title) {
+      const who = el("span", "who");
+      who.textContent = row.thread.title;
+      who.title = `thread: ${row.thread.title}`;
+      top.appendChild(who);
+    }
     const timing = el("span", "ms");
     top.appendChild(timing);
     // A running row is re-rendered by the ticker in place, so it carries its own start time.
