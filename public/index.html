@@ -283,6 +283,15 @@
   header .stat { font: 12px var(--mono); color: var(--muted); background: #161b22;
     border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; white-space: nowrap; }
   header .stat:empty { display: none; }
+  /* The footer is a quiet strip: the same figures as a console session, out of the way of the cards. */
+  #footer { position: fixed; left: var(--rail, 0); right: 0; bottom: 0; z-index: 40; display: flex;
+    align-items: center; gap: 14px; height: 24px; padding: 0 12px; background: #0d1117;
+    border-top: 1px solid var(--border); }
+  #footer .stat { font: 11px var(--mono); color: var(--muted); }
+  #footer .stat:empty { display: none; }
+  #footer .stat em { color: var(--text); font-style: normal; }
+  #footer .grow { flex: 1; }
+  body.rail-off #footer { left: 0; }
   header .stat em { color: var(--text); font-style: normal; }
   /* The chip is also the compact button: the same box as its neighbours, so it has to keep their
      metrics. `appearance` strips the button chrome, and the width is pinned to the seven
@@ -615,9 +624,6 @@
        every second and is hidden, so it is never read out. -->
   <span class="live" id="live" role="status" aria-live="polite"><b aria-hidden="true"></b> <span id="liveText">connecting</span><span id="liveClock" aria-hidden="true"></span></span>
   <span class="grow"></span>
-  <span class="stat" id="statModel"></span>
-  <span class="stat" id="statTokens"></span>
-  <span class="stat" id="statCost"></span>
   <!-- The context chip is also the compact button: the action sits on the number it changes,
        and the word appears on hover or focus so the row keeps its width at rest. -->
   <button class="stat" id="statCtx" title="compact the context, the same as /compact" hidden><span id="statCtxValue"></span><span class="act" aria-hidden="true">compact</span></button>
@@ -632,6 +638,18 @@
   <button id="newBtn" title="start over in this workspace: same folder, same settings, empty board">new</button>
   <button id="configBtn" title="this board's settings: default model, thinking, dimming" aria-haspopup="dialog" aria-expanded="false">settings</button>
 </header>
+
+<!-- The board's own numbers, the way a console keeps them along its bottom edge: what answers, what
+     it has cost, how much of a context is in play, and how many threads are running. -->
+<footer id="footer">
+  <span class="stat" id="statModel"></span>
+  <span class="stat" id="statTokens"></span>
+  <span class="stat" id="statCost"></span>
+  <span class="stat" id="footCtx"></span>
+  <span class="stat" id="footRun"></span>
+  <span class="grow"></span>
+  <span class="stat hint" id="footHint"></span>
+</footer>
 
 <!-- The board's own configuration. Model and level share the picker the composer uses, so there is
      one list of models in the whole app. -->

@@ -1005,6 +1005,26 @@
     return `${(value / 1_000_000).toFixed(1)}m`;
   }
 
+  /** The footer's context figure: the largest context any thread is carrying, since none of it sums. */
+  function paintFooter() {
+    const footCtx = document.getElementById("footCtx");
+    const footRun = document.getElementById("footRun");
+    let context = 0;
+    let max = 0;
+    let running = 0;
+    for (const held of threadFacts.values()) {
+      if (held.running) running += 1;
+      const stats = held.stats;
+      if (!stats) continue;
+      if (stats.context > context) {
+        context = stats.context;
+        max = stats.contextMax ?? 0;
+      }
+    }
+    footCtx.textContent = context ? `ctx ${compact(context)}${max ? `/${compact(max)} · ${Math.round((context / max) * 100)}%` : ""}` : "";
+    footRun.textContent = running ? `${running} running` : "";
+  }
+
   /** A section says what its thread costs and offers the stop the card's head also offers. */
   function paintSections() {
     for (const entry of railSections.values()) {
@@ -2552,6 +2572,7 @@
       });
     }
     paintSections();
+    paintFooter();
     modelChip.textContent = shortModel(runtime.model);
     thinkChip.textContent = runtime.thinking ? `think ${runtime.thinking}` : "think off";
     const where = answering ? "this card answers with" : "a new thread starts with";
