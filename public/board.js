@@ -45,6 +45,11 @@
   let sawFirstCard = false;
   /** The card the composer is currently replying into, or null for a fresh message. */
   let replyTarget = null;
+  /**
+   * What the field is carrying, keyed by the card it is written for, `""` being the board itself.
+   * A draft belongs to one card, so moving the reading position never carries text across.
+   */
+  const drafts = new Map();
   // A snapshot is what is already on the board, so nothing in it is new to the reader.
   let replaying = false;
   // Only the first snapshot of a session frames the board: a reconnect restores cards the human
@@ -992,8 +997,7 @@
       (event) => {
         if (event.button === 1) return;
         card.style.zIndex = z++;
-        cards.forEach((c) => c.classList.toggle("active", c === card));
-        paintFocus();
+        selectCard(card);
       },
       true,
     );
@@ -1001,8 +1005,7 @@
     // The keyboard and the mouse agree on which card is current: focus landing inside a card marks
     // it, so the outline, `r` and the digit keys follow the keyboard rather than the last click.
     card.addEventListener("focusin", (event) => {
-      cards.forEach((c) => c.classList.toggle("active", c === card));
-      paintFocus();
+      selectCard(card);
       reveal(event.target);
     });
 
@@ -1010,6 +1013,13 @@
       event.stopPropagation();
       const mini = !card.classList.contains("mini");
       setMini(card, mini);
+      // A folded card has no room for a field, so folding puts the draft away and unfolding brings it
+      // back when the card has one.
+      if (mini) {
+        if (replyTarget && replyTarget.id === entry.id) setReplyTarget(null);
+      } else if (!replyTarget && drafts.has(entry.id)) {
+        setReplyTarget(entry, { focus: false });
+      }
       const rect = JSON.parse(card.dataset.rect || "{}");
       void saveLayout(entry.id, rect, mini);
     });
@@ -1222,6 +1232,22 @@
     }
     // The footer reads the selected thread too, so a selection change is a footer change.
     paintFooter();
+  }
+
+  /**
+   * One place marks which card the board is reading, and the composer is bound to that card, so a
+   * selection is also the answer to "who is this message for". Giving the selection up gives the
+   * field up too: one docked in a card nobody is reading is a reply to a card left behind.
+   */
+  function selectCard(card) {
+    for (const other of cards) other.classList.toggle("active", other === card);
+    paintFocus();
+    const entry = card ? byId.get(card.dataset.id) : null;
+    // A note card is opened by asking for it, with the reply button or `r`; a thread card is its own
+    // conversation, so reading it is enough. A folded card has no room for a field.
+    const holds = Boolean(entry) && !entry.card.classList.contains("mini");
+    const wanted = holds && (replyTarget || entry.data.type === "sticky");
+    setReplyTarget(wanted ? entry : null, { focus: false });
   }
 
   /**
@@ -1541,6 +1567,7 @@
     if (at >= 0) cards.splice(at, 1);
     byId.delete(record.id);
     foldState.delete(record.id);
+    drafts.delete(record.id);
     // Links pointing at the card that just went have to stop looking live.
     refreshXrefs();
     dropRailCard(record.id);
@@ -1822,7 +1849,10 @@
     entry.finishEdit = finish;
     area.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
+        // The editor takes Escape first: cancelling an edit must not give up the selection, and so
+        // must not put a reply away either.
         event.preventDefault();
+        event.stopPropagation();
         finish(false);
       }
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -1910,8 +1940,7 @@
     view.y = height / 2 - y * view.k;
     applyView();
     flashCard(card);
-    cards.forEach((c) => c.classList.toggle("active", c === card));
-    paintFocus();
+    selectCard(card);
   }
 
   /** Centre a question and put the keyboard on its options, so the number keys are one press away. */
@@ -2099,8 +2128,7 @@
   // and selects with it, so this gesture never starts there.
   viewport.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || event.target.closest(".card")) return;
-    cards.forEach((c) => c.classList.remove("active"));
-    paintFocus();
+    selectCard(null);
     beginPan(event);
   });
 
@@ -3712,12 +3740,43 @@
     }
   });
 
+  /** What the field is carrying, keyed by the card it is written for: `""` is the board itself. */
+  const draftKey = () => (replyTarget ? replyTarget.id : "");
+
+  /**
+   * Put the field aside under the card it was written for, so a change of aim parks a draft instead
+   * of carrying its text to whichever card is clicked next.
+   */
+  function parkDraft() {
+    const draft = { text: msgBox.value, images: [...pendingImages], picked: [...picked] };
+    const used = draft.text.trim() !== "" || draft.images.length > 0 || draft.picked.length > 0;
+    if (used) drafts.set(draftKey(), draft);
+    else drafts.delete(draftKey());
+  }
+
+  /** The draft that belongs where the field now points, or an empty field when nothing is there. */
+  function restoreDraft() {
+    const draft = drafts.get(draftKey());
+    msgBox.value = draft?.text ?? "";
+    pendingImages.splice(0, pendingImages.length, ...(draft?.images ?? []));
+    picked.clear();
+    for (const [path, meta] of draft?.picked ?? []) picked.set(path, meta);
+    drawAttachments();
+    drawChips();
+  }
+
   /**
    * A reply is aimed at one card, so the composer shows which until it is sent or cleared.
-   * Without this the follow-up would arrive as a new sticky and the thread would be lost.
+   * Without this the follow-up would arrive as a new sticky and the thread would be lost. A bind
+   * driven by a click passes `focus: false`: the reader is reading cards, not typing.
    */
-  function setReplyTarget(entry) {
-    replyTarget = entry && byId.has(entry.id) ? entry : null;
+  function setReplyTarget(entry, { focus = true } = {}) {
+    const next = entry && byId.has(entry.id) ? entry : null;
+    if (next !== replyTarget) {
+      parkDraft();
+      replyTarget = next;
+      restoreDraft();
+    }
     for (const record of byId.values()) record.card.classList.toggle("replying", record === replyTarget);
     dockComposer(replyTarget);
     replyChip.hidden = !replyTarget;
@@ -3737,7 +3796,7 @@
       const owned = replyTarget.data.type !== "thread" && Boolean(replyTarget.data.answersWith);
       replyChipText.textContent = forkNext && owned ? `in “${name}” · a new thread answers` : `in “${name}”`;
       msgBox.placeholder = "ask a follow-up about this card…  (esc to send to the board instead)";
-      msgBox.focus();
+      if (focus) msgBox.focus();
     } else {
       msgBox.placeholder = "message the agent…  (enter sends, shift+enter for a new line, paste an image or pick files)";
     }
@@ -4627,7 +4686,10 @@
     // The path field already took this keystroke (it browses what was typed).
     if (event.defaultPrevented) return;
     if (event.key === "Escape") {
+      // The overlay takes Escape first, so leaving it does not also give up the board's selection
+      // and the reply the field is holding.
       event.preventDefault();
+      event.stopPropagation();
       closePicker();
       return;
     }
@@ -4724,6 +4786,8 @@
       }
       if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
       if (msgBox.value === draft) msgBox.value = "";
+      // The draft that just left is spent, so the slot it came from starts empty next time.
+      drafts.delete(sentTarget ? sentTarget.id : "");
       for (const image of sentImages) {
         const at = pendingImages.indexOf(image);
         if (at >= 0) pendingImages.splice(at, 1);
@@ -4818,8 +4882,12 @@
     if (entry) {
       // A folded card has no room for a field, so replying unfolds it.
       if (entry.card.classList.contains("mini")) setMini(entry.card, false);
-      entry.card.insertBefore(composer, entry.card.querySelector(".resize"));
       composer.classList.add("docked");
+      // Already docked here: moving the field would detach it between a press and its release, and
+      // the click on the button that was pressed — send, a chip, a picker — would never arrive.
+      if (composer.parentElement !== entry.card) {
+        entry.card.insertBefore(composer, entry.card.querySelector(".resize"));
+      }
       return;
     }
     if (composer.parentElement !== composerHome) {
@@ -4833,8 +4901,7 @@
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (!document.querySelector(".card.active")) return;
-    for (const card of cards) card.classList.remove("active");
-    paintFocus();
+    selectCard(null);
   });
 
   // `r` opens a thread on the card you last clicked and `q` closes it. The composer keeps its
@@ -5174,6 +5241,8 @@
         } finally {
           replaying = false;
         }
+        // A snapshot is the whole board, so a draft whose card is not in it has nowhere to go.
+        for (const id of [...drafts.keys()]) if (id && !byId.has(id)) drafts.delete(id);
         if (keptTarget && byId.has(keptTarget)) setReplyTarget(byId.get(keptTarget));
         // Every thread comes back in the order the human chose, not the order the server lists.
         applyAllThreadOrder();

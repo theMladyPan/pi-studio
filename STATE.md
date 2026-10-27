@@ -553,6 +553,14 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
   wheel scrolls that card wherever the pointer is, and cards of other threads drop to 70% opacity
   (`board.config.dimOthers`). With nothing selected the wheel pans the board and every card is equal.
   Escape gives the selection up.
+- **The composer is bound to the selected card.** The field docked in a card is that card's field: a
+  note opens it when you ask, with the reply button or `r`, and a thread card opens it as soon as it is
+  selected, because a thread is always answered. Giving the selection up — Escape, a click on the
+  canvas — puts the field away with it. Selecting another card never carries the text across: every
+  card keeps its own draft (text, pasted images and picked paths), parked when the field leaves and
+  restored when the card comes back, and spent only by the card that sends it. A folded card has no
+  room for a field, so folding parks the draft and unfolding brings it back. A panel or an editor
+  takes Escape first and stops it there, so closing one costs neither the selection nor the draft.
 - **A card is a handle.** Press and drag anywhere on a card moves it; press the background and the
   board pans; ctrl+drag inside a card selects its text. Controls keep their own press: header buttons,
   the docked composer, links, checkboxes, editable fields and the resize corner.
