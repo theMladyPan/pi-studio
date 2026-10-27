@@ -245,6 +245,23 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
   open button disabled and `that folder no longer exists` where the hint goes, but there is no way to
   forget the entry and it stays in the list.
 
+- **Two verbs for tidying.** `clean` forgets the activity of threads that are gone or dead, the dead
+  threads themselves with their children, and the ownership their cards still pointed at, so a note
+  left behind starts a fresh child when asked again. `new` empties the board and keeps the workspace
+  and its settings; because it throws work away, the button turns into `sure?` and the second press
+  inside four seconds is the answer. Both answer by sending a snapshot, which every open tab already
+  knows how to replay.
+- **The selection decides the wheel and the dimming.** A selected card is the reading position: the
+  wheel scrolls that card wherever the pointer is, and cards of other threads drop to 70% opacity
+  (`board.config.dimOthers`). With nothing selected the wheel pans the board and every card is equal.
+  Escape gives the selection up.
+- **A card is a handle.** Press and drag anywhere on a card moves it; press the background and the
+  board pans; ctrl+drag inside a card selects its text. Controls keep their own press: header buttons,
+  the docked composer, links, checkboxes, editable fields and the resize corner.
+- **A reload in development.** The daemon reuses the port it printed last, so `npm run dev`
+  (`node --watch server.mjs --no-open`) restarts behind the URL a tab is already on, and the tab
+  reconnects to a snapshot by itself. Client files need only a browser reload.
+
 ## Next, in order
 
 1. Stream the answer into the card, then rail payloads. pi already writes `message_update` with a
