@@ -122,15 +122,6 @@
   .min { border: 0; background: transparent; color: var(--muted); font: 12px/1 system-ui;
     cursor: pointer; padding: 3px 5px; border-radius: 4px; }
   .min:hover { background: #21262d; color: var(--text); }
-  /* One slot for two jobs: a run to stop wears the red square, a child that only needs ending is
-     quiet until the pointer is on it. */
-  /* The stop square is red because it is the one control in the head that ends what you are watching. */
-  .stop { border: 0; background: transparent; color: #f85149; font: 12px/1 system-ui;
-    cursor: pointer; padding: 3px 5px; border-radius: 4px; }
-  .stop:hover { background: rgba(248, 81, 73, .14); color: #ff7b72; }
-  /* The kill that follows a stop that did not land is grey until you reach for it. */
-  .stop.killing { color: #6e7681; }
-  .stop.killing:hover { background: rgba(248, 81, 73, .14); color: #ff7b72; }
   /* Folded: the head is the whole card, and the real height stays saved for restoring. */
   .card.mini { height: auto !important; min-height: 0; }
   .card.mini .body, .card.mini .thread, .card.mini .resize { display: none; }

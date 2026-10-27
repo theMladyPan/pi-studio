@@ -837,7 +837,6 @@
       <span class="spacer"></span>
       <button type="button" class="ask-pill" aria-label="centre this question">answer needed</button>
       <span class="chip"></span>
-      <button class="stop" title="stop this thread" aria-label="stop this thread">■</button>
       <button class="min" title="minimize this card" aria-label="minimize this card">▾</button>
       <button class="reply" title="ask a follow-up about this card" aria-label="ask a follow-up about this card">↩</button>
       <button class="edit" title="edit this note" aria-label="edit this note">✎</button>
@@ -917,20 +916,6 @@
       cards.forEach((c) => c.classList.toggle("active", c === card));
       paintFocus();
       reveal(event.target);
-    });
-
-    head.querySelector(".stop").addEventListener("click", (event) => {
-      event.stopPropagation();
-      // The same control does what its own face says: stop while the run is going, then kill if the stop
-      // does not land. Nothing else remembers a mode for it.
-      const kill = threadState(entry.data).running && stopping.has(entry.id);
-      if (kill) stopping.delete(entry.id);
-      else stopping.add(entry.id);
-      void fetch(`/${kill ? "kill" : "stop"}?${auth}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cardId: entry.id }),
-      });
     });
 
     head.querySelector(".min").addEventListener("click", (event) => {
@@ -1062,12 +1047,6 @@
    * What answers this card is doing. A thread card says it itself — the daemon sends `sent` while a run
    * is live — and a plain card says it through the child that owns it.
    */
-  function threadState(data) {
-    if (!data) return { running: false };
-    if (data.type === "sticky") return { running: data.status === "sent" };
-    return { running: data.answersWith?.running === true };
-  }
-
   /** A thread that has been asked to stop. A stop that does not land turns into a kill. */
   const stopping = new Set();
 
@@ -1076,7 +1055,7 @@
    * it, a link or a checkbox, the resize corner. Everything else is surface, which drags the card.
    */
   const INTERACTIVE =
-    ".close, .edit, .reply, .min, .stop, .ask-pill, .resize, input, textarea, button, a, [contenteditable], .xref, .tick, .q-options, #composer";
+    ".close, .edit, .reply, .min, .ask-pill, .resize, input, textarea, button, a, [contenteditable], .xref, .tick, .q-options, #composer";
 
   /** Move a card by dragging it, in board units, so the card keeps up at any zoom. */
   function startCardDrag(card, entry, event) {
@@ -1155,18 +1134,6 @@
     if (editBtn) editBtn.style.display = data.type === "note" ? "" : "none";
     // One slot, two meanings: stop the run that is going, or end the child that is sitting idle. A card
     // with neither has nothing to stop, so it shows nothing.
-    const stopBtn = entry.head.querySelector(".stop");
-    const state = threadState(data);
-    if (stopBtn) {
-      // Gone quiet again, so the next stop starts over as a stop.
-      if (!state.running) stopping.delete(data.id);
-      const kill = state.running && stopping.has(data.id);
-      stopBtn.style.display = state.running ? "" : "none";
-      stopBtn.textContent = kill ? "⊗" : "■";
-      stopBtn.classList.toggle("killing", kill);
-      stopBtn.title = kill ? "kill this thread's child" : "stop this thread's run";
-      stopBtn.setAttribute("aria-label", stopBtn.title);
-    }
     const closeBtn = entry.head.querySelector(".close");
     // Closing an open question would leave the agent waiting for an answer with nothing on
     // screen to click, so the button appears only once it has been answered or has expired.
