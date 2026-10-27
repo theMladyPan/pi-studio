@@ -437,6 +437,27 @@
     background: #0f141b; border-top: 1px solid var(--border); backdrop-filter: none;
   }
   #composer.docked textarea { min-height: 54px; max-height: 150px; font-size: 13px; }
+  /* The conversation behind a thread, opened from the activity rail. A drawer over the board: it costs
+     nothing while closed, and the canvas does not have to make room for it. */
+  #transcript { position: fixed; right: 14px; bottom: 42px; width: min(660px, 48vw); height: min(72vh, 780px);
+    display: flex; flex-direction: column; background: rgba(13,17,23,.96); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 18px 48px rgba(0,0,0,.6); z-index: 60; }
+  #transcript[hidden] { display: none; }
+  .tr-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    border-bottom: 1px solid var(--border); font: 12px var(--mono); color: var(--muted); }
+  .tr-title { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tr-note { margin-left: auto; white-space: nowrap; opacity: .85; }
+  .tr-head button { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 6px;
+    font: 11px var(--mono); padding: 2px 7px; cursor: pointer; }
+  .tr-head button.on { color: var(--accent); border-color: var(--accent-dim); }
+  .tr-body { flex: 1; overflow: auto; padding: 8px 12px 16px; font: 12px/1.55 var(--mono); }
+  .tr-entry { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .tr-entry::before { content: attr(data-mark); margin-right: 6px; opacity: .7; }
+  .tr-entry.user { color: var(--amber); }
+  .tr-entry.answer { color: var(--text); }
+  .tr-entry.thinking { color: var(--muted); font-style: italic; }
+  .tr-entry.call { color: var(--accent); }
+  .tr-entry.result { color: #9fb0c0; opacity: .8; padding-left: 12px; border-left: 1px solid var(--border); }
   /* A narrow card cannot hold the field and the buttons side by side, so they stack: buttons
      on the right of the first row, the chip and the field filling the second. */
   #composer.docked { flex-wrap: wrap; }
@@ -717,6 +738,16 @@
     <button id="send">send</button>
   </div>
 </div>
+
+<aside id="transcript" hidden aria-label="thread transcript">
+  <div class="tr-head">
+    <span class="tr-title"></span>
+    <span class="tr-note"></span>
+    <button type="button" id="trFollow" class="on" title="keep up while the run writes">follow</button>
+    <button type="button" id="trClose" title="close">×</button>
+  </div>
+  <div class="tr-body" id="trBody"></div>
+</aside>
 
 <button id="newThread" type="button" aria-label="start a new thread" title="start a new thread">+</button>
 

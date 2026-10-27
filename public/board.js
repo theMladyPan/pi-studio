@@ -2241,6 +2241,96 @@
   }
   restoreRail();
   document.getElementById("railToggle").onclick = () => railShown(false);
+
+  // ---------- the conversation behind a thread ------------------------------
+  //
+  // The rail summarises a thread in rows and the card shows one answer; this is the whole of it, from
+  // the session file pi writes. It reads while it is open and costs nothing while it is closed.
+  const trPanel = document.getElementById("transcript");
+  const trBody = document.getElementById("trBody");
+  const trTitleEl = trPanel.querySelector(".tr-title");
+  const trNoteEl = trPanel.querySelector(".tr-note");
+  const trFollowBtn = document.getElementById("trFollow");
+  const TR_MARKS = { user: "›", answer: "●", thinking: "▸", call: "▸", result: "·" };
+  let trThread = "";
+  let trFollow = true;
+  let trTimer = 0;
+  let trDrawn = "";
+
+  function trEntryNode(entry) {
+    const node = el("div", `tr-entry ${entry.kind}`);
+    node.dataset.mark = TR_MARKS[entry.kind] ?? "";
+    node.textContent = entry.kind === "thinking" ? `thinking: ${entry.text}` : entry.text;
+    return node;
+  }
+
+  async function trLoad() {
+    if (!trThread) return;
+    let data;
+    try {
+      const res = await fetch(`/transcript/${encodeURIComponent(trThread)}?${auth}`);
+      if (!res.ok) {
+        trNoteEl.textContent = res.status === 404 ? "no session file yet" : `error ${res.status}`;
+        return;
+      }
+      data = await res.json();
+    } catch {
+      trNoteEl.textContent = "the daemon did not answer";
+      return;
+    }
+    trTitleEl.textContent = data.title || data.threadId.slice(0, 8);
+    trNoteEl.textContent = [data.status, data.branch || (data.base ? `detached on ${data.base}` : "")]
+      .filter(Boolean)
+      .join(" · ");
+    // A repaint keeps the reader's place unless they were at the bottom, and an unchanged transcript is
+    // not painted at all: the poll runs every few seconds for as long as the drawer is open.
+    const drawn = JSON.stringify(data.entries.map((entry) => [entry.kind, entry.text]));
+    if (drawn === trDrawn) return;
+    trDrawn = drawn;
+    const atBottom = trBody.scrollHeight - trBody.scrollTop - trBody.clientHeight < 60;
+    trBody.replaceChildren(...data.entries.map(trEntryNode));
+    if (trFollow && atBottom) trBody.scrollTop = trBody.scrollHeight;
+  }
+
+  function trOpen(threadId) {
+    trThread = threadId;
+    trDrawn = "";
+    trPanel.hidden = false;
+    trTitleEl.textContent = "";
+    trNoteEl.textContent = "reading…";
+    trBody.replaceChildren();
+    void trLoad();
+    clearInterval(trTimer);
+    trTimer = setInterval(() => {
+      if (trFollow) void trLoad();
+    }, 2500);
+  }
+
+  function trClose() {
+    trThread = "";
+    trDrawn = "";
+    trPanel.hidden = true;
+    clearInterval(trTimer);
+    trTimer = 0;
+    trBody.replaceChildren();
+  }
+
+  document.getElementById("trClose").addEventListener("click", trClose);
+  trFollowBtn.addEventListener("click", () => {
+    trFollow = !trFollow;
+    trFollowBtn.classList.toggle("on", trFollow);
+    if (trFollow) void trLoad();
+  });
+  // Right click a thread in the rail to read it. The section is the thread, so the press lands on a row
+  // or on the head and names the same conversation either way.
+  railLog.addEventListener("contextmenu", (event) => {
+    const section = event.target.closest(".rail-thread");
+    const threadId = section?.dataset.thread;
+    if (!threadId) return;
+    event.preventDefault();
+    trOpen(threadId);
+  });
+
   document.getElementById("railOpen").onclick = () => railShown(true);
 
   (() => {
@@ -2645,6 +2735,8 @@
         else foldedSections.add(id);
         applyFold(entry);
       });
+      // The section says which thread it is, so a right click can read that thread's conversation.
+      section.dataset.thread = id;
       entry = { section, head, body, id, title: "" };
       railSections.set(id, entry);
       applyFold(entry);

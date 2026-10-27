@@ -190,6 +190,15 @@ commit's own account rather than on a check run now, the section below says so.
   remembered for the session only. Rows still running stay in the strip above the log, so what is
   happening now is visible however far the log is scrolled; that strip belongs to no section, so a
   running row names its own thread beside the tool.
+- **Right click a thread in the rail to read it whole.** `GET /transcript/<threadId>` renders the
+  session file pi wrote into entries — `user`, `thinking`, `call`, `result`, `answer` — and the drawer
+  shows them in that order, marked and coloured by kind, with the thread's status and branch in its
+  head. It is the conversation, not the child's protocol stream: the stream is JSON frames, and what a
+  human reads in a terminal is the conversation they carry. The system prompt is left out, one block is
+  cut at 4000 characters and the last 600 entries are served, because a tool result can be megabytes
+  and a drawer holding one is a tab that stops answering. The drawer reads again every 2.5 seconds
+  while `follow` is on, keeps the reader's scroll unless they were at the bottom, and costs nothing
+  while it is closed: nothing is written to disk for it, the session file is already there.
 - **What answers is a choice, per thread.** `provider`, `model` and `thinking` live on the thread and
   are saved with it; `board.config` is what the next thread starts with, taken from the newest thread
   until a choice is made. `GET /models` reads `pi --list-models` once and keeps it for ten minutes, so
