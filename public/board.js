@@ -235,6 +235,8 @@
     // The board's zoom scales the focus ring drawn inside it too, so the rule in index.html
     // divides the ring by this to keep it the same thickness at every zoom.
     document.documentElement.style.setProperty("--zoom", String(view.k));
+    // Every pan, zoom and fit comes through here, so the minimap has one place to hear about them.
+    scheduleMap();
   };
 
   // ---------- syntax highlighting -----------------------------------------
@@ -936,6 +938,7 @@
     card.append(head, scroll, grip);
     world.appendChild(card);
     cards.push(card);
+    scheduleMap();
     // A new card takes its place in the stack; a replay settles every thread once it is done.
     if (data.threadRoot && !replaying) applyThreadOrder(data.threadRoot);
 
@@ -1083,6 +1086,7 @@
         // A size the user chose wins over growing to fit later answers.
         card.dataset.sized = "user";
         card.classList.remove("auto-height");
+        scheduleMap();
       };
       const up = () => {
         removeEventListener("pointermove", move);
@@ -1246,6 +1250,7 @@
     const move = (ev) => {
       card.style.left = `${ox + (ev.clientX - sx) / view.k}px`;
       card.style.top = `${oy + (ev.clientY - sy) / view.k}px`;
+      scheduleMap();
     };
     const up = () => {
       card.classList.remove("dragging");
@@ -1508,6 +1513,7 @@
     paintPill();
     sawFirstCard = false;
     updateEmpty();
+    scheduleMap();
   }
 
   /** Close a card here and on the server, so a refresh does not bring it back. */
@@ -1542,6 +1548,7 @@
     recomputePill();
     updateEmpty();
     paintFocus();
+    scheduleMap();
   }
 
   /** Free the rectangle a closed card was holding so later cards can fill the gap. */
@@ -1722,6 +1729,8 @@
       // The glyph says nothing out loud, so the spoken name follows the tooltip.
       button.setAttribute("aria-label", button.title);
     }
+    // A folded card is as tall as its header, and the minimap draws the size the eye sees.
+    scheduleMap();
   }
 
   /** Move a card locally and take the space it now holds into account. */
@@ -1738,6 +1747,7 @@
     }
     card.dataset.rect = JSON.stringify(rect);
     occupied.push(rect);
+    scheduleMap();
   }
 
   /** Save a note the user changed: a ticked box, or text typed in the editor. */
@@ -2175,6 +2185,188 @@
     view.y = sy - py;
     applyView();
   }
+
+  // ---------- minimap ------------------------------------------------------
+  // The board at a glance: every card as a rectangle in its kind's colour, the window you are
+  // looking at drawn over them, and the rest dimmed. It draws what this page already holds, so
+  // nothing about it reaches the daemon.
+  const MAP_W = 208;
+  const MAP_H = 140;
+  const MAP_PAD = 8;
+  const MAP_KEY = "board.minimap";
+  const MAP_COLOUR = { note: "#7d8590", code: "#d2a8ff", sticky: "#d29922", question: "#db61a2" };
+  const mapCanvas = document.getElementById("minimap");
+  const mapCtx = mapCanvas.getContext("2d");
+  const mapBtn = document.getElementById("mapBtn");
+  let mapOn = true;
+  let mapQueued = false;
+  /** The projection the last paint used, so a press lands where the eye saw the picture. */
+  let mapShown = null;
+  try {
+    mapOn = localStorage.getItem(MAP_KEY) !== "off";
+  } catch {}
+
+  /** Board units to map pixels: one scale for both axes, letterboxed in the frame. */
+  function mapProjection(bounds) {
+    const bw = Math.max(1, bounds.maxX - bounds.minX);
+    const bh = Math.max(1, bounds.maxY - bounds.minY);
+    const s = Math.min((MAP_W - MAP_PAD * 2) / bw, (MAP_H - MAP_PAD * 2) / bh);
+    return { s, ox: (MAP_W - bw * s) / 2 - bounds.minX * s, oy: (MAP_H - bh * s) / 2 - bounds.minY * s };
+  }
+
+  /** What the canvas is showing right now, in board units. */
+  const windowBounds = () => ({
+    minX: -view.x / view.k,
+    minY: -view.y / view.k,
+    maxX: (viewport.clientWidth - view.x) / view.k,
+    maxY: (viewport.clientHeight - view.y) / view.k,
+  });
+
+  function paintMap() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(MAP_W * dpr);
+    const h = Math.round(MAP_H * dpr);
+    if (mapCanvas.width !== w || mapCanvas.height !== h) {
+      mapCanvas.width = w;
+      mapCanvas.height = h;
+    }
+    mapCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    mapCtx.clearRect(0, 0, MAP_W, MAP_H);
+    const screen = windowBounds();
+    // An empty board still has a window, so the map shows where you are with nothing on it.
+    const p = mapProjection(boardBounds() ?? screen);
+    mapShown = p;
+    for (const card of cards) {
+      const colour = MAP_COLOUR[dotKind(card.dataset.kind)];
+      const x = p.ox + parseFloat(card.style.left) * p.s;
+      const y = p.oy + parseFloat(card.style.top) * p.s;
+      const w = Math.max(2, card.offsetWidth * p.s);
+      const h = Math.max(2, card.offsetHeight * p.s);
+      // Filled so a small card still reads, outlined so two of them never merge into one shape.
+      mapCtx.globalAlpha = 0.5;
+      mapCtx.fillStyle = colour;
+      mapCtx.fillRect(x, y, w, h);
+      mapCtx.globalAlpha = 0.85;
+      mapCtx.strokeStyle = colour;
+      mapCtx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.max(0, Math.round(w) - 1), Math.max(0, Math.round(h) - 1));
+    }
+    mapCtx.globalAlpha = 1;
+    // The card being read keeps its accent ring here too, so the map says where the reading is.
+    const active = document.querySelector(".card.active");
+    if (active && active.style.left) {
+      mapCtx.strokeStyle = "#58a6ff";
+      mapCtx.strokeRect(
+        Math.round(p.ox + parseFloat(active.style.left) * p.s) - 0.5,
+        Math.round(p.oy + parseFloat(active.style.top) * p.s) - 0.5,
+        Math.max(2, Math.round(active.offsetWidth * p.s)) + 1,
+        Math.max(2, Math.round(active.offsetHeight * p.s)) + 1,
+      );
+    }
+    // The window, clipped to the frame: a window wider than the board covers the whole map.
+    const left = Math.max(0, Math.min(MAP_W, p.ox + screen.minX * p.s));
+    const top = Math.max(0, Math.min(MAP_H, p.oy + screen.minY * p.s));
+    const right = Math.max(0, Math.min(MAP_W, p.ox + screen.maxX * p.s));
+    const bottom = Math.max(0, Math.min(MAP_H, p.oy + screen.maxY * p.s));
+    // Everything the window does not cover goes dark, so the window reads at a glance.
+    mapCtx.fillStyle = "rgba(1,4,9,.68)";
+    mapCtx.fillRect(0, 0, MAP_W, top);
+    mapCtx.fillRect(0, bottom, MAP_W, MAP_H - bottom);
+    mapCtx.fillRect(0, top, left, bottom - top);
+    mapCtx.fillRect(right, top, MAP_W - right, bottom - top);
+    mapCtx.strokeStyle = "#58a6ff";
+    mapCtx.strokeRect(Math.round(left) + 0.5, Math.round(top) + 0.5, right - left, bottom - top);
+  }
+
+  /** One paint per frame at most, and none while the map is hidden. */
+  function scheduleMap() {
+    if (!mapOn || mapQueued) return;
+    mapQueued = true;
+    requestAnimationFrame(() => {
+      mapQueued = false;
+      if (mapOn) paintMap();
+    });
+  }
+
+  /** The board point under a point on the map, read from the picture that is on screen. */
+  const mapToBoard = (local) =>
+    mapShown ? { x: (local.x - mapShown.ox) / mapShown.s, y: (local.y - mapShown.oy) / mapShown.s } : null;
+
+  /** Put a board point in the middle of the screen; applyView tells the map to follow. */
+  function centreAt(point) {
+    view.x = viewport.clientWidth / 2 - point.x * view.k;
+    view.y = viewport.clientHeight / 2 - point.y * view.k;
+    applyView();
+  }
+
+  /** The card under a point on the map; the last drawn wins, so the one on top is the one hit. */
+  function mapCardAt(local) {
+    for (let index = cards.length - 1; index >= 0; index -= 1) {
+      const card = cards[index];
+      const x = mapShown.ox + parseFloat(card.style.left) * mapShown.s;
+      const y = mapShown.oy + parseFloat(card.style.top) * mapShown.s;
+      if (
+        local.x >= x &&
+        local.x <= x + Math.max(2, card.offsetWidth * mapShown.s) &&
+        local.y >= y &&
+        local.y <= y + Math.max(2, card.offsetHeight * mapShown.s)
+      ) {
+        return card;
+      }
+    }
+    return null;
+  }
+
+  // The map is a handle on the board: a press puts the window over that point, a drag keeps it under
+  // the pointer, and a press on a card goes to that card the way a rail row or a link does.
+  mapCanvas.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || !mapShown) return;
+    event.preventDefault();
+    const box = mapCanvas.getBoundingClientRect();
+    const from = { x: event.clientX - box.left, y: event.clientY - box.top };
+    const hit = mapCardAt(from);
+    const record = hit ? byId.get(hit.dataset.id) : null;
+    if (record) centerOn(record);
+    else centreAt(mapToBoard(from));
+    mapCanvas.setPointerCapture(event.pointerId);
+    let dragging = false;
+    const move = (ev) => {
+      const at = { x: ev.clientX - box.left, y: ev.clientY - box.top };
+      // A press that barely moved is the click above; past that the window follows the pointer.
+      if (!dragging && Math.abs(at.x - from.x) + Math.abs(at.y - from.y) < 3) return;
+      dragging = true;
+      centreAt(mapToBoard(at));
+    };
+    const up = () => {
+      removeEventListener("pointermove", move);
+      removeEventListener("pointerup", up);
+      removeEventListener("pointercancel", up);
+    };
+    addEventListener("pointermove", move);
+    addEventListener("pointerup", up);
+    addEventListener("pointercancel", up);
+  });
+
+  function paintMapBtn() {
+    mapBtn.setAttribute("aria-pressed", mapOn ? "true" : "false");
+    mapBtn.title = mapOn ? "hide the board overview (m)" : "show the board overview (m)";
+  }
+
+  function setMap(on) {
+    mapOn = on;
+    document.body.classList.toggle("map-on", on);
+    try {
+      localStorage.setItem(MAP_KEY, on ? "on" : "off");
+    } catch {}
+    paintMapBtn();
+    if (on) scheduleMap();
+  }
+
+  paintMapBtn();
+  document.body.classList.toggle("map-on", mapOn);
+  mapBtn.addEventListener("click", () => setMap(!mapOn));
+  // The window rect is measured against the canvas, so the map follows the box it is drawn in:
+  // a resized window and a rail that opens, closes or is dragged all land here.
+  new ResizeObserver(() => scheduleMap()).observe(viewport);
 
   document.getElementById("fit").addEventListener("click", fitAll);
   document.getElementById("tidy").addEventListener("click", tidy);
@@ -3778,8 +3970,9 @@
     button.click();
   });
 
-  // The board is drivable without a mouse: `f` frames it, `0` is real size, `n` is what is next.
-  // The composer keeps its plain letters, because a field the user is typing in is never read.
+  // The board is drivable without a mouse: `f` frames it, `0` is real size, `m` the map, `n` is
+  // what is next. The composer keeps its plain letters, because a field the user is typing in is
+  // never read.
   document.addEventListener("keydown", (event) => {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     if (typingSomewhere()) return;
@@ -3791,6 +3984,9 @@
     } else if (event.key === "0") {
       event.preventDefault();
       resetZoom();
+    } else if (event.key === "m") {
+      event.preventDefault();
+      setMap(!mapOn);
     } else if (event.key === "n") {
       event.preventDefault();
       jumpToFresh();
