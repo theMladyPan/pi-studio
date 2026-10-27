@@ -931,8 +931,23 @@
       setReplyTarget(entry);
     });
 
+    // The pencil toggles. A press while the editor is open closes it, and it has to happen on
+    // pointerdown: the press blurs the textarea, the blur commits and repaints, and by the time the
+    // click arrives the card reads as not editing, so it would open a fresh editor on the note the
+    // reader had just finished with.
+    let editPressClosed = false;
+    head.querySelector(".edit").addEventListener("pointerdown", (event) => {
+      if (!entry.editing) return;
+      event.preventDefault();
+      editPressClosed = true;
+      entry.finishEdit?.(true);
+    });
     head.querySelector(".edit").addEventListener("click", (event) => {
       event.stopPropagation();
+      if (editPressClosed) {
+        editPressClosed = false;
+        return;
+      }
       startEditing(entry);
     });
 
@@ -1627,6 +1642,8 @@
   function startEditing(entry) {
     if (entry.data.type !== "note") return;
     entry.editing = true;
+    const pencil = entry.head.querySelector(".edit");
+    if (pencil) pencil.title = "save and close";
     const area = el("textarea", "note-edit");
     area.value = entry.data.markdown || "";
     area.spellcheck = false;
@@ -1635,10 +1652,13 @@
     const finish = (commit) => {
       if (!entry.editing) return;
       entry.editing = false;
+      entry.finishEdit = null;
+      if (pencil) pencil.title = "edit this note";
       const value = area.value;
       if (commit && value !== entry.data.markdown) void saveNote(entry, value);
       else paintCard(entry, entry.data);
     };
+    entry.finishEdit = finish;
     area.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
