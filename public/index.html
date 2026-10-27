@@ -593,6 +593,13 @@
   .sticky-status.sent { color: var(--accent); }
   .sticky-status.answered { color: var(--green); }
   .sticky-reply { border-top: 1px dashed #30363d; padding-top: 8px; color: #c9d1d9; font-size: 13px; }
+  /* The tree the thread works in: one muted line, readable but never louder than the answer. */
+  .sticky-worktree { display: flex; gap: 8px; align-items: center; font: 11px var(--mono);
+    color: var(--muted); border-top: 1px dashed #21262d; padding-top: 6px; overflow: hidden; }
+  .sticky-worktree .tree-branch { color: #8b949e; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .sticky-worktree .tree-warn { color: #d29922; flex: none; }
+  .sticky-worktree.skipped { color: var(--muted); opacity: .8; }
   header .grow { flex: 1; }
   header button { font: 12px var(--mono); color: var(--muted); background: #161b22;
     border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; }

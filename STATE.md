@@ -44,12 +44,27 @@ commit's own account rather than on a check run now, the section below says so.
   exports no factory, so pi refuses to load it and the thread dies before it can answer.
 - **What a thread is told**: `--append-system-prompt` says it is one thread on a board, in which
   folder, that the human reads cards rather than a terminal log, and that a fenced svg block in a
-  note draws a picture. It is also told that other threads may be working in the same folder, so it
-  takes a git worktree before changing files — `git worktree add -b thread/<slug> .agents/<slug> HEAD`,
-  with the slug taken from the thread's title — and that `.agents/` has to be in `.gitignore` or the
-  main tree fills with the worktree, which `git status` does show. A question that only reads files
-  needs none, and a folder that is not a repository is worked in as it is. Three examples of right and
-  wrong are in the prompt, because the rule alone reads as a suggestion.
+  note draws a picture. It is also told where its own git worktree is, what branch it is on and what
+  that branch was cut from, that it commits there and reports the branch, and that no merge happens
+  without the human. Three examples of right and wrong are in the prompt. A thread whose folder is not
+  a repository is told it works in place, and why.
+- **The board makes the worktree, not the child.** On a thread's first message, before anything is
+  spawned, the daemon runs `git worktree add -b <agent>/<type>/<slug> <repo>/.agents/<agent>/<slug>
+  <base>`, spawns the child with that path as its `cwd`, and puts the branch and path on the thread's
+  card. `<agent>` is `agent-1`, `agent-2` in the order threads start, from a counter kept in the board
+  file so `clean` cannot hand a label on. `<type>` is read from the title (`fix`, `refactor`, `docs`,
+  `test`, `chore`, else `feat`) and `POST /thread {type}` overrides it. `<base>` is `dev` when the
+  repository has one, else the branch checked out. The label, not the title, is what keeps two threads
+  apart, so two threads with the same title still get different branches. This supersedes `2e6c8db`,
+  which handed `git worktree add` to the child: a rule a model may skip is a rule that half the time is
+  skipped.
+- **`clean` is the only thing that deletes a tree.** It retires the worktree of a thread that is gone
+  when `git status` finds no uncommitted change in it (ignored files do not count) and the branch has
+  no commit its base does not have, and reports the rest — a tree with work in it is named in the
+  response with the reason it was kept, never removed. A count git cannot read (a base branch that was
+  renamed or deleted) is treated as unknown, so nothing is deleted on a guess. The record of a tree
+  belongs to the board rather than to the thread, in `board.trees`, so closing a thread card or
+  clearing the board leaves the tree sweepable instead of orphaned.
 - **An answer arrives as it is written.** `message_update` from the child carries `text_delta`, and
   the daemon buffers it per content block, puts it on the turn in flight and re-broadcasts the card
   that holds that turn — the note when a note is being answered, the thread's own card otherwise — at
@@ -160,9 +175,12 @@ commit's own account rather than on a check run now, the section below says so.
 - **Layout**: `POST /layout {cardId, rect, mini}` is saved with the board and restored on open.
 - **Clean and new**: `POST /clean` forgets activity rows whose thread is gone or dead, the dead threads
   and their children, and the ownership their cards still pointed at, so a note left behind starts a
-  fresh child when it is asked again. Nothing that can answer is touched. `POST /new` empties the board
-  in the same workspace and keeps its settings; the button turns into `sure?` for four seconds first.
-  Both answer with a snapshot, which the client already replays, so every open tab rebuilds.
+  fresh child when it is asked again. Nothing that can answer is touched. It also sweeps the worktrees
+  of threads that are gone — see the worktree bullets — and answers `{removed, rows, trees}`, where a
+  kept tree carries the reason it was kept. `POST /new` empties the board in the same workspace and
+  keeps its settings; the button turns into `sure?` for four seconds first. The worktree records stay
+  in the board file, so a tree left behind by `new` can still be swept by a later `clean`. Both answer
+  with a snapshot, which the client already replays, so every open tab rebuilds.
 - **Usage is asked for, then shown twice.** A pi child keeps its own numbers, so at every settle the
   daemon sends `{"type":"get_session_stats"}` and holds the child's stdin open until the answer
   arrives — `stdin.end()` before it threw the last run's cost away. `thread.stats` keeps input,
@@ -269,10 +287,23 @@ text, place and fold after a daemon restart, closed through `POST /close`, and a
 note started a thread named after it. Editing a card id that is not a note answers 409. Nothing here
 has been checked in a browser.
 
-How several threads are kept off each other's tree: a child asked to create two documents in a git
-workspace ran `git worktree add -b thread/draft-docs .agents/draft-docs HEAD`, wrote both files inside
-it, left the main tree clean, and reported the path it used. The daemon does not create or remove a
-worktree; the child does, on being told to.
+Worktrees, against daemons on throwaway `HOME`s whose `~/.pi/agent` is symlinked so pi keeps its
+credentials, in scratch repositories: a thread's first message made `.agents/agent-1/fix-the-parser-bug`
+on branch `agent-1/fix/fix-the-parser-bug`, and the child answered `pwd` with that path, so the tree is
+where it works; a second thread in the same repository got `agent-2/refactor/refactor-the-loader`; the
+base was `dev` where the repository had one and `main` where it did not; `ignored` came back true in a
+repository whose `.gitignore` listed `.agents/` and false in one that did not, and the false case put a
+line about it in the child's prompt; a folder that is not a repository got `{skipped: "this folder is
+not a git repository"}` on the thread and on its card, and the child still ran there. `clean` removed
+three empty trees and their branches, kept a fourth whose tree had one commit the base did not have,
+and said so: `1 commit(s) not in dev`. A tree whose thread was closed with `POST /close` was swept by
+the next `clean`, and a tree left behind by `POST /new` was still reported by a later `clean`, which is
+what the board's own record of a tree is for. With the base branch deleted, `clean` deleted nothing and
+answered `could not read dev..agent-1/...`, so an unreadable count is not taken for a zero. The prompt
+the child actually received was read out of its session file, which is how the wording above is known
+rather than assumed. `board_source` resolving a relative path against the asking thread's tree is
+reasoning from the code: no run has asked for a file from inside a tree yet, and none of this has been
+seen in a browser.
 
 Streaming, against real children on a throwaway `HOME` whose `~/.pi/agent` is symlinked so pi keeps
 its credentials: a 250-word answer reached the browser as 8 frames growing 216 → 1432 characters,
@@ -311,10 +342,11 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
 
 - **Two verbs for tidying.** `clean` forgets the activity of threads that are gone or dead, the dead
   threads themselves with their children, and the ownership their cards still pointed at, so a note
-  left behind starts a fresh child when asked again. `new` empties the board and keeps the workspace
-  and its settings; because it throws work away, the button turns into `sure?` and the second press
-  inside four seconds is the answer. Both answer by sending a snapshot, which every open tab already
-  knows how to replay.
+  left behind starts a fresh child when asked again. It also removes the worktree and branch of a gone
+  thread when the tree has no uncommitted change and no commit the base does not have, and names the
+  trees it kept and why. `new` empties the board and keeps the workspace and its settings; because it
+  throws work away, the button turns into `sure?` and the second press inside four seconds is the
+  answer. Both answer by sending a snapshot, which every open tab already knows how to replay.
 - **The selection decides the wheel and the dimming.** A selected card is the reading position: the
   wheel scrolls that card wherever the pointer is, and cards of other threads drop to 70% opacity
   (`board.config.dimOthers`). With nothing selected the wheel pans the board and every card is equal.
@@ -341,5 +373,6 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
 ## Rules
 
 - `public/` is the client; do not add a second UI beside it.
+- `.agents/` is where worktrees and scratch plans live, and it is gitignored. One name, one folder.
 - No subagent starts a browser or sends signals to processes; verification is curl and `node --check`.
 - One slice per commit, conventional commits, review before commit.

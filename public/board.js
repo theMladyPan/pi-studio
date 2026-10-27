@@ -736,7 +736,31 @@
       reply.appendChild(renderMarkdown(data.reply));
       holder.appendChild(reply);
     }
+    // The tree this thread works in, so its branch can be found without reading what the agent was
+    // told. A thread with no tree says why: the folder is not a repository, or git refused.
+    if (data.worktree) holder.appendChild(worktreeLine(data.worktree));
     return holder;
+  }
+
+  /** The branch a thread commits on, and the path its work sits at, in one muted line. */
+  function worktreeLine(tree) {
+    const line = el("div", "sticky-worktree");
+    if (tree.skipped) {
+      line.textContent = `no worktree: ${tree.skipped}`;
+      line.classList.add("skipped");
+      return line;
+    }
+    const branch = el("span", "tree-branch");
+    branch.textContent = tree.branch ?? "no branch";
+    line.appendChild(branch);
+    if (tree.ignored === false) {
+      const warn = el("span", "tree-warn");
+      warn.textContent = ".agents/ not ignored";
+      warn.title = `${tree.path}\n.gitignore does not cover .agents/, so this tree shows in git status`;
+      line.appendChild(warn);
+    }
+    line.title = tree.path ? `${tree.path}\ncut from ${tree.base}` : "";
+    return line;
   }
 
   /**
@@ -1361,6 +1385,7 @@
   function cardChanged(before, after) {
     const fields = ["title", "markdown", "details", "text", "question", "reply", "status"];
     if (fields.some((field) => before[field] !== after[field])) return true;
+    if (JSON.stringify(before.worktree ?? null) !== JSON.stringify(after.worktree ?? null)) return true;
     // A follow-up's answer settles into the turn it was asked with, so the thread changes without
     // gaining a turn: compare what each turn draws, not only how many there are.
     const was = before.turns || [];
@@ -1395,6 +1420,7 @@
    * a second.
    */
   function bodySame(before, after) {
+    if (JSON.stringify(before.worktree ?? null) !== JSON.stringify(after.worktree ?? null)) return false;
     return ["type", "markdown", "text", "path", "content", "line", "question", "status", "answer", "details"].every(
       (field) => before[field] === after[field],
     );
@@ -2949,7 +2975,22 @@
   cleanBtn.addEventListener("click", async () => {
     const result = await postBoardAction("clean");
     if (!result) return;
-    hintLine(result.removed.length ? `cleaned ${result.removed.length} dead thread${result.removed.length > 1 ? "s" : ""} and ${result.rows} rows` : "nothing to clean");
+    // A tree the sweep would not touch is the one thing here that needs saying: it holds work, and
+    // the human is the only one who can decide what happens to it.
+    const kept = (result.trees ?? []).filter((tree) => tree.kept);
+    const swept = (result.trees ?? []).filter((tree) => tree.removed).length;
+    if (kept.length) {
+      const sweptNote = result.removed.length ? `${result.removed.length} dead thread${result.removed.length > 1 ? "s" : ""}, ` : "";
+      hintLine(`${sweptNote}kept ${kept.length} worktree${kept.length > 1 ? "s" : ""}: ${kept.map((tree) => `${tree.branch} (${tree.kept})`).join(", ")}`);
+      return;
+    }
+    hintLine(
+      result.removed.length
+        ? `cleaned ${result.removed.length} dead thread${result.removed.length > 1 ? "s" : ""}, ${swept} worktree${swept === 1 ? "" : "s"} and ${result.rows} rows`
+        : swept
+          ? `removed ${swept} unused worktree${swept > 1 ? "s" : ""}`
+          : "nothing to clean",
+    );
   });
 
   newBtn.addEventListener("click", async () => {

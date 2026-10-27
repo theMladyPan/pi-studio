@@ -11,7 +11,7 @@
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -399,6 +399,8 @@ function saveBoard(board) {
 		savedAt: Date.now(),
 		activity: board.activity.slice(-MAX_ACTIVITY),
 		config: activeConfig(board),
+		...(Number.isInteger(board.agentSeq) ? { agentSeq: board.agentSeq } : {}),
+		trees: board.trees,
 		threads: [...board.threads.values()].map((thread) => ({
 			id: thread.id,
 			title: thread.title,
@@ -413,6 +415,9 @@ function saveBoard(board) {
 			...(thread.mini ? { mini: true } : {}),
 			...(thread.threadRoot ? { threadRoot: thread.threadRoot } : {}),
 			...(thread.hidden ? { hidden: true } : {}),
+			...(thread.agent ? { agent: thread.agent } : {}),
+			...(thread.type ? { type: thread.type } : {}),
+			...(thread.worktree ? { worktree: thread.worktree } : {}),
 		})),
 		cards: [...board.cards.values()].map((card) => ({
 			id: card.id,
@@ -490,6 +495,12 @@ function restoredThread(raw, folder) {
 		...(rect ? { rect } : {}),
 		...(raw.mini ? { mini: true } : {}),
 		...(typeof raw.threadRoot === "string" && raw.threadRoot ? { threadRoot: raw.threadRoot } : {}),
+		...(typeof raw.agent === "string" && raw.agent ? { agent: raw.agent } : {}),
+		...(typeof raw.type === "string" && raw.type ? { type: raw.type } : {}),
+		// The tree is not made again after a restart: it is on disk, and its branch is where the work is.
+		...(raw.worktree && typeof raw.worktree === "object" && typeof raw.worktree.path === "string"
+			? { worktree: raw.worktree }
+			: {}),
 		// Boards saved before this was a plain flag said `behind: <cardId>`; the id is not needed now that
 		// ownership decides which cards a thread answers for.
 		...(raw.hidden === true || (typeof raw.behind === "string" && raw.behind) ? { hidden: true } : {}),
@@ -555,6 +566,7 @@ function boardFor(workspace) {
 		activity: [],
 		children: new Map(),
 		clients: new Set(),
+		trees: [],
 		saveTimer: null,
 	};
 	const saved = readJsonFile(boardFile(workspace), null);
@@ -562,6 +574,17 @@ function boardFor(workspace) {
 	// before this was called `config` kept the same three fields under `defaults`.
 	const born = saved?.config && typeof saved.config === "object" ? saved.config : saved?.defaults;
 	board.config = { ...homeDefaults, ...(born && typeof born === "object" ? born : {}) };
+	if (Number.isInteger(saved?.agentSeq) && saved.agentSeq > 0) board.agentSeq = saved.agentSeq;
+	if (Array.isArray(saved?.trees)) {
+		board.trees = saved.trees.filter(
+			(tree) =>
+				tree &&
+				typeof tree.path === "string" &&
+				typeof tree.branch === "string" &&
+				typeof tree.base === "string" &&
+				tree.base.length > 0,
+		);
+	}
 	if (saved && saved.version === STATE_VERSION && Array.isArray(saved.threads)) {
 		for (const raw of saved.threads.slice(-MAX_THREADS)) {
 			const thread = restoredThread(raw, workspace.folder);
@@ -580,6 +603,16 @@ function boardFor(workspace) {
 		// here rather than let a card quietly re-fork because a thread id in it means nothing.
 		for (const thread of [...board.threads.values()]) {
 			if (thread.hidden && !ownedCards(board, thread.id).length) board.threads.delete(thread.id);
+		}
+		// A label is never handed out twice: the counter starts past every thread the file remembers.
+		for (const thread of board.threads.values()) {
+			const number = Number(String(thread.agent ?? "").replace(/^agent-/, ""));
+			if (Number.isInteger(number) && number >= (board.agentSeq ?? 1)) board.agentSeq = number + 1;
+		}
+		// The tree is the board's record, so a thread points at that object rather than a copy of it.
+		for (const thread of board.threads.values()) {
+			const held = thread.worktree?.path ? board.trees.find((tree) => tree.path === thread.worktree.path) : null;
+			if (held) thread.worktree = held;
 		}
 		for (const card of board.cards.values()) {
 			if (card.ownerThread && !board.threads.has(card.ownerThread)) delete card.ownerThread;
@@ -635,6 +668,203 @@ function gitFacts(folder) {
 	if (!branch) return null;
 	const dirty = run(["status", "--porcelain"]);
 	return { branch, modified: dirty ? dirty.split("\n").length : 0 };
+}
+
+// ---------- worktrees ------------------------------------------------------
+
+/** Where a board keeps the trees it makes, inside the repository the workspace is. */
+const AGENTS_DIR = ".agents";
+
+/** The kinds of branch a thread can be given, and the words in a title that pick one. */
+const WORK_TYPES = [
+	["fix", /\b(fix|fixed|bug|broken|breaks|repair|wrong|fails?|failing|regression)\b/],
+	["refactor", /\b(refactor|rename|extract|split|move|tidy|simplif(y|ies)|clean ?up)\b/],
+	["docs", /\b(docs?|readme|document|documentation|comment|comments)\b/],
+	["test", /\b(tests?|spec|specs|coverage)\b/],
+	["chore", /\b(chore|bump|upgrade|deps?|dependencies|lint)\b/],
+];
+
+/** One git command, short enough to wait for while a message is being sent. */
+function gitIn(folder, args, timeout = 5000) {
+	try {
+		const out = spawnSync("git", ["-C", folder, ...args], { encoding: "utf8", timeout });
+		return { ok: out.status === 0, out: (out.stdout ?? "").trim(), err: (out.stderr ?? "").trim() };
+	} catch (error) {
+		return { ok: false, out: "", err: error.message };
+	}
+}
+
+/** The repository a folder belongs to; empty when it is not one. */
+function repoOf(folder) {
+	if (!folder || !existsSync(folder)) return "";
+	const found = gitIn(folder, ["rev-parse", "--show-toplevel"]);
+	return found.ok && found.out ? found.out : "";
+}
+
+/** What a new branch is cut from: `dev` when the repository has one, else the branch checked out. */
+function baseRef(repo) {
+	if (gitIn(repo, ["rev-parse", "--verify", "--quiet", "refs/heads/dev"]).ok) return "dev";
+	const head = gitIn(repo, ["rev-parse", "--abbrev-ref", "HEAD"]);
+	return head.ok && head.out && head.out !== "HEAD" ? head.out : "";
+}
+
+/**
+ * The main checkout a linked worktree belongs to: `git rev-parse --show-toplevel` inside a worktree
+ * answers with the tree itself, so removal and branch deletion have to be run from the other one.
+ */
+function mainRepoOf(path) {
+	if (!path || !existsSync(path)) return "";
+	const common = gitIn(path, ["rev-parse", "--git-common-dir"]);
+	if (!common.ok || !common.out) return "";
+	return dirname(resolve(path, common.out));
+}
+
+/** The kind of change a title reads like, so a branch says what it carries. */
+function workType(title, wanted) {
+	if (WORK_TYPES.some(([type]) => type === wanted)) return wanted;
+	const words = String(title ?? "").toLowerCase();
+	return WORK_TYPES.find(([, pattern]) => pattern.test(words))?.[0] ?? "feat";
+}
+
+/** A title as a branch and folder segment: lowercase words with hyphens between them. */
+function slugOf(text) {
+	return (
+		String(text ?? "")
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, "-")
+			.replace(/^-|-$/g, "")
+			.slice(0, 40) || "work"
+	);
+}
+
+/**
+ * The label a thread takes its branch and folder from: `agent-1`, `agent-2`, in the order threads
+ * start. A counter rather than a place on the board, because `clean` frees places and two threads
+ * must never be handed the same branch.
+ */
+function agentLabel(board) {
+	const next =
+		Number.isInteger(board.agentSeq) && board.agentSeq > 0 ? board.agentSeq : board.threads.size + 1;
+	board.agentSeq = next + 1;
+	return `agent-${next}`;
+}
+
+/**
+ * The tree a thread works in, made the first time it is asked to do something. A board runs several
+ * threads against one folder; a tree of its own is what keeps two of them out of the same file, and
+ * what the card can point at when the human wants to see the work.
+ */
+function ensureWorktree(board, thread) {
+	if (thread.worktree) return thread.worktree;
+	const repo = repoOf(thread.folder ?? board.folder);
+	if (!repo) {
+		thread.worktree = { skipped: "this folder is not a git repository" };
+		return thread.worktree;
+	}
+	const base = baseRef(repo);
+	if (!base) {
+		thread.worktree = { skipped: "the repository has no branch to cut from" };
+		return thread.worktree;
+	}
+	const agent = thread.agent ?? agentLabel(board);
+	const type = workType(thread.title, thread.type);
+	const slug = slugOf(thread.title);
+	const taken = (name) =>
+		existsSync(join(repo, AGENTS_DIR, agent, name)) ||
+		gitIn(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${agent}/${type}/${name}`]).ok;
+	// A name an earlier thread still holds is not this thread's to write in, so the newer one is the
+	// one that takes a suffix.
+	const name = taken(slug) ? `${slug}-${thread.id.slice(0, 4)}` : slug;
+	const branch = `${agent}/${type}/${name}`;
+	const path = join(repo, AGENTS_DIR, agent, name);
+	const added = gitIn(repo, ["worktree", "add", "-b", branch, path, base], 10_000);
+	if (!added.ok) {
+		thread.worktree = { skipped: `git worktree add failed: ${added.err.split("\n")[0] || "no reason given"}` };
+		return thread.worktree;
+	}
+	const tree = {
+		path,
+		branch,
+		base,
+		agent,
+		repo,
+		// A tree git can see is a tree in `git status` of the main checkout, which is what the human
+		// reads. Said on the card rather than fixed behind their back.
+		ignored: gitIn(repo, ["check-ignore", "--quiet", join(AGENTS_DIR, agent, name)]).ok,
+		thread: thread.id,
+		title: thread.title,
+		at: Date.now(),
+	};
+	// The board keeps the record, not only the thread: a thread that is closed or cleared would
+	// otherwise leave a tree on disk that nothing knows about, and no later `clean` could retire it.
+	board.trees.push(tree);
+	thread.worktree = tree;
+	return tree;
+}
+
+/** Where a thread works: its own tree while that is still on disk, else the workspace folder. */
+function workdirOf(board, thread) {
+	const tree = thread.worktree;
+	return tree?.path && existsSync(tree.path) ? tree.path : board.folder;
+}
+
+/**
+ * Let a tree go, but only one with nothing worth keeping: uncommitted changes or a commit the base
+ * does not have are reported, never deleted. `clean` is the only caller, so a tree outlives its thread
+ * until the human asks for the sweep.
+ */
+function retireWorktree(board, tree) {
+	if (!tree?.path) return null;
+	const repo = (existsSync(tree.path) ? mainRepoOf(tree.path) : "") || tree.repo || repoOf(board.folder);
+	if (!repo) return { path: tree.path, branch: tree.branch, kept: "not a repository any more" };
+	if (existsSync(tree.path)) {
+		const dirty = gitIn(tree.path, ["status", "--porcelain"]);
+		if (!dirty.ok) return { path: tree.path, branch: tree.branch, kept: "git could not read it" };
+		if (dirty.out) {
+			return { path: tree.path, branch: tree.branch, kept: `${dirty.out.split("\n").length} uncommitted change(s)` };
+		}
+	} else {
+		// A tree somebody deleted by hand is already gone; its registration in .git/worktrees is not.
+		gitIn(repo, ["worktree", "prune"]);
+	}
+	// A branch deleted by hand takes the tree with it in every real case, so the record has nothing left
+	// to protect. Without this check the unreadable count below would report a phantom tree for ever.
+	if (!gitIn(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`]).ok) {
+		const gone = board.trees.findIndex((candidate) => candidate.path === tree.path);
+		if (gone !== -1) board.trees.splice(gone, 1);
+		return { path: tree.path, branch: tree.branch, removed: true, note: "the branch is already gone" };
+	}
+	// The branch is what holds the work, and a count git cannot read is not a zero: a renamed or
+	// deleted base made `rev-list` fail here once and the branch was deleted with commits on it.
+	const ahead = gitIn(repo, ["rev-list", "--count", `${tree.base}..${tree.branch}`]);
+	if (!ahead.ok) {
+		return { path: tree.path, branch: tree.branch, kept: `could not read ${tree.base}..${tree.branch}` };
+	}
+	const commits = Number(ahead.out) || 0;
+	if (commits > 0) return { path: tree.path, branch: tree.branch, kept: `${commits} commit(s) not in ${tree.base}` };
+	if (existsSync(tree.path)) {
+		const removed = gitIn(repo, ["worktree", "remove", tree.path], 10_000);
+		if (!removed.ok) {
+			return { path: tree.path, branch: tree.branch, kept: removed.err.split("\n")[0] || "could not be removed" };
+		}
+		// `.agents/agent-1` is one thread's folder and goes with it; `rmdir` refuses a folder that
+		// still holds another thread's tree, which is the answer wanted.
+		try {
+			rmdirSync(dirname(tree.path));
+		} catch {
+			// Something else lives there, or it is already gone.
+		}
+	}
+	// Nothing is ahead of the base, so the branch holds no work of its own.
+	const branchGone = gitIn(repo, ["branch", "-D", tree.branch]);
+	const at = board.trees.findIndex((candidate) => candidate.path === tree.path);
+	if (at !== -1) board.trees.splice(at, 1);
+	return {
+		path: tree.path,
+		branch: tree.branch,
+		removed: true,
+		...(branchGone.ok ? {} : { branchKept: branchGone.err.split("\n")[0] || "git refused" }),
+	};
 }
 
 /** How much of the app's own state a workspace holds: its sessions on disk. */
@@ -723,6 +953,8 @@ function cardFor(thread, board = null) {
 	card.model = thread.model;
 	if (thread.thinking) card.thinking = thread.thinking;
 	if (thread.stats) card.stats = thread.stats;
+	// Where the thread's work is, so the human can find the tree without reading its prompt.
+	if (thread.worktree) card.worktree = thread.worktree;
 	return card;
 }
 
@@ -856,12 +1088,20 @@ function liveThreadIds(board) {
 function cleanBoard(board) {
 	const alive = liveThreadIds(board);
 	const removed = [];
+	const trees = [];
 	for (const thread of [...board.threads.values()]) {
 		if (thread.status !== "dead") continue;
 		removed.push(thread.id);
 		board.threads.delete(thread.id);
 		board.children.get(thread.id)?.kill("SIGKILL");
 		board.children.delete(thread.id);
+	}
+	// A tree whose thread is gone is retired only when it holds nothing unmerged; the rest is reported.
+	// The record is the board's, not the thread's, so a closed or cleared thread is swept too.
+	for (const tree of [...board.trees]) {
+		if (tree.thread && board.threads.has(tree.thread)) continue;
+		const retired = retireWorktree(board, tree);
+		if (retired) trees.push(retired);
 	}
 	for (const card of board.cards.values()) {
 		if (card.ownerThread && !alive.has(card.ownerThread)) delete card.ownerThread;
@@ -872,7 +1112,7 @@ function cleanBoard(board) {
 		return id ? alive.has(id) : false;
 	});
 	scheduleSave(board);
-	return { removed, rows: before - board.activity.length };
+	return { removed, rows: before - board.activity.length, trees };
 }
 
 /** New: the same workspace and the same settings, with nothing on the board. */
@@ -1050,33 +1290,49 @@ function lastLine(tail) {
 }
 
 /**
- * What a thread is told about changing files. Boards run several threads on one folder at once, so a
- * thread that edits in place fights the others; a worktree gives it a tree of its own. The examples
- * are here because the rule alone reads like a suggestion.
+ * What a thread is told about the folder it works in. The board makes the tree before the child is
+ * spawned, so this is a fact to report, not an instruction to obey: `2e6c8db` asked the child to run
+ * `git worktree add` itself, and a rule a model may skip is a rule that half the time is skipped.
  */
 function worktreePrompt(board, thread) {
-	const slug = thread.title
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-|-$/g, "")
-		.slice(0, 40) || "work";
-	return [
-		`Other threads may be working in ${board.folder} at the same time. Take a git worktree before you change files.`,
-		`  git worktree add -b thread/${slug} .agents/${slug} HEAD`,
-		"Then work inside it and say the path when you report. `git worktree list` shows what is taken; pick a slug from the job, not from the clock.",
-		"Keep the folder out of the main tree: `.agents/` has to be in `.gitignore`, or `git status` there fills up with your worktree.",
-		"A question that only reads files needs no worktree. If the folder is not a git repository, or the change is one line nothing else touches, work in place and say so.",
+	const tree = thread.worktree;
+	const lines = [];
+	if (tree?.path) {
+		lines.push(
+			`Other threads may be working in ${board.folder} at the same time. The board gives each thread its own git worktree, so a change of yours cannot collide with one of theirs.`,
+			`Your worktree is ${tree.path}, on branch ${tree.branch}, cut from ${tree.base}. Work inside it.`,
+			`Commit on ${tree.branch} and report the branch and the path when the work is ready. Nobody merges for you: cutting a branch and merging one are the human's decisions.`,
+		);
+		if (!existsSync(tree.path)) {
+			lines.push(
+				`That tree is no longer on disk, so work in ${board.folder} and say so when you report.`,
+			);
+		}
+		if (tree.ignored === false) {
+			lines.push(
+				`\`.agents/\` is not in that repository's .gitignore, so the tree shows up as an untracked folder in the main checkout. Say so when you report; do not edit .gitignore unless the job asks for it.`,
+			);
+		}
+	} else {
+		lines.push(
+			`No worktree was made: ${tree?.skipped ?? "the board has none for this thread"}. Work in ${board.folder} itself, and say so if that is a problem.`,
+		);
+	}
+	lines.push(
 		"Examples of right and wrong:",
-		`- right: ${board.folder} is a repo and the job is to rewrite the parser: \`git worktree add -b thread/${slug} .agents/${slug} HEAD\`, then edit files under .agents/${slug}/.`,
-		"- right: \"how does the router pick a board?\" is answered with reads, and creates nothing.",
-		"- wrong: editing parser.ts in the folder itself while three other threads have the same tree open.",
-	].join("\n");
+		`- right: the job is to rewrite the parser in a repository: edit files under ${tree?.path ?? `${board.folder}/${AGENTS_DIR}/<your tree>`}, then commit on its branch.`,
+		`- right: "how does the router pick a board?" is answered with reads. The tree exists and stays empty.`,
+		`- wrong: editing parser.ts in ${board.folder} itself, or merging your branch into ${tree?.base ?? "the base branch"}, because another thread may have the same files open.`,
+	);
+	return lines.join("\n");
 }
 
 /** The thread's own card, and the board around it, said plainly enough that an agent uses it. */
 function boardPrompt(board, thread) {
+	const workdir = workdirOf(board, thread);
 	return [
-		`You are thread "${thread.title}" on a board, working in the folder ${board.folder}.`,
+		`You are thread "${thread.title}" on a board, working in the folder ${workdir}.`,
+		`The workspace this board opened is ${board.folder}, which is where the rest of the board reads files from.`,
 		"The human reads cards on that board, not a terminal log.",
 		"Your answer is shown inside your own card, so write it as prose for a person, and keep long material out of it.",
 		"board_note puts a note on the board: use it for a diagram (a fenced svg block draws a picture), a table, a file tree, a todo list you will keep revising under the same key, or a finding worth keeping visible.",
@@ -1119,7 +1375,8 @@ function ensureChild(board, thread) {
 	if (existing && existing.exitCode === null && existing.stdin?.writable) return existing;
 	const cli = piCli();
 	const child = spawn(cli.command, [...cli.args, ...childArgv(board, thread)], {
-		cwd: board.folder,
+		// A thread with a tree works in it: the child's whole notion of `here` is its own branch.
+		cwd: workdirOf(board, thread),
 		shell: false,
 		stdio: ["pipe", "pipe", "pipe"],
 		// The bridge reads these: where the board is, what it may write to, and whose card it is.
@@ -1177,6 +1434,9 @@ function ensureChild(board, thread) {
 
 /** One prompt, either a new question or what was waiting behind the run in flight. */
 function prompt(board, thread, text, target = null) {
+	// The tree is made here, before anything is spawned: this is the first moment the thread is going
+	// to do something, and the child's working folder is decided by it.
+	ensureWorktree(board, thread);
 	// A question written on a card is answered on that card, and the run in flight remembers which
 	// one, so the reply lands where the human typed rather than on the thread's own card.
 	thread.answering = target;
@@ -1625,6 +1885,9 @@ async function onThread(req, res, board) {
 		title: typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 80) : `thread ${board.threads.size + 1}`,
 		sessionId: null,
 		status: "idle",
+		// The label its branch and folder are named after, taken now so a later rename cannot move them.
+		agent: agentLabel(board),
+		...(WORK_TYPES.some(([type]) => type === body.type) ? { type: body.type } : {}),
 		...runtimeDefaults(board),
 		...(typeof body.model === "string" && body.model ? { model: body.model } : {}),
 		at: Date.now(),
@@ -1725,6 +1988,9 @@ function anchorOf(board, threadId) {
  */
 /** The child goes with its last card. Nothing can reach a thread the board cannot draw. */
 function closeThread(board, thread) {
+	// The child is ended, not merely asked to leave: it is working in a tree, and a tree whose thread
+	// is gone is what `clean` may sweep. A run still writing there would write into nothing.
+	killChild(board, thread);
 	try {
 		board.children.get(thread.id)?.stdin?.end();
 	} catch {
@@ -1872,16 +2138,20 @@ async function onSource(req, res, board) {
 	if (!body) return;
 	const wanted = field(body.path, 400);
 	if (!wanted) return void fail(res, 400, "path is required");
+	// A child works in its own tree, and what it asks to show is relative to where it stands. The card
+	// is still the board's, so the path is resolved and named against that thread's folder.
+	const owner = board.threads.get(field(body.threadRoot, 100));
+	const folder = owner ? workdirOf(board, owner) : board.folder;
 	let content;
 	try {
-		content = readInsideWorkspace(board.folder, wanted);
+		content = readInsideWorkspace(folder, wanted);
 	} catch (error) {
 		return void fail(res, 409, error.message);
 	}
 	const key = field(body.key, 400) || wanted;
 	// The head says which file first, so a card is recognisable without opening it, then what the caller
 	// called the place in it.
-	const named = relative(board.folder, resolve(board.folder, wanted)) || basename(wanted) || wanted;
+	const named = relative(folder, resolve(folder, wanted)) || basename(wanted) || wanted;
 	const label = field(body.title, 200);
 	const title = label ? `${named} - ${label}` : named;
 	const line = Number.isFinite(body.line) && body.line > 0 ? Math.round(body.line) : undefined;
