@@ -1355,7 +1355,7 @@ function worktreePrompt(board, thread) {
 		lines.push(
 			`Other threads may be working in ${board.folder} at the same time. The board gives each thread its own git worktree, so a change of yours cannot collide with one of theirs.`,
 			`Your worktree is ${tree.path}, on branch ${tree.branch}, cut from ${tree.base}. Work inside it.`,
-			`Commit on ${tree.branch} and report the branch and the path when the work is ready. Nobody merges for you: cutting a branch and merging one are the human's decisions.`,
+			`Commit on ${tree.branch}. If files changed, name the branch and the path in one clause; nothing more. Nobody merges for you: cutting a branch and merging one are the human's decisions.`,
 		);
 		if (!existsSync(tree.path)) {
 			lines.push(
@@ -1381,16 +1381,29 @@ function worktreePrompt(board, thread) {
 	return lines.join("\n");
 }
 
-/** The thread's own card, and the board around it, said plainly enough that an agent uses it. */
+/**
+ * The thread's own card, and the board around it, said plainly enough that an agent uses it.
+ *
+ * The board is the product, and the chat is only the wire under it: the answer is a pointer to the
+ * cards, so a thread that writes its findings in prose has done the work where nobody reads it.
+ */
 function boardPrompt(board, thread) {
 	const workdir = workdirOf(board, thread);
 	return [
 		`You are thread "${thread.title}" on a board, working in the folder ${workdir}.`,
 		`The workspace this board opened is ${board.folder}, which is where the rest of the board reads files from.`,
-		"The human reads cards on that board, not a terminal log.",
-		"Your answer is shown inside your own card, so write it as prose for a person, and keep long material out of it.",
-		"board_note puts a note on the board: use it for a diagram (a fenced svg block draws a picture), a table, a file tree, a todo list you will keep revising under the same key, or a finding worth keeping visible.",
-		"board_source shows the human a real file from this workspace, scrolled to a line, instead of quoting it at them.",
+		"The human reads cards on that board, not a chat log or a terminal. Put the work on cards.",
+		"What you say in the chat is a pointer to those cards, one or two lines: like \"I read the request; the shapes are in [[errors-by-hour]] and the plan in [[fix-plan]]\". A bare [[key]] links the card, and the human clicks it.",
+		"A [[key]] only works if the card carries that exact key, so pass a short key to board_note every time and name the card by it.",
+		"Do not narrate what you are about to do, and do not add a summary under the pointer. \"I will read both files first\" and \"short version: ...\" are both the report the cards were meant to replace.",
+		"Examples:",
+		'- right: "Two failing paths, both in the retry loop: [[retry-trace]] and the todo in [[retry-fix]]."',
+		'- right: "The numbers did not support it, so the card [[load-shape]] is a corrected chart and one line of why."',
+		'- wrong: a paragraph, or a list, restating what a card already says. That belongs on the card, not beside it.',
+		"One card holds one kind of thing: a chart with its caption, a piece of markdown analysis, a diagram, a checklist, a tree, a snippet of source. A chart and a todo on the same card makes both harder to read, so split them.",
+		"Look at the board before you write. If a card already covers the subject, revise it by passing its key again rather than adding a near-duplicate; open a new card for a new artefact.",
+		"Prefer showing to telling: only fenced ```svg blocks and markdown tables are drawn, so a chart or a diagram is svg and never mermaid. board_note writes the card; board_source opens a real file, scrolled to a line, instead of quoting it.",
+		"Detail on request: the human can ask you to expand anything in the chat, so do not spend the answer on a summary of what the board already shows.",
 		worktreePrompt(board, thread),
 	].join("\n");
 }
@@ -1683,6 +1696,7 @@ function handleChildLine(board, thread, line) {
 			status: "running",
 			startedAt: Date.now(),
 			thread: threadRef(thread),
+			args: event.args,
 		});
 		return;
 	}
@@ -1691,6 +1705,7 @@ function handleChildLine(board, thread, line) {
 			status: event.isError ? "error" : "ok",
 			durationMs: typeof event.durationMs === "number" ? event.durationMs : undefined,
 			summary: firstLine(event.result),
+			output: typeof event.result === "string" ? event.result : JSON.stringify(event.result, null, 2),
 		});
 		return;
 	}
@@ -1699,6 +1714,11 @@ function handleChildLine(board, thread, line) {
 		const text = (Array.isArray(message.content) ? message.content : [])
 			.filter((block) => block?.type === "text")
 			.map((block) => String(block.text ?? ""))
+			.join("")
+			.trim();
+		const thinking = (Array.isArray(message.content) ? message.content : [])
+			.filter((block) => block?.type === "thinking")
+			.map((block) => String(block.thinking ?? ""))
 			.join("")
 			.trim();
 		// When the run was answering for a card, only that card may receive the reply. Falling back to
@@ -1745,6 +1765,7 @@ function handleChildLine(board, thread, line) {
 			status: "ok",
 			startedAt: Date.now(),
 			text: text.slice(0, 4000),
+			...(thinking ? { thinking: thinking.slice(0, 4000) } : {}),
 			thread: threadRef(thread),
 		});
 		if (turn && asked) updateCard(board, asked);
@@ -2799,8 +2820,20 @@ const server = createServer((req, res) => {
 			onBrowse(url, res);
 			return;
 		}
-		// The rail's detail panel has no payloads here yet, so it says so instead of hanging.
-		if (req.method === "GET" && url.pathname.startsWith("/activity/")) return void fail(res, 404, "no detail kept for this row");
+		// The row itself is the payload: a tool row keeps its arguments and its output, a reply keeps
+		// the thinking that led to it, and the panel shows whichever fields it finds.
+		if (req.method === "GET" && url.pathname.startsWith("/activity/")) {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			const id = decodeURIComponent(url.pathname.slice("/activity/".length));
+			const row = board.activity.find((candidate) => candidate.id === id);
+			if (!row) {
+				fail(res, 404, "no detail kept for this row");
+				return;
+			}
+			answer(res, 200, row);
+			return;
+		}
 
 		// ----- board -----
 		// What the composer's pickers offer: every model this machine can run, and the levels pi names.

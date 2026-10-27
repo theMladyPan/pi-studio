@@ -43,8 +43,11 @@ commit's own account rather than on a check run now, the section below says so.
   through a 2FA gateway. Test scripts in that folder are skipped too — `test-delegate-retry.mts`
   exports no factory, so pi refuses to load it and the thread dies before it can answer.
 - **What a thread is told**: `--append-system-prompt` says it is one thread on a board, in which
-  folder, that the human reads cards rather than a terminal log, and that a fenced svg block in a
-  note draws a picture. It is also told where its own git worktree is, what branch it is on and what
+  folder, that the human reads cards rather than a chat log, and that its chat answer is a pointer of a
+  line or two naming the cards it wrote as `[[key]]`. It is told that one card holds one kind of thing
+  — a chart, an analysis, a diagram, a checklist — that it reads the board before writing so a card on
+  the same subject is revised under its key rather than duplicated, and that only a fenced svg block
+  draws a picture. It is also told where its own git worktree is, what branch it is on and what
   that branch was cut from, that it commits there and reports the branch, and that no merge happens
   without the human. Three examples of right and wrong are in the prompt. A thread whose folder is not
   a repository is told it works in place, and why.
