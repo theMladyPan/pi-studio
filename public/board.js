@@ -1459,12 +1459,16 @@
       if (quiet && !replaying && bodySame(existing.data, data)) {
         existing.data = data;
         paintThread(existing, data);
+        refreshXrefs();
         return;
       }
       paintCard(existing, data);
+      refreshXrefs();
       return;
     }
     const entry = makeCard(data, quiet);
+    // A card that arrives can be what another card's link was waiting for.
+    refreshXrefs();
     recomputePill();
     if (!sawFirstCard) {
       sawFirstCard = true;
@@ -1530,6 +1534,8 @@
     if (at >= 0) cards.splice(at, 1);
     byId.delete(record.id);
     foldState.delete(record.id);
+    // Links pointing at the card that just went have to stop looking live.
+    refreshXrefs();
     dropRailCard(record.id);
     releaseSpot(record.card);
     renumberQueue();
@@ -1925,15 +1931,53 @@
   }
 
   /** Follow a [[key]] reference: by key first, then by card title. */
+  /**
+   * Where a cross-reference can land right now: what each card carries as its key, and its name.
+   * A card that was closed takes both with it, so a link to it is dead and has to look it.
+   */
+  function linkTargets() {
+    const keys = new Set();
+    for (const record of byId.values()) {
+      if (record.data.key) keys.add(String(record.data.key).toLowerCase());
+      const title = record.titleEl.textContent.trim().toLowerCase();
+      if (title) keys.add(title);
+    }
+    return keys;
+  }
+
+  /** Mark every link nothing on the board answers, so a closed card is not a silent click. */
+  function refreshXrefs() {
+    const keys = linkTargets();
+    for (const record of byId.values()) {
+      // The whole card, not only its body: a thread's replies are drawn in `entry.thread` beside it,
+      // and a markdown note's links are in the body. A link may be in either.
+      for (const link of record.card.querySelectorAll(".xref")) {
+        const key = String(link.dataset.key ?? "");
+        const known = keys.has(key.toLowerCase());
+        link.classList.toggle("stale", !known);
+        link.title = known
+          ? `jump to ${key}`
+          : `${key} is not on this board: that card was closed or never written`;
+      }
+    }
+  }
+
   function jumpToKey(key) {
     const wanted = key.toLowerCase();
     for (const record of byId.values()) {
-      if (record.data.key && record.data.key.toLowerCase() === wanted) return centerOn(record);
+      if (record.data.key && record.data.key.toLowerCase() === wanted) {
+        centerOn(record);
+        return true;
+      }
     }
     for (const record of byId.values()) {
       const title = record.titleEl.textContent.trim().toLowerCase();
-      if (title && title === wanted) return centerOn(record);
+      if (title && title === wanted) {
+        centerOn(record);
+        return true;
+      }
     }
+    return false;
   }
 
   viewport.addEventListener("click", (event) => {
@@ -1950,7 +1994,10 @@
     const link = event.target.closest(".xref");
     if (!link) return;
     event.preventDefault();
-    jumpToKey(link.dataset.key);
+    const key = String(link.dataset.key ?? "");
+    // A link whose card was closed points at nothing, and a click that does nothing reads as a broken
+    // board. Say which card is missing instead.
+    if (!jumpToKey(key)) footNote(`${key} is not on this board: that card was closed or never written`);
   });
 
   /** A wheel reports pixels, lines or pages, so one factor turns any of them into pixels. */
@@ -2675,6 +2722,8 @@
   const sendBtn = document.getElementById("send");
   const forkBtn = document.getElementById("forkMode");
   const composerHint = document.getElementById("composerHint");
+  const footHint = document.getElementById("footHint");
+  let footTimer = 0;
   const statCtx = document.getElementById("statCtx");
   const statCtxValue = document.getElementById("statCtxValue");
   const replyChip = document.getElementById("replyChip");
@@ -2717,6 +2766,19 @@
     composerHint.classList.toggle("bad", bad);
     clearTimeout(hintTimer);
     hintTimer = setTimeout(() => paintComposer(), 6000);
+  }
+
+  /**
+   * One line in the footer, which is on screen whatever the composer is doing. The composer's own hint
+   * hides when the field is docked in a card, so a click that lands nowhere would otherwise be silent.
+   */
+  function footNote(text) {
+    if (!footHint) return;
+    footHint.textContent = text;
+    clearTimeout(footTimer);
+    footTimer = setTimeout(() => {
+      footHint.textContent = "";
+    }, 8000);
   }
 
   // Compaction is the agent's own housekeeping, so the board asks the session for it and reports

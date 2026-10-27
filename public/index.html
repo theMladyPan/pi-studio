@@ -215,6 +215,9 @@
   .note-body a.xref, .sticky-reply a.xref { color: #79c0ff; border-bottom: 1px dotted rgba(121,192,255,.6);
     cursor: pointer; }
   .note-body a.xref:hover, .sticky-reply a.xref:hover { color: #a5d6ff; border-bottom-style: solid; }
+  /* A link whose card was closed or never written: still clickable, but it says so before the click. */
+  .note-body a.xref.stale, .sticky-reply a.xref.stale { color: var(--muted); opacity: .65;
+    border-bottom-style: dashed; }
   /* A referenced card rings once so the eye finds it after the jump. */
   .card.flash { animation: flashRing 1.2s ease-out; }
   @keyframes flashRing {
