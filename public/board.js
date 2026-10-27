@@ -3102,6 +3102,8 @@
   let actPanelAskedAt = 0;
   let actPanelTimer = 0;
 
+  const PANEL_CUT_NOTICE = "cut at 64 K characters by the board server";
+
   /** One titled block of monospace text, saying when the server cut it. */
   function panelSection(title, text, cut) {
     const box = el("section");
@@ -3109,11 +3111,232 @@
     const pre = el("pre");
     pre.textContent = text;
     box.appendChild(pre);
-    if (cut) box.appendChild(el("div", "cut")).textContent = "cut at 64 K characters by the board server";
+    if (cut) box.appendChild(el("div", "cut")).textContent = PANEL_CUT_NOTICE;
     return box;
   }
 
-  function paintActPanel(payload) {
+  /** A titled block holding whatever a renderer built, so a diff, a picture or a note lands in the sheet. */
+  function panelBlock(title, node, cut) {
+    if (!node) return null;
+    const box = el("section");
+    box.appendChild(el("h4")).textContent = title;
+    box.appendChild(node);
+    if (cut) box.appendChild(el("div", "cut")).textContent = PANEL_CUT_NOTICE;
+    return box;
+  }
+
+  /** Argument rows: the name of the thing, then what it was. */
+  function panelFields(pairs) {
+    const box = el("div", "act-kv");
+    for (const [label, value] of pairs) {
+      if (value === undefined || value === null || value === "") continue;
+      const row = el("div", "act-row");
+      row.append(el("span", "k"), el("span", "v"));
+      row.children[0].textContent = label;
+      row.children[1].textContent = String(value);
+      box.appendChild(row);
+    }
+    return box.children.length ? box : null;
+  }
+
+  /** Lines with a gutter, numbered from `first` so a slice of a file starts where the file does. */
+  function panelCode(text, first = 1) {
+    const box = el("div", "act-code");
+    String(text)
+      .replace(/\n$/, "")
+      .split("\n")
+      .forEach((line, index) => {
+        const row = el("div", "act-line");
+        row.append(el("span", "n"), el("span", "t"));
+        row.children[0].textContent = String(first + index);
+        row.children[1].innerHTML = highlight(line);
+        box.appendChild(row);
+      });
+    return box;
+  }
+
+  /** A unified diff: the sign in the gutter, the line tinted by what it does. */
+  function panelDiff(text) {
+    const box = el("div", "act-code act-diff");
+    String(text)
+      .replace(/\n$/, "")
+      .split("\n")
+      .forEach((line) => {
+        const sign = line.startsWith("+") || line.startsWith("-") ? line[0] : "";
+        const tone = sign === "+" ? "add" : sign === "-" ? "del" : line.startsWith("@@") ? "hunk" : "";
+        const row = el("div", `act-line ${tone}`);
+        row.append(el("span", "n"), el("span", "t"));
+        row.children[0].textContent = sign;
+        row.children[1].innerHTML = highlight(sign ? line.slice(1) : line);
+        box.appendChild(row);
+      });
+    return box;
+  }
+
+  /** An edit that came back without a diff still shows what it replaced and what it put there. */
+  function diffFromEdits(edits) {
+    if (!Array.isArray(edits)) return "";
+    const lines = [];
+    edits.forEach((edit, index) => {
+      const before = String(edit?.oldText ?? "").replace(/\n$/, "");
+      const after = String(edit?.newText ?? "").replace(/\n$/, "");
+      if (!before && !after) return;
+      lines.push(`@@ block ${index + 1} @@`);
+      if (before) lines.push(...before.split("\n").map((line) => `-${line}`));
+      if (after) lines.push(...after.split("\n").map((line) => `+${line}`));
+    });
+    return lines.join("\n");
+  }
+
+  /** The picture a call took, or the reason there is none left to draw. */
+  function panelPicture(payload) {
+    const images = Array.isArray(payload.images) ? payload.images : [];
+    if (!images.length) return null;
+    const image = images[images.length - 1];
+    if (!image?.data) {
+      const gone = el("div", "gone");
+      gone.textContent = "the picture from this run is not kept after a restart";
+      return panelBlock("image", gone);
+    }
+    const img = el("img", "act-img");
+    img.src = `data:${image.mime || "image/png"};base64,${image.data}`;
+    img.alt = "what the browser saw";
+    return panelBlock("image", img);
+  }
+
+  /** One browser action on a line: what it did, and to what. */
+  function stepLine(step) {
+    const at = step?.selector || step?.url || (step?.x !== undefined ? `${step.x},${step.y}` : "");
+    const more = step?.text ?? (step?.ms !== undefined ? `${step.ms} ms` : "");
+    return [String(step?.action ?? ""), at, more].filter(Boolean).join(" ");
+  }
+
+  /** The words a tool said, once the daemon has parsed them out of its result. */
+  const actOutput = (payload) => (typeof payload.output === "string" ? payload.output : "");
+
+  /** A unified diff is worth colouring wherever a tool produced one. */
+  const looksLikeDiff = (text) => /^(diff --git |--- a\/|@@ )/m.test(String(text || ""));
+
+  /**
+   * What the sheet draws for one call. Each tool says how its input reads and how its output reads, so
+   * a shell command is a command and a file is text with line numbers, rather than a JSON dump of a
+   * result object with every newline escaped into it.
+   */
+  const ACT_VIEWS = {
+    bash(payload, args, cut, add) {
+      if (typeof args.command === "string") add(panelSection("command", `$ ${args.command}`, cut.has("args")));
+      const said = actOutput(payload);
+      if (!said) return;
+      add(
+        looksLikeDiff(said)
+          ? panelBlock("diff", panelDiff(said), cut.has("output"))
+          : panelBlock("output", panelCode(said), cut.has("output")),
+      );
+    },
+    edit(payload, args, cut, add) {
+      add(panelFields([["path", args.path ?? args.file_path]]));
+      // pi hands the change over as a diff already; the arguments are the fallback for a run without one.
+      const diff = typeof payload.diff === "string" && payload.diff ? payload.diff : diffFromEdits(args.edits);
+      if (diff) add(panelBlock("diff", panelDiff(diff), cut.has("diff") || cut.has("args")));
+      const said = actOutput(payload);
+      if (said) add(panelSection("result", said, cut.has("output")));
+    },
+    write(payload, args, cut, add) {
+      add(panelFields([["path", args.path ?? args.file_path]]));
+      if (typeof args.content === "string" && args.content) add(panelBlock("content", panelCode(args.content), cut.has("args")));
+      const said = actOutput(payload);
+      if (said) add(panelSection("result", said, cut.has("output")));
+    },
+    read(payload, args, cut, add) {
+      const offset = Number(args.offset);
+      const limit = Number(args.limit);
+      const range = Number.isFinite(offset) ? `${offset}${Number.isFinite(limit) ? `–${offset + limit - 1}` : "+"}` : "";
+      add(panelFields([["path", args.path ?? args.file_path], ["lines", range]]));
+      add(panelPicture(payload));
+      const said = actOutput(payload);
+      if (said) add(panelBlock("output", panelCode(said, Number.isFinite(offset) ? offset : 1), cut.has("output")));
+    },
+    board_source(payload, args, cut, add) {
+      add(
+        panelFields([
+          ["path", args.path],
+          ["line", Number.isFinite(Number(args.line)) ? args.line : ""],
+          ["title", args.title],
+          ["key", args.key],
+        ]),
+      );
+      const said = actOutput(payload);
+      if (said) add(panelSection("result", said, cut.has("output")));
+    },
+    board_note(payload, args, cut, add) {
+      add(panelFields([["title", args.title], ["key", args.key]]));
+      // The note is markdown that the board draws anyway, so the sheet draws the card the call wrote.
+      if (typeof args.markdown === "string" && args.markdown) {
+        const note = el("div", "act-note");
+        note.appendChild(renderMarkdown(args.markdown));
+        add(panelBlock("note", note, cut.has("args")));
+      }
+      const said = actOutput(payload);
+      if (said) add(panelSection("result", said, cut.has("output")));
+    },
+    board_ask(payload, args, cut, add) {
+      if (typeof args.question === "string") add(panelSection("question", args.question, cut.has("args")));
+      const options = Array.isArray(args.options) ? args.options : [];
+      if (options.length) {
+        const list = el("ol", "act-options");
+        for (const option of options) list.appendChild(el("li")).textContent = String(option);
+        add(panelBlock("options", list));
+      }
+      add(
+        panelFields([
+          ["title", args.title],
+          ["free text", args.allowFreeText === false ? "no" : "yes"],
+        ]),
+      );
+      const said = actOutput(payload);
+      if (said) add(panelSection("result", said, cut.has("output")));
+    },
+    browser_screenshot(payload, args, cut, add) {
+      const actions = Array.isArray(args.actions) ? args.actions : [];
+      if (actions.length) add(panelSection("actions", actions.map(stepLine).join("\n")));
+      add(panelPicture(payload));
+      const said = actOutput(payload);
+      if (said) add(panelSection("result", said, cut.has("output")));
+    },
+  };
+
+  /**
+   * A row saved before the daemon parsed tool results still holds the JSON dump of one, so a string
+   * that is a result object is unpacked here: an old board reads like a new one, with no migration.
+   */
+  function actParsed(payload) {
+    const raw = payload.output;
+    if (typeof raw !== "string" || !raw.trimStart().startsWith("{")) return payload;
+    let parsed = null;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return payload;
+    }
+    const content = Array.isArray(parsed?.content) ? parsed.content : null;
+    if (!content) return payload;
+    const text = content
+      .filter((part) => part?.type === "text")
+      .map((part) => String(part.text ?? ""))
+      .join("\n");
+    const image = content.find((part) => part?.type === "image" && part.data);
+    return {
+      ...payload,
+      output: text || raw,
+      diff: payload.diff ?? parsed.details?.diff,
+      exitCode: payload.exitCode ?? parsed.structuredContent?.exit_code,
+      ...(image && !payload.images ? { images: [{ mime: image.mimeType || "image/png", data: image.data }] } : {}),
+    };
+  }
+
+  function paintActPanel(row) {
+    const payload = actParsed(row);
+    const args = payload.args && typeof payload.args === "object" ? payload.args : {};
     actPanelName.textContent =
       payload.kind === "reply" ? "answer" : payload.kind === "thinking" ? "thinking" : payload.tool || "tool";
     const took =
@@ -3122,23 +3345,35 @@
         : payload.status === "running"
           ? Date.now() - payload.startedAt
           : 0;
-    actPanelMeta.textContent = [payload.status, took ? rowClock(took) : ""].filter(Boolean).join(" · ");
+    const exit = Number.isFinite(payload.exitCode) ? `exit ${payload.exitCode}` : "";
+    actPanelMeta.textContent = [payload.status, exit, payload.truncated ? "truncated" : "", took ? rowClock(took) : ""]
+      .filter(Boolean)
+      .join(" · ");
     const cut = new Set(payload.cut || []);
     const parts = [];
-    if (payload.args !== undefined) {
-      // The server hands arguments over as an object, or as their JSON when it had to cut them.
-      const text = typeof payload.args === "string" ? payload.args : JSON.stringify(payload.args, null, 2);
-      parts.push(panelSection("input", text || "", cut.has("args")));
-    }
-    for (const [field, title] of [
-      ["log", "log"],
-      ["output", "output"],
-      ["thinking", "thinking"],
-      ["text", "answer"],
-    ]) {
-      const text = payload[field];
-      if (typeof text !== "string" || !text) continue;
-      parts.push(panelSection(title, text, cut.has(field)));
+    const add = (node) => {
+      if (node) parts.push(node);
+    };
+    const view = payload.kind === "tool" ? ACT_VIEWS[String(payload.tool || "")] : null;
+    if (view) {
+      view(payload, args, cut, add);
+    } else {
+      if (payload.args !== undefined) {
+        // The server hands arguments over as an object, or as their JSON when it had to cut them.
+        const text = typeof payload.args === "string" ? payload.args : JSON.stringify(payload.args, null, 2);
+        add(panelSection("input", text || "", cut.has("args")));
+      }
+      add(panelPicture(payload));
+      for (const [field, title] of [
+        ["log", "log"],
+        ["output", "output"],
+        ["thinking", "thinking"],
+        ["text", "answer"],
+      ]) {
+        const text = payload[field];
+        if (typeof text !== "string" || !text) continue;
+        add(panelSection(title, text, cut.has(field)));
+      }
     }
     if (!parts.length) {
       const gone = el("div", "gone");

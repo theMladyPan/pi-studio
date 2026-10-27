@@ -209,6 +209,20 @@ commit's own account rather than on a check run now, the section below says so.
   remembered for the session only. Rows still running stay in the strip above the log, so what is
   happening now is visible however far the log is scrolled; that strip belongs to no section, so a
   running row names its own thread beside the tool.
+- **A row opens into what the call was and what it said.** A press or Enter on a rail row shows the
+  sheet `#actDetail`, which reads the row from `GET /activity/<id>`: its arguments, the text it said,
+  the diff it made, its exit code and its newest picture. The daemon keeps those parts and never the
+  JSON dump of the result a tool hands over — `output` is the joined `content[].text`, `diff` is
+  `details.diff`, `exitCode` is `structuredContent.exit_code` — because the dump is packaging: on the
+  board that prompted this change, 2.84 M characters of `output` were 1.45 M of screenshot base64,
+  0.93 M of JSON shell and escaping, and 0.41 M of what the tools actually said. Any one field is cut
+  at 64 000 characters with `cut` naming which, and the sheet prints that under the block. The sheet
+  renders by tool: a shell command, text with a line-number gutter, a diff with its removed and added
+  lines tinted, a note drawn as the card draws it, a browser action list with the picture under it,
+  and the old JSON view only for a tool it does not know. A picture lives in memory only — `diskRow`
+  strips the base64 on save — so a row from before a restart says the picture is not kept. A row
+  saved before this change is unpacked by `actParsed` on the way in, so an old board needs no
+  migration. While a row still runs the sheet asks again every 250 ms and its head counts the time.
 - **Right click a thread in the rail to read it whole.** `GET /transcript/<threadId>` renders the
   session file pi wrote into entries — `user`, `thinking`, `call`, `result`, `answer` — and the drawer
   shows them in that order, marked and coloured by kind, with the thread's status and branch in its
@@ -464,6 +478,21 @@ made that request throw "Converting circular structure to JSON". Timers live in 
 caret and the incremental repaint have not been seen in a browser; the client half is checked by
 `node --check` and by reading it, not by eye.
 
+The row detail sheet, against a throwaway daemon whose `HOME` is a temp folder with its own board file
+and a git repo made for it: a real child's `bash` row came back as `{"command":"ls a.txt"}` with
+`output: "a.txt\n"` and `exitCode: 0` instead of a JSON dump of the result; a row over 50 KB kept pi's
+own `[Showing last 50.0KB of line 1 …]` line; a screenshot row's picture was `{"mime":"image/png",
+"dropped":true}` in the board file, drew as a picture in the sheet, and after a restart said it was not
+kept. Seeded rows in the old shape and the new one were opened in a browser: a failed `bash` (head
+`error · exit 1 · 1.2s`), a `bash` that printed a diff (tinted `+` and `-`, `ok · exit 0 · 1s`), an
+`edit` whose diff came out of the old dump, a `read` numbered 2731–2734 from its `offset`, a
+`board_note` drawn as a card with its table, task list and `[[shape]]` link, a `board_ask` with its
+options, a `browser_screenshot` with and without its picture, an answer with its thinking, and a row
+still running (`running · 37s`, the command and nothing else). The 64 000-character ceiling and the
+argument cut are checked by an offline harness that pulls the real function text out of `server.mjs`
+and runs it — eight cases, all passing, including a 70 000-character output and a 70 000-character
+argument; no live row reached the ceiling, because pi cuts a bash result at 50 KB first.
+
 Reported by the commits that added the settings and the clean/new verbs, both against a real daemon
 and neither re-checked since: crossroads defaults set, and refused with 409 for a model this machine
 cannot run or 400 for a level pi does not name; a new board inheriting them; a board changing its own
@@ -478,8 +507,8 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
 - Forking a *thread* is not built: `fork` on a thread card does nothing (the button is hidden there),
   because a real fork has to copy the session file and mark the copy `forkedFrom`.
 - Feeding a card into a thread other than the one that made it is designed and not built.
-- Rail rows carry no payloads (arguments, logs, outputs), no usage totals, no images. `GET
-  /activity/<id>` answers 404 rather than pretending an empty detail exists.
+- Rail rows carry what the sheet draws and no usage totals beside it, and a picture lives only while
+  the daemon does: a screenshot row from a board that has been restarted says the picture is not kept.
 - A workspace whose folder has been deleted or moved says `folder missing` at the crossroads, with its
   open button disabled and `that folder no longer exists` where the hint goes, but there is no way to
   forget the entry and it stays in the list.
