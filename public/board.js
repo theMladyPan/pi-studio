@@ -2860,6 +2860,12 @@
   const runtimeList = document.getElementById("runtimeList");
   /** {models, levels} from the daemon, read on the first open of either chip. */
   let catalog = null;
+  /**
+   * Whether the picker shows the whole catalogue instead of the scope pi cycles. A taste about this
+   * browser, so it lives here rather than in the board's settings.
+   */
+  const SHOW_ALL_KEY = "board.allModels";
+  let showAllModels = localStorage.getItem(SHOW_ALL_KEY) === "1";
   /** Which chip opened the panel: "model", "thinking", or "" when it is closed. */
   let picking = "";
   /** The board's own settings: what a new thread starts with, and which features are on. */
@@ -2969,26 +2975,80 @@
     return row;
   }
 
+  function pickHead(text) {
+    const head = el("div", "pick-group");
+    head.textContent = text;
+    return head;
+  }
+
+  /** One model, with what it costs in context and whether it thinks, as the row's aside. */
+  function modelRow(one, aside) {
+    const here = pickRuntime();
+    const on = one.provider === here.provider && one.model === here.model;
+    const meta = [aside, one.context, one.thinking ? "thinks" : "", one.images ? "images" : ""].filter(Boolean).join(" · ");
+    return pickRow(one.model, meta, on, () => void chooseRuntime("model", one));
+  }
+
+  /**
+   * The row that swaps the picker between pi's scope and the whole catalogue. It is the only place the
+   * choice lives, so the list has one way in and one way out; the browser remembers which you chose.
+   */
+  function revealRow(towardsAll) {
+    const count = (catalog?.models ?? []).length;
+    const row = el("button", "pick-row pick-more");
+    row.type = "button";
+    const name = el("span");
+    name.textContent = towardsAll ? `all ${count} models` : "scoped only";
+    row.appendChild(name);
+    row.title = towardsAll ? "every model this machine can run" : "back to the models pi cycles";
+    row.addEventListener("click", () => {
+      showAllModels = towardsAll;
+      localStorage.setItem(SHOW_ALL_KEY, showAllModels ? "1" : "0");
+      drawModels(runtimeSearch.value);
+      placeRuntimePick();
+    });
+    return row;
+  }
+
   function drawModels(query) {
     const needle = query.trim().toLowerCase();
     const here = pickRuntime();
-    const models = (catalog?.models ?? []).filter(
-      (one) => !needle || one.model.toLowerCase().includes(needle) || one.provider.toLowerCase().includes(needle),
-    );
+    const all = catalog?.models ?? [];
+    // What pi cycles, from `enabledModels` in its settings: the one list the human edits with
+    // /scoped-models, so nothing here is stored a second time.
+    const scoped = catalog?.scoped ?? [];
     const rows = [];
-    let group = "";
-    // The list is long, so it is grouped by provider and cut short: a search narrows it, and past
-    // a couple of hundred rows scrolling is slower than typing.
-    for (const one of models.slice(0, 200)) {
-      if (one.provider !== group) {
-        group = one.provider;
-        const head = el("div", "pick-group");
-        head.textContent = group;
-        rows.push(head);
+    // A search is a question about one model, so it asks the whole catalogue whatever the row below
+    // says. The scope decides what browsing starts from, not what can be found.
+    if (scoped.length && !showAllModels && !needle) {
+      rows.push(pickHead("scoped"));
+      // The model this card answers with keeps its row here even when pi's scope no longer names it:
+      // a thread that is running stays the thread that answers.
+      const held = all.find((one) => one.provider === here.provider && one.model === here.model);
+      if (held && !scoped.some((one) => one.provider === held.provider && one.model === held.model)) rows.push(modelRow(held, "not scoped"));
+      for (const one of scoped) rows.push(modelRow(one, ""));
+      // A pattern pi holds that this machine has no model for is said here rather than passed over.
+      for (const pattern of catalog?.problems ?? []) rows.push(pickNote(`pi: “${pattern}” matched no model here`));
+      rows.push(revealRow(true));
+      runtimeList.replaceChildren(...rows);
+      return;
+    }
+    if (needle) {
+      const hits = all.filter((one) => one.model.toLowerCase().includes(needle) || one.provider.toLowerCase().includes(needle));
+      rows.push(pickHead("matches"));
+      for (const one of hits.slice(0, 200)) rows.push(modelRow(one, ""));
+    } else {
+      // The list is long, so it is grouped by provider and cut short: a search narrows it, and past
+      // a couple of hundred rows scrolling is slower than typing.
+      if (scoped.length) rows.push(revealRow(false));
+      let group = "";
+      for (const one of all.slice(0, 200)) {
+        if (one.provider !== group) {
+          group = one.provider;
+          rows.push(pickHead(group));
+        }
+        rows.push(modelRow(one, ""));
       }
-      const on = one.provider === here.provider && one.model === here.model;
-      const meta = [one.context, one.thinking ? "thinks" : "", one.images ? "images" : ""].filter(Boolean).join(" · ");
-      rows.push(pickRow(one.model, meta, on, () => void chooseRuntime("model", one)));
     }
     runtimeList.replaceChildren(...(rows.length ? rows : [pickNote("no model matches")]));
   }
@@ -3030,12 +3090,15 @@
     runtimePick.hidden = false;
     runtimeSearch.hidden = which !== "model";
     runtimeList.replaceChildren(pickNote("reading what this machine has…"));
-    if (!catalog) {
-      try {
-        const response = await fetch(`/models?${auth}`);
-        if (!response.ok) throw new Error("the daemon would not list models");
-        catalog = await response.json();
-      } catch (error) {
+    // Read on every open, not once per page: the scope is pi's, and the human edits it in a console pi
+    // while this tab is open. The catalogue behind it is cached by the daemon, so this is one cheap
+    // request. A failed read keeps what the panel already had, because an old list beats an empty one.
+    try {
+      const response = await fetch(`/models?${auth}`);
+      if (!response.ok) throw new Error("the daemon would not list models");
+      catalog = await response.json();
+    } catch (error) {
+      if (!catalog) {
         runtimeList.replaceChildren(pickNote(error.message || "could not read the models"));
         return;
       }

@@ -206,6 +206,21 @@ commit's own account rather than on a check run now, the section below says so.
   is the one feature so far: the cards of other threads step back to 70% opacity while one is selected.
   `meta.config` is what the client reads, and `POST /model` with no card writes the board's own default.
   The board's panel reuses the composer's model list, so there is one catalogue in the app.
+- **The models offered first are pi's own scope.** `GET /models` also reads `enabledModels` from
+  `settings.json` in the agent directory (`PI_CODING_AGENT_DIR`, else `~/.pi/agent`), which is the key
+  `/scoped-models` writes. Nothing in pi-studio stores that list, so there is nothing to keep in sync:
+  pi is its only editor. It is read on every call rather than cached with the catalogue, so an edit
+  made in a console pi lands on the next open of the picker; the client refetches `/models` each time
+  the picker opens for the same reason. Patterns resolve in pi's order — `provider/id` first, then the
+  same id on every provider that offers it, then globs on `provider/id` and on the bare id, then a
+  piece of an id — and a trailing `:level` is cut away, since the level is not the picker's business.
+  pi's fuzzy match on model *names* cannot be reproduced: `pi --list-models` prints no names. A pattern
+  that matches nothing is listed in `problems` and said once on stderr instead of disappearing, because
+  a scope quietly smaller than pi's is the failure this is meant to prevent. The picker opens on the
+  scope and swaps to the whole catalogue with one row, remembered in `localStorage` as
+  `board.allModels`; the model a running thread answers with keeps its row, marked `not scoped`, when
+  pi's scope no longer names it. Only the agent-level file is read — a project `.pi/settings.json` can
+  override the list for one folder, and a board there would then show wider than its children cycle.
 - **Ownership survives a restart or is repaired.** `answersWith` is only reported for an owner that is
   still alive; a choice made on a card whose thread has ended lands on `board.config`, which is where
   the next child comes from anyway. A board file
