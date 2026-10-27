@@ -301,7 +301,11 @@ commit's own account rather than on a check run now, the section below says so.
   on the commit a running thread is standing on. It has no panel and takes no clicks, so the board
   reads and pans through it; the map's toggle moves it up and `body.git-on` is what shows it at all.
   The daemon reads the disk, never the page: `gitGraph` is one `git log --all --topo-order`
-  (`-n 60`, refs from `%D`) and `gitStatusOf` is one `git status --porcelain=v2` per checkout. A
+  (`-n 40`, refs from `%D`) and `gitStatusOf` is one `git status --porcelain=v2` per checkout. A
+  commit gets a 34px row: its refs as pills on the dot's own line, its subject as the caption under
+  it, so 22 commits fill the column at 1080. Junctions are right angles with a 3px corner and dots
+  are hollow rings, so the board's dots read through the graph; a merge opens the nearest free lane,
+  because a one-column bend reads as a fork and a five-column one reads as a line across the graph. A
   board with a tab open is watched every 3 s, the fingerprint is compared and only a real change is
   broadcast as `{type:"git"}`, plus a look 400 ms after a turn settles; with no tab open nothing runs.
   Measured: 6 ms for the graph, 2–3 ms per tree, so eight trees cost about 40 ms of a core.

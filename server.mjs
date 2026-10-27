@@ -818,7 +818,7 @@ function gitFacts(folder) {
 const AGENTS_DIR = ".agents";
 
 /** How many commits the strip has to draw with, and how often a watched board looks for a change. */
-const GIT_ROWS = 60;
+const GIT_ROWS = 40;
 const GIT_TICK = 3000;
 
 /**
