@@ -1160,6 +1160,8 @@ function handleChildLine(board, thread, line) {
 				cacheRead: data.tokens.cacheRead ?? 0,
 				total: data.tokens.total ?? 0,
 				cost: typeof data.cost === "number" ? data.cost : 0,
+				messages: data.totalMessages ?? 0,
+				tools: data.toolCalls ?? 0,
 				...(data.contextUsage ? { context: data.contextUsage.tokens ?? data.contextUsage.used } : {}),
 				...(data.contextUsage?.maxTokens ? { contextMax: data.contextUsage.maxTokens } : {}),
 			};

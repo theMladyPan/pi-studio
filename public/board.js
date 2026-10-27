@@ -1005,24 +1005,67 @@
     return `${(value / 1_000_000).toFixed(1)}m`;
   }
 
-  /** The footer's context figure: the largest context any thread is carrying, since none of it sums. */
+  /** The last meta the daemon sent, which is where the board-wide totals come from. */
+  let boardMetaCache = {};
+
+  /**
+   * The footer is the numbers of whatever you are reading: the selected card's thread, in full, or
+   * the whole board when nothing is selected. It is the same rule the wheel and the dimming follow.
+   */
   function paintFooter() {
+    const model = document.getElementById("statModel");
+    const tokens = document.getElementById("statTokens");
+    const cost = document.getElementById("statCost");
     const footCtx = document.getElementById("footCtx");
     const footRun = document.getElementById("footRun");
+    const selected = document.querySelector(".card.active");
+    const data = selected ? byId.get(selected.dataset.id)?.data : null;
+    const threadId = data ? (data.type === "sticky" ? data.id : (data.answersWith?.thread ?? data.threadRoot)) : null;
+    const held = threadId ? threadFacts.get(threadId) : null;
+    const money = (value) => (value > 0 ? `$${value < 0.01 ? value.toFixed(4) : value.toFixed(3)}` : "");
+    const counts = (stats) => [stats.messages ? `${stats.messages} msgs` : "", stats.tools ? `${stats.tools} tools` : ""].filter(Boolean).join(" · ");
+
+    if (held) {
+      // One thread: everything the daemon knows about it, because that is what a selection asks.
+      const stats = held.stats ?? {};
+      const where = [held.provider, held.model].filter(Boolean).join("/");
+      model.innerHTML = where ? `<em>${shortModel(held.model)}</em>` : "";
+      model.title = where;
+      tokens.innerHTML = stats.input || stats.output ? `↑${shortNum(stats.input)} ↓${shortNum(stats.output)}${stats.cacheRead ? ` cache ${shortNum(stats.cacheRead)}` : ""}` : "";
+      cost.textContent = money(stats.cost);
+      footCtx.textContent = stats.context ? `ctx ${compact(stats.context)}${stats.contextMax ? `/${compact(stats.contextMax)} · ${Math.round((stats.context / stats.contextMax) * 100)}%` : ""}` : "";
+      footRun.textContent = held.running ? "running" : counts(stats);
+      return;
+    }
+
+    // Nothing selected: the board's own totals, summed, with the largest context since those do not add.
+    let cache = 0;
     let context = 0;
     let max = 0;
     let running = 0;
-    for (const held of threadFacts.values()) {
-      if (held.running) running += 1;
-      const stats = held.stats;
+    let threads = 0;
+    let msgs = 0;
+    let tools = 0;
+    for (const thread of threadFacts.values()) {
+      if (thread.running) running += 1;
+      const stats = thread.stats;
       if (!stats) continue;
-      if (stats.context > context) {
+      threads += 1;
+      cache += stats.cacheRead ?? 0;
+      msgs += stats.messages ?? 0;
+      tools += stats.tools ?? 0;
+      if ((stats.context ?? 0) > context) {
         context = stats.context;
         max = stats.contextMax ?? 0;
       }
     }
+    const meta = boardMetaCache ?? {};
+    model.innerHTML = meta.model ? `<em>${shortModel(meta.model)}</em>` : "";
+    model.title = `the board's default · ${meta.model ?? ""}`;
+    tokens.innerHTML = meta.tokensIn || meta.tokensOut ? `↑${shortNum(meta.tokensIn)} ↓${shortNum(meta.tokensOut)}${cache ? ` cache ${shortNum(cache)}` : ""}` : "";
+    cost.textContent = money(meta.cost);
     footCtx.textContent = context ? `ctx ${compact(context)}${max ? `/${compact(max)} · ${Math.round((context / max) * 100)}%` : ""}` : "";
-    footRun.textContent = running ? `${running} running` : "";
+    footRun.textContent = [threads ? `${threads} thread${threads > 1 ? "s" : ""}` : "", running ? `${running} running` : "", msgs ? `${msgs} msgs` : "", tools ? `${tools} tools` : ""].filter(Boolean).join(" · ");
   }
 
   /** A section says what its thread costs and offers the stop the card's head also offers. */
@@ -1061,6 +1104,8 @@
       const entry = byId.get(card.dataset.id);
       card.classList.toggle("dim", Boolean(selected) && Boolean(entry) && familyOf(entry) !== family);
     }
+    // The footer reads the selected thread too, so a selection change is a footer change.
+    paintFooter();
   }
 
   /**
@@ -2565,10 +2610,13 @@
       const data = entry.data || {};
       const id = data.type === "sticky" ? entry.id : data.answersWith?.thread;
       if (!id) continue;
+      const runtime = data.type === "sticky" ? data : (data.answersWith ?? {});
       threadFacts.set(id, {
         cardId: entry.id,
-        stats: data.type === "sticky" ? data.stats : data.answersWith?.stats,
-        running: data.type === "sticky" ? data.status === "sent" : data.answersWith?.running === true,
+        stats: runtime.stats,
+        running: data.type === "sticky" ? data.status === "sent" : runtime.running === true,
+        provider: runtime.provider,
+        model: runtime.model,
       });
     }
     paintSections();
@@ -3483,17 +3531,8 @@
       ? `${meta.workspace.folder} · click for the crossroads`
       : `${meta.cwd || folder} · port ${meta.port}`;
     setBaseTitle(`pi - ${folder}`);
-    const model = document.getElementById("statModel");
-    if (meta.model) {
-      model.innerHTML = `<em>${meta.model.split("/").pop()}</em>`;
-      model.title = meta.model;
-    } else {
-      model.innerHTML = "";
-    }
-    document.getElementById("statTokens").innerHTML =
-      meta.tokensIn || meta.tokensOut ? `↑${shortNum(meta.tokensIn)} ↓${shortNum(meta.tokensOut)}` : "";
-    document.getElementById("statCost").innerHTML =
-      meta.cost > 0 ? `$${meta.cost < 0.01 ? meta.cost.toFixed(4) : meta.cost.toFixed(3)}` : "";
+    boardMetaCache = meta;
+    paintFooter();
     // The context chip carries the compact action, so it is hidden outright when there is no
     // figure to show rather than left as a button with nothing in it.
     const known = typeof meta.contextPercent === "number";
