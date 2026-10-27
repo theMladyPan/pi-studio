@@ -959,32 +959,19 @@
     head.addEventListener("pointerdown", (event) => {
       // Buttons in the header are for clicking, not for dragging the card. The middle button pans
       // the canvas even here, so it belongs to the workspace rather than to the card.
-      if (event.button !== 0 || event.target.closest(".close, .edit, .reply, .min, .stop, .ask-pill")) return;
-      event.preventDefault();
-      card.classList.add("dragging");
-      const sx = event.clientX;
-      const sy = event.clientY;
-      const ox = parseFloat(card.style.left);
-      const oy = parseFloat(card.style.top);
-      const move = (ev) => {
-        card.style.left = `${ox + (ev.clientX - sx) / view.k}px`;
-        card.style.top = `${oy + (ev.clientY - sy) / view.k}px`;
-      };
-      const up = () => {
-        card.classList.remove("dragging");
-        removeEventListener("pointermove", move);
-        removeEventListener("pointerup", up);
-        const rect = {
-          x: Math.round(parseFloat(card.style.left)),
-          y: Math.round(parseFloat(card.style.top)),
-          w: card.offsetWidth,
-          h: card.offsetHeight,
-        };
-        placeCard(entry, rect);
-        void saveLayout(entry.id, rect);
-      };
-      addEventListener("pointermove", move);
-      addEventListener("pointerup", up);
+      if (event.button !== 0 || event.target.closest(INTERACTIVE)) return;
+      startCardDrag(card, entry, event);
+    });
+
+    // The whole card is a handle. Dragging its text used to select the text, which made reading a
+    // board feel like a web page rather than a surface: hold shift for that instead.
+    card.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.shiftKey) return;
+      // The head starts the same drag on its own press, and preventing the default there does not
+      // stop the event from reaching here.
+      if (card.classList.contains("dragging")) return;
+      if (event.target.closest(INTERACTIVE)) return;
+      startCardDrag(card, entry, event);
     });
 
     grip.addEventListener("pointerdown", (event) => {
@@ -1059,6 +1046,43 @@
 
   /** A thread that has been asked to stop. A stop that does not land turns into a kill. */
   const stopping = new Set();
+
+  /**
+   * What a pointer down on a card may not grab: the controls in its head, the composer docked inside
+   * it, a link or a checkbox, the resize corner. Everything else is surface, which drags the card.
+   */
+  const INTERACTIVE =
+    ".close, .edit, .reply, .min, .stop, .ask-pill, .resize, input, textarea, button, a, [contenteditable], .xref, .tick, .q-options, #composer";
+
+  /** Move a card by dragging it, in board units, so the card keeps up at any zoom. */
+  function startCardDrag(card, entry, event) {
+    // The text is not being selected, so the browser must not start selecting it.
+    event.preventDefault();
+    card.classList.add("dragging");
+    const sx = event.clientX;
+    const sy = event.clientY;
+    const ox = parseFloat(card.style.left);
+    const oy = parseFloat(card.style.top);
+    const move = (ev) => {
+      card.style.left = `${ox + (ev.clientX - sx) / view.k}px`;
+      card.style.top = `${oy + (ev.clientY - sy) / view.k}px`;
+    };
+    const up = () => {
+      card.classList.remove("dragging");
+      removeEventListener("pointermove", move);
+      removeEventListener("pointerup", up);
+      const rect = {
+        x: Math.round(parseFloat(card.style.left)),
+        y: Math.round(parseFloat(card.style.top)),
+        w: card.offsetWidth,
+        h: card.offsetHeight,
+      };
+      placeCard(entry, rect);
+      void saveLayout(entry.id, rect);
+    };
+    addEventListener("pointermove", move);
+    addEventListener("pointerup", up);
+  }
 
   /** The agent is blocked on this card until the question on it is answered. */
   function questionWants(data) {
