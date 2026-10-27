@@ -84,9 +84,10 @@ commit's own account rather than on a check run now, the section below says so.
   is written nowhere: never onto the thread's own turn, which would overwrite an older answer.
   `anchorOf` keeps placement honest for cards a hidden child writes: they cascade under the newest card
   that child owns, and name that child as their owner.
-- **A run is stopped or killed where it is read.** The card of a thread carries `answersWith.running`
-  (or its own `sent` status) while a run is live, and its header turns that into one control: `■` asks
-  the child to abort, and the same control becomes `⊗` — kill — when the stop does not land. `POST
+- **A run is stopped or killed where it is read, and only there.** The thread's own activity section
+  carries the one control: `■` asks the child to abort, and the same control becomes `⊗` — kill —
+  when the stop does not land. It was on the card's header too, with the same stop-then-kill state
+  kept in two places; the card lost it. `POST
   /stop` takes a card id and stops only that thread; without one it still stops everything, which is
   what the header button means. `POST /kill` sends SIGKILL, marks the turn stopped, drains the queue
   that nothing will now serve, and leaves the thread and its card in place, so the next message starts
@@ -139,6 +140,27 @@ commit's own account rather than on a check run now, the section below says so.
   fresh child when it is asked again. Nothing that can answer is touched. `POST /new` empties the board
   in the same workspace and keeps its settings; the button turns into `sure?` for four seconds first.
   Both answer with a snapshot, which the client already replays, so every open tab rebuilds.
+- **Usage is asked for, then shown twice.** A pi child keeps its own numbers, so at every settle the
+  daemon sends `{"type":"get_session_stats"}` and holds the child's stdin open until the answer
+  arrives — `stdin.end()` before it threw the last run's cost away. `thread.stats` keeps input,
+  output, cache reads, total, cost, message and tool counts, and the context the last request carried.
+  A thread's activity section head shows its context, its cost and the stop; the footer along the
+  bottom edge follows the selection the way the wheel and the dimming do: with a card selected it is
+  that thread in full — provider and model in the clear, tokens, cache, cost, context against the
+  window, messages and tools, `running` while a run is live — and with nothing selected it is the
+  board's totals, summed, with the largest context, since contexts do not add up.
+- **The footer is not a header.** Those figures used to sit between the header's buttons as zeros;
+  they moved to a 24 px strip that the `+` button and the cards keep clear of.
+- **The wheel has one target.** Ctrl/Cmd zooms at the pointer. Otherwise an open editor under the
+  pointer scrolls its own text, and everything else is decided by the selection: a selected card
+  scrolls its own body, nothing selected pans. A card with comments is scrollable, so it must not
+  take the wheel merely by being under the pointer — that pinned the board to whatever card the
+  pointer crossed.
+- **The edit pencil toggles, and the editor keeps its card's height.** A press while the editor is
+  open closes it, done on `pointerdown` because the press blurs the textarea and the blur commits and
+  repaints, after which the card no longer reads as editing and the click would open a fresh editor.
+  A textarea carries no height of its own, so the card's height is measured before the swap and
+  becomes the editor's floor; without that an auto-sized card collapsed to its minimum.
 - **Persistence**: board saved on a 500 ms debounce and flushed on stop and on a workspace switch;
   a restart reopens the last workspace.
 - `GET /browse` for the composer's file picker. Token gate on every data route (403 without it).
