@@ -1644,10 +1644,18 @@
     entry.editing = true;
     const pencil = entry.head.querySelector(".edit");
     if (pencil) pencil.title = "save and close";
+    // Read the card's height before the body is swapped. A textarea carries no height of its own, so
+    // an auto-sized card would shrink to its minimum the moment the note became an editor, and the
+    // editor would open as a slit where the note used to be.
+    const readingHeight = entry.card.offsetHeight;
     const area = el("textarea", "note-edit");
     area.value = entry.data.markdown || "";
     area.spellcheck = false;
     entry.body.replaceChildren(area);
+    if (!entry.card.style.height) {
+      const headHeight = entry.head.offsetHeight;
+      area.style.minHeight = `${Math.max(200, readingHeight - headHeight - 2)}px`;
+    }
     area.focus();
     const finish = (commit) => {
       if (!entry.editing) return;

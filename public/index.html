@@ -196,7 +196,9 @@
   .card .edit { border: 0; background: transparent; color: var(--muted); font-size: 14px;
     line-height: 1; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
   .card .edit:hover { background: #21262d; color: var(--text); }
-  .note-edit { width: 100%; height: 100%; resize: none; border: 0; outline: none;
+  /* A floor, because a textarea has no height of its own: without one the card would collapse to its
+     minimum and the editor be a slit. */
+  .note-edit { width: 100%; height: 100%; min-height: 200px; resize: none; border: 0; outline: none;
     background: #0d1117; color: var(--text); font: 13px/1.55 var(--mono); padding: 10px 12px; }
   .note-body a { color: var(--accent); text-decoration: none; }
   .note-body a.xref, .sticky-reply a.xref { color: #79c0ff; border-bottom: 1px dotted rgba(121,192,255,.6);
