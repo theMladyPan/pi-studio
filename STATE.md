@@ -209,6 +209,15 @@ commit's own account rather than on a check run now, the section below says so.
   remembered for the session only. Rows still running stay in the strip above the log, so what is
   happening now is visible however far the log is scrolled; that strip belongs to no section, so a
   running row names its own thread beside the tool.
+- **A thought is a row of its own.** `thinking_start`, `thinking_delta` and `thinking_end` on the
+  child's stream each land in a rail row of kind `thinking`, so what a run is doing when it has not
+  said anything is visible while it happens. The rail carries the newest 400 characters and a rate read
+  off the last five seconds; the sheet draws the whole block — from `liveThoughts` while it streams,
+  from the row's `thinking` once it ends. A delta reaches the board at most four times a second, the
+  count is four characters a token and marked `tokensEstimated`, and the settled row keeps its
+  `durationMs`. A block whose message ends without its end event reads `stopped` with what it said
+  (`settleThoughts`), and its row id is random because a board keeps its rows and a second run must not
+  take the id of the first run's block. The reply row still carries the thinking of its own message.
 - **A row opens into what the call was and what it said.** A press or Enter on a rail row shows the
   sheet `#actDetail`, which reads the row from `GET /activity/<id>`: its arguments, the text it said,
   the diff it made, its exit code and its newest picture. The daemon keeps those parts and never the
@@ -492,6 +501,18 @@ still running (`running · 37s`, the command and nothing else). The 64 000-chara
 argument cut are checked by an offline harness that pulls the real function text out of `server.mjs`
 and runs it — eight cases, all passing, including a 70 000-character output and a 70 000-character
 argument; no live row reached the ceiling, because pi cuts a bash result at 50 KB first.
+
+The thinking rows, against that daemon on a model that thinks: a run that wrote a note and answered
+produced a `thinking` row settled `ok` with `durationMs` 1532, `tokens` 186 estimated, a 401-character
+tail opening `…` and the whole 5 480-character block in `thinking`. A run at thinking `max` was watched
+while it streamed: `status running`, the tail pinned at 401 characters, `tokens` climbing 314 → 9 250
+over 21 samples, `rate` between 138 and 259 tok/s, no full text in the broadcast, and
+`GET /activity/<id>` answering 1 797 then 2 708 characters a second apart; it settled `ok` with a
+37 225-character block and `rate` cleared. The browser showed the strip as `streams live · ~2423 tok ·
+~165 tok/s` with the tail under it, the sheet as `running · ~2423 tok · 21s` while the prose grew, and
+the same sheet as `ok · ~826 tok · 6s` once settled. A thought cut off by an abort was not seen:
+`settleThoughts` is reasoning from the code, as is the sheet keeping its scroll position across a
+repaint.
 
 Reported by the commits that added the settings and the clean/new verbs, both against a real daemon
 and neither re-checked since: crossroads defaults set, and refused with 409 for a model this machine

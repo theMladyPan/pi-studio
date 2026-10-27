@@ -1701,10 +1701,15 @@ function cleanBoard(board) {
 		if (card.ownerThread && !alive.has(card.ownerThread)) delete card.ownerThread;
 	}
 	const before = board.activity.length;
+	const dropped = [];
 	board.activity = board.activity.filter((row) => {
 		const id = row.thread?.id;
-		return id ? alive.has(id) : false;
+		if (id && alive.has(id)) return true;
+		dropped.push(row.id);
+		return false;
 	});
+	// A thought still streaming belongs to a row that is still here; one whose row is gone is worth nothing.
+	for (const id of dropped) liveThoughts.delete(id);
 	scheduleSave(board);
 	return { removed, rows: before - board.activity.length, trees };
 }
@@ -1717,6 +1722,7 @@ function clearBoard(board) {
 		board.threads.delete(thread.id);
 	}
 	board.cards.clear();
+	for (const row of board.activity) liveThoughts.delete(row.id);
 	board.activity = [];
 	board.askers.clear();
 	scheduleSave(board);
@@ -1786,6 +1792,7 @@ function threadError(board, thread, message) {
 	console.error(`pi-studio: ${board.name}/${thread.title}: ${message}`);
 	thread.status = "dead";
 	stopStream(thread);
+	settleThoughts(board, thread);
 	const last = thread.turns[thread.turns.length - 1];
 	if (last) {
 		// What was being written stays as the child left it, but nothing is writing it now.
@@ -2204,6 +2211,7 @@ function prompt(board, thread, text, target = null) {
 	// A new run starts with nothing said yet, whatever the last one left behind.
 	thread.streamDone = "";
 	thread.streamParts = new Map();
+	thinkingRuns.delete(thread);
 	update(board, thread);
 	try {
 		const child = ensureChild(board, thread);
@@ -2268,6 +2276,160 @@ function streamTick(board, thread) {
 	}
 }
 
+// ---------- the thought ----------------------------------------------------
+
+/**
+ * A thought is not the answer and does not belong on the card, but it is the only thing a run says
+ * while it is looking something up. So each thinking block gets a row of its own: four tails a second
+ * while it streams, the whole block kept for the panel where it is actually read.
+ */
+const THOUGHT_PUSH_MS = 250;
+/** A few lines is all the rail can show, so the row carries the tail and no more. */
+const THOUGHT_TAIL = 400;
+/** A few seconds of samples read as a rate, and cost nothing to keep. */
+const THOUGHT_WINDOW_MS = 5000;
+/** Providers count thinking their own way; four characters each is the usual estimate. */
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * The thinking blocks of the run in progress, off the thread itself: `/state` serialises whole threads,
+ * and a Map is not part of a thread's shape.
+ */
+const thinkingRuns = new WeakMap();
+/**
+ * The text of every block still streaming, by row id. A row carries only its tail while it runs, so
+ * the panel reads the whole thought from here through `GET /activity/<id>`.
+ */
+const liveThoughts = new Map();
+
+/** The newest characters, without splitting a surrogate pair, so no emoji turns into a box. */
+function tailOf(text, keep) {
+	const start = Math.max(0, text.length - keep);
+	return /[\uDC00-\uDFFF]/.test(text[start] ?? "") ? text.slice(start + 1) : text.slice(start);
+}
+
+/** Tokens a second over the newest samples, which the rail labels as the estimate it is. */
+function thoughtRate(block) {
+	const first = block.samples[0];
+	const last = block.samples[block.samples.length - 1];
+	const seconds = first && last ? (last.at - first.at) / 1000 : 0;
+	return seconds > 0 ? Math.round((last.chars - first.chars) / seconds / CHARS_PER_TOKEN) : 0;
+}
+
+/** What a row carries while its block streams: the tail, the estimate, and the rate. */
+function pushThought(board, block) {
+	patchRow(board, block.id, {
+		status: "running",
+		text: `${block.cut ? "…" : ""}${block.tail}`,
+		rate: thoughtRate(block),
+		tokens: Math.round(block.chars / CHARS_PER_TOKEN),
+		tokensEstimated: true,
+	});
+}
+
+function thoughtState(thread) {
+	let state = thinkingRuns.get(thread);
+	if (!state) {
+		state = { message: 0, blocks: new Map() };
+		thinkingRuns.set(thread, state);
+	}
+	return state;
+}
+
+/** A block's own row, from its first delta to the end that carries the whole of it. */
+function thoughtEvent(board, thread, update, at) {
+	const state = thoughtState(thread);
+	const key = `${state.message}:${at}`;
+	const now = Date.now();
+	if (update.type === "thinking_start") {
+		// The id is random rather than counted: a board keeps its rows, and the second run of a thread
+		// must not take the id of the first run's block.
+		const block = { id: `think-${randomUUID()}`, startedAt: now, chars: 0, tail: "", cut: false, samples: [], pushedAt: now, text: "" };
+		state.blocks.set(key, block);
+		liveThoughts.set(block.id, "");
+		addRow(board, {
+			id: block.id,
+			kind: "thinking",
+			label: "thinking",
+			status: "running",
+			startedAt: now,
+			text: "",
+			tokens: 0,
+			tokensEstimated: true,
+			thread: threadRef(thread),
+		});
+		return;
+	}
+	const block = state.blocks.get(key);
+	if (!block) return;
+	if (update.type === "thinking_delta") {
+		const delta = String(update.delta ?? "");
+		block.chars += delta.length;
+		block.text += delta;
+		block.tail += delta;
+		if (block.tail.length > THOUGHT_TAIL) {
+			block.tail = tailOf(block.tail, THOUGHT_TAIL);
+			block.cut = true;
+		}
+		// The row keeps a tail, the panel the whole thought, and only that is worth a ceiling: a
+		// thought this long is served on request rather than pushed with every tail.
+		liveThoughts.set(block.id, block.text.slice(0, MAX_ROW_CHARS));
+		// One sample per delta would cost more than the rate is worth, so a sample lands with each push.
+		const last = block.samples[block.samples.length - 1];
+		if (!last || now - last.at >= THOUGHT_PUSH_MS) {
+			block.samples.push({ at: now, chars: block.chars });
+			while (block.samples.length > 2 && block.samples[0].at < now - THOUGHT_WINDOW_MS) block.samples.shift();
+		}
+		// A fast provider would flood the stream, so a delta reaches the board four times a second.
+		if (now - block.pushedAt >= THOUGHT_PUSH_MS) {
+			block.pushedAt = now;
+			pushThought(board, block);
+		}
+		return;
+	}
+
+	// The end carries the authoritative text, so the row follows it and stops with its total.
+	const content = typeof update.content === "string" && update.content ? update.content : block.text;
+	const over = content.length > THOUGHT_TAIL;
+	patchRow(board, block.id, {
+		status: "ok",
+		durationMs: now - block.startedAt,
+		text: `${over ? "…" : ""}${over ? tailOf(content, THOUGHT_TAIL) : content}`,
+		thinking: content.slice(0, MAX_ROW_CHARS),
+		...(content.length > MAX_ROW_CHARS ? { cut: ["thinking"] } : {}),
+		rate: undefined,
+		tokens: Math.round(Math.max(block.chars, content.length) / CHARS_PER_TOKEN),
+		tokensEstimated: true,
+	});
+	liveThoughts.delete(block.id);
+	state.blocks.delete(key);
+}
+
+/** A block that never got its end — an abort, a failure — stops where it stands and keeps what it said. */
+function settleThoughts(board, thread) {
+	const state = thinkingRuns.get(thread);
+	if (!state) return;
+	for (const block of state.blocks.values()) {
+		patchRow(board, block.id, {
+			status: "stopped",
+			durationMs: Date.now() - block.startedAt,
+			...(block.text ? { thinking: block.text.slice(0, MAX_ROW_CHARS) } : {}),
+			rate: undefined,
+			tokens: Math.round(block.chars / CHARS_PER_TOKEN),
+			tokensEstimated: true,
+		});
+		liveThoughts.delete(block.id);
+	}
+	state.blocks.clear();
+	thinkingRuns.delete(thread);
+}
+
+/** A row as the panel reads it: the whole thought while it streams, the row's own text once it ends. */
+function rowWithThought(row) {
+	const live = liveThoughts.get(row.id);
+	return row.kind === "thinking" && typeof live === "string" ? { ...row, thinking: live } : row;
+}
+
 function handleChildLine(board, thread, line) {
 	let event;
 	try {
@@ -2327,11 +2489,21 @@ function handleChildLine(board, thread, line) {
 			// The child is gone; its exit says so.
 		}
 	}
+	if (event.type === "message_start" && event.message?.role === "assistant") {
+		// `contentIndex` counts from zero in every message, so a message is what keeps two blocks apart.
+		thoughtState(thread).message += 1;
+		return;
+	}
 	if (event.type === "message_update") {
 		const next = event.assistantMessageEvent;
 		const at = Number.isInteger(next?.contentIndex) ? next.contentIndex : 0;
-		// A finished block is authoritative, so a delta dropped on the way cannot leave a hole.
-		// Thinking and tool arguments ride the same stream and stay off the card.
+		// A thought is what the run is doing while it says nothing, so it gets a row of its own.
+		if (next?.type === "thinking_start" || next?.type === "thinking_delta" || next?.type === "thinking_end") {
+			thoughtEvent(board, thread, next, at);
+			return;
+		}
+		// A finished block is authoritative, so a delta dropped on the way cannot leave a hole. Tool
+		// arguments ride the same stream and stay off the card.
 		if (next?.type === "text_delta" || next?.type === "text_end") {
 			thread.streamParts ??= new Map();
 			const said = next.type === "text_end" ? String(next.content ?? "") : `${thread.streamParts.get(at) ?? ""}${String(next.delta ?? "")}`;
@@ -2372,6 +2544,8 @@ function handleChildLine(board, thread, line) {
 		return;
 	}
 	if (event.type === "turn_end" && event.message?.role === "assistant") {
+		// A thought whose message ended without its end event stops where it stands.
+		settleThoughts(board, thread);
 		const message = event.message;
 		const text = (Array.isArray(message.content) ? message.content : [])
 			.filter((block) => block?.type === "text")
@@ -2438,6 +2612,7 @@ function handleChildLine(board, thread, line) {
 		thread.status = "idle";
 		thread.abortWanted = false;
 		stopStream(thread);
+		settleThoughts(board, thread);
 		// A run that edited has either cut its own branch or committed on the detached base, and this is
 		// the moment the board learns which and puts a name on the work.
 		settleTreeBranch(board, thread);
@@ -3602,7 +3777,7 @@ const server = createServer((req, res) => {
 				fail(res, 404, "no detail kept for this row");
 				return;
 			}
-			answer(res, 200, row);
+			answer(res, 200, rowWithThought(row));
 			return;
 		}
 		// The conversation behind a thread, rendered for reading: what the activity rail summarises and
