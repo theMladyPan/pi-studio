@@ -751,7 +751,9 @@
       return line;
     }
     const branch = el("span", "tree-branch");
-    branch.textContent = tree.branch ?? "no branch";
+    // A tree on its detached base has no branch until the child cuts one, and the line says which base
+    // it is standing on rather than leaving an empty slot the human has to interpret.
+    branch.textContent = tree.branch ?? `detached on ${tree.base}`;
     line.appendChild(branch);
     if (tree.ignored === false) {
       const warn = el("span", "tree-warn");

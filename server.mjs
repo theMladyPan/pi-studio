@@ -412,7 +412,6 @@ function saveBoard(board) {
 		savedAt: Date.now(),
 		activity: board.activity.slice(-MAX_ACTIVITY),
 		config: activeConfig(board),
-		...(Number.isInteger(board.agentSeq) ? { agentSeq: board.agentSeq } : {}),
 		trees: board.trees,
 		threads: [...board.threads.values()].map((thread) => ({
 			id: thread.id,
@@ -428,7 +427,6 @@ function saveBoard(board) {
 			...(thread.mini ? { mini: true } : {}),
 			...(thread.threadRoot ? { threadRoot: thread.threadRoot } : {}),
 			...(thread.hidden ? { hidden: true } : {}),
-			...(thread.agent ? { agent: thread.agent } : {}),
 			...(thread.type ? { type: thread.type } : {}),
 			...(thread.worktree ? { worktree: thread.worktree } : {}),
 		})),
@@ -508,7 +506,6 @@ function restoredThread(raw, folder) {
 		...(rect ? { rect } : {}),
 		...(raw.mini ? { mini: true } : {}),
 		...(typeof raw.threadRoot === "string" && raw.threadRoot ? { threadRoot: raw.threadRoot } : {}),
-		...(typeof raw.agent === "string" && raw.agent ? { agent: raw.agent } : {}),
 		...(typeof raw.type === "string" && raw.type ? { type: raw.type } : {}),
 		// The tree is not made again after a restart: it is on disk, and its branch is where the work is.
 		...(raw.worktree && typeof raw.worktree === "object" && typeof raw.worktree.path === "string"
@@ -587,13 +584,13 @@ function boardFor(workspace) {
 	// before this was called `config` kept the same three fields under `defaults`.
 	const born = saved?.config && typeof saved.config === "object" ? saved.config : saved?.defaults;
 	board.config = { ...homeDefaults, ...(born && typeof born === "object" ? born : {}) };
-	if (Number.isInteger(saved?.agentSeq) && saved.agentSeq > 0) board.agentSeq = saved.agentSeq;
 	if (Array.isArray(saved?.trees)) {
 		board.trees = saved.trees.filter(
 			(tree) =>
 				tree &&
 				typeof tree.path === "string" &&
-				typeof tree.branch === "string" &&
+				// A tree still on its detached base was never given a branch, and is a tree all the same.
+				(tree.branch === undefined || typeof tree.branch === "string") &&
 				typeof tree.base === "string" &&
 				tree.base.length > 0,
 		);
@@ -616,11 +613,6 @@ function boardFor(workspace) {
 		// here rather than let a card quietly re-fork because a thread id in it means nothing.
 		for (const thread of [...board.threads.values()]) {
 			if (thread.hidden && !ownedCards(board, thread.id).length) board.threads.delete(thread.id);
-		}
-		// A label is never handed out twice: the counter starts past every thread the file remembers.
-		for (const thread of board.threads.values()) {
-			const number = Number(String(thread.agent ?? "").replace(/^agent-/, ""));
-			if (Number.isInteger(number) && number >= (board.agentSeq ?? 1)) board.agentSeq = number + 1;
 		}
 		// The tree is the board's record, so a thread points at that object rather than a copy of it.
 		for (const thread of board.threads.values()) {
@@ -751,15 +743,12 @@ function slugOf(text) {
 }
 
 /**
- * The label a thread takes its branch and folder from: `agent-1`, `agent-2`, in the order threads
- * start. A counter rather than a place on the board, because `clean` frees places and two threads
- * must never be handed the same branch.
+ * What a thread's branch and folder are told apart by: the first eight hex of its own id.
+ * `8c53f1d7` is unique without a counter and without a suffix for two threads that share a title,
+ * and it is short enough to read in a path.
  */
-function agentLabel(board) {
-	const next =
-		Number.isInteger(board.agentSeq) && board.agentSeq > 0 ? board.agentSeq : board.threads.size + 1;
-	board.agentSeq = next + 1;
-	return `agent-${next}`;
+function shortId(thread) {
+	return String(thread.id).slice(0, 8);
 }
 
 /**
@@ -779,31 +768,23 @@ function ensureWorktree(board, thread) {
 		thread.worktree = { skipped: "the repository has no branch to cut from" };
 		return thread.worktree;
 	}
-	const agent = thread.agent ?? agentLabel(board);
-	const type = workType(thread.title, thread.type);
-	const slug = slugOf(thread.title);
-	const taken = (name) =>
-		existsSync(join(repo, AGENTS_DIR, agent, name)) ||
-		gitIn(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${agent}/${type}/${name}`]).ok;
-	// A name an earlier thread still holds is not this thread's to write in, so the newer one is the
-	// one that takes a suffix.
-	const name = taken(slug) ? `${slug}-${thread.id.slice(0, 4)}` : slug;
-	const branch = `${agent}/${type}/${name}`;
-	const path = join(repo, AGENTS_DIR, agent, name);
-	const added = gitIn(repo, ["worktree", "add", "-b", branch, path, base], 10_000);
+	const short = shortId(thread);
+	const path = join(repo, AGENTS_DIR, short);
+	// Detached on purpose. A branch is a name for work, and the work is not known until the child has
+	// read the code: a name invented from the request is one the work has to be renamed out of later,
+	// and a request that is only a question never earns a branch at all.
+	const added = gitIn(repo, ["worktree", "add", "--detach", path, base], 10_000);
 	if (!added.ok) {
 		thread.worktree = { skipped: `git worktree add failed: ${added.err.split("\n")[0] || "no reason given"}` };
 		return thread.worktree;
 	}
 	const tree = {
 		path,
-		branch,
 		base,
-		agent,
 		repo,
 		// A tree git can see is a tree in `git status` of the main checkout, which is what the human
 		// reads. Said on the card rather than fixed behind their back.
-		ignored: gitIn(repo, ["check-ignore", "--quiet", join(AGENTS_DIR, agent, name)]).ok,
+		ignored: gitIn(repo, ["check-ignore", "--quiet", join(AGENTS_DIR, short)]).ok,
 		thread: thread.id,
 		title: thread.title,
 		at: Date.now(),
@@ -821,6 +802,44 @@ function workdirOf(board, thread) {
 	return tree?.path && existsSync(tree.path) ? tree.path : board.folder;
 }
 
+/** The branch a tree is standing on, or "" while it is detached or unreadable. */
+function headBranch(path) {
+	const head = gitIn(path, ["rev-parse", "--abbrev-ref", "HEAD"]);
+	return head.ok && head.out && head.out !== "HEAD" ? head.out : "";
+}
+
+/**
+ * What the tree has become since the last turn: the branch the child cut for itself, or a branch the
+ * board has to cut on its behalf.
+ *
+ * A child is told to branch before it edits. One that skipped that and committed on the detached base
+ * left its commits reachable from the reflog alone, where a sweep reads the tree as empty, so the work
+ * is named here rather than lost. The name comes from the commit it wrote, which is the one piece of
+ * text that describes what the work turned out to be.
+ */
+function settleTreeBranch(board, thread) {
+	const tree = thread.worktree;
+	if (!tree?.path || !existsSync(tree.path)) return;
+	const head = headBranch(tree.path);
+	if (head) {
+		if (head === tree.branch) return;
+		tree.branch = head;
+		scheduleSave(board);
+		return;
+	}
+	const ahead = gitIn(tree.path, ["rev-list", "--count", `${tree.base}..HEAD`]);
+	if (!ahead.ok || Number(ahead.out) < 1) return;
+	const subject = gitIn(tree.path, ["log", "-1", "--format=%s"]).out;
+	// The subject carries its own `<type>:` prefix, and a branch that reads `chore/chore-add-a-file` says
+	// the kind of change twice. The prefix already chose the type, so the slug is what follows it.
+	const bare = subject.replace(/^[a-z]+(\([^)]*\))?!?:\s*/i, "");
+	const slug = slugOf(bare);
+	const branch = `${workType(subject, thread.type)}/${slug === "work" ? "wip" : slug}-${shortId(thread)}`;
+	if (!gitIn(tree.path, ["checkout", "-b", branch]).ok) return;
+	tree.branch = branch;
+	scheduleSave(board);
+}
+
 /**
  * Let a tree go, but only one with nothing worth keeping: uncommitted changes or a commit the base
  * does not have are reported, never deleted. `clean` is the only caller, so a tree outlives its thread
@@ -829,12 +848,16 @@ function workdirOf(board, thread) {
 function retireWorktree(board, tree) {
 	if (!tree?.path) return null;
 	const repo = (existsSync(tree.path) ? mainRepoOf(tree.path) : "") || tree.repo || repoOf(board.folder);
-	if (!repo) return { path: tree.path, branch: tree.branch, kept: "not a repository any more" };
+	// A tree still on its detached base has no branch yet, so what it holds is asked of HEAD inside the
+	// tree. `tree.branch` is only filled in once the child cut one or the board cut one for it.
+	const branch = typeof tree.branch === "string" ? tree.branch : "";
+	const label = branch || `detached at ${tree.base}`;
+	if (!repo) return { path: tree.path, branch: label, kept: "not a repository any more" };
 	if (existsSync(tree.path)) {
 		const dirty = gitIn(tree.path, ["status", "--porcelain"]);
-		if (!dirty.ok) return { path: tree.path, branch: tree.branch, kept: "git could not read it" };
+		if (!dirty.ok) return { path: tree.path, branch: label, kept: "git could not read it" };
 		if (dirty.out) {
-			return { path: tree.path, branch: tree.branch, kept: `${dirty.out.split("\n").length} uncommitted change(s)` };
+			return { path: tree.path, branch: label, kept: `${dirty.out.split("\n").length} uncommitted change(s)` };
 		}
 	} else {
 		// A tree somebody deleted by hand is already gone; its registration in .git/worktrees is not.
@@ -842,39 +865,47 @@ function retireWorktree(board, tree) {
 	}
 	// A branch deleted by hand takes the tree with it in every real case, so the record has nothing left
 	// to protect. Without this check the unreadable count below would report a phantom tree for ever.
-	if (!gitIn(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`]).ok) {
+	if (branch && !gitIn(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok) {
 		const gone = board.trees.findIndex((candidate) => candidate.path === tree.path);
 		if (gone !== -1) board.trees.splice(gone, 1);
-		return { path: tree.path, branch: tree.branch, removed: true, note: "the branch is already gone" };
+		return { path: tree.path, branch: label, removed: true, note: "the branch is already gone" };
 	}
 	// The branch is what holds the work, and a count git cannot read is not a zero: a renamed or
 	// deleted base made `rev-list` fail here once and the branch was deleted with commits on it.
-	const ahead = gitIn(repo, ["rev-list", "--count", `${tree.base}..${tree.branch}`]);
+	const ahead = branch
+		? gitIn(repo, ["rev-list", "--count", `${tree.base}..${branch}`])
+		: existsSync(tree.path)
+			? gitIn(tree.path, ["rev-list", "--count", `${tree.base}..HEAD`])
+			: { ok: false, out: "" };
 	if (!ahead.ok) {
-		return { path: tree.path, branch: tree.branch, kept: `could not read ${tree.base}..${tree.branch}` };
+		return { path: tree.path, branch: label, kept: `could not read ${tree.base}..${branch || "HEAD"}` };
 	}
 	const commits = Number(ahead.out) || 0;
-	if (commits > 0) return { path: tree.path, branch: tree.branch, kept: `${commits} commit(s) not in ${tree.base}` };
+	if (commits > 0) return { path: tree.path, branch: label, kept: `${commits} commit(s) not in ${tree.base}` };
 	if (existsSync(tree.path)) {
 		const removed = gitIn(repo, ["worktree", "remove", tree.path], 10_000);
 		if (!removed.ok) {
-			return { path: tree.path, branch: tree.branch, kept: removed.err.split("\n")[0] || "could not be removed" };
+			return { path: tree.path, branch: label, kept: removed.err.split("\n")[0] || "could not be removed" };
 		}
-		// `.agents/agent-1` is one thread's folder and goes with it; `rmdir` refuses a folder that
-		// still holds another thread's tree, which is the answer wanted.
-		try {
-			rmdirSync(dirname(tree.path));
-		} catch {
-			// Something else lives there, or it is already gone.
+		// A tree made by the older `<agent>/<slug>` layout leaves an empty folder behind; one made by the
+ 		// current layout sits directly in `.agents` and must not take that folder with it. `rmdir`
+		// refuses a folder that still holds another thread's tree, which is the answer wanted.
+		if (basename(dirname(tree.path)) !== AGENTS_DIR) {
+			try {
+				rmdirSync(dirname(tree.path));
+			} catch {
+				// Something else lives there, or it is already gone.
+			}
 		}
 	}
-	// Nothing is ahead of the base, so the branch holds no work of its own.
-	const branchGone = gitIn(repo, ["branch", "-D", tree.branch]);
+	// Nothing is ahead of the base, so the branch holds no work of its own. A detached tree has no branch
+	// to delete: its commits were never given a name, and there were none.
+	const branchGone = branch ? gitIn(repo, ["branch", "-D", branch]) : { ok: true, out: "" };
 	const at = board.trees.findIndex((candidate) => candidate.path === tree.path);
 	if (at !== -1) board.trees.splice(at, 1);
 	return {
 		path: tree.path,
-		branch: tree.branch,
+		branch: label,
 		removed: true,
 		...(branchGone.ok ? {} : { branchKept: branchGone.err.split("\n")[0] || "git refused" }),
 	};
@@ -1038,6 +1069,9 @@ function plainCardFor(card, board = null) {
 					}),
 	};
 	if (card.updatedAt) shown.updatedAt = card.updatedAt;
+	// The key is what a `[[key]]` in another card or in a reply points at, so the browser needs it to
+	// make the cross-reference clickable. Without it the link falls back to a title that never matches.
+	if (card.key) shown.key = card.key;
 	if (card.rect) shown.rect = card.rect;
 	if (card.mini) shown.mini = true;
 	if (card.threadRoot) shown.threadRoot = card.threadRoot;
@@ -1347,15 +1381,23 @@ function lastLine(tail) {
  * What a thread is told about the folder it works in. The board makes the tree before the child is
  * spawned, so this is a fact to report, not an instruction to obey: `2e6c8db` asked the child to run
  * `git worktree add` itself, and a rule a model may skip is a rule that half the time is skipped.
+ *
+ * The tree starts detached, so the branch is the one thing here the child does create. It is told to
+ * cut it before its first edit and to name it after the work it turned out to be, because a name
+ * decided from the request describes the question rather than the answer.
  */
 function worktreePrompt(board, thread) {
 	const tree = thread.worktree;
+	const short = shortId(thread);
 	const lines = [];
 	if (tree?.path) {
 		lines.push(
 			`Other threads may be working in ${board.folder} at the same time. The board gives each thread its own git worktree, so a change of yours cannot collide with one of theirs.`,
-			`Your worktree is ${tree.path}, on branch ${tree.branch}, cut from ${tree.base}. Work inside it.`,
-			`Commit on ${tree.branch}. If files changed, name the branch and the path in one clause; nothing more. Nobody merges for you: cutting a branch and merging one are the human's decisions.`,
+			`Your worktree is ${tree.path}, detached on ${tree.base}: no branch has been cut yet, and nothing is committed there. Read and analyze in it as long as you like without one.`,
+			`Before your first edit, cut your own branch with \`git checkout -b <type>/<slug>-${short}\`: <type> is fix, feat, refactor, docs, test or chore, and <slug> says what the work turned out to be, in kebab-case. Commit there. A request that only asks a question leaves the tree detached and writes no branch.`,
+			`That tree is yours alone. Stay on your branch while you edit and commit: it is your playground, and the human reads it as your work. You may check out ${tree.base} or another branch to read and compare, as long as nothing is left uncommitted when you switch back.`,
+			`If the work turns out to be something other than the branch name says, rename it with \`git branch -m <type>/<slug>-${short}\` and report the new name.`,
+			`If files changed, name the branch and the path in one clause; nothing more. Nobody merges for you: cutting a branch and merging one are the human's decisions.`,
 		);
 		if (!existsSync(tree.path)) {
 			lines.push(
@@ -1369,14 +1411,14 @@ function worktreePrompt(board, thread) {
 		}
 	} else {
 		lines.push(
-			`No worktree was made: ${tree?.skipped ?? "the board has none for this thread"}. Work in ${board.folder} itself, and say so if that is a problem.`,
+			`No worktree was made: ${tree?.skipped ?? "the board has none for this thread"}. Work in ${board.folder} itself, where there is no branch to cut and no separate tree: edit the files in place, and say so when you report.`,
 		);
 	}
 	lines.push(
 		"Examples of right and wrong:",
-		`- right: the job is to rewrite the parser in a repository: edit files under ${tree?.path ?? `${board.folder}/${AGENTS_DIR}/<your tree>`}, then commit on its branch.`,
-		`- right: "how does the router pick a board?" is answered with reads. The tree exists and stays empty.`,
-		`- wrong: editing parser.ts in ${board.folder} itself, or merging your branch into ${tree?.base ?? "the base branch"}, because another thread may have the same files open.`,
+		`- right: the job is to rewrite the parser in a repository: read first, cut \`feat/rewrite-the-parser-${short}\`, edit files under ${tree?.path ?? `${board.folder}/${AGENTS_DIR}/<your tree>`}, commit there, and stop.`,
+		`- right: "how does the router pick a board?" is answered with reads on the detached tree, which stays detached and holds no branch.`,
+		`- wrong: cutting a branch named after the request before you have read anything, or editing parser.ts in ${board.folder} itself, or merging your branch into ${tree?.base ?? "the base branch"}, because another thread may have the same files open.`,
 	);
 	return lines.join("\n");
 }
@@ -1776,6 +1818,9 @@ function handleChildLine(board, thread, line) {
 		thread.status = "idle";
 		thread.abortWanted = false;
 		stopStream(thread);
+		// A run that edited has either cut its own branch or committed on the detached base, and this is
+		// the moment the board learns which and puts a name on the work.
+		settleTreeBranch(board, thread);
 		// A turn whose answer was redirected by a steer, or whose run was stopped, never gets a reply
 		// of its own. It reads as stopped rather than as a message still being worked on, and the
 		// caret goes because nothing is being written any more.
@@ -1973,8 +2018,6 @@ async function onThread(req, res, board) {
 		title: typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 80) : `thread ${board.threads.size + 1}`,
 		sessionId: null,
 		status: "idle",
-		// The label its branch and folder are named after, taken now so a later rename cannot move them.
-		agent: agentLabel(board),
 		...(WORK_TYPES.some(([type]) => type === body.type) ? { type: body.type } : {}),
 		...runtimeDefaults(board),
 		...(typeof body.model === "string" && body.model ? { model: body.model } : {}),

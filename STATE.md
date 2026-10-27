@@ -43,24 +43,40 @@ commit's own account rather than on a check run now, the section below says so.
   through a 2FA gateway. Test scripts in that folder are skipped too — `test-delegate-retry.mts`
   exports no factory, so pi refuses to load it and the thread dies before it can answer.
 - **What a thread is told**: `--append-system-prompt` says it is one thread on a board, in which
-  folder, that the human reads cards rather than a chat log, and that its chat answer is a pointer of a
-  line or two naming the cards it wrote as `[[key]]`. It is told that one card holds one kind of thing
-  — a chart, an analysis, a diagram, a checklist — that it reads the board before writing so a card on
-  the same subject is revised under its key rather than duplicated, and that only a fenced svg block
-  draws a picture. It is also told where its own git worktree is, what branch it is on and what
-  that branch was cut from, that it commits there and reports the branch, and that no merge happens
-  without the human. Three examples of right and wrong are in the prompt. A thread whose folder is not
+  folder, that the human reads cards rather than a chat log, and that its chat answer is a pointer of
+  a line or two naming the cards it wrote as `[[key]]`, that a card must carry the very key the
+  pointer names, and that neither a plan nor a summary belongs in that answer. It is told that one
+  card holds one kind of thing — a chart, an analysis, a diagram, a checklist — that it reads the
+  board before writing so a card on the same subject is revised under its key rather than duplicated,
+  and that only a fenced svg block draws a picture. It is also told where its own git worktree is,
+  what branch it is on and what that branch was cut from, that it commits there, that changed files
+  earn one clause naming the branch and the path, and that no merge happens without the human. Three
+  examples of right and wrong are in the prompt. A thread whose folder is not
   a repository is told it works in place, and why.
 - **The board makes the worktree, not the child.** On a thread's first message, before anything is
-  spawned, the daemon runs `git worktree add -b <agent>/<type>/<slug> <repo>/.agents/<agent>/<slug>
-  <base>`, spawns the child with that path as its `cwd`, and puts the branch and path on the thread's
-  card. `<agent>` is `agent-1`, `agent-2` in the order threads start, from a counter kept in the board
-  file so `clean` cannot hand a label on. `<type>` is read from the title (`fix`, `refactor`, `docs`,
-  `test`, `chore`, else `feat`) and `POST /thread {type}` overrides it. `<base>` is `dev` when the
-  repository has one, else the branch checked out. The label, not the title, is what keeps two threads
-  apart, so two threads with the same title still get different branches. This supersedes `2e6c8db`,
+  spawned, the daemon runs `git worktree add --detach <repo>/.agents/<id> <base>`, spawns the child
+  with that path as its `cwd`, and leaves the branch to the child. `<id>` is the first eight hex of the
+  thread id, so the folder is one level deep and never collides with another thread's. The tree starts
+  detached because a branch is a name for work and the work is not known until the code has been read:
+  a request that only asks a question writes no branch at all, and an implementation still answers "what
+  is this" before it answers "what do we call it". `POST /thread {type}` still overrides the kind of
+  change when the human knows it up front. `<base>` is `dev` when the repository has one, else
+  the branch checked out. The child is told to cut `<type>/<slug>-<id>` before its first edit, `<type>`
+  being `fix`, `feat`, `refactor`, `docs`, `test` or `chore` and the slug saying what the work turned
+  out to be; to stay on that branch while it edits and commits; that it may check out the base or
+  another branch to read and compare; and that it may rename its branch when the name stops fitting.
+  No branch is ever named `thread-N` or `agent-N`, and no counter is kept. This supersedes `2e6c8db`,
   which handed `git worktree add` to the child: a rule a model may skip is a rule that half the time is
   skipped.
+- **The board learns the branch from the tree, after every turn.** `settleTreeBranch` reads
+  `git rev-parse --abbrev-ref HEAD` in the tree when a run settles, so the card shows the branch the
+  child actually cut without the child having to say so. A detached HEAD that has commits ahead of the
+  base is a child that committed without branching, where the work is reachable from the reflog alone
+  and a sweep would read the tree as empty: the board cuts `<type>/<slug>-<id>` there itself, taking
+  the type and the slug from the commit subject with its own `feat:` prefix removed, `wip` when that
+  subject says nothing. `retireWorktree` asks the same question in the other direction, counting
+  `base..HEAD` inside a tree with no branch and reporting such a tree as `detached at <base>`. A card
+  whose tree is still detached prints `detached on <base>` in its muted worktree line.
 - **A thread moved into a tree takes its session with it.** pi resolves `--session <id>` in the folder
   the child is started in, so once the child runs in a worktree its session is a session of another
   project, and pi's answer to that is a question on stdin — `Fork this session into current directory?
@@ -100,7 +116,9 @@ commit's own account rather than on a check run now, the section below says so.
   `POST /close` treat a note like a thread. A message asked on a note starts a thread named after
   it, cascading under the note through `threadRoot`. Notes are saved with the board and come back
   with their text, place and fold. A `key` makes a note stable: the same key revises that card
-  instead of stacking another, which is what a running agent stepping through a job needs. A note
+  instead of stacking another, which is what a running agent stepping through a job needs. The key
+  goes out with the card, because a `[[key]]` written in another card or in a reply is resolved
+  against it in the browser: a key the client never received is a link that goes nowhere. A note
   holds at most 100 000 characters and the board keeps 200 of them.
 - **Source cards**: `POST /card/source {path, line?, title?, key?}` reads a file from the workspace
   and shows it on the board, refusing anything outside the folder, a folder, a binary, or more than
@@ -307,7 +325,10 @@ where it works; a second thread in the same repository got `agent-2/refactor/ref
 base was `dev` where the repository had one and `main` where it did not; `ignored` came back true in a
 repository whose `.gitignore` listed `.agents/` and false in one that did not, and the false case put a
 line about it in the child's prompt; a folder that is not a repository got `{skipped: "this folder is
-not a git repository"}` on the thread and on its card, and the child still ran there. `clean` removed
+not a git repository"}` on the thread and on its card, and the child still ran there. Those paths and
+branches are the older `<agent>/<type>/<slug>` layout, which is superseded twice over: `.agents/<id>`
+with the branch cut by the child replaces it, and the code still sweeps a tree made by the old layout
+because it retires whatever path the board recorded. `clean` removed
 three empty trees and their branches, kept a fourth whose tree had one commit the base did not have,
 and said so: `1 commit(s) not in dev`. A tree whose thread was closed with `POST /close` was swept by
 the next `clean`, and a tree left behind by `POST /new` was still reported by a later `clean`, which is
@@ -317,6 +338,20 @@ the child actually received was read out of its session file, which is how the w
 rather than assumed. `board_source` resolving a relative path against the asking thread's tree is
 reasoning from the code: no run has asked for a file from inside a tree yet, and none of this has been
 seen in a browser.
+
+The detached tree, against the live daemon on this repository: a thread asked to name the constant
+holding `.agents` made `.agents/94f3d5ce` and stood there detached, with no branch in `git branch` and
+no `branch` field on the record. Told to write a file and commit it, the same thread cut
+`chore/notes-probe-94f3d5ce` itself and the board read that name off the tree at `agent_settled`, so
+the card carried a branch the child had never reported. A second thread told to commit while staying
+detached did exactly that (`61510a6`, reachable only from the reflog), and the board cut
+`chore/add-rescue-probe-md-<id>` on its behalf and moved the tree onto it; before the prefix strip that
+name read `chore/chore-add-rescue-probe-md-<id>`, so the strip is checked against four subjects rather
+than assumed. A third thread read only and left the tree detached with nothing in it; `POST /close`
+followed by `POST /clean` removed that tree and reported it as `detached at dev`, while the two trees
+holding commits were kept and reported against their branches. The three probe threads, their trees and
+their branches were removed by hand afterwards. Not exercised: a daemon restart with a detached tree on
+the board, which the loader now allows, and any of this in a browser.
 
 A thread moved into a tree, against the same kind of throwaway daemon: the board file was edited to give
 it a session made in the workspace folder, and its next message made the tree and started the child with
