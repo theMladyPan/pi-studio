@@ -27,6 +27,19 @@ commit's own account rather than on a check run now, the section below says so.
 - **Threads** are cards: `POST /thread` creates one in the open workspace, `POST /message {cardId,
   text, mode}` prompts it. The child is spawned on the first message, one per thread, and shut down
   when it settles.
+- **A thread is named by its first request, never by a counter.** `POST /thread` with no title leaves
+  the card nameless, and its head shows nothing until there is something to show. The first message
+  names it twice over: `titleFromRequest` takes its opening words at once, and `nameThread` asks
+  `PI_STUDIO_NAME_MODEL` (default `openrouter/z-ai/glm-5.3-flash`, naming off when empty) beside the
+  turn for two to four better words, keeping the answer only when `plausibleTitle` accepts its shape
+  and it is not a dull name like "work" or `thread 1a2b3c4d`. `namedBy` records whether the human,
+  `request` or the model chose, and only the `request` name is ever replaced, so a rename by hand
+  survives a slow model. A name that never arrives is said on stderr rather than passed over.
+- **A link to a card that is not there says so.** `[[key]]` is resolved against the keys and names on
+  the board each time a card paints, so a link whose card was closed or never written is marked
+  `stale` before any click: muted, dashed, with a title naming what is missing. The click reports the
+  miss in the footer's `footHint`, which is always on screen, unlike the composer's own hint that goes
+  away when its field is docked in a card.
 - **A thread draws on its own board.** Every child is started with `-ne -e bridge/child-bridge.mjs`
   and four environment variables (`PI_STUDIO_URL`, `PI_STUDIO_TOKEN`, `PI_STUDIO_WORKSPACE`,
   `PI_STUDIO_THREAD`), and the bridge registers three tools that post to the board's own routes:
