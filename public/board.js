@@ -2109,8 +2109,12 @@
     middleDragMoved = () => false;
   });
 
-  function fitAll() {
-    if (!cards.length) return;
+  /**
+   * Every card's outer edges in board units, or null on an empty board. One place measures the
+   * board's extent, so a fit and the minimap cannot disagree about where it ends.
+   */
+  function boardBounds() {
+    if (!cards.length) return null;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const card of cards) {
       const x = parseFloat(card.style.left);
@@ -2120,6 +2124,13 @@
       maxX = Math.max(maxX, x + card.offsetWidth);
       maxY = Math.max(maxY, y + card.offsetHeight);
     }
+    return { minX, minY, maxX, maxY };
+  }
+
+  function fitAll() {
+    const bounds = boardBounds();
+    if (!bounds) return;
+    const { minX, minY, maxX, maxY } = bounds;
     const pad = 40;
     const k = Math.min(
       (viewport.clientWidth - pad * 2) / (maxX - minX),
