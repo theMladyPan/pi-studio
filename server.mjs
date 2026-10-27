@@ -49,6 +49,8 @@ const run = promisify(execFile);
 /** Read once from pi, kept for a while: the picker must work before any thread has a child. */
 let catalog = null;
 let catalogAt = 0;
+/** Scope patterns already reported on stderr, so a stale pattern is not shouted once per picker open. */
+const saidScopeProblems = new Set();
 
 /**
  * The models this machine can actually run. `pi --list-models` prints a table for humans, so the
@@ -85,6 +87,109 @@ async function modelCatalog() {
 	catalog = { models, levels: THINKING_LEVELS };
 	catalogAt = Date.now();
 	return catalog;
+}
+
+/**
+ * Where pi keeps the settings that `/scoped-models` writes: the agent directory, which
+ * `PI_CODING_AGENT_DIR` can move out of `~/.pi/agent`. Only that file is read. A project
+ * `.pi/settings.json` can override `enabledModels` for one folder, and a board opened on such a
+ * folder would then show a wider list than its children cycle.
+ */
+function piSettingsFile() {
+	return join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "settings.json");
+}
+
+/**
+ * The models pi itself offers while cycling: `enabledModels` from the settings file, in the order it
+ * was written. Read on every call rather than kept beside the catalogue, because the human edits this
+ * in a console pi while the daemon runs and the picker has to show the edit without a restart. No
+ * file, no key, or a file caught mid-write all mean no scope, which is every model, as before.
+ */
+function readScope() {
+	let held;
+	try {
+		held = JSON.parse(readFileSync(piSettingsFile(), "utf8"));
+	} catch {
+		return [];
+	}
+	const patterns = held?.enabledModels;
+	if (!Array.isArray(patterns)) return [];
+	return patterns.filter((one) => typeof one === "string" && one.trim()).map((one) => one.trim().slice(0, 120));
+}
+
+/** `*` and `?` mean what they mean to pi; every other character of a pattern is literal. */
+function patternToRegExp(pattern) {
+	const body = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+	return new RegExp(`^${body}$`, "i");
+}
+
+/**
+ * The one model a partial pattern names, chosen the way pi chooses: an alias id beats a dated one, and
+ * the later id beats the earlier, so `sonnet` means `claude-sonnet-4-5` rather than the snapshot with a
+ * date on it. A catalogue order decides nothing.
+ */
+function bestPartial(matches) {
+	const aliases = matches.filter((one) => one.model.endsWith("-latest") || !/-\d{8}$/.test(one.model));
+	return [...(aliases.length ? aliases : matches)].sort((left, right) => right.model.localeCompare(left.model))[0];
+}
+
+/**
+ * Pi's scope patterns resolved against the catalogue the daemon already has, in the order pi wrote
+ * them. Pi matches these with minimatch plus a fuzzy match on model names; the catalogue read from
+ * `--list-models` carries names for no model, so the fuzzy half is the one thing this cannot do. A
+ * pattern that matches nothing is reported rather than dropped: a scope quietly smaller than pi's is
+ * a picker that hides models for no stated reason.
+ */
+function resolveScope(patterns, models) {
+	const scoped = [];
+	const problems = [];
+	const seen = new Set();
+	const add = (one) => {
+		const key = `${one.provider}\u0000${one.model}`;
+		if (seen.has(key)) return;
+		seen.add(key);
+		scoped.push(one);
+	};
+	for (const pattern of patterns) {
+		// `model:high` scopes a model at one thinking level in pi. The level is not this picker's business,
+		// so it is cut away and the model is offered like any other.
+		const cut = pattern.lastIndexOf(":");
+		const base = cut > 0 && THINKING_LEVELS.includes(pattern.slice(cut + 1)) ? pattern.slice(0, cut) : pattern;
+		const needle = base.toLowerCase();
+		// `provider/id` is the whole pattern when that provider has the model: pi prefers the named provider
+		// over the same id on another one, and so does this, or an OpenRouter row spelled `google/x` would
+		// ride along with the Google one.
+		const exact = models.filter((one) => `${one.provider}/${one.model}`.toLowerCase() === needle);
+		if (exact.length) {
+			for (const one of exact) add(one);
+			continue;
+		}
+		// A bare id resolves on every provider that offers it, which is what pi does when a pattern is
+		// ambiguous between providers.
+		const bare = models.filter((one) => one.model.toLowerCase() === needle);
+		if (bare.length) {
+			for (const one of bare) add(one);
+			continue;
+		}
+		if (/[*?[]/.test(base)) {
+			const glob = patternToRegExp(base);
+			const matched = models.filter((one) => glob.test(`${one.provider}/${one.model}`) || glob.test(one.model));
+			if (!matched.length) problems.push(pattern);
+			for (const one of matched) add(one);
+			continue;
+		}
+		// What is left is a piece of an id. Pi answers that with one model, not with every model the piece
+		// appears in, so a scope cannot widen unnoticed by a pattern meant to name a single model.
+		const partial = models.filter((one) => one.model.toLowerCase().includes(needle));
+		if (!partial.length) {
+			problems.push(pattern);
+			continue;
+		}
+		const best = bestPartial(partial);
+		// The same id on several providers is the one tie pi keeps.
+		for (const one of partial.filter((candidate) => candidate.model === best.model)) add(one);
+	}
+	return { scoped, problems };
 }
 
 /**
@@ -3133,9 +3238,20 @@ const server = createServer((req, res) => {
 		}
 
 		// ----- board -----
-		// What the composer's pickers offer: every model this machine can run, and the levels pi names.
+		// What the composer's pickers offer: every model this machine can run, the levels pi names, and
+		// the scope pi cycles — pi's own `enabledModels`, which is where /scoped-models writes it. The
+		// scope is read here rather than cached with the catalogue, so an edit made in a console pi lands
+		// on the next open of the picker.
 		if (req.method === "GET" && url.pathname === "/models") {
-			answer(res, 200, await modelCatalog());
+			const { models, levels } = await modelCatalog();
+			const scope = readScope();
+			const { scoped, problems } = resolveScope(scope, models);
+			for (const pattern of problems) {
+				if (saidScopeProblems.has(pattern)) continue;
+				saidScopeProblems.add(pattern);
+				console.error(`pi-studio: pi's scope pattern ${JSON.stringify(pattern)} matched no model here`);
+			}
+			answer(res, 200, { models, levels, scope, scoped, problems });
 			return;
 		}
 		if (req.method === "GET" && url.pathname === "/state") {
