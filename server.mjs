@@ -563,6 +563,7 @@ function saveBoard(board) {
 			...(thread.mini ? { mini: true } : {}),
 			...(thread.threadRoot ? { threadRoot: thread.threadRoot } : {}),
 			...(thread.hidden ? { hidden: true } : {}),
+			...(thread.closedAt ? { closedAt: thread.closedAt } : {}),
 			...(thread.type ? { type: thread.type } : {}),
 			...(thread.worktree ? { worktree: thread.worktree } : {}),
 		})),
@@ -627,7 +628,8 @@ function restoredThread(raw, folder) {
 	if (!raw || typeof raw !== "object" || typeof raw.id !== "string") return null;
 	const turns = restoredTurns(raw.turns);
 	const rect = cleanRect(raw.rect);
-	return {
+	/** The thread as its file describes it, before the one repair a legacy file needs. */
+	const thread = {
 		id: raw.id,
 		title: typeof raw.title === "string" && raw.title ? raw.title : "thread",
 		sessionId: typeof raw.sessionId === "string" ? raw.sessionId : null,
@@ -651,8 +653,16 @@ function restoredThread(raw, folder) {
 		// Boards saved before this was a plain flag said `behind: <cardId>`; the id is not needed now that
 		// ownership decides which cards a thread answers for.
 		...(raw.hidden === true || (typeof raw.behind === "string" && raw.behind) ? { hidden: true } : {}),
+		// When the human put its card away, so the rail can offer it back. A thread that is only hidden
+		// because a card is where it is read was never closed by anyone.
+		...(Number.isFinite(raw.closedAt) ? { closedAt: raw.closedAt } : {}),
 		folder,
 	};
+	// A board written before a closed card carried a mark said only `hidden`, which a child that answers
+	// for a card also says. A hidden thread with no card behind it was put away by the human, so it is
+	// offered back like one rather than staying lost in a file nobody can reach.
+	if (thread.hidden && !thread.threadRoot && !thread.closedAt) thread.closedAt = thread.at;
+	return thread;
 }
 
 /** Rebuild a plain card from its file. One without the body its type needs is nothing, so it goes. */
@@ -1488,7 +1498,13 @@ function broadcast(board, payload) {
 
 /** Rebuild every open tab from the board as it stands, after something large changed at once. */
 function resync(board) {
-	broadcast(board, { type: "snapshot", cards: cardsFor(board), activity: board.activity, meta: boardMeta(board) });
+	broadcast(board, {
+		type: "snapshot",
+		cards: cardsFor(board),
+		closed: closedCards(board),
+		activity: board.activity,
+		meta: boardMeta(board),
+	});
 }
 
 /** The activity rows of a thread that is still here and still alive. */
@@ -2488,6 +2504,8 @@ function closeThread(board, thread) {
 	}
 	board.children.delete(thread.id);
 	board.threads.delete(thread.id);
+	// A thread that goes takes its place in the closed list with it.
+	nudgeClosed(board);
 }
 
 /**
@@ -2910,6 +2928,29 @@ function refreshOwned(board, thread) {
 }
 
 /**
+ * The cards the human closed while they still held a conversation. They are not drawn, but the board
+ * keeps them, so the rail can offer them back: a click that closed the wrong card costs one more click
+ * rather than a session. A thread that is hidden because a card is where it is read was never closed
+ * by anyone, so it is not here.
+ */
+function closedCards(board) {
+	return [...board.threads.values()]
+		.filter((thread) => thread.hidden && thread.closedAt)
+		.sort((a, b) => b.closedAt - a.closedAt)
+		.map((thread) => ({
+			id: thread.id,
+			title: thread.title,
+			closedAt: thread.closedAt,
+			turns: thread.turns.length,
+		}));
+}
+
+/** What the rail draws under "closed", told to every tab. */
+function nudgeClosed(board) {
+	broadcast(board, { type: "closed", closed: closedCards(board) });
+}
+
+/**
  * The thread a runtime choice applies to. A card id names the thread that answers for the card, so the
  * composer can set the model of a card whose child is not drawn anywhere.
  */
@@ -3019,8 +3060,10 @@ async function onClose(req, res, board) {
 	const kept = ownedCards(board, thread.id);
 	if (kept.length) {
 		thread.hidden = true;
+		thread.closedAt = Date.now();
 		broadcast(board, { type: "remove", id });
 		refreshOwned(board, thread);
+		nudgeClosed(board);
 	} else {
 		closeThread(board, thread);
 		broadcast(board, { type: "remove", id });
@@ -3028,6 +3071,26 @@ async function onClose(req, res, board) {
 	scheduleSave(board);
 	nudgeWelcome();
 	answer(res, 200, { closed: id, kept: kept.length });
+}
+
+/**
+ * Put a closed card back. The thread kept its session, its turns and its worktree while it was hidden,
+ * so this draws the same card again rather than starting anything: the conversation resumes where it
+ * was left, and the cards it owns stay where they are.
+ */
+async function onReopen(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const id = String(body.cardId ?? "");
+	const thread = board.threads.get(id);
+	if (!thread) return void fail(res, 404, "no such card");
+	if (!thread.hidden) return void fail(res, 409, "this card is already on the board");
+	thread.hidden = false;
+	delete thread.closedAt;
+	// The card comes back where it was, with the turns it had, and every tab hears the new list.
+	card(board, thread);
+	nudgeClosed(board);
+	answer(res, 200, { reopened: id });
 }
 
 async function onStop(req, res, board) {
@@ -3231,6 +3294,7 @@ const server = createServer((req, res) => {
 			send(new Set([res]), {
 				type: "snapshot",
 				cards: cardsFor(board),
+				closed: closedCards(board),
 				activity: board.activity,
 				meta: boardMeta(board),
 			});
@@ -3345,6 +3409,7 @@ const server = createServer((req, res) => {
 				workspace: describeWorkspace({ id: board.id, folder: board.folder, name: board.name, openedAt: 0 }),
 				threads: [...board.threads.values()].map((thread) => ({ ...thread, live: board.children.has(thread.id) })),
 				cards: cardsFor(board),
+				closed: closedCards(board),
 				activity: board.activity,
 				meta: boardMeta(board),
 			});
@@ -3362,6 +3427,7 @@ const server = createServer((req, res) => {
 				"/message": onMessage,
 				"/layout": onLayout,
 				"/close": onClose,
+				"/reopen": onReopen,
 				"/model": onModel,
 				"/thinking": onThinking,
 				"/kill": onKill,

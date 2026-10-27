@@ -364,6 +364,8 @@
   body.rail-resizing { cursor: col-resize; user-select: none; }
   #rail .rail-head { padding: 8px 12px 4px; color: var(--muted); font-size: 11px;
     text-transform: uppercase; letter-spacing: .6px; display: flex; gap: 6px; align-items: center; }
+  /* `display: flex` above outranks the browser's own `[hidden]`, so an empty head is hidden here too. */
+  #rail .rail-head[hidden] { display: none; }
   #rail .rail-head b { color: var(--accent); font-weight: 600; }
   #railToggle { margin-left: auto; background: none; border: none; color: var(--muted);
     cursor: pointer; font: 12px var(--mono); padding: 0 2px; line-height: 1; }
@@ -375,17 +377,26 @@
   #railCards { flex: 0 1 auto; min-height: 0; max-height: 45%; overflow-y: auto;
     padding: 0 8px 6px; display: flex; flex-direction: column; gap: 2px; }
   #railCards:empty { display: none; }
-  #railCards .rail-card { display: flex; align-items: center; gap: 6px; width: 100%; flex: none;
+  /* Closed cards keep a row of their own: a card put away while it still holds a conversation is one
+     click from coming back, and the row is where that click lives. */
+  #railClosed { flex: 0 1 auto; min-height: 0; max-height: 30%; overflow-y: auto;
+    padding: 0 8px 6px; display: flex; flex-direction: column; gap: 2px; }
+  #railClosed:empty { display: none; }
+  #railCards .rail-card, #railClosed .rail-card { display: flex; align-items: center; gap: 6px; width: 100%; flex: none;
     padding: 3px 6px; border: 1px solid transparent; border-radius: 6px; background: none;
     color: inherit; font: inherit; text-align: left; cursor: pointer; }
-  #railCards .rail-card:hover { background: #0f141b; border-color: #1c2128; }
-  #railCards .rail-card:focus-visible { outline: none; border-color: var(--accent-dim); }
-  #railCards .rail-card .dot { width: 6px; height: 6px; }
-  #railCards .rail-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  #railCards .rail-card:hover, #railClosed .rail-card:hover { background: #0f141b; border-color: #1c2128; }
+  #railCards .rail-card:focus-visible, #railClosed .rail-card:focus-visible { outline: none; border-color: var(--accent-dim); }
+  #railCards .rail-card .dot, #railClosed .rail-card .dot { width: 6px; height: 6px; }
+  #railClosed .rail-card .dot { opacity: .55; }
+  #railCards .rail-title, #railClosed .rail-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; color: var(--text); }
-  #railCards .rail-state { flex: none; color: var(--muted); font-size: 11px; }
+  #railClosed .rail-title { color: var(--muted); }
+  #railCards .rail-state, #railClosed .rail-state { flex: none; color: var(--muted); font-size: 11px; }
   #railCards .rail-card.wants .rail-state { color: var(--pink); }
   #railCards .rail-card.updated .rail-state { color: var(--accent); }
+  #railClosed .rail-card .rail-state { color: var(--accent); }
+  #railClosed .rail-card:hover .rail-title { color: var(--text); }
   /* One foldable section per thread: the rail is a stack of conversations, not one long log. */
   #railLog .rail-thread { display: flex; flex-direction: column; gap: 4px; flex: none; }
   #railLog .rail-thread-head { display: flex; align-items: center; gap: 6px; width: 100%; flex: none;
@@ -735,6 +746,8 @@
 <aside id="rail">
   <div class="rail-head">cards <b id="railCardCount"></b><button id="railToggle" title="hide the rail">«</button></div>
   <div id="railCards"></div>
+  <div class="rail-head" id="railClosedHead" hidden>closed <b id="railClosedCount"></b></div>
+  <div id="railClosed"></div>
   <div class="rail-head">activity <b id="railRunning"></b></div>
   <div id="railNow"></div>
   <div id="railLog"></div>
