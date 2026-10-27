@@ -3334,6 +3334,13 @@
     };
   }
 
+  /** Prose in the sheet: wrapped, readable, no monospace and no gutter. */
+  function panelProse(text) {
+    const box = el("div", "act-prose");
+    box.textContent = String(text);
+    return box;
+  }
+
   function paintActPanel(row) {
     const payload = actParsed(row);
     const args = payload.args && typeof payload.args === "object" ? payload.args : {};
@@ -3346,7 +3353,11 @@
           ? Date.now() - payload.startedAt
           : 0;
     const exit = Number.isFinite(payload.exitCode) ? `exit ${payload.exitCode}` : "";
-    actPanelMeta.textContent = [payload.status, exit, payload.truncated ? "truncated" : "", took ? rowClock(took) : ""]
+    const tokens =
+      payload.kind === "thinking" && typeof payload.tokens === "number"
+        ? `${payload.tokensEstimated ? "~" : ""}${payload.tokens} tok`
+        : "";
+    actPanelMeta.textContent = [payload.status, exit, tokens, payload.truncated ? "truncated" : "", took ? rowClock(took) : ""]
       .filter(Boolean)
       .join(" · ");
     const cut = new Set(payload.cut || []);
@@ -3355,7 +3366,12 @@
       if (node) parts.push(node);
     };
     const view = payload.kind === "tool" ? ACT_VIEWS[String(payload.tool || "")] : null;
-    if (view) {
+    if (payload.kind === "thinking") {
+      // The row carries the tail while it streams and the whole block once it ends, so the sheet draws
+      // the whole one and never the tail beside it.
+      const body = typeof payload.thinking === "string" && payload.thinking ? payload.thinking : actOutput(payload);
+      add(panelBlock("thinking", body ? panelProse(body) : null, cut.has("thinking") || cut.has("output")));
+    } else if (view) {
       view(payload, args, cut, add);
     } else {
       if (payload.args !== undefined) {
@@ -3380,7 +3396,13 @@
       gone.textContent = "nothing kept for this row";
       parts.push(gone);
     }
+    // A row that is still streaming repaints four times a second, and a sheet that jumped back to the
+    // top with every paint could not be read: the reader keeps their place, and a reader already at the
+    // bottom follows the newest text.
+    const atBottom = actPanelBody.scrollHeight - actPanelBody.scrollTop - actPanelBody.clientHeight < 40;
+    const kept = actPanelBody.scrollTop;
     actPanelBody.replaceChildren(...parts);
+    actPanelBody.scrollTop = atBottom ? actPanelBody.scrollHeight : kept;
   }
 
   async function fetchActDetail(id) {
