@@ -295,6 +295,18 @@ commit's own account rather than on a check run now, the section below says so.
   and resize moves and `setMini`, plus a `ResizeObserver` on the viewport. A press puts the window
   on that point, a drag keeps it under the pointer, a press on a card centres that card, and `m` or
   the header's `map` button hides it, remembered in `localStorage`.
+- **The workspace's git state hangs under the minimap.** A 208px column between the map and the `+`
+  draws the commit graph: one lane per branch, refs as pills (`dev`, `origin/dev`, a thread's branch,
+  tags), an amber ring and a count on a commit that has uncommitted work, and a halo that breathes
+  on the commit a running thread is standing on. It has no panel and takes no clicks, so the board
+  reads and pans through it; the map's toggle moves it up and `body.git-on` is what shows it at all.
+  The daemon reads the disk, never the page: `gitGraph` is one `git log --all --topo-order`
+  (`-n 60`, refs from `%D`) and `gitStatusOf` is one `git status --porcelain=v2` per checkout. A
+  board with a tab open is watched every 3 s, the fingerprint is compared and only a real change is
+  broadcast as `{type:"git"}`, plus a look 400 ms after a turn settles; with no tab open nothing runs.
+  Measured: 6 ms for the graph, 2–3 ms per tree, so eight trees cost about 40 ms of a core.
+  It says nothing when the folder is not a repository, and it will not claim insertions or remote
+  drift: neither is readable without a `diff` or a fetch.
 - **Persistence**: board saved on a 500 ms debounce and flushed on stop and on a workspace switch;
   a restart reopens the last workspace.
 - `GET /browse` for the composer's file picker. Token gate on every data route (403 without it).

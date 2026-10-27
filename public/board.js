@@ -2401,6 +2401,280 @@
   document.getElementById("newPill").addEventListener("click", jumpToFresh);
   resetBtn.addEventListener("click", resetZoom);
 
+  // ---------- git strip ----------------------------------------------------
+  // The workspace's branches, under the minimap: the daemon reads the graph and this draws it. One
+  // lane per branch, refs as pills, a halo on a lane a thread is working in, an amber ring where a
+  // tree is dirty. It draws what arrives on the stream and nothing else, so it costs the board no
+  // requests of its own.
+  const GIT_ROW = 13;
+  const GIT_LANE = 11;
+  const GIT_LANE_X = 12;
+  const GIT_TEXT_X = 78;
+  const GIT_TOP = 6;
+  const GIT_FONT = '8px ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace';
+  const TAU = Math.PI * 2;
+  // A lane keeps its colour by its index. The order is stable for a repository nobody is rebasing
+  // underneath the reader, which is the case that matters: a lane whose colour flickers is a lane
+  // the eye has to find again.
+  const GIT_COLOURS = ["#58a6ff", "#db61a2", "#3fb950", "#d29922", "#d2a8ff", "#39c5cf", "#f85149", "#e3b341"];
+  const GIT_PILL = {
+    head: ["#1f6feb", "#e6edf3"],
+    branch: ["#6e2f5b", "#f0d4e6"],
+    remote: ["#30363d", "#c9d1d9"],
+    tag: ["#4a3a12", "#e3b341"],
+  };
+  const gitStrip = document.getElementById("gitstrip");
+  const gitCanvas = document.getElementById("gitgraph");
+  const gitCtx = gitCanvas.getContext("2d");
+  let gitShown = null;
+  let gitLayout = null;
+  let gitStamp = "";
+  let gitPulse = 0;
+  let gitFrame = 0;
+
+  /**
+   * Lanes for the rows the graph came in: which column each commit sits in, and which lanes carry a
+   * parent through the row, so a line can be drawn where the history is, not where the labels are.
+   */
+  function layoutGraph(commits) {
+    const lanes = [];
+    const rows = [];
+    let width = 1;
+    for (const commit of commits) {
+      let lane = lanes.indexOf(commit.hash);
+      if (lane === -1) {
+        lane = lanes.indexOf(null);
+        if (lane === -1) {
+          lanes.push(null);
+          lane = lanes.length - 1;
+        }
+        lanes[lane] = commit.hash;
+      }
+      const before = lanes.slice();
+      // Two lanes naming the same commit are one history: the other lane has merged into this one.
+      for (let index = 0; index < lanes.length; index += 1) {
+        if (index !== lane && lanes[index] === commit.hash) lanes[index] = null;
+      }
+      lanes[lane] = commit.parents[0] ?? null;
+      const moves = [];
+      // A merge commit opens a lane for each parent after the first.
+      for (const parent of commit.parents.slice(1)) {
+        let into = lanes.indexOf(null);
+        if (into === -1) {
+          lanes.push(parent);
+          into = lanes.length - 1;
+        } else lanes[into] = parent;
+        moves.push(into);
+      }
+      while (lanes.length && lanes[lanes.length - 1] === null) lanes.pop();
+      width = Math.max(width, before.length, lanes.length);
+      rows.push({ commit, lane, before, after: lanes.slice(), moves });
+    }
+    return { rows, width };
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  /** The most of `text` that fits `max` pixels, ending in an ellipsis when it had to be cut. */
+  function fitted(text, max) {
+    if (max <= 8 || !text) return "";
+    if (gitCtx.measureText(text).width <= max) return text;
+    let cut = text;
+    while (cut.length > 1 && gitCtx.measureText(`${cut}\u2026`).width > max) cut = cut.slice(0, -1);
+    return cut.length > 1 ? `${cut}\u2026` : "";
+  }
+
+  /** One ref as a pill; returns the x to continue from. */
+  function drawPill(label, x, y, maxWidth, kind) {
+    const [bg, fg] = GIT_PILL[kind] ?? GIT_PILL.branch;
+    const text = fitted(label, maxWidth - 9);
+    if (!text) return x;
+    const w = Math.min(maxWidth, gitCtx.measureText(text).width + 9);
+    gitCtx.fillStyle = bg;
+    gitCtx.beginPath();
+    roundRect(gitCtx, x, y + 1, w, 11, 3);
+    gitCtx.fill();
+    gitCtx.fillStyle = fg;
+    gitCtx.fillText(text, x + 4.5, y + 9.5);
+    return x + w + 4;
+  }
+
+  function paintGit() {
+    const width = gitStrip.clientWidth;
+    const height = gitStrip.clientHeight;
+    if (!width || !height) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (gitCanvas.width !== Math.round(width * dpr) || gitCanvas.height !== Math.round(height * dpr)) {
+      gitCanvas.width = Math.round(width * dpr);
+      gitCanvas.height = Math.round(height * dpr);
+    }
+    gitCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    gitCtx.clearRect(0, 0, width, height);
+    if (!gitShown || !gitLayout) return;
+    const shown = Math.min(gitLayout.rows.length, Math.floor((height - GIT_TOP) / GIT_ROW));
+    if (shown <= 0) return;
+    // Lanes crowd the left edge as branches pile up, so the spacing gives way before the text does.
+    const lanes = Math.max(1, gitLayout.width);
+    const step = Math.min(GIT_LANE, Math.max(6, Math.floor((GIT_TEXT_X - GIT_LANE_X - 6) / Math.max(1, lanes - 1))));
+    const laneX = (index) => GIT_LANE_X + index * step;
+    const colour = (index) => GIT_COLOURS[index % GIT_COLOURS.length];
+
+    // Which commits are worth a ring, and how much is uncommitted under each: the checkout's own
+    // work and every tree a thread has, because a tree is where the work actually is.
+    const dirty = new Map();
+    const live = new Set();
+    if (gitShown.root?.dirty) dirty.set(gitShown.root.head, gitShown.root.dirty);
+    for (const tree of gitShown.trees ?? []) {
+      if (tree.dirty) dirty.set(tree.head, Math.max(tree.dirty, dirty.get(tree.head) ?? 0));
+      if (tree.live) live.add(tree.head);
+    }
+
+    gitCtx.font = GIT_FONT;
+    gitCtx.textBaseline = "alphabetic";
+    gitCtx.lineWidth = 1.5;
+
+    for (let index = 0; index < shown; index += 1) {
+      const row = gitLayout.rows[index];
+      const y = GIT_TOP + index * GIT_ROW;
+      const nodeX = laneX(row.lane);
+      const commit = row.commit;
+
+      // Lanes that were open above this row and are still open below it: a line passes through.
+      for (let column = 0; column < row.before.length; column += 1) {
+        if (!row.before[column] || column === row.lane) continue;
+        gitCtx.globalAlpha = 0.5;
+        gitCtx.strokeStyle = colour(column);
+        gitCtx.beginPath();
+        if (row.before[column] === commit.hash) {
+          // This lane carries this very commit: it curves into the node instead of past it.
+          gitCtx.moveTo(laneX(column), y);
+          gitCtx.quadraticCurveTo(laneX(column), y + GIT_ROW * 0.6, nodeX, y + GIT_ROW * 0.6);
+        } else {
+          gitCtx.moveTo(laneX(column), y);
+          gitCtx.lineTo(laneX(column), y + GIT_ROW);
+        }
+        gitCtx.stroke();
+      }
+      gitCtx.globalAlpha = 0.85;
+      gitCtx.strokeStyle = colour(row.lane);
+      // Below the node: the first parent keeps the lane, and no first parent means the lane ends here.
+      if (row.after[row.lane]) {
+        gitCtx.beginPath();
+        gitCtx.moveTo(nodeX, y);
+        gitCtx.lineTo(nodeX, y + GIT_ROW);
+        gitCtx.stroke();
+      }
+      // Each further parent curves out into a lane of its own.
+      for (const into of row.moves) {
+        gitCtx.strokeStyle = colour(into);
+        gitCtx.beginPath();
+        gitCtx.moveTo(nodeX, y);
+        gitCtx.quadraticCurveTo(nodeX, y + GIT_ROW * 0.6, laneX(into), y + GIT_ROW * 0.6);
+        gitCtx.lineTo(laneX(into), y + GIT_ROW);
+        gitCtx.stroke();
+      }
+      gitCtx.globalAlpha = 1;
+
+      // A thread working in this commit's tree breathes a halo round the node it stands on.
+      if (live.has(commit.hash)) {
+        gitCtx.globalAlpha = 0.14 + 0.3 * gitPulse;
+        gitCtx.fillStyle = colour(row.lane);
+        gitCtx.beginPath();
+        gitCtx.arc(nodeX, y, 6 + 3.5 * gitPulse, 0, TAU);
+        gitCtx.fill();
+        gitCtx.globalAlpha = 1;
+      }
+      gitCtx.fillStyle = colour(row.lane);
+      gitCtx.beginPath();
+      gitCtx.arc(nodeX, y, 3.5, 0, TAU);
+      gitCtx.fill();
+      if (dirty.has(commit.hash)) {
+        gitCtx.globalAlpha = 0.9;
+        gitCtx.strokeStyle = "#d29922";
+        gitCtx.lineWidth = 1.5;
+        gitCtx.beginPath();
+        gitCtx.arc(nodeX, y, 5.8, 0, TAU);
+        gitCtx.stroke();
+        gitCtx.globalAlpha = 1;
+      }
+
+      // The refs the row carries, then whatever subject the space left over allows.
+      let cursor = GIT_TEXT_X;
+      for (const ref of commit.refs.slice(0, 2)) {
+        if (cursor > width - 24) break;
+        cursor = drawPill(ref.name, cursor, y - 5, width - 4 - cursor, ref.kind);
+      }
+      // The ring says "dirty"; the number says how much, and it sits where the eye already is.
+      if (dirty.has(commit.hash)) {
+        const count = String(dirty.get(commit.hash));
+        gitCtx.fillStyle = "#d29922";
+        gitCtx.fillText(count, cursor, y + 3.5);
+        cursor += gitCtx.measureText(count).width + 4;
+      }
+      const subject = fitted(commit.subject, width - 4 - cursor);
+      if (subject) {
+        gitCtx.fillStyle = commit.refs.length ? "#8b949e" : "#484f58";
+        gitCtx.fillText(subject, cursor, y + 3.5);
+      }
+    }
+  }
+
+  /** The pulse the halo breathes with, running only while some thread is working in a tree. */
+  function startPulse() {
+    if (gitFrame) return;
+    if (!gitShown || !(gitShown.trees ?? []).some((tree) => tree.live) || document.hidden) return;
+    const step = () => {
+      gitFrame = 0;
+      if (!gitShown || !(gitShown.trees ?? []).some((tree) => tree.live) || document.hidden) return;
+      gitPulse = (Math.sin(performance.now() / 420) + 1) / 2;
+      paintGit();
+      gitFrame = requestAnimationFrame(step);
+    };
+    gitFrame = requestAnimationFrame(step);
+  }
+
+  /** What a screen reader is told about the strip, in the words the picture says it in. */
+  function gitLabel(picture) {
+    const root = picture.root ?? {};
+    const branches = 1 + (picture.trees?.length ?? 0);
+    const working = (picture.trees ?? []).filter((tree) => tree.live).length;
+    return [
+      `${picture.graph.length} commits on ${branches} branch${branches === 1 ? "" : "es"}`,
+      `${root.branch || "detached"} ${root.dirty ? `${root.dirty} uncommitted` : "clean"}`,
+      working ? `${working} thread${working === 1 ? "" : "s"} working` : "nothing running",
+    ].join(", ");
+  }
+
+  /** A new picture from the daemon: repaint only when it says something the last one did not. */
+  function applyGit(picture) {
+    const stamp = picture ? JSON.stringify(picture) : "";
+    if (stamp === gitStamp) return;
+    gitStamp = stamp;
+    gitShown = picture && picture.graph?.length ? picture : null;
+    gitLayout = gitShown ? layoutGraph(gitShown.graph) : null;
+    document.body.classList.toggle("git-on", Boolean(gitShown));
+    if (!gitShown) return;
+    gitCanvas.setAttribute("aria-label", gitLabel(gitShown));
+    paintGit();
+    startPulse();
+  }
+
+  // The strip's box is the drawn size, so a resized window, a rail that opens and the map's own
+  // toggle all repaint it rather than leave the last picture sitting in the wrong place.
+  new ResizeObserver(() => paintGit()).observe(gitStrip);
+  document.addEventListener("visibilitychange", startPulse);
+
   // ---------- activity rail ------------------------------------------------
   const stopBtn = document.getElementById("stop");
   const railNow = document.getElementById("railNow");
@@ -4534,8 +4808,11 @@
       }
       if (payload.type === "meta") {
         applyMeta(payload.meta);
+      } else if (payload.type === "git") {
+        applyGit(payload.git);
       } else if (payload.type === "snapshot") {
         applyMeta(payload.meta);
+        applyGit(payload.git);
         // A reconnect replays what is already on the board, and the draft survives it. The thread
         // the draft is aimed at has to survive too, or a reply loses its card mid-conversation.
         const keptTarget = replyTarget ? replyTarget.id : null;

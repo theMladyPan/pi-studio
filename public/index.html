@@ -71,6 +71,21 @@
   }
   body.map-on #minimap { display: block; }
 
+  /* The workspace's git state, hung under the minimap: branches as lanes, refs as pills, and a halo
+     on a lane a thread is working in. No panel behind it and no clicks, so the board reads and pans
+     through it, and the only pointer target on this edge stays the +. */
+  #gitstrip {
+    position: fixed; top: 212px; right: 12px; width: 208px; bottom: 80px; z-index: 8;
+    display: none; pointer-events: none;
+    /* A graph is cut by the window, not finished by it: the last rows fade rather than stop hard. */
+    -webkit-mask-image: linear-gradient(to bottom, #000 93%, transparent);
+    mask-image: linear-gradient(to bottom, #000 93%, transparent);
+  }
+  body.git-on #gitstrip { display: block; }
+  /* With the map hidden the strip takes the room it left, rather than hanging in space. */
+  body:not(.map-on) #gitstrip { top: 60px; }
+  #gitgraph { display: block; width: 100%; height: 100%; }
+
   .card {
     position: absolute; display: flex; flex-direction: column; overflow: hidden;
     background: var(--card); border: 1px solid var(--border); border-radius: 10px;
@@ -788,6 +803,12 @@
 <!-- The board at a glance, drawn from the cards this page already holds. It is a mouse handle on
      the view; the keyboard has f, 0 and n for the same journeys. -->
 <canvas id="minimap" role="img" aria-label="the board at a glance: click or drag to move the view"></canvas>
+
+<!-- What the workspace's git state looks like: the daemon reads the graph and this draws it, so the
+     board's own page never runs git. It says nothing when the folder is not a repository. -->
+<div id="gitstrip">
+  <canvas id="gitgraph" role="img" aria-label="branches and commits in this workspace"></canvas>
+</div>
 
 <div id="picker" role="dialog" aria-label="attach files or folders" hidden>
   <div class="p-row">
