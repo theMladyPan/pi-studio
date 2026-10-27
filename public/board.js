@@ -1293,9 +1293,12 @@
     entry.data = data;
     if (entry.editing) return;
     // While a name is being typed, its field sits beside this span, so a repaint writes where nobody
-    // is looking and the hidden span keeps the words the rail row shows.
+    // is looking and the hidden span keeps the words the rail row shows. A thread is named by its first
+    // request, so until then it has no name at all: an invented one like `thread 1` is a label the
+    // human has to unlearn.
     const shownTitle =
-      data.title || (isSource ? data.path : data.type === "question" ? "question" : data.type === "sticky" ? "you" : "note");
+      data.title ||
+      (isSource ? data.path : data.type === "question" ? "question" : data.type === "sticky" ? "" : "note");
     entry.titleEl.textContent = shownTitle;
     entry.titleEl.title = shownTitle;
     entry.subEl.textContent = isSource

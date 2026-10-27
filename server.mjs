@@ -426,6 +426,7 @@ function saveBoard(board) {
 			at: thread.at,
 			turns: thread.turns.map(savedTurn),
 			...(thread.rect ? { rect: thread.rect } : {}),
+			...(thread.namedBy ? { namedBy: thread.namedBy } : {}),
 			...(thread.mini ? { mini: true } : {}),
 			...(thread.threadRoot ? { threadRoot: thread.threadRoot } : {}),
 			...(thread.hidden ? { hidden: true } : {}),
@@ -506,6 +507,7 @@ function restoredThread(raw, folder) {
 		turns,
 		queued: [],
 		...(rect ? { rect } : {}),
+		...(typeof raw.namedBy === "string" && raw.namedBy ? { namedBy: raw.namedBy } : {}),
 		...(raw.mini ? { mini: true } : {}),
 		...(typeof raw.threadRoot === "string" && raw.threadRoot ? { threadRoot: raw.threadRoot } : {}),
 		...(typeof raw.type === "string" && raw.type ? { type: raw.type } : {}),
@@ -808,6 +810,116 @@ function workdirOf(board, thread) {
 function headBranch(path) {
 	const head = gitIn(path, ["rev-parse", "--abbrev-ref", "HEAD"]);
 	return head.ok && head.out && head.out !== "HEAD" ? head.out : "";
+}
+
+/** How long a thread's name may be before the first request is cut at a word. */
+const TITLE_FROM_REQUEST_CHARS = 48;
+/**
+ * The model that names a thread once its first request is in hand. Empty turns naming off.
+ * `inception/mercury-3` was the first choice and answers 404 (no endpoints for the routing this
+ * machine gets), so the default is the fastest flash model measured here: 2.1s against 10.7s for the
+ * copilot one. Any other model is a `PI_STUDIO_NAME_MODEL` away.
+ */
+const NAME_MODEL = process.env.PI_STUDIO_NAME_MODEL ?? "openrouter/z-ai/glm-5.3-flash";
+const NAME_TIMEOUT_MS = 8000;
+/** Names that describe the fact that a job exists rather than the job. */
+const DULL_TITLES = new Set(["work", "job", "task", "thread", "new thread", "change", "update", "stuff", "question"]);
+
+/**
+ * A thread's name from its own first request: the first line, without the markdown that dresses it,
+ * cut at a word. It exists so no card is ever nameless and none is called `thread 1`, and so a model
+ * that is slow or absent costs a better name rather than any name at all.
+ */
+function titleFromRequest(text) {
+	const line =
+		String(text ?? "")
+			.split("\n")
+			.map((part) => part.trim())
+			.find(Boolean) ?? "";
+	const plain = line.replace(/[`*_>#]/g, "").replace(/\s+/g, " ").trim();
+	if (plain.length <= TITLE_FROM_REQUEST_CHARS) return plain;
+	const cut = plain.slice(0, TITLE_FROM_REQUEST_CHARS);
+	const space = cut.lastIndexOf(" ");
+	return `${(space > 20 ? cut.slice(0, space) : cut).trim()}…`;
+}
+
+/**
+ * What to ask the naming model. The gate below is code rather than the model's opinion, so the
+ * examples say what a good card name looks like instead of pleading for one.
+ */
+function namePrompt(request) {
+	return [
+		"Name this job for a card on a board of work. Answer with two to four plain words and nothing else.",
+		"Examples:",
+		'- request: "why does the parser reject empty input?" -> ok: empty input rejection / not ok: parser (says nothing) or: The Parser Rejects Empty Input Because The Tokenizer Splits Wrong (a sentence)',
+		'- request: "add a dark theme to the board" -> ok: board dark theme / not ok: add a dark theme to the board (the request repeated)',
+		'- request: "the rail keeps no detail for a row" -> ok: rail row detail / not ok: bug (a category, not the work)',
+		`Request: ${request}`,
+	].join("\n");
+}
+
+/** A name as a card title, or "" when it is not one: two to four words that say something. */
+function plausibleTitle(answer) {
+	const first =
+		String(answer ?? "")
+			.split("\n")
+			.map((line) => line.trim())
+			.find(Boolean) ?? "";
+	const words = first.replace(/[`*_"']/g, "").replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+	const lower = words.toLowerCase();
+	if (!lower || DULL_TITLES.has(lower) || /^thread (\d+|[0-9a-f]{8})$/.test(lower)) return "";
+	const count = lower.split(" ").length;
+	return count >= 2 && count <= 4 ? words : "";
+}
+
+/**
+ * One question and one answer from a `pi` that must not read stdin: `execFile` leaves stdin an open
+ * pipe, and a `pi -p` on an open pipe waits for input that never comes.
+ */
+function askOnce(argv, timeoutMs) {
+	return new Promise((resolve) => {
+		const child = spawn(argv[0], argv.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
+		let out = "";
+		const timer = setTimeout(() => {
+			child.kill("SIGKILL");
+			resolve("");
+		}, timeoutMs);
+		child.stdout.on("data", (chunk) => {
+			out += chunk;
+		});
+		child.on("error", () => {
+			clearTimeout(timer);
+			resolve("");
+		});
+		child.on("close", () => {
+			clearTimeout(timer);
+			resolve(out);
+		});
+	});
+}
+
+/**
+ * A better name for a thread than its request's own words, asked beside the turn so no model's latency
+ * sits in front of the answer. A name the human typed, or one already given by the model, is never
+ * overwritten.
+ */
+async function nameThread(board, thread, request) {
+	const asked = request.slice(0, 2000);
+	const cli = piCli();
+	const argv = [cli.command, ...cli.args, "-p", "--no-session", "-ne", "-nt", "-nc", "-ns", "--model", NAME_MODEL];
+	const said = await askOnce([...argv, namePrompt(asked)], NAME_TIMEOUT_MS);
+	const picked = plausibleTitle(said);
+	if (!picked) {
+		// Said out loud because a name that never arrives looks exactly like a model that is not here.
+		console.error(`pi-studio: naming gave no usable name (${JSON.stringify(said.slice(0, 80))})`);
+		return;
+	}
+	// The card may be gone, renamed by the human, or named again while the model was thinking.
+	if (!board.threads.has(thread.id) || thread.namedBy !== "request") return;
+	thread.title = picked.slice(0, MAX_TITLE_CHARS);
+	thread.namedBy = NAME_MODEL;
+	update(board, thread);
+	scheduleSave(board);
 }
 
 /**
@@ -1561,6 +1673,14 @@ function prompt(board, thread, text, target = null) {
 	// The tree is made here, before anything is spawned: this is the first moment the thread is going
 	// to do something, and the child's working folder is decided by it.
 	ensureWorktree(board, thread);
+	// A thread with no name takes one from its first request: the request's own words at once, and a
+	// better name from a fast model afterwards if it offers one.
+	if (!thread.title) {
+		thread.title = titleFromRequest(text) || shortId(thread);
+		thread.namedBy = "request";
+		update(board, thread);
+		if (NAME_MODEL) void nameThread(board, thread, text);
+	}
 	// A question written on a card is answered on that card, and the run in flight remembers which
 	// one, so the reply lands where the human typed rather than on the thread's own card.
 	thread.answering = target;
@@ -2017,7 +2137,9 @@ async function onThread(req, res, board) {
 	if (!body) return;
 	const thread = {
 		id: randomUUID(),
-		title: typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 80) : `thread ${board.threads.size + 1}`,
+		title: typeof body.title === "string" ? body.title.trim().slice(0, MAX_TITLE_CHARS) : "",
+		// No name until the human types one or the first request supplies it: a card that invents its own
+		// name is a card called `thread 3`, which says nothing and is wrong the moment the work starts.
 		sessionId: null,
 		status: "idle",
 		...(WORK_TYPES.some(([type]) => type === body.type) ? { type: body.type } : {}),
