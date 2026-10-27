@@ -547,6 +547,9 @@
   #runtimeList .pick-row:hover { background: #161b22; }
   #runtimeList .pick-row.on { color: var(--accent); }
   #runtimeList .pick-row .pick-meta { color: var(--muted); font: 10px var(--mono); }
+  /* A tool kept from a new thread: the row says `off` and goes quiet, so a list where most are on
+     reads as a list of names rather than a wall of colour. */
+  #runtimeList .pick-row.tool-off, #runtimeList .pick-row.tool-off .pick-meta { color: var(--muted); }
   /* The one row that swaps the scope for the whole catalogue: a door, so it reads as one. It sits last
      under the scope and first above the full list, and a divider points the way it leads. */
   #runtimeList .pick-more { color: var(--amber); justify-content: flex-start; }
@@ -644,7 +647,7 @@
   /* The second press of `new` is the confirmation, so the button says so. */
   header button.armed { color: #f85149; border-color: rgba(248, 81, 73, .5); }
   #boardConfig { position: fixed; z-index: 2000; top: 46px; right: 12px; display: flex; flex-direction: column;
-    gap: 1px; width: 248px; max-height: calc(100vh - 60px); overflow-y: auto; padding: 8px; background: #0d1117; border: 1px solid var(--border-bright);
+    gap: 1px; width: 232px; padding: 8px; background: #0d1117; border: 1px solid var(--border-bright);
     border-radius: 8px; box-shadow: 0 12px 32px rgba(1, 4, 9, .55); }
   #boardConfig[hidden] { display: none; }
   #boardConfig .cfg-head { margin: 0 0 4px; color: var(--muted); font: 10px var(--mono);
@@ -659,21 +662,6 @@
   #boardConfig .cfg-row b { display: block; color: var(--accent); font: 12px var(--mono); font-weight: 500;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #boardConfig .cfg-note { margin: 6px 2px 0; color: var(--muted); font: 10px/1.45 var(--mono); }
-  /* A checkbox list is the one thing here that can be long: a machine with a dozen extensions would
-     push the panel past the bottom of a small window, so the list scrolls and the panel does not. */
-  #boardConfig .cfg-tools { max-height: 216px; overflow-y: auto; margin: 0 -2px; }
-  #boardConfig .cfg-check { display: flex; align-items: center; gap: 6px; padding: 3px 6px;
-    border-radius: 5px; cursor: pointer; color: var(--text); font: 11px var(--mono); }
-  #boardConfig .cfg-check:hover { background: #161b22; }
-  #boardConfig .cfg-check input { margin: 0; accent-color: var(--accent); }
-  /* An unchecked row is still legible: it says what a new thread is being kept from. */
-  #boardConfig .cfg-check.off { color: var(--muted); }
-  #boardConfig .cfg-check span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* The row that carries a group's name is the switch for the whole group: smaller and quieter than
-     the tools under it, so the list reads as two groups rather than as one long list. */
-  #boardConfig .cfg-check.cfg-all { margin-top: 5px; }
-  #boardConfig .cfg-check.cfg-all span { color: var(--muted); font: 9px var(--mono);
-    text-transform: uppercase; letter-spacing: .6px; }
   .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted);
     font-size: 14px; pointer-events: none; text-align: center; padding: 20px; }
   /* Each of the board's three animations repeats a state the text already spells out, so the board
@@ -726,9 +714,8 @@
   <button type="button" class="cfg-row" id="cfgDim"><span>dim other threads</span><b id="cfgDimValue">on</b></button>
   <button type="button" class="cfg-row" id="cfgModel"><span>default model</span><b id="cfgModelValue"></b></button>
   <button type="button" class="cfg-row" id="cfgThinking"><span>default thinking</span><b id="cfgThinkingValue"></b></button>
-  <p class="cfg-head">tools in a new thread</p>
-  <div class="cfg-tools" id="cfgTools" role="group" aria-label="tools a new thread gets"></div>
-  <p class="cfg-note">new threads start with these. the crossroads sets the defaults for new boards.</p>
+  <button type="button" class="cfg-row" id="cfgTools"><span>tools in a new thread</span><b id="cfgToolsValue"></b></button>
+  <p class="cfg-note">a new thread starts with these. new boards take their defaults from the crossroads.</p>
 </div>
 
 <aside id="rail">
