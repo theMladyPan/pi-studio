@@ -271,6 +271,8 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
 4. Brainstorm how to organize subagents on a board — potentially replace `delegate`.
 5. HTML artifacts: a card that renders a whole html file, not only source text.
 6. Home screen redesign — the crossroads (`/`, `welcome.html`/`welcome.css`/`welcome.js`).
+7. A debug view of the raw stream from a pi child: the stdout lines `handleChildLine` parses, line by
+   line and unfiltered, beside the 1000-character `stderrTail` that is kept today.
 
 ## Rules
 

@@ -1764,17 +1764,14 @@
     delta * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1);
 
   /**
-   * The nearest thing under the pointer that has somewhere to scroll. An open editor is a textarea
-   * with its own overflow, so a wheel over it scrolls the text you are writing, not the board.
+   * The open editor under the pointer, if any. It is a textarea with its own overflow, so a wheel
+   * over it scrolls the text you are writing. Only an editor counts here: any card with comments
+   * has a scrollable body too, and taking the wheel for whichever card the pointer crossed would
+   * pin the board to it, selected or not.
    */
-  function scrollTarget(event) {
-    for (let node = event.target; node && node !== viewport; node = node.parentElement) {
-      if (node.scrollHeight - node.clientHeight > 1) {
-        const overflowY = getComputedStyle(node).overflowY;
-        if (overflowY === "auto" || overflowY === "scroll") return node;
-      }
-    }
-    return null;
+  function editorAt(target) {
+    const area = target instanceof Element ? target.closest("textarea") : null;
+    return area && area.scrollHeight - area.clientHeight > 1 ? area : null;
   }
 
   viewport.addEventListener("wheel", (event) => {
@@ -1783,7 +1780,7 @@
       // reader is looking at; otherwise the selection decides, so a board you are reading a card on
       // keeps still while you scroll that card, and a board with nothing selected pans.
       const selected = document.querySelector(".card.active");
-      const scroller = scrollTarget(event) ?? selected?.querySelector(".card-scroll");
+      const scroller = editorAt(event.target) ?? selected?.querySelector(".card-scroll");
       const room = scroller ? scroller.scrollHeight - scroller.clientHeight : 0;
       if (room > 1) {
         event.preventDefault();
