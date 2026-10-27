@@ -58,6 +58,16 @@ commit's own account rather than on a check run now, the section below says so.
   apart, so two threads with the same title still get different branches. This supersedes `2e6c8db`,
   which handed `git worktree add` to the child: a rule a model may skip is a rule that half the time is
   skipped.
+- **A thread moved into a tree takes its session with it.** pi resolves `--session <id>` in the folder
+  the child is started in, so once the child runs in a worktree its session is a session of another
+  project, and pi's answer to that is a question on stdin — `Fork this session into current directory?
+  [y/N]` — which nothing on a board can answer: the child exited before it settled and the card carried
+  that question as its error. Such a child is now started with `--fork <id>`, which brings the history
+  into the tree, and the id the child reports back on `get_state` is what the next run resumes. Whether
+  the session has moved is read from the `cwd` in the header of its file, of which only the first block
+  is read; a thread whose session file is gone still gets `--session`, so the `pi session behind this
+  thread is gone` reason stays as it was. This is why a thread created before worktrees existed keeps
+  its conversation when its first message makes the tree.
 - **`clean` is the only thing that deletes a tree.** It retires the worktree of a thread that is gone
   when `git status` finds no uncommitted change in it (ignored files do not count) and the branch has
   no commit its base does not have, and reports the rest — a tree with work in it is named in the
@@ -304,6 +314,14 @@ the child actually received was read out of its session file, which is how the w
 rather than assumed. `board_source` resolving a relative path against the asking thread's tree is
 reasoning from the code: no run has asked for a file from inside a tree yet, and none of this has been
 seen in a browser.
+
+A thread moved into a tree, against the same kind of throwaway daemon: the board file was edited to give
+it a session made in the workspace folder, and its next message made the tree and started the child with
+`--fork`. The child answered with a word from that older conversation (`Platypus.`), its own session
+file had `cwd` in the tree and a `parentSession`, the thread's `sessionId` moved to the new one, and a
+second message kept that id and started no third session. The same setup without the change gave the
+card `child exited (0) before it settled: Fork this session into current directory? [y/N] Aborted.`,
+which is the line a person reads as "fork is broken".
 
 Streaming, against real children on a throwaway `HOME` whose `~/.pi/agent` is symlinked so pi keeps
 its credentials: a 250-word answer reached the browser as 8 frames growing 216 → 1432 characters,

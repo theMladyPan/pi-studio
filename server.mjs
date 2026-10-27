@@ -11,7 +11,20 @@
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	readSync,
+	renameSync,
+	rmdirSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -888,6 +901,47 @@ function sessionFacts(workspace) {
 	return { count, bytes };
 }
 
+/**
+ * The folder a session was started in, from the header of its file. pi looks `--session <id>` up in the
+ * folder it is started in, so whether a thread still belongs where its session was recorded decides how
+ * the child has to be started; see `childArgv`. Empty when there is no such session or no header.
+ */
+function sessionCwd(dir, id) {
+	let names;
+	try {
+		names = readdirSync(dir);
+	} catch {
+		return "";
+	}
+	// pi names a session file `<timestamp>_<id>.jsonl`, and the file itself is where the id is kept.
+	const name = names.find((entry) => entry.endsWith(`_${id}.jsonl`));
+	if (!name) return "";
+	// Only the header matters, and a long session is megabytes, so the start of the file is enough.
+	try {
+		const handle = openSync(join(dir, name), "r");
+		const head = Buffer.alloc(4096);
+		const read = readSync(handle, head, 0, head.length, 0);
+		closeSync(handle);
+		const header = JSON.parse(head.subarray(0, read).toString("utf8").split("\n")[0]);
+		return typeof header.cwd === "string" ? header.cwd : "";
+	} catch {
+		return "";
+	}
+}
+
+/** Two folders naming the same place: a worktree reached through a symlink is still the same worktree. */
+function sameFolder(one, other) {
+	if (!one || !other) return false;
+	const real = (path) => {
+		try {
+			return realpathSync(path);
+		} catch {
+			return resolve(path);
+		}
+	};
+	return real(one) === real(other);
+}
+
 /** The one workspace that matters to a tab: what is on it, and the last thing that happened. */
 function describeWorkspace(workspace) {
 	const board = boards.get(workspace.id);
@@ -1345,7 +1399,18 @@ function childArgv(board, thread) {
 	// A child writes its session where pi-studio keeps them, not in pi's own session list: this app
 	// owns these conversations, and a thread that already has one resumes it so the card stays
 	// continuous across a daemon restart.
-	const session = thread.sessionId ? ["--session", thread.sessionId] : [];
+	//
+	// Unless the thread has moved since: pi resolves `--session <id>` against the folder the child is
+	// started in, and a session recorded in the workspace folder belongs to another project once the
+	// child runs in the thread's worktree. pi's answer to that is a question on stdin — "Fork this
+	// session into current directory? [y/N]" — and a board never answers it, so the child exits before
+	// it settles and the card reads that question as its error. `--fork` is the same move without the
+	// question: the history comes along into the folder the thread works in now, and the new id the
+	// child reports on `get_state` is what the next run resumes.
+	const workdir = workdirOf(board, thread);
+	const recorded = thread.sessionId ? sessionCwd(sessionDir(board), thread.sessionId) : "";
+	const moved = recorded && !sameFolder(recorded, workdir);
+	const session = thread.sessionId ? [moved ? "--fork" : "--session", thread.sessionId] : [];
 	return [
 		"--mode",
 		"rpc",
@@ -1422,7 +1487,9 @@ function ensureChild(board, thread) {
 		if (thread.status !== "running") return;
 		const reason = /no session found/i.test(thread.stderrTail ?? "")
 			? "the pi session behind this thread is gone — start a new thread"
-			: `child exited (${signal ?? code}) before it settled`;
+			: /fork this session into current directory/i.test(thread.stderrTail ?? "")
+				? "this thread's session was recorded in another folder and could not be carried into its worktree"
+				: `child exited (${signal ?? code}) before it settled`;
 		// A child that dies at startup says why on stderr, and that line is the whole explanation.
 		const said = lastLine(thread.stderrTail);
 		threadError(board, thread, said ? `${reason}: ${said}` : reason);
