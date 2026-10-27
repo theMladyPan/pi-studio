@@ -635,10 +635,14 @@
       turn.status === "answered"
         ? "answered"
         : turn.status === "stopped"
-          ? "stopped"
+          ? turn.error
+            ? `stopped · ${turn.error}`
+            : "stopped"
           : turn.status === "sent"
             ? "sent"
             : `queued · ${turn.mode === "steer" ? "steer" : "queue"}`;
+    // A connection error fits on this line; a longer reason is readable in full on hover.
+    if (turn.error) status.title = turn.error;
     wrap.appendChild(status);
     if (turn.images) {
       const shot = el("div", "turn-status");
@@ -654,7 +658,7 @@
 
   /** What a turn draws besides its answer. A turn that changes here has to be redrawn whole. */
   function turnShape(turn) {
-    return [turn.text, turn.status, turn.mode, turn.images].join("\u0000");
+    return [turn.text, turn.status, turn.mode, turn.images, turn.error].join("\u0000");
   }
 
   /**

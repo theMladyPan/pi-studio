@@ -380,6 +380,7 @@ function savedTurn(turn) {
 		mode: turn.mode,
 		at: turn.at,
 		...(turn.reply ? { reply: turn.reply } : {}),
+		...(turn.error ? { error: turn.error } : {}),
 	};
 }
 
@@ -466,6 +467,7 @@ function restoredTurns(raw) {
 			mode: turn.mode === "steer" ? "steer" : "queue",
 			at: Number.isFinite(turn.at) ? turn.at : Date.now(),
 			...(typeof turn.reply === "string" ? { reply: turn.reply } : {}),
+			...(typeof turn.error === "string" && turn.error ? { error: turn.error } : {}),
 		}));
 }
 
@@ -942,14 +944,21 @@ function threadError(board, thread, message) {
 	if (last) {
 		// What was being written stays as the child left it, but nothing is writing it now.
 		last.streaming = false;
-		if (last.status !== "answered") last.status = "stopped";
+		if (last.status !== "answered") {
+			last.status = "stopped";
+			// A turn that reads only "stopped" hides the one line the child managed to say.
+			last.error = message;
+		}
 	}
 	// A question that was written on a card is stuck in the same way the thread's own turn is.
 	const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
 	const cardTurn = asked?.turns?.[thread.answering.turn];
 	if (cardTurn) {
 		cardTurn.streaming = false;
-		if (cardTurn.status !== "answered") cardTurn.status = "stopped";
+		if (cardTurn.status !== "answered") {
+			cardTurn.status = "stopped";
+			cardTurn.error = message;
+		}
 		// Unconditional: a caret cleared on the daemon and not on the browser blinks for ever.
 		updateCard(board, asked);
 	}
@@ -1009,6 +1018,17 @@ function describeTool(name, args) {
 	return name;
 }
 
+/** The one line of an error a card can show, or what to say when pi gave no reason. */
+function headline(text) {
+	return (
+		String(text ?? "")
+			.split("\n")
+			.map((line) => line.trim())
+			.find((line) => line.length > 0)
+			?.slice(0, 160) ?? "the run failed"
+	);
+}
+
 /** What a rail row says once the call is over: its first line of output, cut short. */
 function firstLine(result) {
 	const content = Array.isArray(result?.content) ? result.content : [];
@@ -1017,6 +1037,16 @@ function firstLine(result) {
 		.map((part) => String(part.text ?? ""))
 		.join("\n");
 	return text.split("\n").map((line) => line.trim()).find((line) => line.length > 0)?.slice(0, 140) ?? "";
+}
+
+/** The last line a child wrote on stderr, which is often the only explanation there is. */
+function lastLine(tail) {
+	const lines = String(tail ?? "")
+		.replace(/\u001b\[[0-9;]*m/g, "")
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
+	return lines[lines.length - 1]?.slice(0, 160) ?? "";
 }
 
 /**
@@ -1136,7 +1166,9 @@ function ensureChild(board, thread) {
 		const reason = /no session found/i.test(thread.stderrTail ?? "")
 			? "the pi session behind this thread is gone — start a new thread"
 			: `child exited (${signal ?? code}) before it settled`;
-		threadError(board, thread, reason);
+		// A child that dies at startup says why on stderr, and that line is the whole explanation.
+		const said = lastLine(thread.stderrTail);
+		threadError(board, thread, said ? `${reason}: ${said}` : reason);
 	});
 	// RPC mode emits no session header, so get_state is the only place a session id can come from.
 	child.stdin.write(`${JSON.stringify({ id: "session", type: "get_state" })}\n`);
@@ -1350,6 +1382,9 @@ function handleChildLine(board, thread, line) {
 		const said = [thread.streamDone ?? "", text].filter(Boolean).join("\n\n");
 		const aborted = message.stopReason === "aborted";
 		const failed = message.stopReason === "error";
+		// Why a run stopped belongs on the turn. A card that reads only "stopped" sends the human looking
+		// through session files for the reason, and a connection error is the common case.
+		const reason = failed ? headline(message.errorMessage) : undefined;
 		// A message pi is about to retry is not half an answer: keeping it would make the retry's full
 		// text read twice.
 		thread.streamDone = failed ? "" : said;
@@ -1357,11 +1392,16 @@ function handleChildLine(board, thread, line) {
 		stopStream(thread);
 		if (!text) {
 			// A message of nothing but tool calls settles nothing: the turn keeps what has arrived and
-			// the caret stays until a message has words in it.
-			if (turn?.streaming) {
-				turn.reply = said;
-				if (asked) updateCard(board, asked);
-				else update(board, thread);
+			// the caret stays until a message has words in it. A failed one has no words coming, so it
+			// ends here, carrying the reason.
+			if (turn) {
+				turn.error = reason;
+				if (reason) turn.status = "stopped";
+				if (turn.streaming) turn.reply = said;
+				if (reason || turn.streaming) {
+					if (asked) updateCard(board, asked);
+					else update(board, thread);
+				}
 			}
 			return;
 		}
@@ -1370,6 +1410,7 @@ function handleChildLine(board, thread, line) {
 			// An aborted or failed message is not an answer, however much of it arrived before it was
 			// cut. Saying `answered` over half a sentence would be a card that lies.
 			turn.status = aborted || failed ? "stopped" : "answered";
+			turn.error = reason;
 		}
 		addRow(board, {
 			id: randomUUID(),
