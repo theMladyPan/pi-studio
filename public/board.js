@@ -3361,6 +3361,78 @@
     runtimeList.replaceChildren(...(rows.length ? rows : [pickNote("no model matches")]));
   }
 
+  /**
+   * A tool with its state on the right. A click flips it and the list redraws where it stands.
+   * The word carries the state and the muted row backs it up: a list of twelve tools where eight are
+   * on must not read as twelve accents.
+   */
+  function toolRow(name, on, onClick) {
+    const row = pickRow(name, on ? "on" : "off", false, onClick);
+    row.classList.toggle("tool-off", !on);
+    row.setAttribute("aria-pressed", on ? "true" : "false");
+    row.title = on ? `${name} is given to a new thread` : `${name} is kept from a new thread`;
+    return row;
+  }
+
+  /**
+   * The tools a new thread gets: pi's own four, then one row per extension folder. Each list carries a
+   * row that turns the whole group on or off, because a pass over the list usually starts there.
+   */
+  function drawTools(query) {
+    if (!toolCatalogue) {
+      runtimeList.replaceChildren(
+        pickNote(toolsTrouble ? `the tool list is unavailable: ${toolsTrouble}` : "asking the daemon for its tools…"),
+      );
+      return;
+    }
+    const needle = query.trim().toLowerCase();
+    const toolsOff = boardConfig.toolsOff ?? [];
+    const extensionsOff = boardConfig.extensionsOff ?? [];
+    const builtin = toolCatalogue.builtin ?? [];
+    const extensions = (toolCatalogue.extensions ?? []).map((one) => one.name);
+    const rows = [];
+    const matches = (name) => !needle || name.toLowerCase().includes(needle);
+    const group = (head, names, off, patchFor) => {
+      const shown = names.filter(matches);
+      if (!shown.length) return;
+      rows.push(pickHead(`${head} · ${names.length - off.length} of ${names.length} on`));
+      rows.push(
+        pickRow("all of them", off.length ? "turn on" : "turn off", false, () => void setTools(patchFor(off.length ? [] : [...names]))),
+      );
+      for (const name of shown) {
+        const on = !off.includes(name);
+        // A click flips the row: one that is on joins the list of tools this board keeps out, and one
+        // that is off leaves it.
+        const next = on ? [...off, name] : off.filter((one) => one !== name);
+        rows.push(toolRow(name, on, () => void setTools(patchFor(next))));
+      }
+    };
+    group("built-in", builtin, toolsOff, (list) => ({ toolsOff: list }));
+    group("extensions", extensions, extensionsOff, (list) => ({ extensionsOff: list }));
+    if (!extensions.length) rows.push(pickNote("no extensions installed beside the board's own bridge"));
+    runtimeList.replaceChildren(...(rows.length ? rows : [pickNote("no tool matches")]));
+  }
+
+  /**
+   * One change to the board's tool switches. The list redraws where it stands rather than closing,
+   * because choosing tools is a pass over several rows and not a single pick.
+   */
+  async function setTools(patch) {
+    try {
+      const response = await fetch(`/config?${auth}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+      applyConfig((await response.json()).config);
+      drawTools(runtimeSearch.value);
+      placeRuntimePick();
+    } catch (error) {
+      hintLine(`could not change it: ${error.message || error}`, true);
+    }
+  }
+
   function drawLevels() {
     const here = pickRuntime();
     const chosen = (catalog?.models ?? []).find((one) => one.provider === here.provider && one.model === here.model);
@@ -3396,7 +3468,22 @@
     pickAnchor = anchor;
     pickBoard = forBoard;
     runtimePick.hidden = false;
-    runtimeSearch.hidden = which !== "model";
+    runtimeSearch.hidden = which === "thinking";
+    runtimeSearch.placeholder = which === "tools" ? "search tools…" : "search models…";
+    // The tools are a question of their own, so they are asked for on their own: pi's four names and
+    // this machine's extension folders, in one cheap request.
+    if (which === "tools") {
+      runtimeSearch.value = "";
+      runtimeList.replaceChildren(
+        pickNote(toolsTrouble ? `the tool list is unavailable: ${toolsTrouble}` : "asking the daemon for its tools…"),
+      );
+      await loadTools();
+      if (picking !== "tools") return; // closed while the list was loading
+      drawTools("");
+      placeRuntimePick();
+      runtimeSearch.focus();
+      return;
+    }
     runtimeList.replaceChildren(pickNote("reading what this machine has…"));
     // Read on every open, not once per page: the scope is pi's, and the human edits it in a console pi
     // while this tab is open. The catalogue behind it is cached by the daemon, so this is one cheap
@@ -3461,10 +3548,11 @@
   const cfgThinking = document.getElementById("cfgThinking");
   const cfgThinkingValue = document.getElementById("cfgThinkingValue");
   const cfgTools = document.getElementById("cfgTools");
+  const cfgToolsValue = document.getElementById("cfgToolsValue");
 
   /**
    * The tools a thread can be given, as the daemon sees them: pi's own four by name, and the extension
-   * folders installed on this machine. Read on the first open of the panel and kept, because only a
+   * folders installed on this machine. Read on the first open of the list and kept, because only a
    * daemon restart with a new extension installed changes the answer.
    */
   let toolCatalogue = null;
@@ -3482,98 +3570,10 @@
     return toolCatalogue;
   }
 
-  /** One change to the board's configuration, and the configuration the daemon now holds. */
-  async function postConfig(patch) {
-    try {
-      const response = await fetch(`/config?${auth}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
-      applyConfig((await response.json()).config);
-      return true;
-    } catch (error) {
-      footNote(`could not change it: ${error.message || error}`);
-      return false;
-    }
-  }
-
-  /**
-   * A checkbox row. The box is redrawn from the daemon's answer, so a refused change puts it back.
-   * `partial` is the group switch: some of its entries are off, so it reads as neither on nor off.
-   */
-  function checkRow(label, checked, patchFor, partial = false) {
-    const row = el("label", checked ? "cfg-check" : "cfg-check off");
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.checked = checked;
-    box.indeterminate = partial;
-    box.addEventListener("change", async () => {
-      box.disabled = true;
-      const ok = await postConfig(patchFor(box.checked));
-      // Redrawn from the configuration the daemon now holds, which is what the next thread gets.
-      toolsPaintedFor = "";
-      paintTools();
-      if (!ok) box.disabled = false;
-    });
-    const text = el("span");
-    text.textContent = label;
-    row.append(box, text);
-    return row;
-  }
-
-  /**
-   * The checkbox list, rebuilt only when it would look different. A board repaints on every message,
-   * and a list re-made on each token would take the box out from under a click.
-   */
-  let toolsPaintedFor = "";
-  function paintTools() {
-    if (!cfgTools || configPanel.hidden) return;
-    const toolsOff = boardConfig.toolsOff ?? [];
-    const extensionsOff = boardConfig.extensionsOff ?? [];
-    const signature = JSON.stringify([toolsOff, extensionsOff, toolCatalogue ? "tools" : toolsTrouble]);
-    if (signature === toolsPaintedFor) return;
-    toolsPaintedFor = signature;
-    if (!toolCatalogue) {
-      const said = el("p", "cfg-note");
-      said.textContent = toolsTrouble ? `the tool list is unavailable: ${toolsTrouble}` : "asking the daemon for its tools…";
-      cfgTools.replaceChildren(said);
-      return;
-    }
-    const builtin = toolCatalogue.builtin ?? [];
-    const extensions = (toolCatalogue.extensions ?? []).map((one) => one.name);
-    const rows = [];
-    // Each group opens with the switch for the whole list, so the default is one click away from any
-    // state the boxes have been left in. The switch carries the group's name and the rows under it
-    // are what it covers.
-    const group = (label, off, all, patchFor) => {
-      const row = checkRow(label, off.length === 0, patchFor, off.length > 0 && off.length < all.length);
-      row.classList.add("cfg-all");
-      rows.push(row);
-    };
-    group("built-in", toolsOff, builtin, (on) => ({ toolsOff: on ? [] : [...builtin] }));
-    for (const name of builtin) {
-      rows.push(
-        checkRow(name, !toolsOff.includes(name), (on) => ({
-          toolsOff: on ? toolsOff.filter((one) => one !== name) : [...toolsOff, name],
-        })),
-      );
-    }
-    group("extensions", extensionsOff, extensions, (on) => ({ extensionsOff: on ? [] : [...extensions] }));
-    for (const name of extensions) {
-      rows.push(
-        checkRow(name, !extensionsOff.includes(name), (on) => ({
-          extensionsOff: on ? extensionsOff.filter((one) => one !== name) : [...extensionsOff, name],
-        })),
-      );
-    }
-    if (!extensions.length) {
-      const said = el("p", "cfg-note");
-      said.textContent = "no extensions installed beside the board's own bridge";
-      rows.push(said);
-    }
-    cfgTools.replaceChildren(...rows);
+  /** How much of the default a new thread still gets, in the row that opens the list. */
+  function toolsSummary() {
+    const off = (boardConfig.toolsOff ?? []).length + (boardConfig.extensionsOff ?? []).length;
+    return off ? `${off} off` : "everything";
   }
 
   /** The daemon's copy of the configuration is the truth; whatever arrives is what the panel shows. */
@@ -3588,7 +3588,7 @@
     cfgDimValue.textContent = boardConfig.dimOthers === false ? "off" : "on";
     cfgModelValue.textContent = shortModel(boardConfig.model);
     cfgThinkingValue.textContent = boardConfig.thinking || "off";
-    paintTools();
+    cfgToolsValue.textContent = toolsSummary();
   }
 
   function shownConfig(on) {
@@ -3657,26 +3657,34 @@
     hintLine("a new board in the same workspace");
   });
 
-  configBtn.addEventListener("click", async () => {
+  configBtn.addEventListener("click", () => {
     closePick();
-    const opening = configPanel.hidden;
-    shownConfig(opening);
+    shownConfig(configPanel.hidden);
     paintConfig();
-    // The tool list comes from the daemon, so the first open asks for it and the panel says so until
-    // it lands.
-    if (opening && !toolCatalogue && !toolsTrouble) {
-      await loadTools();
-      paintTools();
-    }
   });
 
-  cfgDim.addEventListener("click", () => {
-    void postConfig({ dimOthers: boardConfig.dimOthers === false });
+  // The tools are a list, not a row you can flip: a thread has sixteen of them, and sixteen switches
+  // in this panel made it taller than the board. It opens the same picker a model does.
+  cfgTools.addEventListener("click", () => void openPick("tools", cfgTools, true));
+
+  cfgDim.addEventListener("click", async () => {
+    const want = boardConfig.dimOthers === false;
+    try {
+      const response = await fetch(`/config?${auth}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dimOthers: want }),
+      });
+      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+      applyConfig((await response.json()).config);
+    } catch (error) {
+      hintLine(`could not change it: ${error.message || error}`, true);
+    }
   });
 
   cfgModel.addEventListener("click", () => void openPick("model", cfgModel, true));
   cfgThinking.addEventListener("click", () => void openPick("thinking", cfgThinking, true));
-  runtimeSearch.addEventListener("input", () => drawModels(runtimeSearch.value));
+  runtimeSearch.addEventListener("input", () => (picking === "tools" ? drawTools(runtimeSearch.value) : drawModels(runtimeSearch.value)));
   window.addEventListener("resize", () => {
     if (!runtimePick.hidden) placeRuntimePick();
   });
