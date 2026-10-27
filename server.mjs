@@ -177,6 +177,8 @@ const MAX_PLAIN_CARDS = 200;
 const MAX_NOTE_CHARS = 100_000;
 /** A source card carries a whole file, so the ceiling is higher and still finite. */
 const MAX_SOURCE_CHARS = 200_000;
+/** A card's name is read at a glance, so it is one short line and not a paragraph. */
+const MAX_TITLE_CHARS = 200;
 /** A question whose agent is waiting holds that child's turn open, so it cannot wait forever. */
 const ASK_TIMEOUT_MS = 5 * 60_000;
 const STATE_VERSION = 1;
@@ -2206,6 +2208,31 @@ async function onEdit(req, res, board) {
 	answer(res, 200, { card: plainCardFor(note, board) });
 }
 
+/**
+ * The human names a card. A thread is drawn as a card of its own, so its name lives on the thread;
+ * every other card carries its own title. A name the human typed is theirs, kept as written.
+ */
+async function onRename(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const title = field(body.title, MAX_TITLE_CHARS);
+	if (!title) return void fail(res, 400, "title is required");
+	const id = String(body.cardId ?? "");
+	const card = board.cards.get(id);
+	if (card) {
+		card.title = title;
+		card.updatedAt = Date.now();
+		updateCard(board, card);
+		answer(res, 200, { cardId: card.id, card: plainCardFor(card, board) });
+		return;
+	}
+	const thread = board.threads.get(id);
+	if (!thread) return void fail(res, 409, "no such card");
+	thread.title = title;
+	update(board, thread);
+	answer(res, 200, { cardId: thread.id, card: cardFor(thread, board) });
+}
+
 /** Settle a question, tell whoever was waiting, and keep the card honest about what happened. */
 function settleQuestion(board, card, status, answer) {
 	card.status = status;
@@ -2760,6 +2787,7 @@ const server = createServer((req, res) => {
 				"/card/source": onSource,
 				"/card/ask": onAsk,
 				"/edit": onEdit,
+				"/rename": onRename,
 				"/answer": onAnswer,
 				"/message": onMessage,
 				"/layout": onLayout,

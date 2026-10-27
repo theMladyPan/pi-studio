@@ -103,6 +103,10 @@
   .dot.question { background: var(--pink); box-shadow: 0 0 0 3px rgba(219,97,162,.18); }
   .title { font-weight: 600; font-size: 13px; letter-spacing: .2px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46%; }
+  /* The name while it is being typed: the same words in the same place, now editable. */
+  .title-edit { font: 600 13px system-ui; letter-spacing: .2px; color: var(--text);
+    background: #0d1117; border: 1px solid var(--accent); border-radius: 4px;
+    padding: 1px 5px; outline: none; }
   .sub { color: var(--muted); font: 12px var(--mono); white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; }
   .sub.expired { color: var(--red); }
