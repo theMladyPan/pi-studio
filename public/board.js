@@ -1735,13 +1735,27 @@
   const wheelPixels = (event, delta) =>
     delta * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1);
 
+  /**
+   * The nearest thing under the pointer that has somewhere to scroll. An open editor is a textarea
+   * with its own overflow, so a wheel over it scrolls the text you are writing, not the board.
+   */
+  function scrollTarget(event) {
+    for (let node = event.target; node && node !== viewport; node = node.parentElement) {
+      if (node.scrollHeight - node.clientHeight > 1) {
+        const overflowY = getComputedStyle(node).overflowY;
+        if (overflowY === "auto" || overflowY === "scroll") return node;
+      }
+    }
+    return null;
+  }
+
   viewport.addEventListener("wheel", (event) => {
     if (!event.ctrlKey && !event.metaKey) {
-      // One target per wheel, chosen by what is selected rather than by what the pointer is over: a
-      // board you are reading a card on keeps still while you scroll that card, and a board with
-      // nothing selected pans wherever the pointer happens to be.
+      // One target per wheel: whatever scrolls under the pointer first, because that is what the
+      // reader is looking at; otherwise the selection decides, so a board you are reading a card on
+      // keeps still while you scroll that card, and a board with nothing selected pans.
       const selected = document.querySelector(".card.active");
-      const scroller = selected?.querySelector(".card-scroll");
+      const scroller = scrollTarget(event) ?? selected?.querySelector(".card-scroll");
       const room = scroller ? scroller.scrollHeight - scroller.clientHeight : 0;
       if (room > 1) {
         event.preventDefault();

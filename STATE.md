@@ -268,6 +268,9 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
    `text_delta` on the same stdout `handleChildLine` reads, and only `turn_end` is acted on.
 2. A workspace entry that no longer resolves: offer to forget it.
 3. Fork a thread, then feeding a card into another thread.
+4. Brainstorm how to organize subagents on a board — potentially replace `delegate`.
+5. HTML artifacts: a card that renders a whole html file, not only source text.
+6. Home screen redesign — the crossroads (`/`, `welcome.html`/`welcome.css`/`welcome.js`).
 
 ## Rules
 
