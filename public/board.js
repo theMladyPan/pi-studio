@@ -964,9 +964,10 @@
     });
 
     // The whole card is a handle. Dragging its text used to select the text, which made reading a
-    // board feel like a web page rather than a surface: hold shift for that instead.
+    // board feel like a web page rather than a surface: hold ctrl for that instead, the same modifier
+    // the wheel uses for zoom.
     card.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || event.shiftKey) return;
+      if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
       // The head starts the same drag on its own press, and preventing the default there does not
       // stop the event from reaching here.
       if (card.classList.contains("dragging")) return;
