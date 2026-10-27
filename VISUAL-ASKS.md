@@ -60,5 +60,41 @@ Settling them means giving the graph the same key-and-button shape the map has, 
 offering both as rows in the settings dialog `#boardConfig` (`public/index.html:773`, JS at
 `public/board.js:4221`) rather than as header buttons.
 
+## 5. Git graph: graphics at rest, branches and messages on hover
+
+As specified: the strip shows lanes and dots only. Hovering rolls it further into view, wide enough for
+branch and tag pills and commit subjects; leaving hides the text again and leaves the graph.
+
+Where it stands today the opposite way round: the strip is a fixed 208px column
+(`public/index.html:78`), and it already draws up to two pills per row (`public/board.js:2682`) and a
+fitted subject (`public/board.js:2684`) inside that width. So the change is two things at once: text
+out of the resting state, and width in the hovered one.
+
+Two ways to get the hover, and they are not equivalent:
+
+- **`pointer-events: auto` on `#gitstrip`.** Simple, uses plain `:hover`. It breaks the invariant the
+  stylesheet states on purpose (`public/index.html:79`): today the board reads and pans *through* that
+  column, and the only pointer target on the right edge is the `+`. An auto strip swallows drags and
+  clicks over 208px of board.
+- **A `pointermove` hit test on the window against the strip's rect.** Keeps the invariant, costs one
+  listener and a proximity test, and the same handler can drive a short open/close delay so a pointer
+  crossing the column on its way somewhere else does not flash text over the board.
+
+Either way the repaint is free: `new ResizeObserver(() => paintGit()).observe(gitStrip)`
+(`public/board.js:2742`) already redraws when the box changes, and the canvas re-measures text at the
+new width. A fade needs more than CSS, because the text is canvas pixels: either the paint takes a
+hover alpha and ramps it, or the text moves to a second canvas above the lanes.
+
+Three consequences worth deciding before anyone writes it:
+
+- **Hover is not a modality everyone has.** Keyboard and touch users get nothing from it. The
+  accessible read is already the `aria-label` summary (`gitLabel`, `public/board.js:2714`); keeping the
+  text in that label, or making the strip focusable so `:focus-within` opens it, is the honest fix.
+- **A wide strip sits over cards.** At 208px it is a margin; at 400px it is over the board, and this is
+  where item 2 above bites: a semi transparent strip with no panel would put commit subjects on top of
+  card text. The hovered state wants a background the resting state does not.
+- **It changes item 4's default.** If the graph becomes an opt-in widget, this is the state it opens in:
+  graphics only, text on hover, one remembered preference for whether it is there at all.
+
 No defaults chosen. Every item is reversible except the alpha values, which want one look in a
 browser before they are kept.
