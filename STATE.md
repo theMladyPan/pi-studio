@@ -163,6 +163,13 @@ commit's own account rather than on a check run now, the section below says so.
   run's first event, because there was no run to abort yet.
 - **A source card is titled by its file, then by its label**: `docs/notes.md - The list as it reads
   now`. The path is made relative to the workspace, so a card says where it is before what it is.
+  Opening the same file again titles the card from the file once more, so a name given by hand to a
+  file card lasts until that file is asked for again.
+- **A card's name is the human's too.** Two presses on the name in a card's head turn it into a field
+  holding itself: Enter or a click elsewhere keeps what was typed, Escape drops it, and an empty name
+  keeps the one the card had. `POST /rename {cardId, title}` stores it on the card, or on the thread
+  when the id names a thread, because a thread is drawn as a card of its own. The press that starts a
+  rename belongs to the name, so the card does not also drag, and one press still drags it.
 - **A card draws only what it has.** A thread card's `text` is empty by design — the turns are the
   conversation — so an empty text draws no bubble and no state line.
 - **The rail is a stack of threads.** Every activity row says which thread wrote it, and a settled row

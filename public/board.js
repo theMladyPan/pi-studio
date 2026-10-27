@@ -1045,6 +1045,15 @@
       // Buttons in the header are for clicking, not for dragging the card. The middle button pans
       // the canvas even here, so it belongs to the workspace rather than to the card.
       if (event.button !== 0 || event.target.closest(INTERACTIVE)) return;
+      // Two presses on the name in quick succession rename the card, the way a file manager does.
+      // The press that starts a rename belongs to the name, so the card does not begin to drag.
+      const named = event.target.closest(".title");
+      if (named && doubledOnTitle(named)) {
+        event.preventDefault();
+        event.stopPropagation();
+        startRenaming(entry);
+        return;
+      }
       startCardDrag(card, entry, event);
     });
 
@@ -1283,9 +1292,12 @@
     const isOpenQuestion = questionWants(data);
     entry.data = data;
     if (entry.editing) return;
-    entry.titleEl.textContent =
+    // While a name is being typed, its field sits beside this span, so a repaint writes where nobody
+    // is looking and the hidden span keeps the words the rail row shows.
+    const shownTitle =
       data.title || (isSource ? data.path : data.type === "question" ? "question" : data.type === "sticky" ? "you" : "note");
-    entry.titleEl.title = entry.titleEl.textContent;
+    entry.titleEl.textContent = shownTitle;
+    entry.titleEl.title = shownTitle;
     entry.subEl.textContent = isSource
       ? `${data.content.split("\n").length} lines`
       : data.type === "question"
@@ -1734,6 +1746,21 @@
     }
   }
 
+  /** Give a card the name the human typed, and keep it on screen while the daemon agrees. */
+  async function renameCard(entry, title) {
+    entry.data = { ...entry.data, title };
+    paintCard(entry, entry.data);
+    try {
+      await fetch(`/rename?${auth}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cardId: entry.id, title }),
+      });
+    } catch {
+      // A failed rename keeps the new name on screen; the next reload shows the daemon's copy.
+    }
+  }
+
   /** Flip the Nth task marker, so the tick lands on the line the user clicked. */
   function flipTask(markdown, index) {
     let seen = -1;
@@ -1784,6 +1811,64 @@
       }
     });
     area.addEventListener("blur", () => finish(true));
+  }
+
+  /**
+   * A press that lands on the name soon after the last one is a double click. The card drags from
+   * the same press, so this is counted here rather than left to the browser's own event, which a
+   * prevented pointer down can swallow.
+   */
+  let lastTitlePress = { at: 0, node: null };
+  function doubledOnTitle(node) {
+    const now = Date.now();
+    const again = lastTitlePress.node === node && now - lastTitlePress.at < 400;
+    lastTitlePress = again ? { at: 0, node: null } : { at: now, node };
+    return again;
+  }
+
+  /**
+   * The name becomes a field holding itself. Enter or a click elsewhere keeps what was typed,
+   * Escape drops it, and an empty name is no name at all, so the card keeps the one it had.
+   */
+  function startRenaming(entry) {
+    if (entry.renaming || entry.editing) return;
+    const titleEl = entry.titleEl;
+    const current = titleEl.textContent.trim();
+    // Measured before the span is hidden, and wide enough for a name longer than the one there.
+    const width = Math.max(120, Math.min(420, titleEl.offsetWidth + 80));
+    entry.renaming = true;
+    const field = el("input", "title-edit");
+    field.type = "text";
+    field.value = current;
+    field.spellcheck = false;
+    field.style.width = `${width}px`;
+    titleEl.after(field);
+    // Hidden rather than emptied: the rail row and a repaint both read this span.
+    titleEl.style.display = "none";
+    field.focus();
+    field.select();
+    const finish = (commit) => {
+      if (!entry.renaming) return;
+      entry.renaming = false;
+      const wanted = field.value.trim();
+      field.remove();
+      titleEl.style.display = "";
+      if (commit && wanted && wanted !== current) void renameCard(entry, wanted);
+      else paintCard(entry, entry.data);
+    };
+    field.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        finish(true);
+      }
+      if (event.key === "Escape") {
+        // The board gives up its selection on Escape too, and a dropped name should not cost it.
+        event.preventDefault();
+        event.stopPropagation();
+        finish(false);
+      }
+    });
+    field.addEventListener("blur", () => finish(true));
   }
 
   /** Ring a card once, through the same class a reference jump uses. */
