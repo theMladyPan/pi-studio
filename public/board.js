@@ -5034,10 +5034,17 @@
     const name = document.createElement("b");
     name.textContent = folder;
     sess.append(name);
+    // A second daemon answering here says so in the header: the tab title is not always on screen.
+    if (meta.instance) {
+      const which = document.createElement("span");
+      which.className = "instance";
+      which.textContent = meta.instance;
+      sess.append(which);
+    }
     sess.title = meta.workspace
       ? `${meta.workspace.folder} · click for the crossroads`
       : `${meta.cwd || folder} · port ${meta.port}`;
-    setBaseTitle(`pi - ${folder}`);
+    setBaseTitle(meta.instance ? `pi - ${folder} · ${meta.instance}` : `pi - ${folder}`);
     boardMetaCache = meta;
     paintFooter();
     // The context chip carries the compact action, so it is hidden outright when there is no

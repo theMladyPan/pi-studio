@@ -37,11 +37,28 @@ const PUBLIC_DIR = fileURLToPath(new URL("./public/", import.meta.url));
  * workspaces the human has opened, one board file per workspace, and the pi sessions behind its
  * threads.
  *
- * `PI_STUDIO_STATE` moves all of it, so a second daemon can be booted against a scratch folder while
- * the real one keeps running. Without it, the only way to see a change work was somebody's own board,
- * which is a hope rather than a check.
+ * `PI_STUDIO_STATE` or `--state <folder>` moves all of it, so a second daemon can be booted against
+ * its own folder while the real one keeps running. Without that, the only way to see a change work
+ * was somebody's own board, which is a hope rather than a check.
  */
-const STATE_DIR = process.env.PI_STUDIO_STATE ?? join(homedir(), ".pi", "agent", "state", "pi-studio");
+function stateFromArgs() {
+	const args = process.argv.slice(2);
+	for (const [index, arg] of args.entries()) {
+		if (arg === "--state") return args[index + 1] ?? "";
+		if (arg.startsWith("--state=")) return arg.slice("--state=".length);
+	}
+	return "";
+}
+
+const stateArg = stateFromArgs() || process.env.PI_STUDIO_STATE || "";
+// A `~` reaches node unexpanded when nobody goes through a shell, and `.agents/…` should be relative to
+// the folder the daemon was started in, which is what `resolve` already does.
+const STATE_DIR = resolve(stateArg.startsWith("~/") ? join(homedir(), stateArg.slice(2)) : stateArg || join(homedir(), ".pi", "agent", "state", "pi-studio"));
+/**
+ * What this daemon calls itself when its folder is not the usual one. Two instances with the same
+ * boards in two tabs are indistinguishable, and the tab title is the only place that can say which.
+ */
+const INSTANCE = STATE_DIR === join(homedir(), ".pi", "agent", "state", "pi-studio") ? "" : basename(STATE_DIR);
 const STATE_FILE = join(STATE_DIR, "daemon.json");
 const WORKSPACES_FILE = join(STATE_DIR, "workspaces.json");
 const PROVIDER = process.env.PI_STUDIO_PROVIDER ?? "klotilda";
@@ -1631,6 +1648,9 @@ function boardMeta(board) {
 		folder: board.name,
 		cwd: board.folder,
 		port,
+		// Empty for the one daemon most machines run; the name of its state folder for a second one,
+		// which the tab title carries so two boards are told apart at a glance.
+		instance: INSTANCE,
 		model: MODEL,
 		// The board's configuration: what the next thread starts with, and which features are on.
 		config: activeConfig(board),
@@ -3765,7 +3785,7 @@ const server = createServer((req, res) => {
 
 		// ----- crossroads -----
 		if (req.method === "GET" && url.pathname === "/workspaces") {
-			answer(res, 200, { workspaces: workspaces.map(describeWorkspace) });
+			answer(res, 200, { workspaces: workspaces.map(describeWorkspace), instance: INSTANCE });
 			return;
 		}
 		// What every board opened from here is born with. The crossroads sets it; a board may then
@@ -3963,9 +3983,9 @@ function onListening() {
 	port = server.address().port;
 	writeJsonFile(STATE_FILE, { token, port, at: new Date().toISOString() });
 	const url = `http://127.0.0.1:${port}/?token=${token}`;
-	console.log(`pi-studio listening on ${url}`);
+	console.log(`pi-studio${INSTANCE ? ` [${INSTANCE}]` : ""} listening on ${url}`);
 	// Which build is answering matters the moment a tab looks wrong, so it is said out loud.
-	console.log(`build ${buildHash()}`);
+	console.log(`build ${buildHash()}${INSTANCE ? `, state ${STATE_DIR}` : ""}`);
 	if (workspaces.length) console.log(`${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"}, newest ${workspaces[0].name}`);
 	else console.log("no workspace yet — open one on the crossroads");
 	// The crossroads is where a desktop app starts, so it starts in the browser.

@@ -14,6 +14,7 @@
     "start": "node server.mjs",
     "check": "node --check server.mjs && node --check public/board.js && node --check bin/smoke.mjs",
     "dev": "node --watch server.mjs --no-open",
-    "smoke": "node bin/smoke.mjs"
+    "smoke": "node bin/smoke.mjs",
+    "dev:alt": "node --watch server.mjs --no-open --state ~/.pi/agent/state/pi-studio-dev"
   }
 }

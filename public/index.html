@@ -324,6 +324,8 @@
   header .hint { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   header .sess { font: 13px var(--mono); color: var(--text); }
   header .sess b { color: var(--accent); font-weight: 600; }
+  /* A daemon booted on another state folder is a second instance, and says so beside the workspace. */
+  header .sess .instance { margin-left: 6px; color: var(--amber); font-size: 11px; }
   header .stat { font: 12px var(--mono); color: var(--muted); background: #161b22;
     border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; white-space: nowrap; }
   header .stat:empty { display: none; }

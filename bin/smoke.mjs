@@ -1,27 +1,28 @@
 #!/usr/bin/env node
 /**
- * Boots a daemon against a scratch state folder and hits the routes a change is most likely to break.
+ * Boots daemons against scratch state folders and hits the routes a change is most likely to break.
  *
- * The point is isolation: with `PI_STUDIO_STATE` pointing into a temporary folder, this runs beside
- * the human's own daemon without touching its token, its workspaces, its boards or its sessions, and
- * picks a free port because a fresh state folder holds no port to reuse. Nothing is spawned here: no
- * thread is prompted, so no `pi` child starts and no model is called.
+ * The point is isolation: with the state folder moved, this runs beside the human's own daemon without
+ * touching its token, its workspaces, its boards or its sessions, and picks a free port because a
+ * fresh folder holds no port to reuse. Nothing is spawned here: no thread is prompted, so no `pi` child
+ * starts and no model is called.
  *
  * What it proves is that the server starts, serves the page, opens a workspace, writes that workspace
- * down, and answers for its board. A refactor that breaks a route fails here in about a second.
+ * down, and answers for its board — and that two of them can run at once, which is what a development
+ * instance beside a stable one is. A refactor that breaks a route fails here in about a second.
  *
  *   node bin/smoke.mjs          # one line per check, exit 1 on the first failure
- *   node bin/smoke.mjs --keep   # leave the scratch folder behind, named in the output
+ *   node bin/smoke.mjs --keep   # leave the scratch folders behind, named in the output
  */
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const keep = process.argv.includes("--keep");
-const scratch = mkdtempSync(join(tmpdir(), "pi-studio-smoke-"));
+const scratches = [];
 const children = new Set();
 
 function said(ok, what, note = "") {
@@ -29,11 +30,17 @@ function said(ok, what, note = "") {
 	if (!ok) throw new Error(`smoke: ${what}`);
 }
 
+function scratchFolder() {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-smoke-"));
+	scratches.push(folder);
+	return folder;
+}
+
 /** The daemon answers on an ephemeral port and says so; that line is the only address there is. */
-function waitForUrl(child) {
+function waitForUrl(child, noise) {
 	return new Promise((resolve, reject) => {
 		let seen = "";
-		const timer = setTimeout(() => reject(new Error(`no listening line in 20s: ${seen.slice(-400)}`)), 20_000);
+		const timer = setTimeout(() => reject(new Error(`no listening line in 20s: ${seen.slice(-400)} ${noise.join("")}`)), 20_000);
 		const onData = (chunk) => {
 			seen += String(chunk);
 			const match = seen.match(/listening on (http:\/\/127\.0\.0\.1:\d+\/\?token=[0-9a-f]+)/);
@@ -45,94 +52,144 @@ function waitForUrl(child) {
 		child.stdout.on("data", onData);
 		child.on("exit", (code) => {
 			clearTimeout(timer);
-			reject(new Error(`the daemon exited with ${code} before listening: ${seen.slice(-400)}`));
+			reject(new Error(`the daemon exited with ${code} before listening: ${seen.slice(-400)} ${noise.join("")}`));
 		});
 	});
 }
 
-async function get(base, path, init) {
-	const res = await fetch(new URL(path, base), init);
+/**
+ * One daemon. `via` picks how it is told where its state goes: the environment, which is what a couple
+ * of scratch commands use, or the flag, which is what a human types to run a second instance.
+ */
+async function boot(folder, via) {
+	const args = [join(repo, "server.mjs"), "--no-open"];
+	const env = { ...process.env, PI_STUDIO_STATE: "", PI_STUDIO_PORT: "" };
+	if (via === "flag") args.push(`--state=${folder}`);
+	else env.PI_STUDIO_STATE = folder;
+	const child = spawn(process.execPath, args, { cwd: repo, env, stdio: ["ignore", "pipe", "pipe"] });
+	children.add(child);
+	const noise = [];
+	child.stderr.on("data", (chunk) => noise.push(String(chunk)));
+	const url = await waitForUrl(child, noise);
+	return { child, noise, url, token: new URL(url).searchParams.get("token"), base: url.replace(/\?.*$/, ""), folder };
+}
+
+async function get(daemon, path, init) {
+	const res = await fetch(new URL(path, daemon.base), init);
 	const body = await res.text();
 	return { status: res.status, type: res.headers.get("content-type") ?? "", body };
 }
 
-async function main() {
-	const child = spawn(process.execPath, [join(repo, "server.mjs"), "--no-open"], {
-		cwd: repo,
-		env: { ...process.env, PI_STUDIO_STATE: scratch, PI_STUDIO_PORT: "" },
-		stdio: ["ignore", "pipe", "pipe"],
+/** The workspace both daemons open: the same folder, which is the case that has to stay separate. */
+async function openWorkspace(daemon, folder) {
+	const opened = await get(daemon, `/workspace?token=${daemon.token}`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ folder }),
 	});
-	children.add(child);
-	const noise = [];
-	child.stderr.on("data", (chunk) => noise.push(String(chunk)));
+	return { status: opened.status, ...JSON.parse(opened.body || "{}") };
+}
 
-	const url = await waitForUrl(child);
-	const token = new URL(url).searchParams.get("token");
-	const base = url.replace(/\?.*$/, "");
-	said(Boolean(token), "the daemon boots against a scratch folder", scratch);
+/** `daemon.json` exists as soon as a daemon listens; `workspaces.json` only once one was opened. */
+function daemonFile(folder) {
+	return JSON.parse(readFileSync(join(folder, "daemon.json"), "utf8"));
+}
 
-	const page = await get(base, "/");
+function recorded(folder) {
+	return { daemon: daemonFile(folder), workspaces: JSON.parse(readFileSync(join(folder, "workspaces.json"), "utf8")) };
+}
+
+async function main() {
+	const first = scratchFolder();
+	const second = scratchFolder();
+	const one = await boot(first, "env");
+	said(Boolean(one.token), "the daemon boots against a scratch folder", first);
+
+	const page = await get(one, "/");
 	said(
 		page.status === 200 && page.type.includes("text/html") && page.body.includes("pi-studio"),
 		"GET / serves the crossroads",
 		`${page.status} ${page.type}`,
 	);
 
-	// Every route past the statics is behind the token, and it travels in the query, not the body.
-	const opened = await get(base, `/workspace?token=${token}`, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ folder: scratch }),
-	});
-	const workspace = JSON.parse(opened.body || "{}");
+	const opened = await openWorkspace(one, first);
 	said(
-		opened.status === 200 && Boolean(workspace.board?.id),
+		opened.status === 200 && Boolean(opened.board?.id),
 		"POST /workspace opens one",
-		`${opened.status} board ${String(workspace.board?.id ?? "").slice(0, 8)}`,
+		`${opened.status} board ${String(opened.board?.id ?? "").slice(0, 8)}`,
 	);
-	said(existsSync(join(scratch, "workspaces.json")), "the workspace is written down inside the scratch folder");
+	said(existsSync(join(first, "workspaces.json")), "the workspace is written down inside the scratch folder");
 
-	const state = await get(base, `/state?token=${token}&workspace=${workspace.board.id}`);
-	const board = JSON.parse(state.body || "{}");
+	const state = JSON.parse((await get(one, `/state?token=${one.token}&workspace=${opened.board.id}`)).body || "{}");
 	said(
-		state.status === 200 && Array.isArray(board.threads) && board.workspace?.id === workspace.board.id,
+		Array.isArray(state.threads) && state.workspace?.id === opened.board.id,
 		"GET /state answers for that board",
-		`${state.status} ${board.threads?.length ?? "?"} threads`,
+		`${state.threads?.length ?? "?"} threads`,
 	);
 	// Read back through the API rather than the file: a board is only written down when it changes, so
 	// what a fresh boot proves is that the workspace it was told about is the one it serves.
-	const list = await get(base, `/workspaces?token=${token}`);
-	const saved = JSON.parse(readFileSync(join(scratch, "workspaces.json"), "utf8"));
+	const list = await get(one, `/workspaces?token=${one.token}`);
+	const saved = recorded(first);
 	said(
-		list.status === 200 && list.body.includes(workspace.board.id) && saved.workspaces?.some((one) => one.id === workspace.board.id),
+		list.status === 200 && list.body.includes(opened.board.id) && saved.workspaces.workspaces?.some((each) => each.id === opened.board.id),
 		"GET /workspaces reads it back from the scratch folder",
 		`${list.status}`,
 	);
+	said(
+		saved.daemon.token === one.token && Number(saved.daemon.port) > 0,
+		"the token and port are its own",
+		`port ${saved.daemon.port}`,
+	);
+	said(
+		state.meta?.instance === basename(first),
+		"a daemon off the usual folder names itself",
+		`instance ${state.meta?.instance}`,
+	);
 
-	const script = await get(base, "/board.js");
+	const script = await get(one, "/board.js");
 	said(script.status === 200 && script.type.includes("javascript"), "GET /board.js serves the client", `${script.status} ${script.type}`);
-
-	const refused = await get(base, "/state");
+	const refused = await get(one, "/state");
 	said(refused.status === 403, "a route without the token is refused", `${refused.status}`);
-	said(existsSync(join(scratch, "daemon.json")), "the token and port are recorded in the scratch folder");
 
-	// The scratch folder is all it touched: the token and the port are its own, and the human's daemon
-	// keeps its own file, so a check can run beside a live board without appending to it.
-	const daemon = JSON.parse(readFileSync(join(scratch, "daemon.json"), "utf8"));
-	said(daemon.token === token && Number(daemon.port) > 0, "the scratch daemon used its own token and port", `port ${daemon.port}`);
-	if (noise.length) console.log(`     stderr: ${noise.join("").trim().split("\n").slice(-1)[0]}`);
+	// The point of the whole exercise: a second daemon answering at the same time, told where to put
+	// its state by the flag, on the same workspace folder.
+	const two = await boot(second, "flag");
+	said(Boolean(two.token) && two.base !== one.base, "a second daemon boots beside the first", two.base);
+	said(two.token !== one.token, "each instance has its own token");
+	said(daemonFile(second).port !== saved.daemon.port, "and its own port", `${saved.daemon.port} and ${daemonFile(second).port}`);
+
+	const alsoOpened = await openWorkspace(two, first);
+	const theirs = JSON.parse((await get(two, `/state?token=${two.token}&workspace=${alsoOpened.board.id}`)).body || "{}");
+	said(
+		alsoOpened.status === 200 && alsoOpened.board.id === opened.board.id && Array.isArray(theirs.threads) && theirs.threads.length === 0,
+		"the same folder is two boards, one per instance",
+		`board ${String(alsoOpened.board?.id ?? "").slice(0, 8)}, ${theirs.threads?.length} threads on the second`,
+	);
+	said(theirs.meta?.instance !== state.meta?.instance, "and each board says which instance it is", `${state.meta?.instance} | ${theirs.meta?.instance}`);
+	const stillThere = await get(one, `/state?token=${one.token}&workspace=${opened.board.id}`);
+	said(stillThere.status === 200, "the first instance is still answering");
+	// Nothing of the second daemon leaked into the first one's folder: its token file is the one it
+	// wrote, and the only workspace recorded there is the one its own board was opened with.
+	const again = recorded(first);
+	said(
+		again.daemon.token === one.token && again.workspaces.workspaces.length === 1,
+		"the second instance left the first one's folder alone",
+	);
+	for (const daemon of [one, two]) {
+		if (daemon.noise.length) console.log(`     stderr: ${daemon.noise.join("").trim().split("\n").slice(-1)[0]}`);
+	}
 }
 
 main()
 	.then(() => {
-		console.log(`all checks passed${keep ? `, scratch kept at ${scratch}` : ""}`);
+		console.log(`all checks passed${keep ? `, scratch folders kept at ${scratches.join(" ")}` : ""}`);
 	})
 	.catch((error) => {
 		console.error(String(error?.message ?? error));
-		console.log(`scratch was ${scratch}${keep ? "" : " (removed)"}`);
+		console.log(`scratch folders were ${scratches.join(" ")}${keep ? "" : " (removed)"}`);
 		process.exitCode = 1;
 	})
 	.finally(async () => {
 		for (const child of children) child.kill();
-		if (!keep) rmSync(scratch, { recursive: true, force: true });
+		if (!keep) for (const folder of scratches) rmSync(folder, { recursive: true, force: true });
 	});

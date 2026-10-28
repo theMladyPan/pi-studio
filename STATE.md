@@ -398,13 +398,21 @@ a second workspace with its own thread and reply at the same time, both restored
 restart, crossroads showing both with their last activity. `POST /pick-folder` is untested because
 running it opens a dialog on the human's screen.
 
+Two instances run side by side: `--state <folder>` (or `PI_STUDIO_STATE`) moves the token, the
+workspaces, the boards and the sessions, and a fresh folder holds no port so the daemon takes a free
+one. A daemon off the usual folder names itself after it in the console line, in `meta.instance` and
+in the tab title, because two boards in two tabs look identical otherwise. The board id follows the
+workspace folder, so the same repository opened in both is the same board id out of two folders, each
+with its own threads. `npm run dev:alt` is the second instance: watch on, its own state, no tab.
+
 `npm run smoke` now does that loop against a scratch state folder: `PI_STUDIO_STATE` moves the token,
 the workspaces, the boards and the sessions out of `~/.pi/agent/state/pi-studio`, a fresh folder holds
 no port so the daemon takes a free one, and the script boots it, hits the crossroads, opens a
 workspace, reads it back through `/workspaces` and `/state`, and checks that a route without the token
-is refused. Ten checks, about a second, and it never touches the human's own daemon or prompts a
-thread, so no `pi` child starts and no model is called. That is what lets a change be checked by
-something other than somebody's live board.
+is refused, then boots a second daemon beside the first on the same workspace folder and checks that
+the two keep their own token, port and board. Seventeen checks, about two seconds, and it never touches
+the human's own daemon or prompts a thread, so no `pi` child starts and no model is called. That is
+what lets a change be checked by something other than somebody's live board.
 
 The board verbs, against real children on a throwaway `HOME`: a child asked to make a note and open a
 file did both (`board_note` with a key revised one card; `board_source` opened `notes.txt` at line 2),

@@ -23,12 +23,29 @@ pi-studio
 There is no build step and no dependency to install: Node 22 or newer and a working `pi` on the
 same machine are the whole requirement.
 
-`PI_STUDIO_STATE` moves everything durable out of `~/.pi/agent/state/pi-studio` into another folder,
-and a fresh one holds no port, so a second daemon picks a free one and runs beside the first. That is
-what makes the app checkable:
+### Two at once
+
+The state folder is one flag away from the usual place, which is what lets a development instance run
+beside the stable one. Each instance keeps its own token, its own port, its own workspaces, its own
+boards and its own pi sessions, so they cannot read or overwrite each other:
 
 ```bash
-npm run smoke   # boots a daemon against a scratch folder, runs ten checks, exits 1 on the first failure
+pi-studio                                   # stable, state in ~/.pi/agent/state/pi-studio
+node server.mjs --no-open --state ~/.pi/agent/state/pi-studio-dev   # a second one, its own everything
+npm run dev:alt                             # the same, watching the code and not opening a tab
+```
+
+A daemon whose folder is not the usual one names itself after that folder: in its console line, in the
+board header next to the workspace, and in the browser tab title (`pi - pi-studio · pi-studio-dev`).
+Opening the same repository in both is fine and expected: the board id follows the folder, so both
+serve the same board id out of their own folder, with their own threads.
+
+`PI_STUDIO_STATE` does the same as `--state` for anything that would rather set an environment.
+
+That is also what makes the app checkable:
+
+```bash
+npm run smoke   # boots two daemons against scratch folders, runs 17 checks, exits 1 on the first failure
 ```
 
 ## How it works
