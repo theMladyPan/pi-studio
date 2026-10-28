@@ -12,7 +12,8 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check public/board.js",
-    "dev": "node --watch server.mjs --no-open"
+    "check": "node --check server.mjs && node --check public/board.js && node --check bin/smoke.mjs",
+    "dev": "node --watch server.mjs --no-open",
+    "smoke": "node bin/smoke.mjs"
   }
 }

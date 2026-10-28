@@ -36,8 +36,12 @@ const PUBLIC_DIR = fileURLToPath(new URL("./public/", import.meta.url));
  * Everything durable lives beside pi's own state under a folder named after the app: the token, the
  * workspaces the human has opened, one board file per workspace, and the pi sessions behind its
  * threads.
+ *
+ * `PI_STUDIO_STATE` moves all of it, so a second daemon can be booted against a scratch folder while
+ * the real one keeps running. Without it, the only way to see a change work was somebody's own board,
+ * which is a hope rather than a check.
  */
-const STATE_DIR = join(homedir(), ".pi", "agent", "state", "pi-studio");
+const STATE_DIR = process.env.PI_STUDIO_STATE ?? join(homedir(), ".pi", "agent", "state", "pi-studio");
 const STATE_FILE = join(STATE_DIR, "daemon.json");
 const WORKSPACES_FILE = join(STATE_DIR, "workspaces.json");
 const PROVIDER = process.env.PI_STUDIO_PROVIDER ?? "klotilda";

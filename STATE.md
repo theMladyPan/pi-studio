@@ -398,6 +398,14 @@ a second workspace with its own thread and reply at the same time, both restored
 restart, crossroads showing both with their last activity. `POST /pick-folder` is untested because
 running it opens a dialog on the human's screen.
 
+`npm run smoke` now does that loop against a scratch state folder: `PI_STUDIO_STATE` moves the token,
+the workspaces, the boards and the sessions out of `~/.pi/agent/state/pi-studio`, a fresh folder holds
+no port so the daemon takes a free one, and the script boots it, hits the crossroads, opens a
+workspace, reads it back through `/workspaces` and `/state`, and checks that a route without the token
+is refused. Ten checks, about a second, and it never touches the human's own daemon or prompts a
+thread, so no `pi` child starts and no model is called. That is what lets a change be checked by
+something other than somebody's live board.
+
 The board verbs, against real children on a throwaway `HOME`: a child asked to make a note and open a
 file did both (`board_note` with a key revised one card; `board_source` opened `notes.txt` at line 2),
 each card cascading under the thread that asked for it, and the thread still answered in its own
@@ -584,5 +592,6 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
 
 - `public/` is the client; do not add a second UI beside it.
 - `.agents/` is where worktrees and scratch plans live, and it is gitignored. One name, one folder.
-- No subagent starts a browser or sends signals to processes; verification is curl and `node --check`.
+- No subagent starts a browser or sends signals to processes; verification is `npm run smoke`,
+  `npm run check` and curl.
 - One slice per commit, conventional commits, review before commit.

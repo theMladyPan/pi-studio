@@ -23,6 +23,14 @@ pi-studio
 There is no build step and no dependency to install: Node 22 or newer and a working `pi` on the
 same machine are the whole requirement.
 
+`PI_STUDIO_STATE` moves everything durable out of `~/.pi/agent/state/pi-studio` into another folder,
+and a fresh one holds no port, so a second daemon picks a free one and runs beside the first. That is
+what makes the app checkable:
+
+```bash
+npm run smoke   # boots a daemon against a scratch folder, runs ten checks, exits 1 on the first failure
+```
+
 ## How it works
 
 - **Workspaces** are folders you have opened before. The crossroads at `/` lists them, newest first,
@@ -44,6 +52,7 @@ The daemon listens on loopback only. The token in the URL guards every data rout
 server.mjs        the daemon: workspaces, threads, children, routes
 public/           the board client (index.html with its styles, board.js)
 bin/pi-studio     the wrapper: one word to start it
+bin/smoke.mjs     boot a daemon against a scratch folder and hit the routes a change can break
 STATE.md          what works, what does not, and what is next
 ```
 
