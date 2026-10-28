@@ -3711,9 +3711,34 @@ const token = (() => {
 	return typeof saved?.token === "string" && saved.token ? saved.token : randomToken();
 })();
 
+/**
+ * The path a route is compared against. The client never writes `//` or a trailing slash, but a URL
+ * typed by hand, pasted from a log or built by a proxy can, and an unfolded one matched nothing and
+ * fell through to an answer that was neither the page nor a plain not-found. Root stays root.
+ */
+function foldPath(pathname) {
+	const folded = pathname.replace(/\/{2,}/g, "/").replace(/(.)\/+$/, "$1");
+	return folded || "/";
+}
+
+/**
+ * The request target as a URL, which `new URL(req.url, base)` cannot do on its own: `new URL("//state",
+ * base)` reads `state` as a host, so a doubled slash turned into the root page or into an exception the
+ * catch below answered with a 500. The path is folded before parsing, and the query is left alone — a
+ * doubled slash can be deliberate in a folder path.
+ */
+function requestUrl(target) {
+	const raw = String(target || "/");
+	if (!raw.startsWith("/")) return new URL(raw.startsWith("http") ? raw : `/${raw}`, "http://127.0.0.1");
+	const cut = raw.indexOf("?");
+	const path = cut === -1 ? raw : raw.slice(0, cut);
+	const query = cut === -1 ? "" : raw.slice(cut);
+	return new URL(`http://127.0.0.1${foldPath(path)}${query}`);
+}
+
 const server = createServer((req, res) => {
 	void (async () => {
-		const url = new URL(req.url ?? "/", "http://127.0.0.1");
+		const url = requestUrl(req.url);
 		// Static assets carry no session data, so the token only guards the data routes.
 		if (req.method === "GET") {
 			const statics = {

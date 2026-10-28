@@ -74,8 +74,10 @@ async function boot(folder, via) {
 	return { child, noise, url, token: new URL(url).searchParams.get("token"), base: url.replace(/\?.*$/, ""), folder };
 }
 
+// Joined by hand rather than with `new URL`, so a path that starts with `//` stays a path instead of
+// turning into a host.
 async function get(daemon, path, init) {
-	const res = await fetch(new URL(path, daemon.base), init);
+	const res = await fetch(daemon.base + path, init);
 	const body = await res.text();
 	return { status: res.status, type: res.headers.get("content-type") ?? "", body };
 }
@@ -145,6 +147,13 @@ async function main() {
 		"a daemon off the usual folder names itself",
 		`instance ${state.meta?.instance}`,
 	);
+
+	// A path with a doubled or a trailing slash is what a hand typed URL looks like, and it used to fall
+	// through the route table into an answer that was neither.
+	const doubled = await get(one, `//state/?token=${one.token}&workspace=${opened.board.id}`);
+	said(doubled.status === 200 && doubled.body.includes(opened.board.id), "a doubled or trailing slash still finds its route", `${doubled.status}`);
+	const root = await get(one, "//");
+	said(root.status === 200 && root.type.includes("text/html"), "and the crossroads answers at //", `${root.status}`);
 
 	const script = await get(one, "/board.js");
 	said(script.status === 200 && script.type.includes("javascript"), "GET /board.js serves the client", `${script.status} ${script.type}`);
