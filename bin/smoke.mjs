@@ -62,7 +62,7 @@ function waitForUrl(child, noise) {
  * of scratch commands use, or the flag, which is what a human types to run a second instance.
  */
 async function boot(folder, via) {
-	const args = [join(repo, "server.mjs"), "--no-open"];
+	const args = [join(repo, "server.ts"), "--no-open"];
 	const env = { ...process.env, PI_STUDIO_STATE: "", PI_STUDIO_PORT: "" };
 	if (via === "flag") args.push(`--state=${folder}`);
 	else env.PI_STUDIO_STATE = folder;
@@ -155,8 +155,8 @@ async function main() {
 	const root = await get(one, "//");
 	said(root.status === 200 && root.type.includes("text/html"), "and the crossroads answers at //", `${root.status}`);
 
-	const script = await get(one, "/board.js");
-	said(script.status === 200 && script.type.includes("javascript"), "GET /board.js serves the client", `${script.status} ${script.type}`);
+	const script = await get(one, "/client/board.js");
+	said(script.status === 200 && script.type.includes("javascript"), "GET /client/board.js serves the client", `${script.status} ${script.type}`);
 	const refused = await get(one, "/state");
 	said(refused.status === 403, "a route without the token is refused", `${refused.status}`);
 
