@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -10,12 +10,13 @@ const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 
 /**
  * One daemon on its own state folder, started the way a human starts it. Nothing is spawned from a
- * thread here, so no `pi` child ever runs and no model is called.
+ * thread here, so no `pi` child ever runs and no model is called — except where a test passes `env` to
+ * put a stub `pi` in the daemon's way.
  */
-async function boot(folder: string) {
+async function boot(folder: string, env: Record<string, string> = {}) {
 	const child = spawn(process.execPath, [join(repo, "server.ts"), "--no-open"], {
 		cwd: repo,
-		env: { ...process.env, PI_STUDIO_STATE: folder, PI_STUDIO_PORT: "" },
+		env: { ...process.env, PI_STUDIO_STATE: folder, PI_STUDIO_PORT: "", ...env },
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	const noise: string[] = [];
@@ -50,6 +51,13 @@ const post = (daemon: Daemon, path: string, body?: unknown) =>
 /** A POST that names the board it is about, which every card route needs. */
 const postTo = (daemon: Daemon, board: string, path: string, body?: unknown) =>
 	get(daemon, `${path}?token=${daemon.token}&workspace=${board}`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body ?? {}),
+	});
+/** The same, carrying someone else's token: a thread speaks for itself and not for the human. */
+const postAs = (daemon: Daemon, token: string, board: string, path: string, body?: unknown) =>
+	get(daemon, `${path}?token=${token}&workspace=${board}`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(body ?? {}),
@@ -223,5 +231,138 @@ test("the event stream opens with a snapshot the client can draw from", async ()
 	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+/**
+ * A `pi` that is not pi, at the path the daemon looks for one.
+ *
+ * A thread's token is minted inside the spawn and handed to the child alone: `/state` does not carry it
+ * and neither does the board file. So the only way for a test to hold a real one is to be the child.
+ * This stub writes down the three variables the daemon gave it, answers the frames the daemon waits on,
+ * and exits when its stdin closes. It is a string rather than a file of its own because `node --test`
+ * runs every file it finds under `test/`, and a stub waiting on stdin would sit in the suite as a test
+ * that never ends.
+ */
+const STUB_PI = String.raw`
+const { writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+
+// A naming run is the other shape of invocation and carries no thread token, so it has nothing to say
+// here and leaves rather than wait on a stdin nobody will write.
+if (!process.env.PI_STUDIO_TOKEN) process.exit(0);
+
+writeFileSync(join(__dirname, "child-env.json"), JSON.stringify({
+	token: process.env.PI_STUDIO_TOKEN,
+	workspace: process.env.PI_STUDIO_WORKSPACE,
+	thread: process.env.PI_STUDIO_THREAD,
+}));
+
+const say = (frame) => process.stdout.write(JSON.stringify(frame) + "\n");
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+	buffer += chunk;
+	const lines = buffer.split("\n");
+	buffer = lines.pop() || "";
+	for (const line of lines) {
+		if (!line.trim()) continue;
+		const frame = JSON.parse(line);
+		// The session id is the one thing the daemon cannot do without: it resumes the thread with it.
+		if (frame.type === "get_state") say({ type: "response", command: "get_state", success: true, data: { sessionId: "stub-session" } });
+		// Asked after the run settles, and the child is closed once it answers.
+		if (frame.type === "get_session_stats") say({ type: "response", command: "get_session_stats", success: true, data: { tokens: { input: 1, output: 1, total: 2 }, totalMessages: 1 } });
+		if (frame.type === "prompt") {
+			say({ type: "turn_end", message: { role: "assistant", content: [{ type: "text", text: "the stub answered" }] } });
+			say({ type: "agent_settled" });
+		}
+	}
+});
+process.stdin.on("end", () => process.exit(0));
+`;
+
+/** Write that stub into a temp folder shaped like the managed install the daemon drives. */
+function stubPi(root: string) {
+	const version = "0.0.0-test";
+	const packageDir = join(root, "releases", version, "node_modules", "@earendil-works", "pi-coding-agent");
+	const bundle = join(packageDir, "dist", "bundle");
+	const cli = join(bundle, "cli.js");
+	mkdirSync(bundle, { recursive: true });
+	writeFileSync(join(root, "current-version"), `${version}\n`);
+	// The install carries its own manifest, so the stub is read as CommonJS whatever folder the temp
+	// root happened to be made in.
+	writeFileSync(join(packageDir, "package.json"), `${JSON.stringify({ name: "@earendil-works/pi-coding-agent", type: "commonjs" })}\n`);
+	writeFileSync(cli, STUB_PI);
+	// A stub that was not written would leave the daemon falling back to a real `pi` on PATH, which is
+	// the one thing a test may not start.
+	assert.ok(existsSync(cli), `the stub pi was not written to ${cli}`);
+	return { root, envFile: join(bundle, "child-env.json") };
+}
+
+/**
+ * The token the daemon minted for a thread, read back from the child that was handed it. The file is
+ * written by that child, so finding it is waiting for the spawn the token belongs to rather than for a
+ * guessed number of milliseconds.
+ */
+async function childEnvOf(daemon: Daemon, file: string) {
+	for (let tries = 0; tries < 100; tries++) {
+		try {
+			const env = JSON.parse(readFileSync(file, "utf8"));
+			if (env?.token) return env as { token: string; workspace: string; thread: string };
+		} catch {
+			// The child has not written it yet.
+		}
+		await new Promise((done) => setTimeout(done, 50));
+	}
+	throw new Error(`no child token was written to ${file}: ${daemon.noise.join("").slice(-400)}`);
+}
+
+test("a thread's own token reaches /card/ask over http and is refused the human's routes", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-thread-token-"));
+	// A plain temp folder: a thread there works in place, so the run leaves no worktree behind.
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-thread-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	// Naming a thread is a second `pi` the daemon would start for it, and the stub is not one.
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		// A message is what starts the child, and the child is what a token is minted for.
+		const said = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" });
+		assert.equal(said.status, 200);
+		const child = await childEnvOf(daemon, stub.envFile);
+		assert.notEqual(child.token, daemon.token, "a thread was handed the daemon's own token");
+		assert.equal(child.workspace, board.id);
+		assert.equal(child.thread, threadId);
+
+		// What belongs to the human stays out of a thread's reach, over the real wire this time.
+		const read = await get(daemon, `/state?token=${child.token}&workspace=${board.id}`);
+		assert.equal(read.status, 403);
+		assert.equal(read.body, "a thread may not use that");
+		const layout = await postAs(daemon, child.token, board.id, "/layout", { id: board.id, view: { x: 1, y: 1, k: 1 } });
+		assert.equal(layout.status, 403);
+		assert.equal(layout.body, "a thread may not use that");
+
+		// The route board_ask uses, asked by the thread itself. The daemon holds this request open until
+		// the human answers it, so it is not awaited yet.
+		const held = postAs(daemon, child.token, board.id, "/card/ask", { question: "which way?", options: ["left", "right"] });
+		const card = await questionCard(daemon, board.id);
+		assert.ok(card, "the thread's question never reached the board");
+		assert.equal(card.question, "which way?");
+		assert.equal(card.status, "open");
+		const early = await Promise.race([
+			held.then(() => "settled" as const),
+			new Promise<"held">((done) => setTimeout(() => done("held"), 250)),
+		]);
+		assert.equal(early, "held", "the question settled before the human answered it");
+
+		const clicked = await postTo(daemon, board.id, "/answer", { cardId: card.id, answer: "right" });
+		assert.equal(clicked.status, 200);
+		const reply = await held;
+		assert.equal(reply.status, 200);
+		assert.equal(JSON.parse(reply.body).answer, "right");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
 	}
 });
