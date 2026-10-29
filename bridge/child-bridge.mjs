@@ -45,7 +45,7 @@ const noteTool = defineTool({
 	name: "board_note",
 	label: "Board note",
 	description:
-		"Put a note on the user's board. Use it for a diagram, a table, a file tree, a todo list that will be updated, or a finding worth keeping beside the conversation instead of buried in it. One card holds one kind of thing: a chart and the todo for it are two notes. Markdown is rendered; a fenced svg block draws a picture. Pass the same key again to revise that note in place, which is how a checklist grows.",
+		"Put a note on the user's board. Use it for a diagram, a table, a file tree, a todo list that will be updated, or a finding worth keeping beside the conversation instead of buried in it. One card holds one kind of thing: a chart and the todo for it are two notes. Markdown is rendered; a fenced mermaid block draws a diagram, a fenced svg block draws a picture. Pass the same key again to revise that note in place, which is how a checklist grows.",
 	parameters: Type.Object({
 		markdown: Type.String({ description: "Note body in markdown." }),
 		title: Type.Optional(Type.String({ description: "Short card title, for example the step name." })),

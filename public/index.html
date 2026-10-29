@@ -221,6 +221,11 @@
   .note-body .svg-wrap { margin: 8px 0; background: #0d1117; border: 1px solid var(--border);
     border-radius: 6px; padding: 8px; }
   .note-body .svg-wrap svg { max-width: 100%; height: auto; display: block; }
+  /* A mermaid diagram arrives at the width its layout needs, so a wide graph keeps its text size
+     and scrolls sideways rather than shrinking to nothing inside a narrow card. */
+  .note-body .diagram-wrap { overflow-x: auto; }
+  .note-body .diagram-wrap svg { max-width: none; }
+  .note-body .diagram-error { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
   .note-body ul { margin: 0 0 8px; padding-left: 18px; list-style: disc; }
   .note-body li { margin: 1px 0; }
   /* A task item carries its own box in the text, so the list must not add a marker on top. */
@@ -680,6 +685,9 @@
   #actDetail .act-note .svg-wrap { margin: 8px 0; background: #0d1117; border: 1px solid var(--border);
     border-radius: 6px; padding: 8px; }
   #actDetail .act-note .svg-wrap svg { max-width: 100%; height: auto; display: block; }
+  #actDetail .act-note .diagram-wrap { overflow-x: auto; }
+  #actDetail .act-note .diagram-wrap svg { max-width: none; }
+  #actDetail .act-note .diagram-error { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
 
   /* sticky card */
   .sticky-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
