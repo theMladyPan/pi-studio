@@ -200,7 +200,14 @@ export function restoredPlainCard(raw) {
 				: { question: raw.question, options: Array.isArray(raw.options) ? raw.options.filter((one) => typeof one === "string") : [] }),
 		// A question is answered by an agent that was waiting for it, and that agent is gone: whatever
 		// the file says, a restored question is settled.
-		...(type === "question" ? { status: "expired", allowFreeText: raw.allowFreeText !== false } : {}),
+		...(type === "question"
+			? {
+					status: "expired",
+					allowFreeText: raw.allowFreeText !== false,
+					...(raw.multiple === true ? { multiple: true } : {}),
+					...(Array.isArray(raw.answers) ? { answers: raw.answers.filter((one) => typeof one === "string") } : {}),
+				}
+			: {}),
 		...(typeof raw.answer === "string" ? { answer: raw.answer } : {}),
 		...(Number.isFinite(raw.updatedAt) ? { updatedAt: raw.updatedAt } : {}),
 		...(Number.isFinite(raw.line) ? { line: raw.line } : {}),

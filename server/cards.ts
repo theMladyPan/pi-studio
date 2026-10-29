@@ -73,8 +73,10 @@ export function plainCardFor(card, board = null) {
 						question: card.question,
 						options: card.options,
 						allowFreeText: card.allowFreeText !== false,
+						multiple: card.multiple === true,
 						status: card.status ?? "expired",
 						...(card.answer ? { answer: card.answer } : {}),
+						...(card.answers?.length ? { answers: card.answers } : {}),
 						...(Number.isFinite(card.expiresAt) ? { expiresAt: card.expiresAt } : {}),
 					}),
 	};

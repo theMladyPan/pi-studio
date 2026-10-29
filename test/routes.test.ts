@@ -47,6 +47,24 @@ const post = (daemon: Daemon, path: string, body?: unknown) =>
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(body ?? {}),
 	});
+/** A POST that names the board it is about, which every card route needs. */
+const postTo = (daemon: Daemon, board: string, path: string, body?: unknown) =>
+	get(daemon, `${path}?token=${daemon.token}&workspace=${board}`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body ?? {}),
+	});
+
+/** The question card the daemon wrote, read back until it is on the board. */
+async function questionCard(daemon: Daemon, board: string) {
+	for (let tries = 0; tries < 100; tries++) {
+		const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board}`)).body);
+		const card = (state.cards as any[]).find((one) => one.type === "question");
+		if (card) return card;
+		await new Promise((done) => setTimeout(done, 50));
+	}
+	return null;
+}
 
 test("the daemon boots, opens a workspace, and answers for its board", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-"));
@@ -101,6 +119,75 @@ test("a route without the token is refused, and the page is not", async () => {
 		const script = await get(daemon, "/client/board.js");
 		assert.equal(script.status, 200);
 		assert.match(script.type, /javascript/);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a question that takes several answers keeps all of them", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-ask-"));
+	const daemon = await boot(folder);
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		const board = JSON.parse(opened.body).board;
+		// The daemon holds this request open until the question is settled, so it is not awaited yet.
+		const held = postTo(daemon, board.id, "/card/ask", {
+			question: "which of these?",
+			options: ["a", "b", "c"],
+			multiple: true,
+			allowFreeText: false,
+		});
+		const card = await questionCard(daemon, board.id);
+		assert.ok(card, "the question never reached the board");
+		assert.equal(card.multiple, true);
+		assert.equal(card.status, "open");
+
+		// An option list is closed when free text is off, so a pick that is not on it is refused and
+		// the question stays open rather than being answered with something nobody offered.
+		const stray = await postTo(daemon, board.id, "/answer", { cardId: card.id, answers: ["a", "z"] });
+		assert.equal(stray.status, 400);
+		const empty = await postTo(daemon, board.id, "/answer", { cardId: card.id, answers: [] });
+		assert.equal(empty.status, 400);
+
+		const sent = await postTo(daemon, board.id, "/answer", { cardId: card.id, answers: ["a", "c"] });
+		assert.equal(sent.status, 200);
+		// The child that asked reads one line, and the card keeps the two picks apart for the reader.
+		const answered = await held;
+		assert.equal(answered.status, 200);
+		const reply = JSON.parse(answered.body);
+		assert.equal(reply.answer, "a, c");
+		assert.deepEqual(reply.answers, ["a", "c"]);
+
+		const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		const settled = (state.cards as any[]).find((one) => one.id === card.id);
+		assert.equal(settled.status, "answered");
+		assert.deepEqual(settled.answers, ["a", "c"]);
+
+		// A second answer is still the 409 it always was.
+		const again = await postTo(daemon, board.id, "/answer", { cardId: card.id, answers: ["b"] });
+		assert.equal(again.status, 409);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a question that takes one answer is answered by one click, as before", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-ask-one-"));
+	const daemon = await boot(folder);
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		const board = JSON.parse(opened.body).board;
+		const held = postTo(daemon, board.id, "/card/ask", { question: "which one?", options: ["a", "b"] });
+		const card = await questionCard(daemon, board.id);
+		assert.ok(card, "the question never reached the board");
+		assert.equal(card.multiple, false);
+		const sent = await postTo(daemon, board.id, "/answer", { cardId: card.id, answer: "b" });
+		assert.equal(sent.status, 200);
+		const reply = JSON.parse((await held).body);
+		assert.equal(reply.answer, "b");
+		assert.equal(reply.answers, undefined);
 	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });

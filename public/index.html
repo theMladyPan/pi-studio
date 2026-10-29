@@ -296,6 +296,11 @@
   .q-opt:focus-visible { outline: none; border-color: var(--accent-dim); background: #1f2631; }
   .q-opt:disabled { cursor: default; opacity: .55; }
   .q-opt.picked { border-color: var(--accent); background: rgba(88,166,255,.12); opacity: 1; }
+  /* A question that takes several answers draws its options as boxes, so a click fills the
+     question in instead of answering it. The glyph is the button's own state, which is why it is
+     a pseudo element and not a second node the answer matching has to skip over. */
+  .q-opt.q-check::before { content: "☐ "; color: var(--muted); }
+  .q-opt.q-check.picked::before { content: "☑ "; color: var(--accent); }
   .q-free { display: flex; gap: 6px; }
   .q-free input {
     flex: 1; font: 13px system-ui, sans-serif; color: var(--text); background: #0d1117;

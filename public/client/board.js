@@ -615,6 +615,9 @@ function questionBody(data, entry) {
   // A question that ran out of time is as settled as an answered one: its buttons are dead and
   // the header says which of the two happened.
   const settled = data.status === "answered" || data.status === "expired";
+  // A question that takes several answers is filled in and then sent: one click would answer it
+  // half way, so its options are boxes and the row under them is what sends.
+  const multiple = data.multiple === true;
   const holder = el("div", "q-body");
   const text = el("div", "q-text");
   text.innerHTML = inlineMd(data.question || "");
@@ -623,32 +626,74 @@ function questionBody(data, entry) {
   // The arrival lands the keyboard here, so a focused option cannot answer on Space or Enter.
   const buttons = el("div", "q-options");
   buttons.tabIndex = -1;
+  // What this card says was chosen. A question saved before the picks were kept has only the one
+  // joined line, and that line is the whole answer.
+  const chosen = new Set(
+    settled ? (Array.isArray(data.answers) && data.answers.length ? data.answers : data.answer ? [data.answer] : []) : [],
+  );
+
   // Built before the options are wired: every answer path hands the row to submitAnswer, which
-  // takes it out of the card while the send is in flight and puts it back if the send fails.
+  // takes it out of the card while the send is in flight and puts it back if the send fails. A
+  // question that takes several answers always has the row, because that is where `send` lives.
   let freeRow = null;
-  if (data.allowFreeText && !settled) {
+  let input = null;
+  let send = null;
+  if (!settled && (data.allowFreeText || multiple)) {
     freeRow = el("div", "q-free");
-    const input = el("input");
-    input.placeholder = "or type an answer…";
-    const send = el("button", "q-opt");
+    if (data.allowFreeText) {
+      input = el("input");
+      input.placeholder = multiple ? "or add a note…" : "or type an answer…";
+      freeRow.appendChild(input);
+    }
+    send = el("button", "q-opt");
     send.textContent = "send";
-    const fire = () => {
-      const value = input.value.trim();
-      if (value) submitAnswer(entry, value, buttons, freeRow);
-    };
-    send.addEventListener("click", fire);
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") fire();
-    });
-    freeRow.append(input, send);
+    // Nothing ticked and nothing typed is not an answer, so the button says so by being dead.
+    if (multiple) send.disabled = true;
+    freeRow.appendChild(send);
   }
 
+  // The ticks, in the order the options are drawn, plus whatever was typed beside them.
+  const picksNow = () => [...buttons.querySelectorAll(".q-opt.picked")].map((button) => button.textContent);
+  const typedNow = () => (input ? input.value.trim() : "");
+  const sendPicks = () => {
+    const picks = picksNow();
+    const typed = typedNow();
+    if (typed) picks.push(typed);
+    if (picks.length) submitAnswer(entry, picks, buttons, freeRow);
+  };
+  const sendTyped = () => {
+    const typed = typedNow();
+    if (typed) submitAnswer(entry, typed, buttons, freeRow);
+  };
+  const refreshSend = () => {
+    if (send) send.disabled = !picksNow().length && !typedNow();
+  };
+  if (input) {
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      if (multiple) sendPicks();
+      else sendTyped();
+    });
+    if (multiple) input.addEventListener("input", refreshSend);
+  }
+  if (send) send.addEventListener("click", multiple ? sendPicks : sendTyped);
+
   for (const option of data.options || []) {
-    const button = el("button", "q-opt");
+    const button = el("button", multiple ? "q-opt q-check" : "q-opt");
     button.textContent = option;
     if (settled) {
       button.disabled = true;
-      if (data.answer === option) button.classList.add("picked");
+      if (chosen.has(option)) button.classList.add("picked");
+      // A settled box still says which way it was left, so the card reads the same before and after.
+      if (multiple) button.setAttribute("aria-pressed", chosen.has(option) ? "true" : "false");
+    } else if (multiple) {
+      // A box, not an answer: clicking it fills the question in and lets the human pick a second.
+      button.setAttribute("aria-pressed", "false");
+      button.addEventListener("click", () => {
+        const on = button.classList.toggle("picked");
+        button.setAttribute("aria-pressed", on ? "true" : "false");
+        refreshSend();
+      });
     } else {
       button.addEventListener("click", () => submitAnswer(entry, option, buttons, freeRow));
     }
@@ -666,17 +711,23 @@ function questionBody(data, entry) {
 }
 
 async function submitAnswer(entry, answer, buttons, freeRow) {
-  buttons.querySelectorAll("button").forEach((button) => (button.disabled = true));
+  // An answer that is a list came from the boxes. The ticks stay on screen while the send is in
+  // flight: they are the question being filled in, and a failed send must not undo them.
+  const multi = Array.isArray(answer);
+  const options = [...buttons.querySelectorAll("button")];
+  options.forEach((button) => (button.disabled = true));
   if (freeRow) freeRow.remove();
-  for (const button of buttons.querySelectorAll("button")) {
-    if (button.textContent === answer) button.classList.add("picked");
+  if (!multi) {
+    for (const button of options) {
+      if (button.textContent === answer) button.classList.add("picked");
+    }
   }
   let problem = "";
   try {
     const response = await fetch(`/answer?${auth}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cardId: entry.id, answer }),
+      body: JSON.stringify(multi ? { cardId: entry.id, answers: answer } : { cardId: entry.id, answer }),
     });
     // A 409 means the question expired or another tab answered it, so nothing was delivered.
     if (!response.ok) problem = (await response.text()).trim() || "could not send — the question may have expired";
@@ -685,11 +736,10 @@ async function submitAnswer(entry, answer, buttons, freeRow) {
   }
   if (!problem) return;
   // The agent got nothing, so the card goes back to looking unanswered: a picked option and
-  // dead buttons would read as sent.
-  for (const button of buttons.querySelectorAll("button")) {
-    button.disabled = false;
-    button.classList.remove("picked");
-  }
+  // dead buttons would read as sent. On a question with boxes the ticks are the human's work, so
+  // only the buttons come back to life.
+  for (const button of options) button.disabled = false;
+  if (!multi) for (const button of options) button.classList.remove("picked");
   if (freeRow) buttons.after(freeRow);
   const holder = buttons.parentElement;
   let warn = holder.querySelector(".q-done");
@@ -3405,6 +3455,7 @@ const ACT_VIEWS = {
     add(
       panelFields([
         ["title", args.title],
+        ["picks", args.multiple === true ? "any of them" : "one of them"],
         ["free text", args.allowFreeText === false ? "no" : "yes"],
       ]),
     );

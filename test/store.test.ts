@@ -64,6 +64,27 @@ test("a file with no type is read as a note, which is what it was", () => {
 test("a question card comes back with only its options", () => {
 	const card = restoredPlainCard({ id: "c6", type: "question", question: "which?", options: ["a", 2, "b"] }) as any;
 	assert.deepEqual(card.options, ["a", "b"]);
+	// A question written before the boxes existed takes one answer, and says nothing about picks.
+	assert.equal(card.multiple, undefined);
+	assert.equal(card.answers, undefined);
+});
+
+test("a question card that took several answers keeps the picks", () => {
+	const card = restoredPlainCard({
+		id: "c8",
+		type: "question",
+		question: "which ones?",
+		options: ["a", "b", "c"],
+		multiple: true,
+		answer: "a, c",
+		answers: ["a", "c", 7],
+		status: "answered",
+	}) as any;
+	assert.equal(card.multiple, true);
+	assert.deepEqual(card.answers, ["a", "c"]);
+	assert.equal(card.answer, "a, c");
+	// The child that was waiting is gone, so the card is settled however the file read it.
+	assert.equal(card.status, "expired");
 });
 
 test("a thread becomes a card the client can draw", () => {
@@ -79,4 +100,17 @@ test("a plain card becomes a card of its own kind", () => {
 	assert.equal(card.id, "c7");
 	assert.equal(card.type, "note");
 	assert.equal(card.markdown, "body");
+});
+
+test("the browser is told when a question takes several answers", () => {
+	const card = plainCardFor(
+		{ id: "c9", type: "question", title: "q", at: now, question: "which?", options: ["a", "b"], multiple: true, status: "answered", answer: "a, b", answers: ["a", "b"] },
+		null,
+	) as any;
+	assert.equal(card.multiple, true);
+	assert.deepEqual(card.answers, ["a", "b"]);
+	// One answer is still drawn from `answer`, so a card that never heard of the flag reads the same.
+	const single = plainCardFor({ id: "c10", type: "question", title: "q", at: now, question: "which?", options: ["a", "b"], status: "answered", answer: "a" }, null) as any;
+	assert.equal(single.multiple, false);
+	assert.equal(single.answers, undefined);
 });
