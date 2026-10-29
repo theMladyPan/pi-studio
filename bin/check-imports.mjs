@@ -24,7 +24,7 @@ const publicDir = join(repo, "public");
 /** The file `index.html` loads. Everything the client needs has to be reachable from it. */
 const clientEntry = join(publicDir, "board.js");
 /** Directories in the order they are walked. A name that does not exist is skipped, not an error. */
-const roots = ["server.mjs", "server", "public", "bin"];
+const roots = ["server.mjs", "server.ts", "server", "public", "bin"];
 const skip = new Set([".git", ".agents", ".history", "node_modules"]);
 
 function said(ok, what, note = "") {
@@ -40,7 +40,7 @@ function sourceFiles(path) {
 		if (skip.has(entry.name)) continue;
 		const full = join(path, entry.name);
 		if (entry.isDirectory()) found.push(...sourceFiles(full));
-		else if (/\.[mc]?js$/.test(entry.name) || isScript(full)) found.push(full);
+		else if (/\.[mc]?[jt]s$/.test(entry.name) || isScript(full)) found.push(full);
 	}
 	return found;
 }
