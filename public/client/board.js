@@ -2221,7 +2221,6 @@ function resetZoom() {
 const MAP_W = 208;
 const MAP_H = 140;
 const MAP_PAD = 8;
-const MAP_KEY = "board.minimap";
 const MAP_COLOUR = { note: "#7d8590", code: "#d2a8ff", sticky: "#d29922", question: "#db61a2" };
 const mapCanvas = document.getElementById("minimap");
 const mapCtx = mapCanvas.getContext("2d");
@@ -2230,9 +2229,6 @@ let mapOn = true;
 let mapQueued = false;
 /** The projection the last paint used, so a press lands where the eye saw the picture. */
 let mapShown = null;
-try {
-  mapOn = localStorage.getItem(MAP_KEY) !== "off";
-} catch {}
 
 /** Board units to map pixels: one scale for both axes, letterboxed in the frame. */
 function mapProjection(bounds) {
@@ -2295,12 +2291,10 @@ function paintMap() {
   const top = Math.max(0, Math.min(MAP_H, p.oy + screen.minY * p.s));
   const right = Math.max(0, Math.min(MAP_W, p.ox + screen.maxX * p.s));
   const bottom = Math.max(0, Math.min(MAP_H, p.oy + screen.maxY * p.s));
-  // Everything the window does not cover goes dark, so the window reads at a glance.
-  mapCtx.fillStyle = "rgba(1,4,9,.68)";
-  mapCtx.fillRect(0, 0, MAP_W, top);
-  mapCtx.fillRect(0, bottom, MAP_W, MAP_H - bottom);
-  mapCtx.fillRect(0, top, left, bottom - top);
-  mapCtx.fillRect(right, top, MAP_W - right, bottom - top);
+  // The window is tinted from the inside rather than the board dimmed from the outside: the map has
+  // no panel behind it, and a scrim over everything else would put the dark box back.
+  mapCtx.fillStyle = "rgba(88,166,255,.14)";
+  mapCtx.fillRect(left, top, right - left, bottom - top);
   mapCtx.strokeStyle = "#58a6ff";
   mapCtx.strokeRect(Math.round(left) + 0.5, Math.round(top) + 0.5, right - left, bottom - top);
 }
@@ -2379,12 +2373,14 @@ function paintMapBtn() {
   mapBtn.title = mapOn ? "hide the board overview (m)" : "show the board overview (m)";
 }
 
+/**
+ * The map is a session's choice: it starts on at every load, and `m` or the header button hides it
+ * until the next one. Nothing is stored, so a stray keypress cannot leave the board without a map
+ * that no press on the board explains.
+ */
 function setMap(on) {
   mapOn = on;
   document.body.classList.toggle("map-on", on);
-  try {
-    localStorage.setItem(MAP_KEY, on ? "on" : "off");
-  } catch {}
   paintMapBtn();
   if (on) scheduleMap();
 }

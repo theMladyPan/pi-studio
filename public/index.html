@@ -60,13 +60,11 @@
 
   /* The board at a glance: every card as a rectangle, the window you are looking through over them.
      It hangs under the header at the right, because the + button and the footer own the bottom edge.
-     Nearly solid, with the blur the header has: a card behind it must not read through the map, only
-     tint it. */
+     No panel and no blur, the way the git strip below it sits on the board: the picture is the only
+     thing over the page, so a card behind the map reads through it. */
   #minimap {
     position: fixed; top: 56px; right: 12px; z-index: 9; display: none;
-    width: 208px; height: 140px; border-radius: 8px; border: 1px solid var(--border-bright);
-    background: rgba(13,17,23,.97); backdrop-filter: blur(10px);
-    box-shadow: 0 8px 24px rgba(1,4,9,.5);
+    width: 208px; height: 140px;
     cursor: crosshair; touch-action: none;
   }
   body.map-on #minimap { display: block; }

@@ -321,13 +321,15 @@ commit's own account rather than on a check run now, the section below says so.
   A textarea carries no height of its own, so the card's height is measured before the swap and
   becomes the editor's floor; without that an auto-sized card collapsed to its minimum.
 - **The board has a minimap.** A 208×140 canvas sits under the header at the right, the corner the
-  `+` button and the footer leave free. Every card is a rectangle in its kind's colour, the window
-  you are looking through is drawn over them and the rest is dimmed; a folded card is drawn at
-  header height, because that is the size on the board. It draws `cards[]` and `view`, so nothing
-  about it reaches the daemon, and it repaints once a frame from `applyView`, `placeCard`, the drag
-  and resize moves and `setMini`, plus a `ResizeObserver` on the viewport. A press puts the window
-  on that point, a drag keeps it under the pointer, a press on a card centres that card, and `m` or
-  the header's `map` button hides it, remembered in `localStorage`.
+  `+` button and the footer leave free. Every card is a rectangle in its kind's colour and the window
+  you are looking through is tinted and outlined over them; a folded card is drawn at header height,
+  because that is the size on the board. It carries no panel and no blur, the way the git strip sits
+  on the board, so the board reads through the picture instead of behind a dark plate. It draws
+  `cards[]` and `view`, so nothing about it reaches the daemon, and it repaints once a frame from
+  `applyView`, `placeCard`, the drag and resize moves and `setMini`, plus a `ResizeObserver` on the
+  viewport. A press puts the window on that point, a drag keeps it under the pointer, a press on a
+  card centres that card, and `m` or the header's `map` button hides it until the next load: the map
+  starts on every time, so no stored choice can leave the board without one.
 - **The workspace's git state hangs under the minimap.** A 208px column between the map and the `+`
   draws the commit graph: one lane per branch, refs as pills (`dev`, `origin/dev`, a thread's branch,
   tags), an amber ring and a count on a commit that has uncommitted work, and a halo that breathes
