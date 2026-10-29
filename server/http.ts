@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PUBLIC_DIR } from "./paths.ts";
-import { MAX_BODY_BYTES } from "./core.ts";
+import { MAX_BODY_BYTES } from "./limits.ts";
 
 
 

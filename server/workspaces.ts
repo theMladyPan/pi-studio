@@ -4,7 +4,8 @@
  * one line of facts each one is described by.
  */
 import { WORKSPACES_FILE, readJsonFile, workspaceId, writeJsonFile } from "./paths.ts";
-import { STATE_VERSION, boardFile, boards, sessionFacts } from "./core.ts";
+import { STATE_VERSION, boardFile, boards } from "./store.ts";
+import { sessionFacts } from "./session.ts";
 import { basename } from "node:path";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, MODEL, PROVIDER, THINKING_LEVELS, run } from "./models.ts";
 import { existsSync, realpathSync, statSync } from "node:fs";

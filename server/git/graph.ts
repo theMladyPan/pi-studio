@@ -5,7 +5,7 @@
  */
 import { gitIn } from "./repo.ts";
 import { existsSync } from "node:fs";
-import { broadcast } from "../core.ts";
+import { broadcast } from "../bus.ts";
 
 
 

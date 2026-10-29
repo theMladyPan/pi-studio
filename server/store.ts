@@ -5,7 +5,8 @@
  */
 import { join } from "node:path";
 import { STATE_DIR, readJsonFile, writeJsonFile } from "./paths.ts";
-import { card, diskRow, ownedCards } from "./core.ts";
+import { card, diskRow } from "./bus.ts";
+import { ownedCards } from "./routes/board/message.ts";
 import { activeConfig, homeDefaults, workspaceById } from "./workspaces.ts";
 import { answer, fail } from "./http.ts";
 import { MODEL, PROVIDER, THINKING_LEVELS } from "./models.ts";

@@ -5,7 +5,7 @@
  */
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
-import { extensionsDir, piCli } from "./core.ts";
+import { extensionsDir, piCli } from "./child/argv.ts";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import { existsSync, readFileSync, readdirSync } from "node:fs";

@@ -5,7 +5,10 @@
  */
 import { addRow, card, liveThreadIds, threadRef, update, updateCard } from "./bus.ts";
 import { answer } from "./http.ts";
-import { liveThoughts, port, retireWorktree, settleThoughts, stopStream } from "./core.ts";
+import { liveThoughts, settleThoughts } from "./thought.ts";
+import { port } from "./main.ts";
+import { retireWorktree } from "./worktrees/retire.ts";
+import { stopStream } from "./child/run.ts";
 import { INSTANCE } from "./paths.ts";
 import { MODEL } from "./models.ts";
 import { activeConfig } from "./workspaces.ts";

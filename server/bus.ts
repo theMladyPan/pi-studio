@@ -4,7 +4,8 @@
  * row helpers every route writes through.
  */
 import { send } from "./http.ts";
-import { boardMeta, cardFor, cardsFor, homeCard, plainCardFor } from "./core.ts";
+import { boardMeta, cardFor, cardsFor, plainCardFor } from "./cards.ts";
+import { homeCard } from "./routes/board/message.ts";
 import { refreshGit } from "./git/graph.ts";
 import { describeWorkspace, welcomeClients, workspaces } from "./workspaces.ts";
 import { MAX_ACTIVITY, scheduleSave } from "./store.ts";
