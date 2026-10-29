@@ -82,6 +82,15 @@ async function get(daemon, path, init) {
 	return { status: res.status, type: res.headers.get("content-type") ?? "", body };
 }
 
+/** A POST with a JSON body, answered as text like every other call here. */
+async function post(daemon, path, body) {
+	return get(daemon, path, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body),
+	});
+}
+
 /** The workspace both daemons open: the same folder, which is the case that has to stay separate. */
 async function openWorkspace(daemon, folder) {
 	const opened = await get(daemon, `/workspace?token=${daemon.token}`, {
@@ -163,6 +172,34 @@ async function main() {
 	said(diagram.status === 200 && diagram.type.includes("javascript"), "GET /client/mermaid-min.js serves the diagram renderer", `${diagram.status} ${diagram.type}`);
 	const refused = await get(one, "/state");
 	said(refused.status === 403, "a route without the token is refused", `${refused.status}`);
+	const forged = await get(one, `/state?token=deadbeef&workspace=${opened.board.id}`);
+	said(forged.status === 403, "and so is a token nobody minted", `${forged.status}`);
+
+	// A spawned thread on the board. The row says who made it, the card says what arrow is drawn, and a
+	// child of a child is refused: the rule is one level, and it lives on the row rather than the body.
+	const board = `?token=${one.token}&workspace=${opened.board.id}`;
+	const parent = JSON.parse((await post(one, `/thread${board}`, { title: "master" })).body || "{}");
+	const child = await post(one, `/thread${board}`, { title: "child", parentThread: parent.threadId, after: [parent.threadId], role: "scout" });
+	const spawned = JSON.parse(child.body || "{}");
+	said(
+		child.status === 200 && spawned.card?.threadRoot === parent.threadId && spawned.card?.after?.[0] === parent.threadId,
+		"a child thread cascades under its master and carries its arrow",
+		`${child.status} root ${String(spawned.card?.threadRoot ?? "").slice(0, 8)}`,
+	);
+	const grandchild = await post(one, `/thread${board}`, { title: "grandchild", parentThread: spawned.threadId });
+	said(grandchild.status === 409, "a child of a child is refused", `${grandchild.status} ${grandchild.body.slice(0, 60)}`);
+	const stray = await post(one, `/thread${board}`, { title: "stray", after: ["no-such-card"] });
+	said(stray.status === 409, "an unknown predecessor is refused rather than dropped", `${stray.status}`);
+	const noTask = await post(one, `/thread/spawn${board}`, { title: "nothing" });
+	said(noTask.status === 409, "a spawned thread without a task is refused", `${noTask.status}`);
+	const afterState = JSON.parse((await get(one, `/state${board}`)).body || "{}");
+	const childRow = afterState.threads?.find((thread) => thread.id === spawned.threadId);
+	said(
+		childRow?.depth === 1 && childRow?.parentThread === parent.threadId && childRow?.role === "scout",
+		"the child row keeps its depth, parent and role",
+		`depth ${childRow?.depth} role ${childRow?.role}`,
+	);
+	said(!afterState.threads?.some((thread) => "token" in thread), "and /state does not spread a child's token");
 
 	// The point of the whole exercise: a second daemon answering at the same time, told where to put
 	// its state by the flag, on the same workspace folder.
