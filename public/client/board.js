@@ -57,10 +57,10 @@ let freshCount = 0;
 const GAP = 18;
 const STEP = 24;
 
-// Cards are sized in columns rather than pixels: code reads best at 120 monospace
-// columns, prose at 80. Both are measured from the fonts actually in use.
+// Cards are sized in columns rather than pixels: code reads at 120 monospace columns, prose and
+// chat at 120 characters. Both are measured from the fonts actually in use.
 const SOURCE_COLS = 120;
-const NOTE_COLS = 90;
+const NOTE_COLS = 120;
 let charWidths;
 
 function measureCharWidths() {
@@ -83,11 +83,13 @@ function measureCharWidths() {
   return charWidths;
 }
 
-/** Default width: gutter, text padding and borders included, so the columns really fit. */
+/**
+ * Default width: gutter, text padding and borders included, so the columns really fit. A note and
+ * the question card that answers it share one width, so a thread reads as one column.
+ */
 function defaultWidth(kind) {
   const widths = measureCharWidths();
   if (kind === "source") return Math.round(52 + 24 + 2 + widths.mono * SOURCE_COLS);
-  if (kind === "question") return 460;
   return Math.round(24 + 2 + widths.prose * NOTE_COLS);
 }
 
