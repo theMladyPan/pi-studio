@@ -42,7 +42,7 @@ export const token = (() => {
 
 
 /** The routes a child may reach. Everything else on this daemon belongs to the human. */
-const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/thread/spawn"]);
+export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn"]);
 
 
 
@@ -60,6 +60,22 @@ export function callerOf(given) {
 			if (thread.token && thread.token === given) return { human: false, board, thread };
 		}
 	}
+	return null;
+}
+
+
+
+/**
+ * The refusal a thread earns for asking what only the human may do, or null when it may go ahead.
+ *
+ * A child may write cards on its own board — notes, sources, the question it puts to the human — and ask
+ * for work of its own, which the depth rule then decides. Layout, close, kill, config and clean belong
+ * to the human, and so does every other board. The human at the keyboard is refused nothing here.
+ */
+export function threadRefusal(caller, method, pathname, workspace) {
+	if (caller.human) return null;
+	if (method !== "POST" || !THREAD_ROUTES.has(pathname)) return "a thread may not use that";
+	if (workspace !== caller.board.id) return "a thread may not use another board";
 	return null;
 }
 
@@ -129,19 +145,12 @@ export const server = createServer((req, res) => {
 			fail(res, 403, "forbidden");
 			return;
 		}
-		// A child may write cards on its own board and ask for work of its own, which the depth rule then
-		// decides. Layout, close, kill, config and clean belong to the human, and so does every other board.
-		if (!caller.human) {
-			if (req.method !== "POST" || !THREAD_ROUTES.has(url.pathname)) {
-				req.resume();
-				fail(res, 403, "a thread may not use that");
-				return;
-			}
-			if (url.searchParams.get("workspace") !== caller.board.id) {
-				req.resume();
-				fail(res, 403, "a thread may not use another board");
-				return;
-			}
+		// What a thread may reach is decided beside callerOf, so the rule can be tested without a child.
+		const refusal = threadRefusal(caller, req.method, url.pathname, url.searchParams.get("workspace"));
+		if (refusal) {
+			req.resume();
+			fail(res, 403, refusal);
+			return;
 		}
 
 		// ----- streams -----
