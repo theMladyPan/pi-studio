@@ -57,6 +57,9 @@ import { spawnSync } from "node:child_process";
  * @property {string} [question]
  * @property {string[]} [options]
  * @property {boolean} [allowFreeText]
+ * @property {boolean} [multiple] the question takes several answers: the human ticks boxes and sends
+ *   them together, and `answers` is what they ticked
+ * @property {string[]} [answers] the picks of a question that takes several answers
  * @property {"open"|"answered"|"expired"} [status]
  * @property {string} [answer]
  * @property {number} [expiresAt]
@@ -82,7 +85,7 @@ import { spawnSync } from "node:child_process";
  * @property {string} name
  * @property {Map<string, Thread>} threads
  * @property {Map<string, PlainCard>} cards
- * @property {Map<string, {resolve: (value: {status: string, answer?: string}) => void}>} askers
+ * @property {Map<string, {resolve: (value: {status: string, answer?: string, answers?: string[]}) => void}>} askers
  * @property {object[]} activity
  * @property {Map<string, import("node:child_process").ChildProcess>} children
  * @property {Set<import("node:http").ServerResponse>} clients

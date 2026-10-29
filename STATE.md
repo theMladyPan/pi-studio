@@ -145,12 +145,15 @@ commit's own account rather than on a check run now, the section below says so.
 - **Source cards**: `POST /card/source {path, line?, title?, key?}` reads a file from the workspace
   and shows it on the board, refusing anything outside the folder, a folder, a binary, or more than
   200 000 bytes. The key defaults to the path, so opening the same file again refreshes that card.
-- **Questions**: `POST /card/ask {question, options[], allowFreeText?, title?}` puts a question on
-  the board and holds the request open; `POST /answer {cardId, answer}` settles it and the click
-  travels back in the held response. Five minutes with no answer expires it, closing the tab expires
-  it, and a question restored from disk is always expired because the agent that was waiting is gone.
-  A question nobody answered is not a failure: the tool tells the child to decide and say what it
-  assumed.
+- **Questions**: `POST /card/ask {question, options[], allowFreeText?, title?, multiple?}` puts a
+  question on the board and holds the request open; `POST /answer {cardId, answer}` settles it and the
+  click travels back in the held response. `multiple: true` turns the options into boxes and makes
+  `POST /answer {cardId, answers[]}` the answer: the card keeps the picks apart in `answers`, the held
+  response carries both `answer` ("The diff, The file list") and `answers`, and with
+  `allowFreeText: false` a pick that is not on the option list is refused with 400. Five minutes with
+  no answer expires it, closing the tab expires it, and a question restored from disk is always
+  expired because the agent that was waiting is gone. A question nobody answered is not a failure:
+  the tool tells the child to decide and say what it assumed.
 - **One map for cards without a child**: notes, sources and questions live in `board.cards`, saved
   under `cards` and read from an older file's `notes` too.
 - **Commenting on a card**: a thread answers in itself. A card without a child is asked of the thread
@@ -424,6 +427,19 @@ answer posted from another request reached the card and the child's turn ("You c
 answer to the same question was refused with 409, an ask with no question or with one option was
 refused with 400. A child asked to search the web used `exa_search` and answered with the result, and
 the rail showed the tool row, which proves the research extensions load inside a thread.
+
+A question that takes several answers, checked against a throwaway daemon and in a browser at
+`/w/<board>`: `POST /card/ask {multiple: true}` drew its three options as boxes with a `send` button
+that stayed dead until something was ticked; ticking two and sending settled the card as
+`answered: The diff, The file list` with both boxes ticked and the third left plain, and the held
+response read `{"answer": "The diff, The file list", "answers": ["The diff", "The file list"]}`.
+`/state` showed the same picks apart from the joined line. An empty `answers` list and a pick that is
+not an option were both refused with 400 while the question stayed open, a second answer got the usual
+409, and a single-answer question asked beside it still drew plain options and settled on one click.
+`npm run check` passes, including two route tests that hold a `/card/ask` open and answer it, and two
+store tests for a question that reloads with its picks. The bridge's `multiple` parameter and the
+`The human chose: …` line it returns are read from the code and not from a live child, and so is the
+`board_ask` row the tool sheet draws.
 
 With the whole extension folder in play: a child loaded the installed extensions, called `exa_search`,
 then `board_note`, and its note landed on the pi-studio board (so the bridge's tool names survive the

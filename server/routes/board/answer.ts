@@ -15,15 +15,18 @@ import { ASK_TIMEOUT_MS } from "../../limits.ts";
 
 
 /** Settle a question, tell whoever was waiting, and keep the card honest about what happened. */
-export function settleQuestion(board, card, status, answer) {
+export function settleQuestion(board, card, status, answer, picks = []) {
 	card.status = status;
 	card.updatedAt = Date.now();
 	if (answer) card.answer = answer;
+	// A question that took several answers keeps them apart, so a settled card can still show which
+	// boxes were ticked rather than one string the reader has to split again.
+	if (picks.length) card.answers = picks;
 	broadcast(board, { type: "update", card: plainCardFor(card, board) });
 	scheduleSave(board);
 	const waiting = board.askers.get(card.id);
 	board.askers.delete(card.id);
-	if (waiting) waiting.resolve({ status, answer });
+	if (waiting) waiting.resolve({ status, answer, ...(picks.length ? { answers: picks } : {}) });
 }
 
 
@@ -49,6 +52,9 @@ export async function onAsk(req, res, board) {
 		question,
 		options: options.slice(0, 4),
 		allowFreeText: body.allowFreeText !== false,
+		// Off unless the caller asked: a question with one answer is answered by one click, and every
+		// caller written before this flag existed asked one.
+		...(body.multiple === true ? { multiple: true } : {}),
 		status: "open",
 		at: Date.now(),
 		expiresAt: Date.now() + ASK_TIMEOUT_MS,
@@ -76,8 +82,21 @@ export async function onAsk(req, res, board) {
 			settleQuestion(board, card, "expired");
 		});
 	});
-	if (settled.status === "answered") answer(res, 200, { cardId: card.id, answer: settled.answer ?? "" });
+	if (settled.status === "answered")
+		answer(res, 200, {
+			cardId: card.id,
+			answer: settled.answer ?? "",
+			...(settled.answers ? { answers: settled.answers } : {}),
+		});
 	else fail(res, 409, "nobody answered this question");
+}
+
+
+
+/** What the human ticked on a question that takes several answers, in the order they were sent. */
+function picksOf(body) {
+	const sent = Array.isArray(body.answers) ? body.answers : [];
+	return [...new Set(sent.map((one) => field(one, 2000)).filter(Boolean))];
 }
 
 
@@ -89,8 +108,13 @@ export async function onAnswer(req, res, board) {
 	const card = board.cards.get(String(body.cardId ?? ""));
 	if (!card || card.type !== "question") return void fail(res, 404, "no such question");
 	if (card.status !== "open") return void fail(res, 409, "that question is already settled");
-	const reply = field(body.answer, 2000);
+	// A question that takes several answers arrives as a list, and one that takes a single answer
+	// arrives as words: a typed answer is as good as a clicked option on either kind.
+	const picks = card.multiple ? picksOf(body) : [];
+	if (card.multiple && card.allowFreeText === false && picks.some((one) => !(card.options ?? []).includes(one)))
+		return void fail(res, 400, "one of those is not an option");
+	const reply = card.multiple ? picks.join(", ") : field(body.answer, 2000);
 	if (!reply) return void fail(res, 400, "empty answer");
-	settleQuestion(board, card, "answered", reply);
+	settleQuestion(board, card, "answered", reply, picks);
 	answer(res, 200, { cardId: card.id });
 }

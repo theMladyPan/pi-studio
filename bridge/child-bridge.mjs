@@ -111,7 +111,7 @@ const askTool = defineTool({
 	name: "board_ask",
 	label: "Ask on board",
 	description:
-		"Ask the human a question on the board and wait for their click. Use it for a decision that is genuinely theirs instead of guessing, or when two readings of the request lead to different work. Blocks this turn until they answer or the question expires, so ask one thing at a time.",
+		"Ask the human a question on the board and wait for their click. Use it for a decision that is genuinely theirs instead of guessing, or when two readings of the request lead to different work. Blocks this turn until they answer or the question expires, so ask one thing at a time. Set `multiple: true` when more than one of the options can apply: the human then ticks boxes and sends them together, and the answer is all of them.",
 	parameters: Type.Object({
 		question: Type.String({ description: "The question, in one or two sentences." }),
 		options: Type.Array(Type.String(), {
@@ -119,6 +119,12 @@ const askTool = defineTool({
 		}),
 		title: Type.Optional(Type.String({ description: "Optional card title." })),
 		allowFreeText: Type.Optional(Type.Boolean({ description: "Also allow a typed answer. Defaults to true." })),
+		multiple: Type.Optional(
+			Type.Boolean({
+				description:
+					"Let the human pick more than one option. Defaults to false, where one click answers the question.",
+			}),
+		),
 	}),
 	async execute(_id, params) {
 		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
@@ -128,10 +134,15 @@ const askTool = defineTool({
 				options: params.options,
 				...(params.title ? { title: params.title } : {}),
 				...(typeof params.allowFreeText === "boolean" ? { allowFreeText: params.allowFreeText } : {}),
+				...(params.multiple === true ? { multiple: true } : {}),
 			});
+			// A question that took several answers comes back as the list, so the child reads the picks
+			// rather than one line it would have to split again.
+			const picked = Array.isArray(result.answers) && result.answers.length ? result.answers : null;
+			const said = picked ? `The human chose: ${picked.join(", ")}` : `The human answered: ${result.answer}`;
 			return {
-				content: [{ type: "text", text: `The human answered: ${result.answer}` }],
-				details: { cardId: result.cardId, answer: result.answer },
+				content: [{ type: "text", text: said }],
+				details: { cardId: result.cardId, answer: result.answer, ...(picked ? { answers: picked } : {}) },
 			};
 		} catch (error) {
 			// A question nobody answered is not a failure of the work: the turn has to decide for itself.
