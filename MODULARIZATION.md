@@ -1,7 +1,70 @@
 # Breaking the two monoliths into modules
 
-Recorded against `dev` at `99e38e9`. Nothing here is implemented. Sizes are measured from this
-worktree.
+**Status, 2026-10-29: the daemon half is done; the client half is deferred until further notice.**
+Where this stands, and
+what to read instead of the plan below:
+
+| | state | where |
+|---|---|---|
+| the daemon | **done and merged** | `server.ts` plus 28 modules under `server/`, one commit per group, merged to `dev` at `78e6ca8` |
+| its checks and tests | **done** | `npm run check` = `node --check`, `bin/check-imports.mjs`, `tsc`, `node --test` (34 tests), `bin/smoke.mjs` (19 route checks) |
+| the client | **one module**: `public/client/board.js`, 5322 lines, loaded by `index.html` as `type="module"` and served by one `/client/**/*.js` rule | `f600268` |
+| the client's split | **deferred, not started** | see "The client, when someone picks it up" below |
+| `@ts-nocheck` on 26 of 28 daemon modules | **open** | 44 diagnostics under a loose config; stripping the pragmas and gating them is the next real win |
+
+`PORT-PLAN.md` is the record of the daemon port: its target layout, the order of work, the review that
+reshaped it, and the status section written when it landed.
+
+## The client, when someone picks it up
+
+Do not start from the plan below. It was measured with text greps, and the parser disagreed with it:
+
+| plan said | measured |
+|---|---:|
+| 404 top-level declarations | 403 |
+| 113 module-level `let` | 56 |
+| 64 top-level listeners + 50 inside functions | 103 call sites: **68 run when the module evaluates**, 35 inside functions |
+| 19 section banners | 20 |
+| eight cross-section names | **eleven** written across sections: `sendMode`, `forkNext`, `boardConfig`, `boardMetaCache`, plus `z`, `newestFirst`, `sawFirstCard`, `replyTarget`, `replaying`, `framedView`, `freshCount` |
+
+Three routes, cheapest first. The recommendation is C, and A only if the file keeps growing.
+
+- **B. Put the state object inside the monolith.** One commit, one file, no imports: the eleven names
+  become properties of one `state` object, about 128 mechanical renames. Nothing else moves. It removes
+  the one thing that broke both earlier attempts — an imported binding cannot be assigned — so the file
+  becomes liftable by pure mechanics later.
+- **C. Split the three pure leaves.** `lib/highlight.js`, `lib/markdown.js`, `lib/dom.js`, about 250
+  lines, one-directional imports, no state and no wiring. This is the only route that produces the
+  client's first tests: the tokenizer and the escaping are string-pure. It cannot break the board.
+- **A. The full split.** ~20 banner modules (or ~30 to reach the finer layout), ~84 load-time statements
+  relocated, ~128 `state.x` rewrites, ~159 cross-section names turned into imports, 20+ commits. Its
+  payoff is organisational — parallel review, parity with the daemon, per-module types later — and this
+  is a single-author project. Its whole risk is carried by an eye on a browser, because there is no
+  client test to carry it.
+
+Three rules if A is ever taken, learned the hard way:
+
+1. **`wire()` means every statement a section evaluates, not its listeners.** Besides the 68
+   registrations there are 2 `onclick=` assignments, 3 observers and 11 init calls — about 84 statements
+   that run on load today. A `wire()` that takes only listeners leaves the entry a hub and panels
+   half-painted.
+2. **Call the wires in today's evaluation order**, not the order the module list happens to be written.
+   The threads section's four document keydown handlers must stay one module, and capture handlers
+   register before bubble ones.
+3. **No setters.** With each writer moved into the module that owns the variable, no module assigns
+   another module's binding. Generating setters and rewriting assignment sites with regexes is what
+   broke four files and cost the most time in the first attempt.
+
+The tooling that worked: a parser-driven lift, which appends to a module instead of replacing it,
+lifts only top-level statements, and generates import lines from the references each block actually
+makes. `bin/check-imports.mjs` already walks the client entry's import graph and fails if a module the
+page reaches is not served.
+
+---
+
+## The original record, unchanged
+
+Recorded against `dev` at `99e38e9`. Sizes are measured from that worktree.
 
 ## What the two files actually are
 
