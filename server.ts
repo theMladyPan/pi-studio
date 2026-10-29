@@ -1,3 +1,4 @@
+// @ts-nocheck -- the one file that has not been ported yet. Shrinks with every extraction.
 /**
  * pi-studio — a local daemon that owns pi agents.
  *
@@ -30,37 +31,20 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
+import {
+	BRIDGE,
+	INSTANCE,
+	PUBLIC_DIR,
+	STATE_DIR,
+	STATE_FILE,
+	WORKSPACES_FILE,
+	buildHash,
+	randomToken,
+	readJsonFile,
+	workspaceId,
+	writeJsonFile,
+} from "./server/paths.ts";
 
-const PUBLIC_DIR = fileURLToPath(new URL("./public/", import.meta.url));
-/**
- * Everything durable lives beside pi's own state under a folder named after the app: the token, the
- * workspaces the human has opened, one board file per workspace, and the pi sessions behind its
- * threads.
- *
- * `PI_STUDIO_STATE` or `--state <folder>` moves all of it, so a second daemon can be booted against
- * its own folder while the real one keeps running. Without that, the only way to see a change work
- * was somebody's own board, which is a hope rather than a check.
- */
-function stateFromArgs() {
-	const args = process.argv.slice(2);
-	for (const [index, arg] of args.entries()) {
-		if (arg === "--state") return args[index + 1] ?? "";
-		if (arg.startsWith("--state=")) return arg.slice("--state=".length);
-	}
-	return "";
-}
-
-const stateArg = stateFromArgs() || process.env.PI_STUDIO_STATE || "";
-// A `~` reaches node unexpanded when nobody goes through a shell, and `.agents/…` should be relative to
-// the folder the daemon was started in, which is what `resolve` already does.
-const STATE_DIR = resolve(stateArg.startsWith("~/") ? join(homedir(), stateArg.slice(2)) : stateArg || join(homedir(), ".pi", "agent", "state", "pi-studio"));
-/**
- * What this daemon calls itself when its folder is not the usual one. Two instances with the same
- * boards in two tabs are indistinguishable, and the tab title is the only place that can say which.
- */
-const INSTANCE = STATE_DIR === join(homedir(), ".pi", "agent", "state", "pi-studio") ? "" : basename(STATE_DIR);
-const STATE_FILE = join(STATE_DIR, "daemon.json");
-const WORKSPACES_FILE = join(STATE_DIR, "workspaces.json");
 const PROVIDER = process.env.PI_STUDIO_PROVIDER ?? "klotilda";
 const MODEL = process.env.PI_STUDIO_MODEL ?? "deepseek-ai/DeepSeek-V4.1-Flash-1017";
 // Pi names seven levels and clamps whatever is chosen to what the model offers.
@@ -259,8 +243,6 @@ function runtimeDefaults(board) {
  * whatever is installed here. `PI_STUDIO_TOOLS` narrows that to a named allowlist instead.
  */
 const TOOLS = process.env.PI_STUDIO_TOOLS ?? "";
-/** The extension a child loads so a thread can draw on the board it belongs to. */
-const BRIDGE = join(dirname(PUBLIC_DIR), "bridge", "child-bridge.mjs");
 /**
  * Extensions a thread may load: everything installed on this machine, less the two that cannot come
  * along at all.
@@ -433,48 +415,6 @@ const OPEN_BROWSER = !process.argv.includes("--no-open");
  */
 
 // ---------- small filesystem helpers ---------------------------------------
-
-/** Read a JSON file, or the fallback when it is missing, unreadable or not JSON at all. */
-function readJsonFile(file, fallback) {
-	try {
-		return JSON.parse(readFileSync(file, "utf8"));
-	} catch {
-		return fallback;
-	}
-}
-
-/** Write a JSON file whole, so a crash mid-write cannot leave half a board behind. */
-function writeJsonFile(file, data) {
-	try {
-		mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-		const temp = `${file}.${process.pid}.tmp`;
-		writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-		renameSync(temp, file);
-	} catch (error) {
-		console.error(`pi-studio: could not write ${file}: ${error.message}`);
-	}
-}
-
-/** The commit this copy of the app was started from, or "unknown" outside a checkout. */
-function buildHash() {
-	const root = dirname(fileURLToPath(import.meta.url));
-	try {
-		const head = readFileSync(join(root, ".git", "HEAD"), "utf8").trim();
-		if (!head.startsWith("ref: ")) return head.slice(0, 7);
-		return readFileSync(join(root, ".git", head.slice(5).trim()), "utf8").trim().slice(0, 7);
-	} catch {
-		return "unknown";
-	}
-}
-
-function randomToken() {
-	return createHash("sha256").update(`${process.pid}-${Date.now()}-${Math.random()}`).digest("hex").slice(0, 32);
-}
-
-/** A folder keeps its identity across restarts, which is what makes "continue" mean continue. */
-function workspaceId(folder) {
-	return createHash("sha256").update(folder).digest("hex").slice(0, 12);
-}
 
 // ---------- workspaces -----------------------------------------------------
 

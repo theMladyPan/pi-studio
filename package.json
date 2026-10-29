@@ -8,13 +8,18 @@
     "pi-studio": "./bin/pi-studio"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.18"
   },
   "scripts": {
-    "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check public/board.js && node --check bin/smoke.mjs && node --check bin/check-imports.mjs && node bin/check-imports.mjs",
-    "dev": "node --watch server.mjs --no-open",
+    "start": "node server.ts",
+    "check": "node --check server.ts && node --check public/board.js && node --check bin/smoke.mjs && node --check bin/check-imports.mjs && node bin/check-imports.mjs && tsc -p tsconfig.node.json",
+    "dev": "node --watch server.ts --no-open",
     "smoke": "node bin/smoke.mjs",
-    "dev:alt": "node --watch server.mjs --no-open --state ~/.pi/agent/state/pi-studio-dev"
+    "dev:alt": "node --watch server.ts --no-open --state ~/.pi/agent/state/pi-studio-dev",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
   }
 }

@@ -1,0 +1,14 @@
+{
+	"compilerOptions": {
+		"target": "es2023",
+		"lib": ["es2023", "dom", "dom.iterable"],
+		"module": "esnext",
+		"moduleResolution": "bundler",
+		"allowJs": true,
+		"checkJs": true,
+		"noEmit": true,
+		"strict": false,
+		"skipLibCheck": true
+	},
+	"include": ["public/client/**/*.js"]
+}

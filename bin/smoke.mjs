@@ -62,7 +62,7 @@ function waitForUrl(child, noise) {
  * of scratch commands use, or the flag, which is what a human types to run a second instance.
  */
 async function boot(folder, via) {
-	const args = [join(repo, "server.mjs"), "--no-open"];
+	const args = [join(repo, "server.ts"), "--no-open"];
 	const env = { ...process.env, PI_STUDIO_STATE: "", PI_STUDIO_PORT: "" };
 	if (via === "flag") args.push(`--state=${folder}`);
 	else env.PI_STUDIO_STATE = folder;
