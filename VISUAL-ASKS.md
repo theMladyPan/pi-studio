@@ -40,19 +40,12 @@ spelled out in the footer (`public/board.js:4300`).
 and links (`public/board.js:2662`) and on the amber ring (`2674`), with text solid at `#8b949e`.
 A change would lower the alpha across `paintGit` so the board reads through the strip.
 
-## 3. Minimap 75% transparent
-
-Today the map is nearly solid on purpose: `background: rgba(13,17,23,.97)` with `blur(10px)`
-(`public/index.html:68`), and the out-of-window scrim is `rgba(1,4,9,.68)` (`public/board.js:2300`).
-Seventy-five per cent transparency means a background near `rgba(13,17,23,.25)`, and the scrim down
-to match, or the map stays a dark box over the board.
-
-## 4. Minimap and graph as settings widgets
+## 3. Minimap and graph as settings widgets
 
 The two toggles disagree today.
 
-- The map is a remembered preference: `#mapBtn` in the header (`public/index.html:753`),
-  `board.minimap` in localStorage (`public/board.js:2225`), `setMap` at `public/board.js:2385`.
+- The map is a session toggle: `#mapBtn` in the header (`public/index.html:753`), `setMap` at
+  `public/client/board.js:2381`, on at every load and stored nowhere.
 - The graph is a side effect: `git-on` is set from whether the daemon sent commits
   (`public/board.js:2733`), with no key and no button.
 
@@ -60,7 +53,7 @@ Settling them means giving the graph the same key-and-button shape the map has, 
 offering both as rows in the settings dialog `#boardConfig` (`public/index.html:773`, JS at
 `public/board.js:4221`) rather than as header buttons.
 
-## 5. Git graph: graphics at rest, branches and messages on hover
+## 4. Git graph: graphics at rest, branches and messages on hover
 
 As specified: the strip shows lanes and dots only. Hovering rolls it further into view, wide enough for
 branch and tag pills and commit subjects; leaving hides the text again and leaves the graph.
