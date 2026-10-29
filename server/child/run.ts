@@ -8,13 +8,14 @@ import { spawn } from "node:child_process";
 import { ensureWorktree, shortId, workdirOf } from "../worktrees/make.ts";
 import { handleChildLine, thinkingRuns } from "../thought.ts";
 import { homeCard } from "../routes/board/message.ts";
-import { port, token } from "../main.ts";
+import { port } from "../main.ts";
 import { cardFor, plainCardFor, threadError } from "../cards.ts";
 import { StringDecoder } from "node:string_decoder";
 import { lastLine } from "./describe.ts";
 import { NAME_MODEL, nameThread, titleFromRequest } from "../worktrees/name.ts";
 import { broadcast, card, update, updateCard } from "../bus.ts";
 import { randomUUID } from "node:crypto";
+import { randomToken } from "../paths.ts";
 import { join } from "node:path";
 
 
@@ -33,7 +34,9 @@ export function ensureChild(board, thread) {
 		env: {
 			...process.env,
 			PI_STUDIO_URL: `http://127.0.0.1:${port}`,
-			PI_STUDIO_TOKEN: token,
+			// Its own token, not the daemon's: the daemon then knows which thread is calling instead of
+			// trusting a field the caller wrote, and a child reaches only the routes a child may use.
+			PI_STUDIO_TOKEN: (thread.token ??= randomToken()),
 			PI_STUDIO_WORKSPACE: board.id,
 			PI_STUDIO_THREAD: thread.id,
 		},

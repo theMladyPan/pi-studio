@@ -243,6 +243,133 @@ const applyView = () => {
   scheduleMap();
 };
 
+  // ---------- predecessor arrows -------------------------------------------
+  // A card may arrive with `after`: the ids of the cards its work follows from. One arrow each,
+  // drawn in a single SVG inside the world, so the lines scale with the board for free.
+  const ARROW_NS = "http://www.w3.org/2000/svg";
+  const ARROW_INK = "#94a3b8";
+  const arrows = document.createElementNS(ARROW_NS, "svg");
+  // Under the cards: they carry z-index from 1 up, while this layer stays at 0.
+  arrows.style.cssText = "position:absolute;left:0;top:0;overflow:visible;pointer-events:none;z-index:0";
+  arrows.setAttribute("aria-hidden", "true");
+  arrows.innerHTML =
+    `<defs><marker id="predHead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" markerUnits="strokeWidth" orient="auto">` +
+    `<path d="M2,1 L9,5 L2,9" fill="none" stroke="${ARROW_INK}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></marker></defs>`;
+  const arrowGroup = document.createElementNS(ARROW_NS, "g");
+  arrows.append(arrowGroup);
+  world.insertBefore(arrows, world.firstChild);
+
+  /** The ids of the cards a card follows from, kept on the element so a redraw reads no map. */
+  function setAfter(card, after) {
+    if (Array.isArray(after) && after.length) card.dataset.after = JSON.stringify(after);
+    else card.dataset.after = "";
+    scheduleArrows();
+  }
+
+  /** A card's box in board units, the same measure boardBounds takes. */
+  const cardBox = (card) => ({
+    x: parseFloat(card.style.left),
+    y: parseFloat(card.style.top),
+    w: card.offsetWidth,
+    h: card.offsetHeight,
+  });
+
+  /** A box a line can actually be drawn between: a card mid-arrival has no position yet. */
+  const drawable = (box) => Number.isFinite(box.x) && Number.isFinite(box.y) && box.w > 0 && box.h > 0;
+
+  /**
+   * The line from one card to the card that follows it: out of the facing edges, with a slight S so
+   * a long hop reads as a route rather than a straight rule.
+   */
+  function arrowPath(a, b) {
+    const dx = b.x + b.w / 2 - (a.x + a.w / 2);
+    const dy = b.y + b.h / 2 - (a.y + a.h / 2);
+    // Mostly under or over: the arrow leaves a bottom edge and lands on a top edge.
+    if (Math.abs(dy) > Math.abs(dx)) {
+      const [sy, ey] = dy > 0 ? [a.y + a.h, b.y] : [a.y, b.y + b.h];
+      const sx = a.x + a.w / 2;
+      const ex = b.x + b.w / 2;
+      const my = (sy + ey) / 2;
+      return `M${sx},${sy} C${sx},${my} ${ex},${my} ${ex},${ey}`;
+    }
+    const [sx, ex] = dx > 0 ? [a.x + a.w, b.x] : [a.x, b.x + b.w];
+    const sy = a.y + a.h / 2;
+    const ey = b.y + b.h / 2;
+    const mx = (sx + ex) / 2;
+    return `M${sx},${sy} C${mx},${sy} ${mx},${ey} ${ex},${ey}`;
+  }
+
+  /** Rebuild the group: one path per predecessor that still has a card on the board. */
+  function paintArrows() {
+    const lines = [];
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const card of cards) {
+      const after = card.dataset.after;
+      if (!after) continue;
+      // The dash belongs to the child: a run is going under it while it reads `sent`.
+      const running = byId.get(card.dataset.id)?.data.status === "sent";
+      const to = cardBox(card);
+      if (!drawable(to)) continue;
+      for (const id of JSON.parse(after)) {
+        const from = byId.get(id);
+        // An id nothing on the board answers to draws nothing at all.
+        if (!from) continue;
+        const at = cardBox(from.card);
+        if (!drawable(at)) continue;
+        lines.push({ d: arrowPath(at, to), running });
+        minX = Math.min(minX, at.x, to.x);
+        minY = Math.min(minY, at.y, to.y);
+        maxX = Math.max(maxX, at.x + at.w, to.x + to.w);
+        maxY = Math.max(maxY, at.y + at.h, to.y + to.h);
+      }
+    }
+    if (!lines.length) {
+      arrowGroup.replaceChildren();
+      arrows.style.display = "none";
+      return;
+    }
+    arrowGroup.replaceChildren(
+      ...lines.map((line) => {
+        const path = document.createElementNS(ARROW_NS, "path");
+        path.setAttribute("d", line.d);
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", ARROW_INK);
+        path.setAttribute("stroke-width", "1.5");
+        path.setAttribute("stroke-linecap", "round");
+        path.setAttribute("marker-end", "url(#predHead)");
+        if (line.running) path.setAttribute("stroke-dasharray", "6 5");
+        return path;
+      }),
+    );
+    // Padding covers the arrowhead, and the viewBox is the board space drawn into, so a card left
+    // of zero or above it is drawn where it is instead of being clipped.
+    const pad = 16;
+    const x = minX - pad;
+    const y = minY - pad;
+    const w = maxX - minX + pad * 2;
+    const h = maxY - minY + pad * 2;
+    arrows.style.left = `${x}px`;
+    arrows.style.top = `${y}px`;
+    arrows.style.width = `${w}px`;
+    arrows.style.height = `${h}px`;
+    arrows.setAttribute("viewBox", `${x} ${y} ${w} ${h}`);
+    arrows.style.display = "";
+  }
+
+  let arrowQueued = false;
+  /** One redraw per frame: a drag or a fit asks for dozens and still costs one paint. */
+  function scheduleArrows() {
+    if (arrowQueued) return;
+    arrowQueued = true;
+    requestAnimationFrame(() => {
+      arrowQueued = false;
+      paintArrows();
+    });
+  }
+  addEventListener("resize", scheduleArrows);
+
+  // ---------- syntax highlighting -----------------------------------------
+
 // ---------- syntax highlighting -----------------------------------------
 const TOKENS =
   /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:[^`\\]|\\.)*`)|(#.*$|\/\/.*$)|(\b\d+(?:\.\d+)?\b)|(\b[A-Za-z_]\w*(?=\())|(\b(?:def|class|return|if|elif|else|for|while|import|from|as|try|except|finally|with|lambda|yield|await|async|const|let|var|function|export|default|new|throw|catch|switch|case|break|continue|type|interface|struct|fn|pub|use|mod|match|impl|self|this|True|False|None|null|true|false|nil|end|do|then)\b)/g;
@@ -1071,6 +1198,7 @@ function makeCard(data, quiet = false) {
   card.dataset.kind = kind;
   card.dataset.id = data.id;
   if (data.threadRoot) card.dataset.threadRoot = data.threadRoot;
+  setAfter(card, data.after);
 
   const head = el("div", "head");
   head.innerHTML = `
@@ -1257,6 +1385,7 @@ function makeCard(data, quiet = false) {
       card.dataset.sized = "user";
       card.classList.remove("auto-height");
       scheduleMap();
+      scheduleArrows();
     };
     const up = () => {
       removeEventListener("pointermove", move);
@@ -1437,6 +1566,7 @@ function startCardDrag(card, entry, event) {
     card.style.left = `${ox + (ev.clientX - sx) / view.k}px`;
     card.style.top = `${oy + (ev.clientY - sy) / view.k}px`;
     scheduleMap();
+    scheduleArrows();
   };
   const up = () => {
     card.classList.remove("dragging");
@@ -1687,6 +1817,7 @@ function clearBoard() {
   for (const card of cards) card.remove();
   cards.length = 0;
   byId.clear();
+  scheduleArrows();
   // A replay rebuilds every card, so the observer must let go of the dead ones.
   seenObserver.disconnect();
   inView.clear();
@@ -1937,6 +2068,7 @@ function placeCard(record, rect) {
   card.dataset.rect = JSON.stringify(rect);
   occupied.push(rect);
   scheduleMap();
+  scheduleArrows();
 }
 
 /** Save a note the user changed: a ticked box, or text typed in the editor. */

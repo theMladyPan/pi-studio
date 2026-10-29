@@ -11,6 +11,7 @@ import { answer, fail, readJson } from "../../http.ts";
 import { field } from "./thread.ts";
 import { randomUUID } from "node:crypto";
 import { cleanBoard, clearBoard } from "../../cards.ts";
+import { finished } from "../../waiters.ts";
 
 
 
@@ -76,6 +77,8 @@ export function killChild(board, thread) {
 	if (asked) updateCard(board, asked);
 	update(board, thread);
 	scheduleSave(board);
+	// A killed child is the end of its run, so whoever waits on it stops waiting.
+	finished(thread);
 	return true;
 }
 

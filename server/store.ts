@@ -10,6 +10,7 @@ import { ownedCards } from "./routes/board/message.ts";
 import { activeConfig, homeDefaults, workspaceById } from "./workspaces.ts";
 import { answer, fail } from "./http.ts";
 import { MODEL, PROVIDER, THINKING_LEVELS } from "./models.ts";
+import { ROLE_NAMES } from "./child/roles.ts";
 
 
 
@@ -66,6 +67,10 @@ export function saveBoard(board) {
 			...(thread.namedBy ? { namedBy: thread.namedBy } : {}),
 			...(thread.mini ? { mini: true } : {}),
 			...(thread.threadRoot ? { threadRoot: thread.threadRoot } : {}),
+			...(thread.parentThread ? { parentThread: thread.parentThread } : {}),
+			...(Number.isFinite(thread.depth) ? { depth: thread.depth } : {}),
+			...(thread.after?.length ? { after: thread.after } : {}),
+			...(thread.role ? { role: thread.role } : {}),
 			...(thread.hidden ? { hidden: true } : {}),
 			...(thread.closedAt ? { closedAt: thread.closedAt } : {}),
 			...(thread.type ? { type: thread.type } : {}),
@@ -157,6 +162,10 @@ export function restoredThread(raw, folder) {
 		...(typeof raw.namedBy === "string" && raw.namedBy ? { namedBy: raw.namedBy } : {}),
 		...(raw.mini ? { mini: true } : {}),
 		...(typeof raw.threadRoot === "string" && raw.threadRoot ? { threadRoot: raw.threadRoot } : {}),
+		...(typeof raw.parentThread === "string" && raw.parentThread ? { parentThread: raw.parentThread } : {}),
+		...(Number.isFinite(raw.depth) ? { depth: raw.depth } : {}),
+		...(Array.isArray(raw.after) ? { after: raw.after.filter((id) => typeof id === "string") } : {}),
+		...(ROLE_NAMES.includes(raw.role) ? { role: raw.role } : {}),
 		...(typeof raw.type === "string" && raw.type ? { type: raw.type } : {}),
 		// The tree is not made again after a restart: it is on disk, and its branch is where the work is.
 		...(raw.worktree && typeof raw.worktree === "object" && typeof raw.worktree.path === "string"

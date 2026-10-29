@@ -2,25 +2,62 @@
 /**
  * A thread's own routes: making one, the card that carries it, and the geometry a card is placed with.
  */
-import { answer, readJson } from "../../http.ts";
+import { answer, fail, readJson } from "../../http.ts";
 import { randomUUID } from "node:crypto";
-import { MAX_TITLE_CHARS } from "../../limits.ts";
+import { MAX_TITLE_CHARS, SPAWN_TIMEOUT_MS } from "../../limits.ts";
 import { WORK_TYPES } from "../../worktrees/make.ts";
 import { runtimeDefaults } from "../../workspaces.ts";
 import { card } from "../../bus.ts";
 import { cardFor } from "../../cards.ts";
-import { cleanRect } from "../../store.ts";
+import { cleanRect, MAX_THREADS } from "../../store.ts";
 import { join } from "node:path";
 import { homeCard } from "./message.ts";
+import { ROLE_NAMES, ROLE_THINKING, roleSystemPrompt } from "../../child/roles.ts";
+import { runSpawn } from "../../child/spawn.ts";
+import { killChild } from "./lifecycle.ts";
+import { THINKING_LEVELS } from "../../models.ts";
 
 
 
 // ---------- routes: the board ----------------------------------------------
 
-export async function onThread(req, res, board) {
-	const body = await readJson(req, res);
-	if (!body) return;
-	const thread = {
+/**
+ * What a request asks for, checked once for both the plain and the spawning route: the two have to
+ * refuse the same things for the same reasons. Answers the spec, or an `error` to send back.
+ */
+function threadSpec(board, body, caller) {
+	// The parent is the caller when a child asks; only the human may name one, because a body is
+	// whatever the caller wrote and the depth rule is worth nothing if the request decides it.
+	const parentId = caller?.human === false ? caller.thread.id : field(body.parentThread, 100);
+	const parent = parentId ? board.threads.get(parentId) : undefined;
+	if (parentId && !parent) return { error: "no such parent thread" };
+	// One level: the human's threads spawn children, and a child spawns nothing.
+	const depth = parent ? (parent.depth ?? 0) + 1 : 0;
+	if (depth > 1) return { error: "a thread spawned by an agent may not spawn another" };
+	if (board.threads.size >= MAX_THREADS) return { error: `this board holds ${MAX_THREADS} threads` };
+	// Predecessors are what the board draws arrows from, so a misspelled id is a mistake to report
+	// rather than something to drop quietly.
+	const wanted = [...new Set(Array.isArray(body.after) ? body.after.filter((id) => typeof id === "string" && id) : [])];
+	const known = wanted.filter((id) => board.threads.has(id) || board.cards.has(id));
+	if (known.length !== wanted.length) return { error: "no such predecessor" };
+	if (known.length > 8) return { error: "too many predecessors" };
+	// A hidden thread has no card of its own, so the arrow is drawn from the card it answers for.
+	const after = known.map((id) => (board.threads.get(id)?.hidden ? anchorOf(board, id) : id));
+	const role = ROLE_NAMES.includes(body.role) ? body.role : "";
+	if (typeof body.role === "string" && body.role && !role) return { error: `unknown role: ${body.role}` };
+	// A role whose prompt file is missing is a child that does not know what it is for, so the spawn is
+	// refused here rather than showing up later as a strange answer.
+	if (role && !roleSystemPrompt(role)) return { error: `role prompt missing: prompts/roles/${role}.md` };
+	return { parent, depth, after, role };
+}
+
+
+
+/** The thread row a checked spec describes, before anything is prompted. */
+function newThread(board, body, spec) {
+	const model = field(body.model, 100);
+	const provider = field(body.provider, 60);
+	return {
 		id: randomUUID(),
 		title: typeof body.title === "string" ? body.title.trim().slice(0, MAX_TITLE_CHARS) : "",
 		// No name until the human types one or the first request supplies it: a card that invents its own
@@ -29,16 +66,87 @@ export async function onThread(req, res, board) {
 		status: "idle",
 		...(WORK_TYPES.some(([type]) => type === body.type) ? { type: body.type } : {}),
 		...runtimeDefaults(board),
-		...(typeof body.model === "string" && body.model ? { model: body.model } : {}),
+		...(provider ? { provider } : {}),
+		...(model ? { model } : {}),
+		...(THINKING_LEVELS.includes(body.thinking) ? { thinking: body.thinking } : {}),
+		// A role brings its own thinking level; the board's default belongs to threads the human makes.
+		...(spec.role && !THINKING_LEVELS.includes(body.thinking) ? { thinking: ROLE_THINKING[spec.role] } : {}),
+		// Provenance, all of it decided here and none of it read back from a later request: which thread
+		// spawned this one, how deep it sits, what it hangs under, and what it was asked to be.
+		...(spec.parent ? { parentThread: spec.parent.id, depth: spec.depth } : {}),
+		...(spec.parent ? { threadRoot: anchorOf(board, spec.parent.id) } : {}),
+		...(spec.after.length ? { after: spec.after } : {}),
+		...(spec.role ? { role: spec.role } : {}),
 		at: Date.now(),
 		turns: [],
 		queued: [],
 		folder: board.folder,
 	};
+}
+
+export async function onThread(req, res, board, caller = { human: true }) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const spec = threadSpec(board, body, caller);
+	if (spec.error) return void fail(res, 409, spec.error);
+	const thread = newThread(board, body, spec);
 	// Creation does not spawn: the child starts on the first message, so an empty board costs nothing.
 	board.threads.set(thread.id, thread);
 	card(board, thread);
 	answer(res, 200, { threadId: thread.id, card: cardFor(thread, board) });
+}
+
+
+
+/**
+ * Create a thread and run it to the end in the same request. This is what the `board_thread` tool
+ * calls: a child that only judged something answers here, and its answer is the tool's result.
+ */
+export async function onThreadSpawn(req, res, board, caller = { human: true }) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const spec = threadSpec(board, body, caller);
+	if (spec.error) return void fail(res, 409, spec.error);
+	const task = typeof body.task === "string" ? body.task.trim().slice(0, 20_000) : "";
+	if (!task) return void fail(res, 409, "a spawned thread needs a task");
+	const thread = newThread(board, body, spec);
+	board.threads.set(thread.id, thread);
+	card(board, thread);
+	const seconds = Number(body.timeoutSeconds);
+	// A run can take minutes, and a client that sees no headers for long enough gives up on the request
+	// while the child keeps spending. So the answer is opened at once and kept alive with a space now
+	// and then: leading whitespace is still valid JSON for the reader at the other end.
+	res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+	const keep = setInterval(() => {
+		try {
+			res.write(" ");
+		} catch {
+			// A closed socket is noticed by the close handler below.
+		}
+	}, 30_000);
+	keep.unref?.();
+	let gone = false;
+	res.on("close", () => {
+		if (res.writableFinished) return;
+		gone = true;
+		// The master stopped waiting — a stop button, a killed parent — so the child it started has no
+		// reader left. It is ended here rather than left to spend its timeout.
+		killChild(board, thread);
+	});
+	const result = await runSpawn(
+		board,
+		thread,
+		task,
+		{
+			timeoutMs: Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 3600) * 1000 : SPAWN_TIMEOUT_MS,
+			maxTurns: Number(body.maxTurns) > 0 ? Number(body.maxTurns) : 0,
+			maxCostUsd: Number(body.maxCostUsd) > 0 ? Number(body.maxCostUsd) : 0,
+		},
+		killChild,
+	);
+	clearInterval(keep);
+	if (gone || res.writableEnded) return;
+	res.end(JSON.stringify(result));
 }
 
 

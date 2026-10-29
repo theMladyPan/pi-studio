@@ -14,6 +14,7 @@ import { MODEL } from "./models.ts";
 import { activeConfig } from "./workspaces.ts";
 import { scheduleSave } from "./store.ts";
 import { randomUUID } from "node:crypto";
+import { finished } from "./waiters.ts";
 
 
 
@@ -41,6 +42,11 @@ export function cardFor(thread, board = null) {
 	if (thread.mini) card.mini = true;
 	// The client cascades a card under the one its reply was asked on, and a note can be that one.
 	if (thread.threadRoot) card.threadRoot = thread.threadRoot;
+	// Where this card sits in the work: the threads and cards a spawning thread named as its
+	// predecessors. The board draws one arrow per id, which is the visible reason it is here.
+	if (thread.after?.length) card.after = thread.after;
+	if (thread.parentThread) card.parentThread = thread.parentThread;
+	if (thread.role) card.role = thread.role;
 	// What this card answers with, so the composer can show the truth instead of the daemon's hope.
 	card.provider = thread.provider;
 	card.model = thread.model;
@@ -257,4 +263,7 @@ export function threadError(board, thread, message) {
 	});
 	update(board, thread);
 	board.children.get(thread.id)?.stdin?.end();
+	// A dead thread is an ended run too: the caller waiting on it must not wait for a settle that will
+	// never come.
+	finished(thread);
 }
