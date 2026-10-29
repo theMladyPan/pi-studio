@@ -12,7 +12,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check public/board.js && node --check bin/smoke.mjs",
+    "check": "node --check server.mjs && node --check public/board.js && node --check bin/smoke.mjs && node --check bin/check-imports.mjs && node bin/check-imports.mjs",
     "dev": "node --watch server.mjs --no-open",
     "smoke": "node bin/smoke.mjs",
     "dev:alt": "node --watch server.mjs --no-open --state ~/.pi/agent/state/pi-studio-dev"
