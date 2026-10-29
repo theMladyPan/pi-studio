@@ -288,3 +288,32 @@ A GLM-5.3 review of the first draft found twelve things; nine changed this docum
 
 Not accepted: the review's claim that `verbatimModuleSyntax` does not enforce type-only imports — it
 does, with error TS1484, which is why it is the guard named above.
+
+## Status after the first pass
+
+What is in the tree, verified by `npm run check` and by hand.
+
+**Done.** The daemon is 28 `.ts` modules: `server.ts` starts `server/main.ts`, which holds the handler and
+the route table, and everything else is a library with no side effects at import. Bodies were lifted byte
+for byte by the TypeScript parser, and a line-multiset diff against the old `server.mjs` accounts for all
+52 differing lines. The client is an ES module at `public/client/board.js`, served by one `/client/` rule,
+started by itself rather than by an inline script, and it draws the board in a headless browser with no
+console errors. 33 tests cover the restore paths, the git graph, a worktree made and retired, the child's
+argv and prompts, and the routes including `/events`. `npm run check` runs `node --check`,
+`bin/check-imports.mjs`, `tsc`, `node --test` and `bin/smoke.mjs`.
+
+**Open, in the order they matter.**
+
+1. **The daemon is not type-checked yet.** 26 of 28 modules carry `@ts-nocheck`, so `tsc` reads them and
+   checks none of them. Measured: stripping the pragmas under `strict: false, noImplicitAny: false`
+   leaves **44 diagnostics**, 37 of them `TS2339` from object literals inferred as a union. That is the
+   next commit: a loose pass in `check` that gates, then `strict` module by module.
+2. **Steps 9–13 of the plan are not in the tree.** `state.js`, `types.js`, the client module split and
+   the `checkJs` ratchet are unwritten. The client is one 5324-line module; the deeper split was
+   attempted and reverted because eight panel-level `let`s are assigned from the entry, which needs the
+   handlers moved into the panels first. `tsconfig.client.json` was deleted rather than left as a config
+   that fails when run and is never run.
+3. **`handleChildLine` is still untested.** It is the largest function in the daemon and the one the
+   review of this plan named first.
+4. **The live-agent half is uncovered.** `child/run.ts`, `routes/board/message.ts` and `answer.ts` have
+   no tests, because reaching them means spawning a real `pi`.
