@@ -290,6 +290,104 @@ function sanitizeSvg(svg) {
     .replace(/javascript:/gi, "");
 }
 
+// ---------- mermaid -------------------------------------------------------
+// The bundle is 3.5 MB and most cards hold no diagram, so it is fetched the first time a card asks
+// for one and never before that. A board that only shows markdown never pays for it.
+let mermaidReady = null;
+
+function loadMermaid() {
+  if (window.mermaid) return Promise.resolve(window.mermaid);
+  if (!mermaidReady) {
+    mermaidReady = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "/client/mermaid-min.js";
+      script.onload = () => {
+        // The board's own palette, so a diagram lands looking like the card around it instead of
+        // like mermaid's default purple.
+        window.mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          theme: "base",
+          themeVariables: {
+            darkMode: true,
+            background: "#0d1117",
+            primaryColor: "#1c2128",
+            primaryTextColor: "#e6edf3",
+            primaryBorderColor: "#30363d",
+            secondaryColor: "#161b22",
+            tertiaryColor: "#21262d",
+            lineColor: "#7d8590",
+            textColor: "#e6edf3",
+            edgeLabelBackground: "#0d1117",
+            fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif",
+            fontSize: "14px",
+          },
+        });
+        resolve(window.mermaid);
+      };
+      // A missing bundle leaves the next card free to try again rather than failing for the session.
+      script.onerror = () => {
+        mermaidReady = null;
+        reject(new Error("mermaid-min.js did not load"));
+      };
+      document.head.appendChild(script);
+    });
+  }
+  return mermaidReady;
+}
+
+/** Drawn diagrams by source: a card re-renders on every tick of the board, and parsing is not free. */
+const diagrams = new Map();
+let diagramSeq = 0;
+
+/**
+ * Mermaid fits its drawing to the width on offer by putting `width="100%"` and a matching
+ * `max-width` on the svg. A card is about 430px wide, so a sequence diagram that way becomes 6px
+ * text. The drawing keeps its own size here and the wrapper scrolls instead.
+ */
+function naturalSize(svg) {
+  const view = svg.match(/viewBox="[-\d.]+ [-\d.]+ ([\d.]+) ([\d.]+)"/);
+  if (!view) return svg;
+  return svg.replace(/<svg\b([^>]*)>/, (_m, attrs) => {
+    const kept = attrs
+      .replace(/\sstyle="[^"]*max-width[^"]*"/i, "")
+      .replace(/\swidth="100%"/, "");
+    return `<svg${kept} width="${Math.ceil(Number(view[1]))}" height="${Math.ceil(Number(view[2]))}">`;
+  });
+}
+
+/**
+ * A mermaid fence draws itself once the bundle arrives. The holder is in place first, so the card
+ * keeps its place while the drawing is on its way, and a diagram that will not parse shows its own
+ * source with one line saying why, instead of an empty box.
+ */
+function drawDiagram(holder, source) {
+  const drawn = diagrams.get(source);
+  if (drawn) {
+    holder.innerHTML = drawn;
+    return;
+  }
+  const id = `diagram-${(diagramSeq += 1)}`;
+  loadMermaid()
+    .then((mermaid) => mermaid.render(id, source))
+    .then(({ svg }) => {
+      const clean = sanitizeSvg(naturalSize(svg));
+      diagrams.set(source, clean);
+      holder.innerHTML = clean;
+    })
+    .catch((error) => {
+      // A failed render leaves mermaid's own error drawing behind in the document; drop it.
+      for (const left of [id, `d${id}`]) document.getElementById(left)?.remove();
+      const pre = el("pre");
+      const code = el("code");
+      code.textContent = source;
+      pre.appendChild(code);
+      const why = el("p", "diagram-error");
+      why.textContent = `mermaid could not draw this: ${String(error.message || error).split("\n")[0]}`;
+      holder.replaceChildren(pre, why);
+    });
+}
+
 /** `|---|:--:|` under a header row is what makes the block above it a table. */
 function isTableRule(line) {
   return typeof line === "string" && line.includes("-") && /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(line);
@@ -357,6 +455,10 @@ function renderMarkdown(markdown) {
       if (lang === "svg") {
         const wrap = el("div", "svg-wrap");
         wrap.innerHTML = sanitizeSvg(body);
+        holder.appendChild(wrap);
+      } else if (lang === "mermaid") {
+        const wrap = el("div", "svg-wrap diagram-wrap");
+        drawDiagram(wrap, body.trim());
         holder.appendChild(wrap);
       } else {
         const pre = el("pre");

@@ -84,6 +84,8 @@ server/           the daemon, one module per subject
   worktrees/      making a thread's worktree, naming its branch, retiring it
   paths.ts        every path and the JSON io; types.ts the shapes that cross a boundary
 public/client/    the board client: index.html at public/, board.js plus its styles
+                  mermaid-min.js is vendored beside it: mermaid 11.17.2, MIT, fetched the first
+                  time a card carries a mermaid fence and never before that
 bridge/           the extension a child loads so a thread can draw on its board
 bin/pi-studio     the wrapper: one word to start it
 bin/smoke.mjs     boot two daemons against scratch folders and hit the routes a change can break

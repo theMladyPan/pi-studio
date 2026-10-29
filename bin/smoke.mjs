@@ -157,6 +157,10 @@ async function main() {
 
 	const script = await get(one, "/client/board.js");
 	said(script.status === 200 && script.type.includes("javascript"), "GET /client/board.js serves the client", `${script.status} ${script.type}`);
+	// The mermaid bundle a diagram fence fetches. Its name has no dot in it because the static rule
+	// only takes /client/[a-z0-9/_-]+\.js, and a 404 here is a card that silently stays empty.
+	const diagram = await get(one, "/client/mermaid-min.js");
+	said(diagram.status === 200 && diagram.type.includes("javascript"), "GET /client/mermaid-min.js serves the diagram renderer", `${diagram.status} ${diagram.type}`);
 	const refused = await get(one, "/state");
 	said(refused.status === 403, "a route without the token is refused", `${refused.status}`);
 
