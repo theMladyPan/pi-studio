@@ -577,6 +577,10 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
   restored when the card comes back, and spent only by the card that sends it. A folded card has no
   room for a field, so folding parks the draft and unfolding brings it back. A panel or an editor
   takes Escape first and stops it there, so closing one costs neither the selection nor the draft.
+- **`t` starts a thread.** The key is the `+` button's twin — the same request, the same wait for the
+  card to arrive, the field put in it — and it stays quiet while a card is selected, because a reading
+  position keeps the letters, and on a board with one session behind it, which has no threads to
+  start. The empty board names both ways in: `press + or t to start a thread`.
 - **A card is a handle.** Press and drag anywhere on a card moves it; press the background and the
   board pans; ctrl+drag inside a card selects its text. Controls keep their own press: header buttons,
   the docked composer, links, checkboxes, editable fields and the resize corner.

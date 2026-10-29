@@ -4838,7 +4838,12 @@
     wait();
   }
 
-  newThreadBtn.addEventListener("click", async () => {
+  /**
+   * The one way to start a thread, for the `+` and for `t`. The request is in flight while the button
+   * is disabled, so a second press in either hand waits rather than creating a card nobody asked for.
+   */
+  async function startThread() {
+    if (newThreadBtn.disabled) return;
     newThreadBtn.disabled = true;
     try {
       const response = await fetch(`/thread?${auth}`, {
@@ -4855,7 +4860,9 @@
     } finally {
       newThreadBtn.disabled = false;
     }
-  });
+  }
+
+  newThreadBtn.addEventListener("click", () => void startThread());
 
   // Stop asks the server to abort the run, then waits for meta to confirm it settled.
   stopBtn.addEventListener("click", async () => {
@@ -4972,6 +4979,12 @@
     } else if (event.key === "o") {
       event.preventDefault();
       flipOrder();
+    } else if (event.key === "t") {
+      // `t` is the keyboard's `+`. A selected card is a reading position and keeps the letters, and a
+      // board with one session behind it has no threads for the key to start.
+      if (!document.body.classList.contains("threads") || document.querySelector(".card.active")) return;
+      event.preventDefault();
+      void startThread();
     }
   });
 
