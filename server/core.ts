@@ -44,927 +44,22 @@ import {
 	workspaceId,
 	writeJsonFile,
 } from "./paths.ts";
-
-const PROVIDER = process.env.PI_STUDIO_PROVIDER ?? "klotilda";
-const MODEL = process.env.PI_STUDIO_MODEL ?? "deepseek-ai/DeepSeek-V4.1-Flash-1017";
-// Pi names seven levels and clamps whatever is chosen to what the model offers.
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-const CATALOG_TTL_MS = 10 * 60_000;
-const run = promisify(execFile);
-/** Read once from pi, kept for a while: the picker must work before any thread has a child. */
-let catalog = null;
-let catalogAt = 0;
-/** Scope patterns already reported on stderr, so a stale pattern is not shouted once per picker open. */
-const saidScopeProblems = new Set();
-
-/**
- * The models this machine can actually run. `pi --list-models` prints a table for humans, so the
- * columns are split on the runs of spaces that separate them, and the trailing yes/no columns say
- * whether a model thinks and takes images.
- */
-async function modelCatalog() {
-	if (catalog && Date.now() - catalogAt < CATALOG_TTL_MS) return catalog;
-	const cli = piCli();
-	let table = "";
-	try {
-		const result = await run(cli.command, [...cli.args, "--list-models"], { maxBuffer: 8 * 1024 * 1024, timeout: 20_000 });
-		table = String(result.stdout ?? "");
-	} catch (error) {
-		table = String(error.stdout ?? "");
-	}
-	const models = [];
-	for (const line of table.split("\n").slice(1)) {
-		const cells = line.trim().split(/\s{2,}/);
-		if (cells.length < 3) continue;
-		const [provider, model, context, maxOut, thinking, images] = cells;
-		models.push({
-			provider,
-			model,
-			context: context ?? "",
-			maxOut: maxOut ?? "",
-			thinking: thinking !== "no",
-			images: images === "yes",
-		});
-	}
-	// A machine with no credentials still has a board, so an empty table is answered with the levels and
-	// no models rather than with an error. The empty answer is kept too: otherwise every open of the
-	// picker would spawn pi again.
-	catalog = { models, levels: THINKING_LEVELS };
-	catalogAt = Date.now();
-	return catalog;
-}
-
-/**
- * Where pi keeps the settings that `/scoped-models` writes: the agent directory, which
- * `PI_CODING_AGENT_DIR` can move out of `~/.pi/agent`. Only that file is read. A project
- * `.pi/settings.json` can override `enabledModels` for one folder, and a board opened on such a
- * folder would then show a wider list than its children cycle.
- */
-function piSettingsFile() {
-	return join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "settings.json");
-}
-
-/**
- * The models pi itself offers while cycling: `enabledModels` from the settings file, in the order it
- * was written. Read on every call rather than kept beside the catalogue, because the human edits this
- * in a console pi while the daemon runs and the picker has to show the edit without a restart. No
- * file, no key, or a file caught mid-write all mean no scope, which is every model, as before.
- */
-function readScope() {
-	let held;
-	try {
-		held = JSON.parse(readFileSync(piSettingsFile(), "utf8"));
-	} catch {
-		return [];
-	}
-	const patterns = held?.enabledModels;
-	if (!Array.isArray(patterns)) return [];
-	return patterns.filter((one) => typeof one === "string" && one.trim()).map((one) => one.trim().slice(0, 120));
-}
-
-/** `*` and `?` mean what they mean to pi; every other character of a pattern is literal. */
-function patternToRegExp(pattern) {
-	const body = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
-	return new RegExp(`^${body}$`, "i");
-}
-
-/**
- * The one model a partial pattern names, chosen the way pi chooses: an alias id beats a dated one, and
- * the later id beats the earlier, so `sonnet` means `claude-sonnet-4-5` rather than the snapshot with a
- * date on it. A catalogue order decides nothing.
- */
-function bestPartial(matches) {
-	const aliases = matches.filter((one) => one.model.endsWith("-latest") || !/-\d{8}$/.test(one.model));
-	return [...(aliases.length ? aliases : matches)].sort((left, right) => right.model.localeCompare(left.model))[0];
-}
-
-/**
- * Pi's scope patterns resolved against the catalogue the daemon already has, in the order pi wrote
- * them. Pi matches these with minimatch plus a fuzzy match on model names; the catalogue read from
- * `--list-models` carries names for no model, so the fuzzy half is the one thing this cannot do. A
- * pattern that matches nothing is reported rather than dropped: a scope quietly smaller than pi's is
- * a picker that hides models for no stated reason.
- */
-function resolveScope(patterns, models) {
-	const scoped = [];
-	const problems = [];
-	const seen = new Set();
-	const add = (one) => {
-		const key = `${one.provider}\u0000${one.model}`;
-		if (seen.has(key)) return;
-		seen.add(key);
-		scoped.push(one);
-	};
-	for (const pattern of patterns) {
-		// `model:high` scopes a model at one thinking level in pi. The level is not this picker's business,
-		// so it is cut away and the model is offered like any other.
-		const cut = pattern.lastIndexOf(":");
-		const base = cut > 0 && THINKING_LEVELS.includes(pattern.slice(cut + 1)) ? pattern.slice(0, cut) : pattern;
-		const needle = base.toLowerCase();
-		// `provider/id` is the whole pattern when that provider has the model: pi prefers the named provider
-		// over the same id on another one, and so does this, or an OpenRouter row spelled `google/x` would
-		// ride along with the Google one.
-		const exact = models.filter((one) => `${one.provider}/${one.model}`.toLowerCase() === needle);
-		if (exact.length) {
-			for (const one of exact) add(one);
-			continue;
-		}
-		// A bare id resolves on every provider that offers it, which is what pi does when a pattern is
-		// ambiguous between providers.
-		const bare = models.filter((one) => one.model.toLowerCase() === needle);
-		if (bare.length) {
-			for (const one of bare) add(one);
-			continue;
-		}
-		if (/[*?[]/.test(base)) {
-			const glob = patternToRegExp(base);
-			const matched = models.filter((one) => glob.test(`${one.provider}/${one.model}`) || glob.test(one.model));
-			if (!matched.length) problems.push(pattern);
-			for (const one of matched) add(one);
-			continue;
-		}
-		// What is left is a piece of an id. Pi answers that with one model, not with every model the piece
-		// appears in, so a scope cannot widen unnoticed by a pattern meant to name a single model.
-		const partial = models.filter((one) => one.model.toLowerCase().includes(needle));
-		if (!partial.length) {
-			problems.push(pattern);
-			continue;
-		}
-		const best = bestPartial(partial);
-		// The same id on several providers is the one tie pi keeps.
-		for (const one of partial.filter((candidate) => candidate.model === best.model)) add(one);
-	}
-	return { scoped, problems };
-}
-
-/**
- * A board's configuration: what a new thread starts with, and which behaviours are on. Kept per board
- * because two workspaces want different models, and because a feature like dimming is a taste about
- * one workspace's canvas, not a global setting.
- * @typedef {object} BoardConfig
- * @property {string} [provider]
- * @property {string} [model]
- * @property {string} [thinking]
- * @property {boolean} [dimOthers] dim the cards of every other thread while one is selected
- */
-
-/**
- * pi's own default tool selection, which is what a thread starts with. The board may leave some of
- * them out of a new thread, and names them with the very names pi uses.
- */
-const BUILTIN_TOOLS = ["read", "bash", "edit", "write"];
-
-/** A board's configuration as the browser reads it, with the daemon's own model filled in. */
-function activeConfig(board) {
-	const chosen = board.config ?? {};
-	return {
-		...runtimeDefaults(board),
-		dimOthers: chosen.dimOthers !== false,
-		// Which tools a new thread is not given: built-in ones by name, extensions by folder. The panel
-		// draws a checkbox per entry from these two lists, so they are always readable, never absent.
-		toolsOff: Array.isArray(chosen.toolsOff) ? chosen.toolsOff.filter((name) => BUILTIN_TOOLS.includes(name)) : [],
-		extensionsOff: Array.isArray(chosen.extensionsOff)
-			? chosen.extensionsOff.filter((name) => CHILD_EXTENSIONS.some((one) => one.name === name))
-			: [],
-	};
-}
-
-/** What a new thread starts with: the last choice made on this board, else the daemon's own. */
-function runtimeDefaults(board) {
-	const chosen = board.config ?? {};
-	return {
-		provider: typeof chosen.provider === "string" && chosen.provider ? chosen.provider : PROVIDER,
-		model: typeof chosen.model === "string" && chosen.model ? chosen.model : MODEL,
-		...(THINKING_LEVELS.includes(chosen.thinking) ? { thinking: chosen.thinking } : {}),
-	};
-}
-/**
- * Left to itself a thread has the same tools as a pi started in a terminal: the built-in four plus
- * whatever is installed here. `PI_STUDIO_TOOLS` narrows that to a named allowlist instead.
- */
-const TOOLS = process.env.PI_STUDIO_TOOLS ?? "";
-/**
- * Extensions a thread may load: everything installed on this machine, less the two that cannot come
- * along at all.
- *
- *   dashboard        it is the old board, it registers the same tool names as the bridge, and it
- *                    would open a board server and rewrite its state file once per running thread
- *   ytrack           it answers through a 2FA gateway, which is a console pi with a human at the
- *                    keyboard, not a thread working on its own
- *
- * `browser-screenshot` used to be left out with them and is now loaded. It runs a headless chromium
- * on a throwaway profile in a temp folder, not the human's own browser, so a thread may drive a page
- * and read the picture the tool writes. Anything else a board does not want in a thread is the
- * panel's business: the two lists there subtract extensions and built-in tools per board, by the
- * names pi itself uses.
- *
- * `-ne` keeps discovery off so the list is this one, plainly; `-e` still loads what it names.
- * `PI_STUDIO_CHILD_EXCLUDE` changes the exclusions, `PI_STUDIO_CHILD_EXTENSIONS` names an exact list.
- */
-const CHILD_EXCLUDE = new Set(
-	(process.env.PI_STUDIO_CHILD_EXCLUDE ?? "dashboard,ytrack")
-		.split(",")
-		.map((name) => name.trim())
-		.filter(Boolean),
-);
-
-/**
- * A test script in the extensions folder is not an extension: it exports no factory, so pi refuses to
- * load it and the thread dies before it can answer. Shipped extensions are never named like this.
- */
-function isTestFile(name) {
-	return /^test[-.]/.test(name) || /\.test\./.test(name) || /\.spec\./.test(name);
-}
-
-/**
- * Every extension this machine has installed, minus the exclusions above, as a name the panel can
- * show and the path pi loads. The name is the folder, or the file without its extension.
- */
-function installedExtensions() {
-	const named = process.env.PI_STUDIO_CHILD_EXTENSIONS;
-	if (named) {
-		return named
-			.split(",")
-			.map((name) => name.trim())
-			.filter(Boolean)
-			.map((name) => ({
-				name: basename(name).replace(/\.(ts|mts|js|mjs)$/, "") || name,
-				path: name.includes("/") ? name : join(extensionsDir(), name, "index.ts"),
-			}))
-			.filter((one) => existsSync(one.path));
-	}
-	const dir = extensionsDir();
-	let entries;
-	try {
-		entries = readdirSync(dir, { withFileTypes: true });
-	} catch {
-		return [];
-	}
-	const found = [];
-	for (const entry of entries) {
-		const bare = entry.name.replace(/\.(ts|mts|js|mjs)$/, "");
-		if (entry.name.startsWith(".") || CHILD_EXCLUDE.has(entry.name) || CHILD_EXCLUDE.has(bare)) continue;
-		const full = join(dir, entry.name);
-		if (entry.isDirectory()) {
-			const entryPoint = ["index.ts", "index.js", "index.mjs"]
-				.map((name) => join(full, name))
-				.find((path) => existsSync(path));
-			if (entryPoint) found.push({ name: entry.name, path: entryPoint });
-		} else if (/\.(ts|mts|js|mjs)$/.test(entry.name) && !entry.name.endsWith(".d.ts") && !isTestFile(entry.name)) {
-			found.push({ name: bare, path: full });
-		}
-	}
-	return found;
-}
-
-const CHILD_EXTENSIONS = installedExtensions();
-const MAX_BODY_BYTES = 1_000_000;
-const MAX_ACTIVITY = 300;
-/** One row of the rail keeps what the panel draws, and the rail is filed to disk on every change. */
-const MAX_ROW_CHARS = 64_000;
-const MAX_THREADS = 200;
-const MAX_PLAIN_CARDS = 200;
-/** A note is markdown the board repaints on every change, so its size has a ceiling. */
-const MAX_NOTE_CHARS = 100_000;
-/** A source card carries a whole file, so the ceiling is higher and still finite. */
-const MAX_SOURCE_CHARS = 200_000;
-/** A card's name is read at a glance, so it is one short line and not a paragraph. */
-const MAX_TITLE_CHARS = 200;
-/** A question whose agent is waiting holds that child's turn open, so it cannot wait forever. */
-const ASK_TIMEOUT_MS = 5 * 60_000;
-const STATE_VERSION = 1;
-const BROWSE_LIMIT = 200;
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 /** Opening a browser is what a desktop app does; a service run asks for `--no-open`. */
-const OPEN_BROWSER = !process.argv.includes("--no-open");
+export const OPEN_BROWSER = !process.argv.includes("--no-open");
 
-/**
- * One exchange with a thread. The card shows the words typed in and the answer once it lands.
- * @typedef {object} Turn
- * @property {string} text
- * @property {"queued"|"sent"|"answered"|"stopped"} status
- * @property {"queue"|"steer"} mode
- * @property {number} at
- * @property {string} [reply]
- */
-
-/**
- * A thread is one card on a board and one child process on demand.
- * @typedef {object} Thread
- * @property {string} id
- * @property {string} title
- * @property {string|null} sessionId
- * @property {"idle"|"running"|"dead"} status
- * @property {string} provider
- * @property {string} model
- * @property {string} [thinking]
- * @property {number} at
- * @property {Turn[]} turns
- * @property {(string|{message: string, text: string, target?: {cardId: string, turn: number}})[]} queued
- * @property {{cardId: string, turn: number}|null} [answering]
- * @property {{x:number,y:number,w:number,h:number}} [rect]
- * @property {boolean} [mini]
- * @property {number} [runStartedAt]
- * @property {string} [stderrTail]
- * @property {string} [threadRoot]
- * @property {boolean} [hidden] the thread is not drawn as a card of its own; the cards it answers for
- *   are where it is read. A child forked onto a card starts hidden, and a thread whose own card is closed
- *   while it still owns cards becomes hidden rather than dying.
- */
-
-/**
- * A card with no child behind it: markdown a note carries, or a file a source card shows. The daemon
- * keeps them beside the threads and the client draws them by `type`.
- * @typedef {object} PlainCard
- * @property {string} id
- * @property {"note"|"source"|"question"} type
- * @property {string} title
- * @property {string} [question]
- * @property {string[]} [options]
- * @property {boolean} [allowFreeText]
- * @property {"open"|"answered"|"expired"} [status]
- * @property {string} [answer]
- * @property {number} [expiresAt]
- * @property {string} [markdown]
- * @property {string} [path]
- * @property {string} [content]
- * @property {number} [line]
- * @property {string} [key]
- * @property {string} [threadRoot] where the card cascades
- * @property {string} [ownerThread] the thread that answers comments on it
- * @property {Turn[]} [turns] what was asked about this card, and what came back
- * @property {number} at
- * @property {number} [updatedAt]
- * @property {{x:number,y:number,w:number,h:number}} [rect]
- * @property {boolean} [mini]
- */
-
-/**
- * A live board: the workspace it belongs to, what is on it, and who is watching.
- * @typedef {object} Board
- * @property {string} id
- * @property {string} folder
- * @property {string} name
- * @property {Map<string, Thread>} threads
- * @property {Map<string, PlainCard>} cards
- * @property {Map<string, {resolve: (value: {status: string, answer?: string}) => void}>} askers
- * @property {object[]} activity
- * @property {Map<string, import("node:child_process").ChildProcess>} children
- * @property {Set<import("node:http").ServerResponse>} clients
- * @property {NodeJS.Timeout|null} saveTimer
- */
-
-// ---------- small filesystem helpers ---------------------------------------
-
-// ---------- workspaces -----------------------------------------------------
-
-/**
- * What the human has opened before. A workspace is a folder; its board lives in its own file, and
- * the pi sessions behind its threads are the app's own, referenced by id and never copied here.
- * @typedef {object} Workspace
- * @property {string} id
- * @property {string} folder
- * @property {string} name
- * @property {number} openedAt
- */
-
-/** @type {Workspace[]} newest first, because that is the order the crossroads shows. */
-const workspaces = (() => {
-	const saved = readJsonFile(WORKSPACES_FILE, null);
-	if (!saved || saved.version !== STATE_VERSION || !Array.isArray(saved.workspaces)) return [];
-	return saved.workspaces
-		.filter((workspace) => typeof workspace?.folder === "string" && workspace.folder)
-		.map((workspace) => ({
-			id: typeof workspace.id === "string" && workspace.id ? workspace.id : workspaceId(workspace.folder),
-			folder: workspace.folder,
-			name: typeof workspace.name === "string" && workspace.name ? workspace.name : basename(workspace.folder),
-			openedAt: Number.isFinite(workspace.openedAt) ? workspace.openedAt : 0,
-		}));
-})();
-
-/** What a new board is born with, set on the crossroads and shared by every workspace opened after it. */
-let homeDefaults = (() => {
-	const saved = readJsonFile(WORKSPACES_FILE, null);
-	const held = saved?.defaults;
-	if (!held || typeof held !== "object") return {};
-	const known = {};
-	if (typeof held.provider === "string" && held.provider) known.provider = held.provider;
-	if (typeof held.model === "string" && held.model) known.model = held.model;
-	if (THINKING_LEVELS.includes(held.thinking)) known.thinking = held.thinking;
-	if (typeof held.dimOthers === "boolean") known.dimOthers = held.dimOthers;
-	return known;
-})();
-
-function saveWorkspaces() {
-	writeJsonFile(WORKSPACES_FILE, { version: STATE_VERSION, workspaces, defaults: homeDefaults });
-}
-
-/** The crossroads' defaults with the daemon's own model filled in, so the page can show them. */
-function activeHomeDefaults() {
-	return {
-		provider: homeDefaults.provider ?? PROVIDER,
-		model: homeDefaults.model ?? MODEL,
-		...(homeDefaults.thinking ? { thinking: homeDefaults.thinking } : {}),
-		dimOthers: homeDefaults.dimOthers !== false,
-	};
-}
-
-/** @type {Map<string, Board>} boards that this daemon has loaded, one per workspace. */
-const boards = new Map();
-/** Tabs sitting on the crossroads, so the counts there stay honest without a reload. */
-const welcomeClients = new Set();
-
-function boardFile(workspace) {
-	return join(STATE_DIR, "boards", `${workspace.id}.json`);
-}
-
-function sessionDir(workspace) {
+export function sessionDir(workspace) {
 	return join(STATE_DIR, "sessions", workspace.id);
-}
-
-/** Everything a `Turn` needs and nothing that dies with the process. */
-function savedTurn(turn) {
-	return {
-		text: turn.text,
-		// A turn in flight when the daemon stopped is nobody's work now.
-		status: turn.status === "answered" ? "answered" : "stopped",
-		mode: turn.mode,
-		at: turn.at,
-		...(turn.reply ? { reply: turn.reply } : {}),
-		...(turn.error ? { error: turn.error } : {}),
-	};
-}
-
-/** A saved card position, or undefined when the file holds something that is not one. */
-function cleanRect(rect) {
-	return rect && Number.isFinite(rect.x) && Number.isFinite(rect.y) && rect.w > 0 && rect.h > 0
-		? { x: rect.x, y: rect.y, w: rect.w, h: rect.h }
-		: undefined;
-}
-
-/** Write one board: its threads, their turns, their layout and their session ids, and its notes. */
-function saveBoard(board) {
-	const payload = {
-		version: STATE_VERSION,
-		workspace: { id: board.id, folder: board.folder, name: board.name },
-		savedAt: Date.now(),
-		activity: board.activity.slice(-MAX_ACTIVITY).map(diskRow),
-		config: activeConfig(board),
-		trees: board.trees,
-		threads: [...board.threads.values()].map((thread) => ({
-			id: thread.id,
-			title: thread.title,
-			sessionId: thread.sessionId,
-			provider: thread.provider,
-			model: thread.model,
-			...(thread.thinking ? { thinking: thread.thinking } : {}),
-			...(thread.stats ? { stats: thread.stats } : {}),
-			at: thread.at,
-			turns: thread.turns.map(savedTurn),
-			...(thread.rect ? { rect: thread.rect } : {}),
-			...(thread.namedBy ? { namedBy: thread.namedBy } : {}),
-			...(thread.mini ? { mini: true } : {}),
-			...(thread.threadRoot ? { threadRoot: thread.threadRoot } : {}),
-			...(thread.hidden ? { hidden: true } : {}),
-			...(thread.closedAt ? { closedAt: thread.closedAt } : {}),
-			...(thread.type ? { type: thread.type } : {}),
-			...(thread.worktree ? { worktree: thread.worktree } : {}),
-		})),
-		cards: [...board.cards.values()].map((card) => ({
-			id: card.id,
-			type: card.type,
-			title: card.title,
-			at: card.at,
-			...(typeof card.markdown === "string" ? { markdown: card.markdown } : {}),
-			...(typeof card.path === "string" ? { path: card.path } : {}),
-			...(typeof card.content === "string" ? { content: card.content } : {}),
-			...(Number.isFinite(card.line) ? { line: card.line } : {}),
-			...(typeof card.question === "string" ? { question: card.question } : {}),
-			...(Array.isArray(card.options) ? { options: card.options } : {}),
-			...(card.type === "question" ? { allowFreeText: card.allowFreeText !== false } : {}),
-			...(typeof card.status === "string" ? { status: card.status } : {}),
-			...(typeof card.answer === "string" ? { answer: card.answer } : {}),
-			...(Number.isFinite(card.expiresAt) ? { expiresAt: card.expiresAt } : {}),
-			...(card.updatedAt ? { updatedAt: card.updatedAt } : {}),
-			...(card.key ? { key: card.key } : {}),
-			...(card.threadRoot ? { threadRoot: card.threadRoot } : {}),
-			...(card.ownerThread ? { ownerThread: card.ownerThread } : {}),
-			...(card.turns?.length ? { turns: card.turns.map(savedTurn) } : {}),
-			...(card.rect ? { rect: card.rect } : {}),
-			...(card.mini ? { mini: true } : {}),
-		})),
-	};
-	writeJsonFile(boardFile(board), payload);
-}
-
-/** A burst of turns and moves costs one write per board. */
-function scheduleSave(board) {
-	if (board.saveTimer) return;
-	board.saveTimer = setTimeout(() => {
-		board.saveTimer = null;
-		saveBoard(board);
-	}, 500);
-	board.saveTimer.unref();
-}
-
-function flushBoard(board) {
-	if (board.saveTimer) clearTimeout(board.saveTimer);
-	board.saveTimer = null;
-	saveBoard(board);
-}
-
-/** Rebuild a thread from its file, never as something that is still running. */
-function restoredTurns(raw) {
-	return (Array.isArray(raw) ? raw : [])
-		.filter((turn) => turn && typeof turn.text === "string")
-		.map((turn) => ({
-			text: String(turn.text),
-			status: turn.status === "answered" ? "answered" : "stopped",
-			mode: turn.mode === "steer" ? "steer" : "queue",
-			at: Number.isFinite(turn.at) ? turn.at : Date.now(),
-			...(typeof turn.reply === "string" ? { reply: turn.reply } : {}),
-			...(typeof turn.error === "string" && turn.error ? { error: turn.error } : {}),
-		}));
-}
-
-function restoredThread(raw, folder) {
-	if (!raw || typeof raw !== "object" || typeof raw.id !== "string") return null;
-	const turns = restoredTurns(raw.turns);
-	const rect = cleanRect(raw.rect);
-	/** The thread as its file describes it, before the one repair a legacy file needs. */
-	const thread = {
-		id: raw.id,
-		title: typeof raw.title === "string" && raw.title ? raw.title : "thread",
-		sessionId: typeof raw.sessionId === "string" ? raw.sessionId : null,
-		status: "idle",
-		provider: typeof raw.provider === "string" ? raw.provider : PROVIDER,
-		model: typeof raw.model === "string" ? raw.model : MODEL,
-		...(THINKING_LEVELS.includes(raw.thinking) ? { thinking: raw.thinking } : {}),
-		...(raw.stats && typeof raw.stats === "object" ? { stats: raw.stats } : {}),
-		at: Number.isFinite(raw.at) ? raw.at : Date.now(),
-		turns,
-		queued: [],
-		...(rect ? { rect } : {}),
-		...(typeof raw.namedBy === "string" && raw.namedBy ? { namedBy: raw.namedBy } : {}),
-		...(raw.mini ? { mini: true } : {}),
-		...(typeof raw.threadRoot === "string" && raw.threadRoot ? { threadRoot: raw.threadRoot } : {}),
-		...(typeof raw.type === "string" && raw.type ? { type: raw.type } : {}),
-		// The tree is not made again after a restart: it is on disk, and its branch is where the work is.
-		...(raw.worktree && typeof raw.worktree === "object" && typeof raw.worktree.path === "string"
-			? { worktree: raw.worktree }
-			: {}),
-		// Boards saved before this was a plain flag said `behind: <cardId>`; the id is not needed now that
-		// ownership decides which cards a thread answers for.
-		...(raw.hidden === true || (typeof raw.behind === "string" && raw.behind) ? { hidden: true } : {}),
-		// When the human put its card away, so the rail can offer it back. A thread that is only hidden
-		// because a card is where it is read was never closed by anyone.
-		...(Number.isFinite(raw.closedAt) ? { closedAt: raw.closedAt } : {}),
-		folder,
-	};
-	// A board written before a closed card carried a mark said only `hidden`, which a child that answers
-	// for a card also says. A hidden thread with no card behind it was put away by the human, so it is
-	// offered back like one rather than staying lost in a file nobody can reach.
-	if (thread.hidden && !thread.threadRoot && !thread.closedAt) thread.closedAt = thread.at;
-	return thread;
-}
-
-/** Rebuild a plain card from its file. One without the body its type needs is nothing, so it goes. */
-function restoredPlainCard(raw) {
-	if (!raw || typeof raw !== "object" || typeof raw.id !== "string") return null;
-	// Files written before source cards existed carried notes under their own key and no type.
-	const type = raw.type === "source" || raw.type === "question" ? raw.type : "note";
-	if (type === "note" && typeof raw.markdown !== "string") return null;
-	if (type === "source" && (typeof raw.path !== "string" || typeof raw.content !== "string")) return null;
-	if (type === "question" && typeof raw.question !== "string") return null;
-	const rect = cleanRect(raw.rect);
-	const card = {
-		id: raw.id,
-		type,
-		title: typeof raw.title === "string" && raw.title ? raw.title : type,
-		at: Number.isFinite(raw.at) ? raw.at : Date.now(),
-		...(type === "note"
-			? { markdown: raw.markdown }
-			: type === "source"
-				? { path: raw.path, content: raw.content }
-				: { question: raw.question, options: Array.isArray(raw.options) ? raw.options.filter((one) => typeof one === "string") : [] }),
-		// A question is answered by an agent that was waiting for it, and that agent is gone: whatever
-		// the file says, a restored question is settled.
-		...(type === "question" ? { status: "expired", allowFreeText: raw.allowFreeText !== false } : {}),
-		...(typeof raw.answer === "string" ? { answer: raw.answer } : {}),
-		...(Number.isFinite(raw.updatedAt) ? { updatedAt: raw.updatedAt } : {}),
-		...(Number.isFinite(raw.line) ? { line: raw.line } : {}),
-		...(typeof raw.key === "string" && raw.key ? { key: raw.key } : {}),
-		...(typeof raw.threadRoot === "string" && raw.threadRoot ? { threadRoot: raw.threadRoot } : {}),
-		...(typeof raw.ownerThread === "string" && raw.ownerThread ? { ownerThread: raw.ownerThread } : {}),
-		...(() => {
-			const turns = restoredTurns(raw.turns);
-			return turns.length ? { turns } : {};
-		})(),
-		...(rect ? { rect } : {}),
-		...(raw.mini ? { mini: true } : {}),
-	};
-	return card;
-}
-
-/** Load a workspace's board into memory, or hand back the one already there. */
-function boardFor(workspace) {
-	const existing = boards.get(workspace.id);
-	if (existing) {
-		// A workspace that has simply been opened again keeps its place in the recent list.
-		existing.folder = workspace.folder;
-		existing.name = workspace.name;
-		return existing;
-	}
-	/** @type {Board} */
-	const board = {
-		id: workspace.id,
-		folder: workspace.folder,
-		name: workspace.name,
-		threads: new Map(),
-		cards: new Map(),
-		askers: new Map(),
-		activity: [],
-		children: new Map(),
-		clients: new Set(),
-		trees: [],
-		saveTimer: null,
-	};
-	const saved = readJsonFile(boardFile(workspace), null);
-	// A board is born with the crossroads' defaults; its own file takes over from there. Boards saved
-	// before this was called `config` kept the same three fields under `defaults`.
-	const born = saved?.config && typeof saved.config === "object" ? saved.config : saved?.defaults;
-	board.config = { ...homeDefaults, ...(born && typeof born === "object" ? born : {}) };
-	if (Array.isArray(saved?.trees)) {
-		board.trees = saved.trees.filter(
-			(tree) =>
-				tree &&
-				typeof tree.path === "string" &&
-				// A tree still on its detached base was never given a branch, and is a tree all the same.
-				(tree.branch === undefined || typeof tree.branch === "string") &&
-				typeof tree.base === "string" &&
-				tree.base.length > 0,
-		);
-	}
-	if (saved && saved.version === STATE_VERSION && Array.isArray(saved.threads)) {
-		for (const raw of saved.threads.slice(-MAX_THREADS)) {
-			const thread = restoredThread(raw, workspace.folder);
-			if (thread && !board.threads.has(thread.id)) board.threads.set(thread.id, thread);
-		}
-		// A board written before source cards existed kept its notes under `notes`.
-		const plain = Array.isArray(saved.cards) ? saved.cards : Array.isArray(saved.notes) ? saved.notes : [];
-		for (const raw of plain.slice(-MAX_PLAIN_CARDS)) {
-			const card = restoredPlainCard(raw);
-			if (card && !board.cards.has(card.id)) board.cards.set(card.id, card);
-		}
-		for (const row of (Array.isArray(saved.activity) ? saved.activity : []).slice(-MAX_ACTIVITY)) {
-			if (row && typeof row.id === "string" && row.status !== "running") board.activity.push(row);
-		}
-		// A card and the child that answers for it belong together, and pruning can part them. Repair it
-		// here rather than let a card quietly re-fork because a thread id in it means nothing.
-		for (const thread of [...board.threads.values()]) {
-			if (thread.hidden && !ownedCards(board, thread.id).length) board.threads.delete(thread.id);
-		}
-		// The tree is the board's record, so a thread points at that object rather than a copy of it.
-		for (const thread of board.threads.values()) {
-			const held = thread.worktree?.path ? board.trees.find((tree) => tree.path === thread.worktree.path) : null;
-			if (held) thread.worktree = held;
-		}
-		for (const card of board.cards.values()) {
-			if (card.ownerThread && !board.threads.has(card.ownerThread)) delete card.ownerThread;
-		}
-	}
-	boards.set(board.id, board);
-	return board;
-}
-
-/** Remember a folder the human opened, newest first. */
-function rememberWorkspace(folder) {
-	const resolved = realpathSync(folder);
-	let workspace = workspaces.find((candidate) => candidate.folder === resolved);
-	if (!workspace) {
-		workspace = {
-			id: workspaceId(resolved),
-			folder: resolved,
-			name: basename(resolved) || resolved,
-			openedAt: Date.now(),
-		};
-		workspaces.unshift(workspace);
-	} else {
-		workspace.openedAt = Date.now();
-		workspaces.sort((a, b) => b.openedAt - a.openedAt);
-	}
-	saveWorkspaces();
-	return workspace;
-}
-
-function workspaceById(id) {
-	return workspaces.find((workspace) => workspace.id === id);
-}
-
-// ---------- what the crossroads needs to know ------------------------------
-
-/** A short, honest answer about a folder, cheap enough to run for every row. */
-function folderFacts(folder) {
-	if (!existsSync(folder) || !statSync(folder).isDirectory()) return { missing: true };
-	return { missing: false };
-}
-
-/** Branch and dirty count, read from git when it is a repository. Never runs a long command. */
-function gitFacts(folder) {
-	const run = (args) => {
-		try {
-			const out = spawnSync("git", ["-C", folder, ...args], { encoding: "utf8", timeout: 1500 });
-			return out.status === 0 ? out.stdout.trim() : "";
-		} catch {
-			return "";
-		}
-	};
-	const branch = run(["rev-parse", "--abbrev-ref", "HEAD"]);
-	if (!branch) return null;
-	const dirty = run(["status", "--porcelain"]);
-	return { branch, modified: dirty ? dirty.split("\n").length : 0 };
 }
 
 // ---------- the git picture the strip draws -------------------------------
 
 /** Where a board keeps the trees it makes, inside the repository the workspace is. */
-const AGENTS_DIR = ".agents";
-
-/** How many commits the strip has to draw with, and how often a watched board looks for a change. */
-const GIT_ROWS = 40;
-const GIT_TICK = 3000;
-
-/**
- * A ref as the strip draws it: the name on the pill, and what kind of name it is. `HEAD -> dev` is
- * the branch this checkout stands on, a bare `HEAD` is a detached one, `tag: v1` is a tag, and
- * anything under a remote's name is remote.
- */
-function refName(raw, remotes) {
-	const head = raw === "HEAD" || raw.startsWith("HEAD -> ");
-	const tag = raw.startsWith("tag: ");
-	const name = raw === "HEAD" ? "HEAD" : head ? raw.slice(8) : tag ? raw.slice(5) : raw;
-	const kind = head
-		? "head"
-		: tag
-			? "tag"
-			: remotes.some((remote) => name.startsWith(`${remote}/`))
-				? "remote"
-				: "branch";
-	return { name, kind };
-}
-
-/**
- * The commits the strip draws, newest first over every ref, with the parents it needs for its lanes
- * and the refs it draws as pills. One `git log`, about 6 ms in a repository of this size.
- *
- * Hashes are the full ones, on both sides: `%h` is as long as `core.abbrev` says, so a repository
- * that shortens nothing and a checkout reporting seven characters would never match a commit.
- */
-function gitGraph(repo, remotes) {
-	const log = gitIn(
-		repo,
-		["log", "--all", "--topo-order", "-n", String(GIT_ROWS), "--pretty=format:%H\u001f%P\u001f%D\u001f%s"],
-		3000,
-	);
-	if (!log.ok) return [];
-	return log.out
-		.split("\n")
-		.filter(Boolean)
-		.map((line) => {
-			const [hash, parents, refs, subject] = line.split("\u001f");
-			return {
-				hash: hash ?? "",
-				parents: (parents ?? "").split(" ").filter(Boolean),
-				refs: (refs ?? "")
-					.split(", ")
-					.filter(Boolean)
-					.map((ref) => refName(ref, remotes)),
-				subject: subject ?? "",
-			};
-		});
-}
-
-/**
- * What one checkout holds: the branch it is on, how far it is from its upstream, and how much is
- * uncommitted, in the four states the strip colours apart. `head` is the commit, so a lane's tip can
- * be found even when the tree is detached and has no branch to name it by.
- */
-function gitStatusOf(path) {
-	const out = gitIn(path, ["status", "--porcelain=v2", "--branch", "--untracked-files=all"], 3000);
-	if (!out.ok) return null;
-	const state = { head: "", branch: "", detached: true, ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicts: 0 };
-	for (const line of out.out.split("\n")) {
-		if (!line) continue;
-		// The whole oid, because that is what `gitGraph` puts on a commit and what a strip matches on.
-		if (line.startsWith("# branch.oid ")) state.head = line.slice(13).trim();
-		else if (line.startsWith("# branch.head ")) {
-			const name = line.slice(14).trim();
-			state.detached = name === "(detached)";
-			state.branch = state.detached ? "" : name;
-		} else if (line.startsWith("# branch.ab ")) {
-			const counts = /\+(\d+) -(\d+)/.exec(line);
-			if (counts) {
-				state.ahead = Number(counts[1]);
-				state.behind = Number(counts[2]);
-			}
-		} else if (line.startsWith("? ")) state.untracked += 1;
-		else if (line.startsWith("u ")) state.conflicts += 1;
-		else if (line.startsWith("1 ") || line.startsWith("2 ")) {
-			// A porcelain=v2 row carries the two status letters: staged in X, unstaged in Y.
-			const xy = line.slice(2, 4);
-			if (xy[0] !== ".") state.staged += 1;
-			if (xy[1] !== ".") state.unstaged += 1;
-		}
-	}
-	state.dirty = state.staged + state.unstaged + state.untracked + state.conflicts;
-	return state;
-}
-
-/**
- * Everything the strip draws, in one payload: the commit graph, the refs on it as pills, and one
- * row per worktree with its own dirt and whether a child is working in it. Null when the workspace
- * is not a repository, which is the strip's way of saying it has nothing to show.
- */
-function gitPicture(board) {
-	const top = gitIn(board.folder, ["rev-parse", "--show-toplevel"], 2000);
-	const repo = top.ok ? top.out : "";
-	if (!repo) return null;
-	const remotes = gitIn(repo, ["remote"], 2000).out.split("\n").filter(Boolean);
-	const root = gitStatusOf(repo);
-	if (!root) return null;
-	const trees = board.trees.map((tree) => {
-		const status = existsSync(tree.path) ? gitStatusOf(tree.path) : null;
-		const thread = tree.thread ? board.threads.get(tree.thread) : null;
-		return {
-			thread: tree.thread ?? "",
-			title: thread?.title ?? "",
-			path: tree.path,
-			base: tree.base,
-			branch: tree.branch ?? status?.branch ?? "",
-			head: status?.head ?? "",
-			live: Boolean(tree.thread && board.children.has(tree.thread)),
-			dirty: status?.dirty ?? 0,
-			staged: status?.staged ?? 0,
-			unstaged: status?.unstaged ?? 0,
-			untracked: status?.untracked ?? 0,
-			conflicts: status?.conflicts ?? 0,
-		};
-	});
-	return { repo, root, trees, graph: gitGraph(repo, remotes), at: Date.now() };
-}
-
-/**
- * What the picture says, without the moment it was read. The clock is in the payload so a tab can say
- * how old it is, and it must not be part of the change test: a repository nobody touched is not news.
- */
-function gitFingerprint(picture) {
-	if (!picture) return "";
-	const { at, ...said } = picture;
-	return JSON.stringify(said);
-}
-
-/** Rebuild the picture and tell the open tabs, but only when something really changed. */
-function refreshGit(board, force = false) {
-	if (!force && !board.clients.size) return null;
-	const picture = gitPicture(board);
-	const stamp = gitFingerprint(picture);
-	if (!force && stamp === board.gitStamp) return board.git;
-	board.gitStamp = stamp;
-	board.git = picture;
-	if (board.clients.size) broadcast(board, { type: "git", git: picture });
-	return picture;
-}
-
-/**
- * Look again shortly after something that almost certainly changed the disk, so the strip answers the
- * turn that dirtied it rather than the tick three seconds later.
- */
-function noteGit(board) {
-	if (board.gitSoon) return;
-	board.gitSoon = setTimeout(() => {
-		board.gitSoon = null;
-		refreshGit(board);
-	}, 400);
-	if (typeof board.gitSoon.unref === "function") board.gitSoon.unref();
-}
-
-/** Watching costs a `git status` per worktree every tick, so it runs only while a tab is open. */
-function watchGit(board) {
-	if (board.gitTimer) return;
-	board.gitTimer = setInterval(() => refreshGit(board), GIT_TICK);
-	if (typeof board.gitTimer.unref === "function") board.gitTimer.unref();
-}
-
-function unwatchGit(board) {
-	if (board.clients.size || !board.gitTimer) return;
-	clearInterval(board.gitTimer);
-	board.gitTimer = null;
-}
+export const AGENTS_DIR = ".agents";
 
 // ---------- worktrees ------------------------------------------------------
 
 /** The kinds of branch a thread can be given, and the words in a title that pick one. */
-const WORK_TYPES = [
+export const WORK_TYPES = [
 	["fix", /\b(fix|fixed|bug|broken|breaks|repair|wrong|fails?|failing|regression)\b/],
 	["refactor", /\b(refactor|rename|extract|split|move|tidy|simplif(y|ies)|clean ?up)\b/],
 	["docs", /\b(docs?|readme|document|documentation|comment|comments)\b/],
@@ -972,50 +67,15 @@ const WORK_TYPES = [
 	["chore", /\b(chore|bump|upgrade|deps?|dependencies|lint)\b/],
 ];
 
-/** One git command, short enough to wait for while a message is being sent. */
-function gitIn(folder, args, timeout = 5000) {
-	try {
-		const out = spawnSync("git", ["-C", folder, ...args], { encoding: "utf8", timeout });
-		return { ok: out.status === 0, out: (out.stdout ?? "").trim(), err: (out.stderr ?? "").trim() };
-	} catch (error) {
-		return { ok: false, out: "", err: error.message };
-	}
-}
-
-/** The repository a folder belongs to; empty when it is not one. */
-function repoOf(folder) {
-	if (!folder || !existsSync(folder)) return "";
-	const found = gitIn(folder, ["rev-parse", "--show-toplevel"]);
-	return found.ok && found.out ? found.out : "";
-}
-
-/** What a new branch is cut from: `dev` when the repository has one, else the branch checked out. */
-function baseRef(repo) {
-	if (gitIn(repo, ["rev-parse", "--verify", "--quiet", "refs/heads/dev"]).ok) return "dev";
-	const head = gitIn(repo, ["rev-parse", "--abbrev-ref", "HEAD"]);
-	return head.ok && head.out && head.out !== "HEAD" ? head.out : "";
-}
-
-/**
- * The main checkout a linked worktree belongs to: `git rev-parse --show-toplevel` inside a worktree
- * answers with the tree itself, so removal and branch deletion have to be run from the other one.
- */
-function mainRepoOf(path) {
-	if (!path || !existsSync(path)) return "";
-	const common = gitIn(path, ["rev-parse", "--git-common-dir"]);
-	if (!common.ok || !common.out) return "";
-	return dirname(resolve(path, common.out));
-}
-
 /** The kind of change a title reads like, so a branch says what it carries. */
-function workType(title, wanted) {
+export function workType(title, wanted) {
 	if (WORK_TYPES.some(([type]) => type === wanted)) return wanted;
 	const words = String(title ?? "").toLowerCase();
 	return WORK_TYPES.find(([, pattern]) => pattern.test(words))?.[0] ?? "feat";
 }
 
 /** A title as a branch and folder segment: lowercase words with hyphens between them. */
-function slugOf(text) {
+export function slugOf(text) {
 	return (
 		String(text ?? "")
 			.toLowerCase()
@@ -1030,7 +90,7 @@ function slugOf(text) {
  * `8c53f1d7` is unique without a counter and without a suffix for two threads that share a title,
  * and it is short enough to read in a path.
  */
-function shortId(thread) {
+export function shortId(thread) {
 	return String(thread.id).slice(0, 8);
 }
 
@@ -1039,7 +99,7 @@ function shortId(thread) {
  * threads against one folder; a tree of its own is what keeps two of them out of the same file, and
  * what the card can point at when the human wants to see the work.
  */
-function ensureWorktree(board, thread) {
+export function ensureWorktree(board, thread) {
 	if (thread.worktree) return thread.worktree;
 	const repo = repoOf(thread.folder ?? board.folder);
 	if (!repo) {
@@ -1080,36 +140,36 @@ function ensureWorktree(board, thread) {
 }
 
 /** Where a thread works: its own tree while that is still on disk, else the workspace folder. */
-function workdirOf(board, thread) {
+export function workdirOf(board, thread) {
 	const tree = thread.worktree;
 	return tree?.path && existsSync(tree.path) ? tree.path : board.folder;
 }
 
 /** The branch a tree is standing on, or "" while it is detached or unreadable. */
-function headBranch(path) {
+export function headBranch(path) {
 	const head = gitIn(path, ["rev-parse", "--abbrev-ref", "HEAD"]);
 	return head.ok && head.out && head.out !== "HEAD" ? head.out : "";
 }
 
 /** How long a thread's name may be before the first request is cut at a word. */
-const TITLE_FROM_REQUEST_CHARS = 48;
+export const TITLE_FROM_REQUEST_CHARS = 48;
 /**
  * The model that names a thread once its first request is in hand. Empty turns naming off.
  * `inception/mercury-3` was the first choice and answers 404 (no endpoints for the routing this
  * machine gets), so the default is the fastest flash model measured here: 2.1s against 10.7s for the
  * copilot one. Any other model is a `PI_STUDIO_NAME_MODEL` away.
  */
-const NAME_MODEL = process.env.PI_STUDIO_NAME_MODEL ?? "openrouter/z-ai/glm-5.3-flash";
-const NAME_TIMEOUT_MS = 8000;
+export const NAME_MODEL = process.env.PI_STUDIO_NAME_MODEL ?? "openrouter/z-ai/glm-5.3-flash";
+export const NAME_TIMEOUT_MS = 8000;
 /** Names that describe the fact that a job exists rather than the job. */
-const DULL_TITLES = new Set(["work", "job", "task", "thread", "new thread", "change", "update", "stuff", "question"]);
+export const DULL_TITLES = new Set(["work", "job", "task", "thread", "new thread", "change", "update", "stuff", "question"]);
 
 /**
  * A thread's name from its own first request: the first line, without the markdown that dresses it,
  * cut at a word. It exists so no card is ever nameless and none is called `thread 1`, and so a model
  * that is slow or absent costs a better name rather than any name at all.
  */
-function titleFromRequest(text) {
+export function titleFromRequest(text) {
 	const line =
 		String(text ?? "")
 			.split("\n")
@@ -1126,7 +186,7 @@ function titleFromRequest(text) {
  * What to ask the naming model. The gate below is code rather than the model's opinion, so the
  * examples say what a good card name looks like instead of pleading for one.
  */
-function namePrompt(request) {
+export function namePrompt(request) {
 	return [
 		"Name this job for a card on a board of work. Answer with two to four plain words and nothing else.",
 		"Examples:",
@@ -1138,7 +198,7 @@ function namePrompt(request) {
 }
 
 /** A name as a card title, or "" when it is not one: two to four words that say something. */
-function plausibleTitle(answer) {
+export function plausibleTitle(answer) {
 	const first =
 		String(answer ?? "")
 			.split("\n")
@@ -1155,7 +215,7 @@ function plausibleTitle(answer) {
  * One question and one answer from a `pi` that must not read stdin: `execFile` leaves stdin an open
  * pipe, and a `pi -p` on an open pipe waits for input that never comes.
  */
-function askOnce(argv, timeoutMs) {
+export function askOnce(argv, timeoutMs) {
 	return new Promise((resolve) => {
 		const child = spawn(argv[0], argv.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
 		let out = "";
@@ -1182,7 +242,7 @@ function askOnce(argv, timeoutMs) {
  * sits in front of the answer. A name the human typed, or one already given by the model, is never
  * overwritten.
  */
-async function nameThread(board, thread, request) {
+export async function nameThread(board, thread, request) {
 	const asked = request.slice(0, 2000);
 	const cli = piCli();
 	const argv = [cli.command, ...cli.args, "-p", "--no-session", "-ne", "-nt", "-nc", "-ns", "--model", NAME_MODEL];
@@ -1210,7 +270,7 @@ async function nameThread(board, thread, request) {
  * is named here rather than lost. The name comes from the commit it wrote, which is the one piece of
  * text that describes what the work turned out to be.
  */
-function settleTreeBranch(board, thread) {
+export function settleTreeBranch(board, thread) {
 	const tree = thread.worktree;
 	if (!tree?.path || !existsSync(tree.path)) return;
 	const head = headBranch(tree.path);
@@ -1238,7 +298,7 @@ function settleTreeBranch(board, thread) {
  * does not have are reported, never deleted. `clean` is the only caller, so a tree outlives its thread
  * until the human asks for the sweep.
  */
-function retireWorktree(board, tree) {
+export function retireWorktree(board, tree) {
 	if (!tree?.path) return null;
 	const repo = (existsSync(tree.path) ? mainRepoOf(tree.path) : "") || tree.repo || repoOf(board.folder);
 	// A tree still on its detached base has no branch yet, so what it holds is asked of HEAD inside the
@@ -1305,7 +365,7 @@ function retireWorktree(board, tree) {
 }
 
 /** How much of the app's own state a workspace holds: its sessions on disk. */
-function sessionFacts(workspace) {
+export function sessionFacts(workspace) {
 	const dir = sessionDir(workspace);
 	let count = 0;
 	let bytes = 0;
@@ -1330,7 +390,7 @@ function sessionFacts(workspace) {
  * folder it is started in, so whether a thread still belongs where its session was recorded decides how
  * the child has to be started; see `childArgv`. Empty when there is no such session or no header.
  */
-function sessionCwd(dir, id) {
+export function sessionCwd(dir, id) {
 	let names;
 	try {
 		names = readdirSync(dir);
@@ -1354,7 +414,7 @@ function sessionCwd(dir, id) {
 }
 
 /** The session file pi wrote for a thread, or "" while it has none. */
-function sessionFile(workspace, id) {
+export function sessionFile(workspace, id) {
 	const dir = sessionDir(workspace);
 	try {
 		const name = readdirSync(dir).find((entry) => entry.endsWith(`_${id}.jsonl`));
@@ -1365,11 +425,11 @@ function sessionFile(workspace, id) {
 }
 
 /** How much of a transcript a drawer asks for, and how much of one block it shows. */
-const TRANSCRIPT_ENTRIES = 600;
-const TRANSCRIPT_BLOCK_CHARS = 4000;
+export const TRANSCRIPT_ENTRIES = 600;
+export const TRANSCRIPT_BLOCK_CHARS = 4000;
 
 /** One line of an argument object, for the head of a tool call. */
-function argLine(value, width = 120) {
+export function argLine(value, width = 120) {
 	let text = "";
 	if (typeof value === "string") text = value;
 	else if (value && typeof value === "object") {
@@ -1388,7 +448,7 @@ function argLine(value, width = 120) {
  * than `TRANSCRIPT_BLOCK_CHARS` is cut: a tool result can be megabytes of build output, and a drawer
  * that hands the browser one is a tab that stops answering.
  */
-function transcriptOf(file) {
+export function transcriptOf(file) {
 	let raw;
 	try {
 		raw = readFileSync(file, "utf8");
@@ -1437,7 +497,7 @@ function transcriptOf(file) {
 }
 
 /** Two folders naming the same place: a worktree reached through a symlink is still the same worktree. */
-function sameFolder(one, other) {
+export function sameFolder(one, other) {
 	if (!one || !other) return false;
 	const real = (path) => {
 		try {
@@ -1449,370 +509,6 @@ function sameFolder(one, other) {
 	return real(one) === real(other);
 }
 
-/** The one workspace that matters to a tab: what is on it, and the last thing that happened. */
-function describeWorkspace(workspace) {
-	const board = boards.get(workspace.id);
-	// A thread that serves a card is not a thread anyone can open: counting it would report more
-	// threads than the board has cards.
-	const threads = [...(board?.threads.values() ?? [])].filter((thread) => !thread.hidden);
-	const rows = board?.activity ?? readJsonFile(boardFile(workspace), null)?.activity ?? [];
-	const last = [...rows].reverse().find((row) => row?.startedAt || row?.at);
-	const facts = folderFacts(workspace.folder);
-	return {
-		...workspace,
-		...facts,
-		running: threads.filter((thread) => thread.status === "running").length,
-		threads: threads
-			.slice()
-			.sort((a, b) => b.at - a.at)
-			.slice(0, 6)
-			.map((thread) => ({
-				id: thread.id,
-				title: thread.title,
-				status: thread.status,
-				turns: thread.turns.length,
-				last: thread.turns[thread.turns.length - 1]?.at ?? thread.at,
-			})),
-		threadCount: threads.length || countSavedThreads(workspace),
-		lastActivity: last ? { label: last.label || last.text || "activity", at: last.startedAt || last.at } : null,
-		git: facts.missing ? null : gitFacts(workspace.folder),
-		sessions: sessionFacts(workspace),
-	};
-}
-
-function countSavedThreads(workspace) {
-	const saved = readJsonFile(boardFile(workspace), null);
-	return saved && Array.isArray(saved.threads) ? saved.threads.length : 0;
-}
-
-// ---------- the board the client draws -------------------------------------
-
-/** A thread as the card the browser draws: a title, and the conversation under it. */
-function cardFor(thread, board = null) {
-	const answered = thread.turns.some((turn) => turn.status === "answered");
-	const status =
-		thread.status === "dead" ? "stopped" : thread.status === "running" ? "sent" : answered ? "answered" : "queued";
-	const card = {
-		id: thread.id,
-		type: "sticky",
-		title: thread.title,
-		at: thread.at,
-		// The conversation lives in the turns; the card's own `text` stays empty so no message is
-		// invented for a thread nobody has typed into yet.
-		text: "",
-		status,
-		mode: "queue",
-		images: 0,
-		turns: thread.turns.map((turn) => ({ ...turn })),
-	};
-	if (thread.rect) card.rect = thread.rect;
-	if (thread.mini) card.mini = true;
-	// The client cascades a card under the one its reply was asked on, and a note can be that one.
-	if (thread.threadRoot) card.threadRoot = thread.threadRoot;
-	// What this card answers with, so the composer can show the truth instead of the daemon's hope.
-	card.provider = thread.provider;
-	card.model = thread.model;
-	if (thread.thinking) card.thinking = thread.thinking;
-	if (thread.stats) card.stats = thread.stats;
-	// Where the thread's work is, so the human can find the tree without reading its prompt.
-	if (thread.worktree) card.worktree = thread.worktree;
-	return card;
-}
-
-/** A plain card as the browser draws it: markdown under a title, or a file, with no run behind it. */
-function plainCardFor(card, board = null) {
-	const shown = {
-		id: card.id,
-		type: card.type,
-		title: card.title,
-		at: card.at,
-		text: "",
-		status: "answered",
-		mode: "queue",
-		images: 0,
-		...(card.turns?.length ? { turns: card.turns } : {}),
-		...(card.type === "note"
-			? { markdown: card.markdown }
-			: card.type === "source"
-				? { path: card.path, content: card.content, ...(Number.isFinite(card.line) ? { line: card.line } : {}) }
-				: {
-						question: card.question,
-						options: card.options,
-						allowFreeText: card.allowFreeText !== false,
-						status: card.status ?? "expired",
-						...(card.answer ? { answer: card.answer } : {}),
-						...(Number.isFinite(card.expiresAt) ? { expiresAt: card.expiresAt } : {}),
-					}),
-	};
-	if (card.updatedAt) shown.updatedAt = card.updatedAt;
-	// The key is what a `[[key]]` in another card or in a reply points at, so the browser needs it to
-	// make the cross-reference clickable. Without it the link falls back to a title that never matches.
-	if (card.key) shown.key = card.key;
-	if (card.rect) shown.rect = card.rect;
-	if (card.mini) shown.mini = true;
-	if (card.threadRoot) shown.threadRoot = card.threadRoot;
-	if (card.ownerThread) shown.ownerThread = card.ownerThread;
-	// The card carries the runtime of whoever answers it, so the composer's pickers can name and change
-	// it without the thread that serves the card ever being drawn.
-	// Boards written before ownership was its own field have only the thread that made the card, and a
-	// thread that has ended answers nothing: the next child will, and that is what the pickers show.
-	const ownerId = card.ownerThread ?? card.threadRoot;
-	const owner = board && ownerId ? board.threads.get(ownerId) : undefined;
-	if (owner && owner.status !== "dead") {
-		shown.answersWith = {
-			provider: owner.provider,
-			model: owner.model,
-			...(owner.thinking ? { thinking: owner.thinking } : {}),
-			// Stop and kill are per thread, and a plain card is where its thread is read.
-			running: owner.status === "running",
-			thread: owner.id,
-			...(owner.stats ? { stats: owner.stats } : {}),
-		};
-	}
-	return shown;
-}
-
-/** Every card on a board: the threads, then the cards the human and the agents put there. */
-function cardsFor(board) {
-	// A thread that answers for a card is not a card of its own: that card is the surface, and drawing
-	// both would show one conversation on two cards.
-	return [...board.threads.values()]
-		.filter((thread) => !thread.hidden)
-		.map((thread) => cardFor(thread, board))
-		.concat([...board.cards.values()].map((card) => plainCardFor(card, board)));
-}
-
-function boardMeta(board) {
-	const working = [...board.threads.values()].filter((thread) => thread.status === "running");
-	return {
-		folder: board.name,
-		cwd: board.folder,
-		port,
-		// Empty for the one daemon most machines run; the name of its state folder for a second one,
-		// which the tab title carries so two boards are told apart at a glance.
-		instance: INSTANCE,
-		model: MODEL,
-		// The board's configuration: what the next thread starts with, and which features are on.
-		config: activeConfig(board),
-		// The board's own totals, summed from every thread: what this workspace has spent, which is the
-		// number the header shows while a section shows one thread's share.
-		...(() => {
-			let input = 0;
-			let output = 0;
-			let cost = 0;
-			for (const thread of board.threads.values()) {
-				if (!thread.stats) continue;
-				input += thread.stats.input ?? 0;
-				output += thread.stats.output ?? 0;
-				cost += thread.stats.cost ?? 0;
-			}
-			return { tokensIn: input, tokensOut: output, cost };
-		})(),
-		// The client draws a board of threads: no bottom composer, a + that starts one, and the field
-		// inside the card being answered.
-		mode: "threads",
-		workspace: { id: board.id, folder: board.folder, name: board.name },
-		contextPercent: null,
-		running: working.length > 0,
-		runStartedAt: working.length ? Math.min(...working.map((thread) => thread.runStartedAt ?? thread.at)) : null,
-	};
-}
-
-function send(target, payload) {
-	const frame = `data: ${JSON.stringify(payload)}\n\n`;
-	for (const client of target) {
-		// A tab that closed is still in the set for a moment; writing to its dead socket would raise
-		// an error nobody is listening for.
-		if (client.writableEnded || client.destroyed) {
-			target.delete(client);
-			continue;
-		}
-		client.write(frame);
-	}
-}
-
-function broadcast(board, payload) {
-	send(board.clients, payload);
-}
-
-/** Rebuild every open tab from the board as it stands, after something large changed at once. */
-function resync(board) {
-	// A snapshot is everything a tab draws, and the strip is part of that: a sweep retires worktrees, so
-	// the graph is read again here rather than left as the last tick found it. Without it the strip
-	// vanished on `clean` and `new`, because a snapshot without `git` reads as "no repository".
-	// The closed cards go in for the other half of the reason: a link to a card this pass closed is
-	// stale, and a tab that hears no `closed` would offer to jump to a card that is gone.
-	broadcast(board, {
-		type: "snapshot",
-		cards: cardsFor(board),
-		closed: closedCards(board),
-		activity: board.activity,
-		meta: boardMeta(board),
-		git: refreshGit(board, true),
-	});
-}
-
-/** The activity rows of a thread that is still here and still alive. */
-function liveThreadIds(board) {
-	const ids = new Set();
-	for (const thread of board.threads.values()) if (thread.status !== "dead") ids.add(thread.id);
-	return ids;
-}
-
-/**
- * Clean: forget what belongs to threads that are gone or dead. A dead thread's card goes too — it
- * cannot answer again, and its logs are the part of the rail nobody reads twice. What such a thread
- * owned stays on the board, owned by nobody, so its next comment starts a fresh child.
- */
-function cleanBoard(board) {
-	const alive = liveThreadIds(board);
-	const removed = [];
-	const trees = [];
-	for (const thread of [...board.threads.values()]) {
-		if (thread.status !== "dead") continue;
-		removed.push(thread.id);
-		board.threads.delete(thread.id);
-		board.children.get(thread.id)?.kill("SIGKILL");
-		board.children.delete(thread.id);
-	}
-	// A tree whose thread is gone is retired only when it holds nothing unmerged; the rest is reported.
-	// The record is the board's, not the thread's, so a closed or cleared thread is swept too.
-	for (const tree of [...board.trees]) {
-		if (tree.thread && board.threads.has(tree.thread)) continue;
-		const retired = retireWorktree(board, tree);
-		if (retired) trees.push(retired);
-	}
-	for (const card of board.cards.values()) {
-		if (card.ownerThread && !alive.has(card.ownerThread)) delete card.ownerThread;
-	}
-	const before = board.activity.length;
-	const dropped = [];
-	board.activity = board.activity.filter((row) => {
-		const id = row.thread?.id;
-		if (id && alive.has(id)) return true;
-		dropped.push(row.id);
-		return false;
-	});
-	// A thought still streaming belongs to a row that is still here; one whose row is gone is worth nothing.
-	for (const id of dropped) liveThoughts.delete(id);
-	scheduleSave(board);
-	return { removed, rows: before - board.activity.length, trees };
-}
-
-/** New: the same workspace and the same settings, with nothing on the board. */
-function clearBoard(board) {
-	for (const thread of [...board.threads.values()]) {
-		board.children.get(thread.id)?.kill("SIGKILL");
-		board.children.delete(thread.id);
-		board.threads.delete(thread.id);
-	}
-	board.cards.clear();
-	for (const row of board.activity) liveThoughts.delete(row.id);
-	board.activity = [];
-	board.askers.clear();
-	scheduleSave(board);
-}
-
-/** The crossroads shows counts, so it hears about every change that alters one. */
-function nudgeWelcome() {
-	if (!welcomeClients.size) return;
-	send(welcomeClients, { type: "workspaces", workspaces: workspaces.map(describeWorkspace) });
-}
-
-const card = (board, thread) => {
-	broadcast(board, { type: "card", card: cardFor(thread, board) });
-	scheduleSave(board);
-	nudgeWelcome();
-};
-const update = (board, thread) => {
-	// A thread that answers for a card is not drawn: what changes is that card, and broadcasting the
-	// thread would put a second card on the board for the same conversation.
-	if (!thread.hidden) {
-		broadcast(board, { type: "update", card: cardFor(thread, board) });
-		return;
-	}
-	// A hidden thread is read through a card it answers for, so that card carries its state instead.
-	const shown = homeCard(board, thread);
-	if (shown) broadcast(board, { type: "update", card: plainCardFor(shown, board) });
-	scheduleSave(board);
-	nudgeWelcome();
-};
-/** A card without a child changes the same way, and is broadcast in its own shape. */
-const updateCard = (board, held) => {
-	broadcast(board, { type: "update", card: plainCardFor(held, board) });
-	scheduleSave(board);
-	nudgeWelcome();
-};
-
-/** A row says which thread wrote it, so the rail can group a thread's work into one section. */
-const threadRef = (thread) => ({ id: thread.id, title: thread.title });
-
-function addRow(board, row) {
-	board.activity.push(row);
-	if (board.activity.length > MAX_ACTIVITY) board.activity.splice(0, board.activity.length - MAX_ACTIVITY);
-	broadcast(board, { type: "activity", row });
-}
-
-function patchRow(board, id, patch) {
-	const row = board.activity.find((candidate) => candidate.id === id);
-	if (!row) return;
-	// A row learns what was cut in two steps, so a later patch adds to that list rather than replacing it.
-	if (Array.isArray(patch.cut)) patch.cut = [...new Set([...(row.cut || []), ...patch.cut])];
-	Object.assign(row, patch);
-	broadcast(board, { type: "activity", row });
-}
-
-/**
- * A row as the board file keeps it. A picture a screenshot returned is worth the memory it takes while
- * the daemon runs, and not worth writing a megabyte of base64 into the state file every time, so the
- * file remembers only that there was one.
- */
-function diskRow(row) {
-	if (!Array.isArray(row.images) || !row.images.length) return row;
-	return { ...row, images: row.images.map(({ mime }) => ({ mime, dropped: true })) };
-}
-
-/** Something the daemon cannot paper over: the card shows it as stopped and the console says why. */
-function threadError(board, thread, message) {
-	console.error(`pi-studio: ${board.name}/${thread.title}: ${message}`);
-	thread.status = "dead";
-	stopStream(thread);
-	settleThoughts(board, thread);
-	const last = thread.turns[thread.turns.length - 1];
-	if (last) {
-		// What was being written stays as the child left it, but nothing is writing it now.
-		last.streaming = false;
-		if (last.status !== "answered") {
-			last.status = "stopped";
-			// A turn that reads only "stopped" hides the one line the child managed to say.
-			last.error = message;
-		}
-	}
-	// A question that was written on a card is stuck in the same way the thread's own turn is.
-	const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
-	const cardTurn = asked?.turns?.[thread.answering.turn];
-	if (cardTurn) {
-		cardTurn.streaming = false;
-		if (cardTurn.status !== "answered") {
-			cardTurn.status = "stopped";
-			cardTurn.error = message;
-		}
-		// Unconditional: a caret cleared on the daemon and not on the browser blinks for ever.
-		updateCard(board, asked);
-	}
-	thread.answering = null;
-	addRow(board, {
-		id: randomUUID(),
-		kind: "reply",
-		status: "error",
-		startedAt: Date.now(),
-		text: message,
-		thread: threadRef(thread),
-	});
-	update(board, thread);
-	board.children.get(thread.id)?.stdin?.end();
-}
-
 // ---------- the child ------------------------------------------------------
 
 /**
@@ -1820,15 +516,15 @@ function threadError(board, thread, message) {
  * running pi from, then the managed install, then the `pi` binary on PATH.
  */
 /** Where pi keeps the install this app drives, and the extensions beside it. */
-function installRoot() {
+export function installRoot() {
 	return process.env.PI_MANAGED_INSTALL_ROOT ?? join(homedir(), ".pi", "agent", "install");
 }
 
-function extensionsDir() {
+export function extensionsDir() {
 	return join(dirname(installRoot()), "extensions");
 }
 
-function piCli() {
+export function piCli() {
 	const script = process.argv[1];
 	if (script && existsSync(script) && (basename(script) === "pi" || script.includes("pi-coding-agent"))) {
 		return { command: process.execPath, args: [script] };
@@ -1845,7 +541,7 @@ function piCli() {
 }
 
 /** The short text a rail row shows. Arguments stay out of it: the row is a signpost, not a log. */
-function describeTool(name, args) {
+export function describeTool(name, args) {
 	if (name === "read" || name === "write" || name === "edit") return `${name} ${String(args.path ?? args.file_path ?? "")}`.trim();
 	if (name === "bash") {
 		const command = String(args.command ?? "").replace(/\s+/g, " ");
@@ -1857,7 +553,7 @@ function describeTool(name, args) {
 }
 
 /** The one line of an error a card can show, or what to say when pi gave no reason. */
-function headline(text) {
+export function headline(text) {
 	return (
 		String(text ?? "")
 			.split("\n")
@@ -1868,7 +564,7 @@ function headline(text) {
 }
 
 /** The text a tool result carries, in the order the tool said it. */
-function resultText(result) {
+export function resultText(result) {
 	const content = Array.isArray(result?.content) ? result.content : [];
 	return content
 		.filter((part) => part?.type === "text")
@@ -1877,12 +573,12 @@ function resultText(result) {
 }
 
 /** What a rail row says once the call is over: its first line of output, cut short. */
-function firstLine(result) {
+export function firstLine(result) {
 	return resultText(result).split("\n").map((line) => line.trim()).find((line) => line.length > 0)?.slice(0, 140) ?? "";
 }
 
 /** A field of a row, cut to the ceiling and saying whether it was. */
-function ceiling(value) {
+export function ceiling(value) {
 	const text = String(value ?? "");
 	return { text: text.slice(0, MAX_ROW_CHARS), cut: text.length > MAX_ROW_CHARS };
 }
@@ -1891,7 +587,7 @@ function ceiling(value) {
  * A tool's arguments with any one string cut to the ceiling, so a call that carries a whole file keeps
  * its shape and the panel still knows what tool it is looking at.
  */
-function keptArgs(args, cut) {
+export function keptArgs(args, cut) {
 	if (!args || typeof args !== "object") return args;
 	const hold = (value) => {
 		if (typeof value !== "string") return value;
@@ -1917,7 +613,7 @@ function keptArgs(args, cut) {
  * picture it took. The panel draws these fields; nothing here is a JSON dump of the result, which is
  * why most of what a row used to weigh is gone.
  */
-function rowResult(result) {
+export function rowResult(result) {
 	// A tool may hand its result over as bare text rather than as parts.
 	if (typeof result === "string") return { output: ceiling(result).text };
 	const content = Array.isArray(result?.content) ? result.content : [];
@@ -1945,12 +641,12 @@ function rowResult(result) {
 }
 
 /** Whether the tool itself says it cut what it returned, which is worth saying in the panel. */
-function resultsTruncated(structured) {
+export function resultsTruncated(structured) {
 	return structured.truncated === true || structured.truncated === "true";
 }
 
 /** The last line a child wrote on stderr, which is often the only explanation there is. */
-function lastLine(tail) {
+export function lastLine(tail) {
 	const lines = String(tail ?? "")
 		.replace(/\u001b\[[0-9;]*m/g, "")
 		.split("\n")
@@ -1968,7 +664,7 @@ function lastLine(tail) {
  * cut it before its first edit and to name it after the work it turned out to be, because a name
  * decided from the request describes the question rather than the answer.
  */
-function worktreePrompt(board, thread) {
+export function worktreePrompt(board, thread) {
 	const tree = thread.worktree;
 	const short = shortId(thread);
 	const lines = [];
@@ -2011,7 +707,7 @@ function worktreePrompt(board, thread) {
  * The board is the product, and the chat is only the wire under it: the answer is a pointer to the
  * cards, so a thread that writes its findings in prose has done the work where nobody reads it.
  */
-function boardPrompt(board, thread) {
+export function boardPrompt(board, thread) {
 	const workdir = workdirOf(board, thread);
 	return [
 		`You are thread "${thread.title}" on a board, working in the folder ${workdir}.`,
@@ -2037,18 +733,18 @@ function boardPrompt(board, thread) {
  * off. A board is one human's answer to what these agents may do, so the switches are kept per board
  * and read when a child is spawned, which is why they land on the next thread.
  */
-function extensionsFor(board) {
+export function extensionsFor(board) {
 	const off = new Set(board.config?.extensionsOff ?? []);
 	return CHILD_EXTENSIONS.filter((one) => !off.has(one.name)).map((one) => one.path);
 }
 
 /** The built-in tools this board does not hand a new thread. */
-function toolsOffFor(board) {
+export function toolsOffFor(board) {
 	const off = board.config?.toolsOff;
 	return Array.isArray(off) ? off.filter((name) => BUILTIN_TOOLS.includes(name)) : [];
 }
 
-function childArgv(board, thread) {
+export function childArgv(board, thread) {
 	// A child writes its session where pi-studio keeps them, not in pi's own session list: this app
 	// owns these conversations, and a thread that already has one resumes it so the card stays
 	// continuous across a daemon restart.
@@ -2091,7 +787,7 @@ function childArgv(board, thread) {
 }
 
 /** The thread's child, started on first use. One child per thread, reused until it exits. */
-function ensureChild(board, thread) {
+export function ensureChild(board, thread) {
 	const existing = board.children.get(thread.id);
 	if (existing && existing.exitCode === null && existing.stdin?.writable) return existing;
 	const cli = piCli();
@@ -2156,7 +852,7 @@ function ensureChild(board, thread) {
 }
 
 /** One prompt, either a new question or what was waiting behind the run in flight. */
-function prompt(board, thread, text, target = null) {
+export function prompt(board, thread, text, target = null) {
 	// The tree is made here, before anything is spawned: this is the first moment the thread is going
 	// to do something, and the child's working folder is decided by it.
 	ensureWorktree(board, thread);
@@ -2210,17 +906,17 @@ function prompt(board, thread, text, target = null) {
  * How often a running answer reaches the browser. Deltas arrive far faster than anyone can read, and
  * every tick costs a whole card.
  */
-const STREAM_MS = 100;
+export const STREAM_MS = 100;
 
 /** The turn a running answer is written into, and the card that holds it when there is one. */
-function liveTurn(board, thread) {
+export function liveTurn(board, thread) {
 	const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
 	const turn = thread.answering ? asked?.turns?.[thread.answering.turn] : thread.turns[thread.turns.length - 1];
 	return { turn, card: asked };
 }
 
 /** The answer as it reads this instant: the messages that finished, then the one still arriving. */
-function runText(thread) {
+export function runText(thread) {
 	const arriving = [...(thread.streamParts?.values() ?? [])].join("");
 	return [thread.streamDone ?? "", arriving].filter((part) => part).join("\n\n");
 }
@@ -2229,10 +925,10 @@ function runText(thread) {
  * The flush a thread has pending, kept off the thread itself: `/state` serialises whole threads, and a
  * Node timer is a circular object that would make that request throw.
  */
-const streamTimers = new WeakMap();
+export const streamTimers = new WeakMap();
 
 /** A flush still pending belongs to a run that is over, and is worth nothing. */
-function stopStream(thread) {
+export function stopStream(thread) {
 	const pending = streamTimers.get(thread);
 	if (pending) clearTimeout(pending);
 	streamTimers.delete(thread);
@@ -2242,7 +938,7 @@ function stopStream(thread) {
  * Put what the child has said so far on the turn and tell the browsers. The board file is not
  * written: half a sentence is not a thing to reopen tomorrow.
  */
-function streamTick(board, thread) {
+export function streamTick(board, thread) {
 	streamTimers.delete(thread);
 	// A child that has been written off is not producing an answer any more, whatever it still sends.
 	if (thread.status !== "running") return;
@@ -2268,33 +964,33 @@ function streamTick(board, thread) {
  * while it is looking something up. So each thinking block gets a row of its own: four tails a second
  * while it streams, the whole block kept for the panel where it is actually read.
  */
-const THOUGHT_PUSH_MS = 250;
+export const THOUGHT_PUSH_MS = 250;
 /** A few lines is all the rail can show, so the row carries the tail and no more. */
-const THOUGHT_TAIL = 400;
+export const THOUGHT_TAIL = 400;
 /** A few seconds of samples read as a rate, and cost nothing to keep. */
-const THOUGHT_WINDOW_MS = 5000;
+export const THOUGHT_WINDOW_MS = 5000;
 /** Providers count thinking their own way; four characters each is the usual estimate. */
-const CHARS_PER_TOKEN = 4;
+export const CHARS_PER_TOKEN = 4;
 
 /**
  * The thinking blocks of the run in progress, off the thread itself: `/state` serialises whole threads,
  * and a Map is not part of a thread's shape.
  */
-const thinkingRuns = new WeakMap();
+export const thinkingRuns = new WeakMap();
 /**
  * The text of every block still streaming, by row id. A row carries only its tail while it runs, so
  * the panel reads the whole thought from here through `GET /activity/<id>`.
  */
-const liveThoughts = new Map();
+export const liveThoughts = new Map();
 
 /** The newest characters, without splitting a surrogate pair, so no emoji turns into a box. */
-function tailOf(text, keep) {
+export function tailOf(text, keep) {
 	const start = Math.max(0, text.length - keep);
 	return /[\uDC00-\uDFFF]/.test(text[start] ?? "") ? text.slice(start + 1) : text.slice(start);
 }
 
 /** Tokens a second over the newest samples, which the rail labels as the estimate it is. */
-function thoughtRate(block) {
+export function thoughtRate(block) {
 	const first = block.samples[0];
 	const last = block.samples[block.samples.length - 1];
 	const seconds = first && last ? (last.at - first.at) / 1000 : 0;
@@ -2302,7 +998,7 @@ function thoughtRate(block) {
 }
 
 /** What a row carries while its block streams: the tail, the estimate, and the rate. */
-function pushThought(board, block) {
+export function pushThought(board, block) {
 	patchRow(board, block.id, {
 		status: "running",
 		text: `${block.cut ? "…" : ""}${block.tail}`,
@@ -2312,7 +1008,7 @@ function pushThought(board, block) {
 	});
 }
 
-function thoughtState(thread) {
+export function thoughtState(thread) {
 	let state = thinkingRuns.get(thread);
 	if (!state) {
 		state = { message: 0, blocks: new Map() };
@@ -2322,7 +1018,7 @@ function thoughtState(thread) {
 }
 
 /** A block's own row, from its first delta to the end that carries the whole of it. */
-function thoughtEvent(board, thread, update, at) {
+export function thoughtEvent(board, thread, update, at) {
 	const state = thoughtState(thread);
 	const key = `${state.message}:${at}`;
 	const now = Date.now();
@@ -2391,7 +1087,7 @@ function thoughtEvent(board, thread, update, at) {
 }
 
 /** A block that never got its end — an abort, a failure — stops where it stands and keeps what it said. */
-function settleThoughts(board, thread) {
+export function settleThoughts(board, thread) {
 	const state = thinkingRuns.get(thread);
 	if (!state) return;
 	for (const block of state.blocks.values()) {
@@ -2410,12 +1106,12 @@ function settleThoughts(board, thread) {
 }
 
 /** A row as the panel reads it: the whole thought while it streams, the row's own text once it ends. */
-function rowWithThought(row) {
+export function rowWithThought(row) {
 	const live = liveThoughts.get(row.id);
 	return row.kind === "thinking" && typeof live === "string" ? { ...row, thinking: live } : row;
 }
 
-function handleChildLine(board, thread, line) {
+export function handleChildLine(board, thread, line) {
 	let event;
 	try {
 		event = JSON.parse(line);
@@ -2656,75 +1352,9 @@ function handleChildLine(board, thread, line) {
 	}
 }
 
-// ---------- http plumbing --------------------------------------------------
-
-function readBody(req, limit = MAX_BODY_BYTES) {
-	return new Promise((done) => {
-		const chunks = [];
-		let size = 0;
-		let oversized = false;
-		req.on("data", (chunk) => {
-			size += chunk.length;
-			if (size > limit) oversized = true;
-			else chunks.push(chunk);
-		});
-		req.on("end", () => done(oversized ? undefined : Buffer.concat(chunks).toString("utf8")));
-		req.on("error", () => done(undefined));
-	});
-}
-
-/** Read and parse a JSON body. Answers 400 or 413 itself and returns null, so the caller stops. */
-async function readJson(req, res) {
-	const body = await readBody(req);
-	if (body === undefined) {
-		fail(res, 413, "body too large");
-		return null;
-	}
-	if (!body.trim()) return {};
-	try {
-		return JSON.parse(body);
-	} catch {
-		fail(res, 400, "bad json");
-		return null;
-	}
-}
-
-function fail(res, status, message) {
-	res.writeHead(status, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
-	res.end(message);
-	return undefined;
-}
-
-function answer(res, status, payload) {
-	res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-	res.end(JSON.stringify(payload));
-}
-
-function serveStatic(res, file, type) {
-	try {
-		const body = readFileSync(join(PUBLIC_DIR, file));
-		res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store" });
-		res.end(body);
-	} catch (error) {
-		console.error(`pi-studio: cannot serve ${file}: ${error.message}`);
-		fail(res, 404, "not found");
-	}
-}
-
-/** The board a request is about, from `?workspace=`; answers 409 itself when there is none. */
-function boardFrom(url, res) {
-	const id = url.searchParams.get("workspace") ?? "";
-	const workspace = workspaceById(id);
-	if (!workspace) {
-		fail(res, 409, "no such workspace");
-		return null;
-	}
-	return boardFor(workspace);
-}
-
 // ---------- routes: the crossroads -----------------------------------------
 
-async function onOpenWorkspace(req, res) {
+export async function onOpenWorkspace(req, res) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	let folder = typeof body.folder === "string" ? body.folder.trim() : "";
@@ -2745,7 +1375,7 @@ async function onOpenWorkspace(req, res) {
  * The crossroads' defaults. A model has to exist on this machine, because a default that cannot run is
  * a board that cannot start a thread.
  */
-async function onDefaults(req, res) {
+export async function onDefaults(req, res) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const next = { ...homeDefaults };
@@ -2768,7 +1398,7 @@ async function onDefaults(req, res) {
 }
 
 /** A real folder dialog, because a browser cannot be told an absolute path any other way. */
-function onPickFolder(res) {
+export function onPickFolder(res) {
 	let child;
 	try {
 		child = spawn("zenity", ["--file-selection", "--directory", "--title=Open a workspace"], {
@@ -2792,7 +1422,7 @@ function onPickFolder(res) {
 
 // ---------- routes: the board ----------------------------------------------
 
-async function onThread(req, res, board) {
+export async function onThread(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const thread = {
@@ -2817,18 +1447,18 @@ async function onThread(req, res, board) {
 }
 
 /** The card a key already addresses, so a caller that repeats itself revises instead of stacking. */
-function cardByKey(board, key, type) {
+export function cardByKey(board, key, type) {
 	if (!key) return undefined;
 	return [...board.cards.values()].find((card) => card.key === key && card.type === type);
 }
 
 /** A string field from a request body, trimmed and cut short. */
-function field(value, limit = 80) {
+export function field(value, limit = 80) {
 	return typeof value === "string" && value.trim() ? value.trim().slice(0, limit) : "";
 }
 
 /** Where a card goes when the caller gave it a place, rounded to whole pixels. */
-function placedRect(body) {
+export function placedRect(body) {
 	const rect = cleanRect(body.rect);
 	return rect
 		? { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.w), h: Math.round(rect.h) }
@@ -2841,7 +1471,7 @@ function placedRect(body) {
  * about. It is capped: the card is on the board, and the rest of a long note is not worth paying for
  * twice.
  */
-function cardPreamble(card, whole = false) {
+export function cardPreamble(card, whole = false) {
 	const title = String(card.title ?? card.path ?? card.type).replace(/\s+/g, " ").trim().slice(0, 60);
 	let about;
 	if (card.type === "source") {
@@ -2881,7 +1511,7 @@ function cardPreamble(card, whole = false) {
 }
 
 /** The thread a card should cascade under, when the caller named one that exists. */
-function rootOf(board, body) {
+export function rootOf(board, body) {
 	const root = field(body.threadRoot, 100);
 	return root && board.threads.has(root) ? root : undefined;
 }
@@ -2890,7 +1520,7 @@ function rootOf(board, body) {
  * Where a card a thread writes should cascade. Usually the thread's own card, but a child that answers
  * for a card has no card of its own, so its notes land under the card it serves.
  */
-function anchorOf(board, threadId) {
+export function anchorOf(board, threadId) {
 	const thread = threadId ? board.threads.get(threadId) : undefined;
 	if (!thread?.hidden) return threadId;
 	return homeCard(board, thread)?.id ?? threadId;
@@ -2902,7 +1532,7 @@ function anchorOf(board, threadId) {
  * that was answering for the card must not write its reply onto some other card's turn.
  */
 /** The child goes with its last card. Nothing can reach a thread the board cannot draw. */
-function closeThread(board, thread) {
+export function closeThread(board, thread) {
 	// The child is ended, not merely asked to leave: it is working in a tree, and a tree whose thread
 	// is gone is what `clean` may sweep. A run still writing there would write into nothing.
 	killChild(board, thread);
@@ -2921,7 +1551,7 @@ function closeThread(board, thread) {
  * End a child without ending its thread. The session file stays, so the next message starts a fresh
  * child with the conversation it had; only the process goes.
  */
-function killChild(board, thread) {
+export function killChild(board, thread) {
 	const child = board.children.get(thread.id);
 	if (!child) return false;
 	// The child stops being this thread's voice before it is killed, so its death is not the run failing.
@@ -2959,7 +1589,7 @@ function killChild(board, thread) {
 	return true;
 }
 
-function forgetCard(board, cardId) {
+export function forgetCard(board, cardId) {
 	for (const thread of [...board.threads.values()]) {
 		if (thread.answering?.cardId === cardId) {
 			const turn = board.cards.get(cardId)?.turns?.[thread.answering.turn];
@@ -2979,7 +1609,7 @@ function forgetCard(board, cardId) {
 }
 
 /** Keep the board bounded: the oldest plain card goes when a new one arrives and there is no room. */
-function makeRoom(board) {
+export function makeRoom(board) {
 	while (board.cards.size >= MAX_PLAIN_CARDS) {
 		const oldest = [...board.cards.values()].sort((a, b) => a.at - b.at)[0];
 		if (!oldest) break;
@@ -2989,7 +1619,7 @@ function makeRoom(board) {
 	}
 }
 
-async function onNote(req, res, board) {
+export async function onNote(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const markdown = typeof body.markdown === "string" ? body.markdown : "";
@@ -3034,7 +1664,7 @@ async function onNote(req, res, board) {
 }
 
 /** Read a file inside the workspace, refusing anything that leaves it. */
-function readInsideWorkspace(folder, wanted) {
+export function readInsideWorkspace(folder, wanted) {
 	const target = resolve(folder, String(wanted ?? ""));
 	const root = resolve(folder);
 	if (target !== root && !target.startsWith(`${root}/`)) {
@@ -3050,7 +1680,7 @@ function readInsideWorkspace(folder, wanted) {
 	return content;
 }
 
-async function onSource(req, res, board) {
+export async function onSource(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const wanted = field(body.path, 400);
@@ -3108,7 +1738,7 @@ async function onSource(req, res, board) {
 }
 
 /** The note the human edited: the text is theirs, so it is stored as written. */
-async function onEdit(req, res, board) {
+export async function onEdit(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const held = board.cards.get(String(body.cardId ?? ""));
@@ -3127,7 +1757,7 @@ async function onEdit(req, res, board) {
  * The human names a card. A thread is drawn as a card of its own, so its name lives on the thread;
  * every other card carries its own title. A name the human typed is theirs, kept as written.
  */
-async function onRename(req, res, board) {
+export async function onRename(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const title = field(body.title, MAX_TITLE_CHARS);
@@ -3149,7 +1779,7 @@ async function onRename(req, res, board) {
 }
 
 /** Settle a question, tell whoever was waiting, and keep the card honest about what happened. */
-function settleQuestion(board, card, status, answer) {
+export function settleQuestion(board, card, status, answer) {
 	card.status = status;
 	card.updatedAt = Date.now();
 	if (answer) card.answer = answer;
@@ -3166,7 +1796,7 @@ function settleQuestion(board, card, status, answer) {
  * The response stays open for as long as the child's turn is waiting, because the answer travels
  * back in it: option clicked, words typed, or a failure the tool can read and act on.
  */
-async function onAsk(req, res, board) {
+export async function onAsk(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const question = field(body.question, 2000);
@@ -3213,7 +1843,7 @@ async function onAsk(req, res, board) {
 }
 
 /** The human's click, arriving from whichever tab they were looking at. */
-async function onAnswer(req, res, board) {
+export async function onAnswer(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const card = board.cards.get(String(body.cardId ?? ""));
@@ -3225,7 +1855,7 @@ async function onAnswer(req, res, board) {
 	answer(res, 200, { cardId: card.id });
 }
 
-async function onMessage(req, res, board) {
+export async function onMessage(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const text = typeof body.text === "string" ? body.text.trim() : "";
@@ -3320,42 +1950,24 @@ async function onMessage(req, res, board) {
  * cards as well as the thread's own card. A card that is not told keeps showing the old model.
  */
 /** The cards a thread answers for. In creation order, so the newest is last. */
-function ownedCards(board, threadId) {
+export function ownedCards(board, threadId) {
 	return [...board.cards.values()].filter((card) => card.ownerThread === threadId);
 }
 
 /** The card a hidden thread is read through: the newest one it answers for. */
-function homeCard(board, thread) {
+export function homeCard(board, thread) {
 	const owned = ownedCards(board, thread.id);
 	return owned[owned.length - 1];
 }
 
-function refreshOwned(board, thread) {
+export function refreshOwned(board, thread) {
 	for (const held of board.cards.values()) {
 		if (held.ownerThread === thread.id) updateCard(board, held);
 	}
 }
 
-/**
- * The cards the human closed while they still held a conversation. They are not drawn, but the board
- * keeps them, so the rail can offer them back: a click that closed the wrong card costs one more click
- * rather than a session. A thread that is hidden because a card is where it is read was never closed
- * by anyone, so it is not here.
- */
-function closedCards(board) {
-	return [...board.threads.values()]
-		.filter((thread) => thread.hidden && thread.closedAt)
-		.sort((a, b) => b.closedAt - a.closedAt)
-		.map((thread) => ({
-			id: thread.id,
-			title: thread.title,
-			closedAt: thread.closedAt,
-			turns: thread.turns.length,
-		}));
-}
-
 /** What the rail draws under "closed", told to every tab. */
-function nudgeClosed(board) {
+export function nudgeClosed(board) {
 	broadcast(board, { type: "closed", closed: closedCards(board) });
 }
 
@@ -3363,7 +1975,7 @@ function nudgeClosed(board) {
  * The thread a runtime choice applies to. A card id names the thread that answers for the card, so the
  * composer can set the model of a card whose child is not drawn anywhere.
  */
-function threadForRuntime(board, cardId) {
+export function threadForRuntime(board, cardId) {
 	const id = String(cardId ?? "");
 	const thread = board.threads.get(id);
 	if (thread) return thread;
@@ -3377,7 +1989,7 @@ function threadForRuntime(board, cardId) {
  * instead, which is what the next thread starts with; with one it is written on the thread and sent
  * to a live child, which uses it for its next request.
  */
-async function onModel(req, res, board) {
+export async function onModel(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const provider = field(body.provider, 80);
@@ -3410,7 +2022,7 @@ async function onModel(req, res, board) {
 }
 
 /** The thinking level, with the same shape: a thread's own, or the board's default for new ones. */
-async function onThinking(req, res, board) {
+export async function onThinking(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const level = field(body.level, 20);
@@ -3433,7 +2045,7 @@ async function onThinking(req, res, board) {
 	answer(res, 200, { card: home ? plainCardFor(home, board) : cardFor(thread, board) });
 }
 
-async function onLayout(req, res, board) {
+export async function onLayout(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const id = String(body.cardId ?? "");
@@ -3449,7 +2061,7 @@ async function onLayout(req, res, board) {
 	answer(res, 200, { placed: held.id });
 }
 
-async function onClose(req, res, board) {
+export async function onClose(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const id = String(body.cardId ?? "");
@@ -3487,7 +2099,7 @@ async function onClose(req, res, board) {
  * so this draws the same card again rather than starting anything: the conversation resumes where it
  * was left, and the cards it owns stay where they are.
  */
-async function onReopen(req, res, board) {
+export async function onReopen(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const id = String(body.cardId ?? "");
@@ -3502,7 +2114,7 @@ async function onReopen(req, res, board) {
 	answer(res, 200, { reopened: id });
 }
 
-async function onStop(req, res, board) {
+export async function onStop(req, res, board) {
 	// A card stops its own thread; no card stops everything, which is what the header button means.
 	const body = (await readJson(req, res)) ?? {};
 	const asked = body?.cardId ? threadForRuntime(board, field(body.cardId, 100)) : undefined;
@@ -3526,7 +2138,7 @@ async function onStop(req, res, board) {
 }
 
 /** Forget dead threads and their logs. Safe: nothing that can answer is touched. */
-async function onClean(req, res, board) {
+export async function onClean(req, res, board) {
 	req.resume();
 	const result = cleanBoard(board);
 	resync(board);
@@ -3535,7 +2147,7 @@ async function onClean(req, res, board) {
 }
 
 /** Start over in this workspace, keeping the board's settings. */
-async function onNew(req, res, board) {
+export async function onNew(req, res, board) {
 	req.resume();
 	clearBoard(board);
 	resync(board);
@@ -3550,7 +2162,7 @@ async function onNew(req, res, board) {
  *
  * A body may carry any of the three, so one checkbox is one request and never has to repeat the rest.
  */
-async function onConfig(req, res, board) {
+export async function onConfig(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const next = { ...(board.config ?? {}) };
@@ -3585,7 +2197,7 @@ async function onConfig(req, res, board) {
 }
 
 /** Kill one thread's child. The thread stays, so its cards stay answerable. */
-async function onKill(req, res, board) {
+export async function onKill(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const thread = threadForRuntime(board, field(body.cardId, 100));
@@ -3595,7 +2207,7 @@ async function onKill(req, res, board) {
 }
 
 /** The composer's file picker walks folders and answers with paths, never with file contents. */
-function onBrowse(url, res) {
+export function onBrowse(url, res) {
 	const start = process.cwd();
 	const asked = url.searchParams.get("path") ?? "";
 	let dir = start;
@@ -3646,7 +2258,7 @@ function onBrowse(url, res) {
 
 // ---------- the server -----------------------------------------------------
 
-const token = (() => {
+export const token = (() => {
 	const saved = readJsonFile(STATE_FILE, null);
 	return typeof saved?.token === "string" && saved.token ? saved.token : randomToken();
 })();
@@ -3656,7 +2268,7 @@ const token = (() => {
  * typed by hand, pasted from a log or built by a proxy can, and an unfolded one matched nothing and
  * fell through to an answer that was neither the page nor a plain not-found. Root stays root.
  */
-function foldPath(pathname) {
+export function foldPath(pathname) {
 	const folded = pathname.replace(/\/{2,}/g, "/").replace(/(.)\/+$/, "$1");
 	return folded || "/";
 }
@@ -3667,7 +2279,7 @@ function foldPath(pathname) {
  * catch below answered with a 500. The path is folded before parsing, and the query is left alone — a
  * doubled slash can be deliberate in a folder path.
  */
-function requestUrl(target) {
+export function requestUrl(target) {
 	const raw = String(target || "/");
 	if (!raw.startsWith("/")) return new URL(raw.startsWith("http") ? raw : `/${raw}`, "http://127.0.0.1");
 	const cut = raw.indexOf("?");
@@ -3676,7 +2288,7 @@ function requestUrl(target) {
 	return new URL(`http://127.0.0.1${foldPath(path)}${query}`);
 }
 
-const server = createServer((req, res) => {
+export const server = createServer((req, res) => {
 	void (async () => {
 		const url = requestUrl(req.url);
 		// Static assets carry no session data, so the token only guards the data routes.
@@ -3902,7 +2514,7 @@ const server = createServer((req, res) => {
 	});
 });
 
-function shutdown() {
+export function shutdown() {
 	// What the debounce still holds is the last thing the human did, so it goes to disk first.
 	for (const board of boards.values()) flushBoard(board);
 	for (const board of boards.values()) for (const child of board.children.values()) child.kill("SIGKILL");
@@ -3917,20 +2529,20 @@ process.on("exit", () => {
 	for (const board of boards.values()) for (const child of board.children.values()) if (child.exitCode === null) child.kill("SIGKILL");
 });
 
-let port = 0;
+export let port = 0;
 
 /**
  * The port the last daemon printed, so a restart keeps the URL a tab is already on. A development
  * reload is the reason: a fresh port per restart would make every edit a new link. If something else
  * has taken it, fall back to any free port rather than refuse to start.
  */
-function lastPort() {
+export function lastPort() {
 	const saved = readJsonFile(STATE_FILE, null);
 	const held = Number(saved?.port);
 	return Number.isInteger(held) && held > 0 && held < 65536 ? held : 0;
 }
 
-function startListening(wanted) {
+export function startListening(wanted) {
 	server.listen(wanted, "127.0.0.1", onListening);
 }
 
@@ -3944,7 +2556,7 @@ server.on("error", (error) => {
 	process.exit(1);
 });
 
-function onListening() {
+export function onListening() {
 	port = server.address().port;
 	writeJsonFile(STATE_FILE, { token, port, at: new Date().toISOString() });
 	const url = `http://127.0.0.1:${port}/?token=${token}`;
@@ -3971,3 +2583,30 @@ function onListening() {
 export function start() {
 	startListening(Number(process.env.PI_STUDIO_PORT) || lastPort());
 }
+
+import { gitIn, repoOf, baseRef, mainRepoOf } from "./git/repo.ts";
+export { gitIn, repoOf, baseRef, mainRepoOf };
+
+import { readJson, fail, answer, serveStatic, send, readBody } from "./http.ts";
+export { readJson, fail, answer, serveStatic, send, readBody };
+
+import { MAX_BODY_BYTES, MAX_ROW_CHARS, MAX_NOTE_CHARS, MAX_SOURCE_CHARS, MAX_TITLE_CHARS, ASK_TIMEOUT_MS, BROWSE_LIMIT, CONTROL_CHARS } from "./limits.ts";
+export { MAX_BODY_BYTES, MAX_ROW_CHARS, MAX_NOTE_CHARS, MAX_SOURCE_CHARS, MAX_TITLE_CHARS, ASK_TIMEOUT_MS, BROWSE_LIMIT, CONTROL_CHARS };
+
+import { PROVIDER, MODEL, THINKING_LEVELS, CATALOG_TTL_MS, run, catalog, catalogAt, saidScopeProblems, modelCatalog, piSettingsFile, readScope, patternToRegExp, bestPartial, resolveScope, BUILTIN_TOOLS, TOOLS, CHILD_EXCLUDE, isTestFile, installedExtensions, CHILD_EXTENSIONS } from "./models.ts";
+export { PROVIDER, MODEL, THINKING_LEVELS, CATALOG_TTL_MS, run, catalog, catalogAt, saidScopeProblems, modelCatalog, piSettingsFile, readScope, patternToRegExp, bestPartial, resolveScope, BUILTIN_TOOLS, TOOLS, CHILD_EXCLUDE, isTestFile, installedExtensions, CHILD_EXTENSIONS };
+
+import { GIT_ROWS, GIT_TICK, refName, gitGraph, gitStatusOf, gitPicture, gitFingerprint, refreshGit, noteGit, watchGit, unwatchGit } from "./git/graph.ts";
+export { GIT_ROWS, GIT_TICK, refName, gitGraph, gitStatusOf, gitPicture, gitFingerprint, refreshGit, noteGit, watchGit, unwatchGit };
+
+import { workspaces, homeDefaults, saveWorkspaces, activeHomeDefaults, welcomeClients, rememberWorkspace, workspaceById, folderFacts, gitFacts, describeWorkspace, countSavedThreads, activeConfig, runtimeDefaults } from "./workspaces.ts";
+export { workspaces, homeDefaults, saveWorkspaces, activeHomeDefaults, welcomeClients, rememberWorkspace, workspaceById, folderFacts, gitFacts, describeWorkspace, countSavedThreads, activeConfig, runtimeDefaults };
+
+import { boards, boardFile, savedTurn, cleanRect, saveBoard, scheduleSave, flushBoard, restoredTurns, restoredThread, restoredPlainCard, boardFor, boardFrom, STATE_VERSION, MAX_ACTIVITY, MAX_THREADS, MAX_PLAIN_CARDS } from "./store.ts";
+export { boards, boardFile, savedTurn, cleanRect, saveBoard, scheduleSave, flushBoard, restoredTurns, restoredThread, restoredPlainCard, boardFor, boardFrom, STATE_VERSION, MAX_ACTIVITY, MAX_THREADS, MAX_PLAIN_CARDS };
+
+import { broadcast, resync, liveThreadIds, nudgeWelcome, card, update, updateCard, threadRef, addRow, patchRow, diskRow, closedCards } from "./bus.ts";
+export { broadcast, resync, liveThreadIds, nudgeWelcome, card, update, updateCard, threadRef, addRow, patchRow, diskRow, closedCards };
+
+import { cardFor, plainCardFor, cardsFor, boardMeta, cleanBoard, clearBoard, threadError } from "./cards.ts";
+export { cardFor, plainCardFor, cardsFor, boardMeta, cleanBoard, clearBoard, threadError };
