@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { threadRefusal } from "../server/main.ts";
+import { THREAD_ROUTES, threadRefusal } from "../server/main.ts";
 
 // A child token is minted inside the spawn, so no HTTP client can forge one. The decision it answers to
 // is a plain function, and that is what these tests call.
@@ -10,6 +10,9 @@ const human = { human: true };
 test("a child may write on its own board, and may ask the human a question there", () => {
 	const allowed = ["/card/note", "/card/source", "/thread/spawn", "/card/ask"];
 	for (const path of allowed) assert.equal(threadRefusal(child, "POST", path, "board-a"), null, path);
+	// The list is compared whole, because a route added to it and not to this test would widen what a
+	// child may reach without a single case going red.
+	assert.deepEqual([...THREAD_ROUTES].sort(), [...allowed].sort());
 });
 
 test("a child may not reach the routes that belong to the human", () => {
