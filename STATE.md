@@ -70,7 +70,8 @@ commit's own account rather than on a check run now, the section below says so.
   pointer names, and that neither a plan nor a summary belongs in that answer. It is told that one
   card holds one kind of thing — a chart, an analysis, a diagram, a checklist — that it reads the
   board before writing so a card on the same subject is revised under its key rather than duplicated,
-  and that a fenced mermaid block draws a diagram while a fenced svg block draws a picture. It is
+  and that a fenced mermaid block draws a diagram while a fenced svg block draws a picture, mermaid
+  first for anything with boxes and arrows. It is
   also told where its own git worktree is,
   what branch it is on and what that branch was cut from, that it commits there, that changed files
   earn one clause naming the branch and the path, and that no merge happens without the human. Three
