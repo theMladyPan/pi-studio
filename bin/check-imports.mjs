@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const publicDir = join(repo, "public");
 /** The file `index.html` loads. Everything the client needs has to be reachable from it. */
-const clientEntry = join(publicDir, "board.js");
+const clientEntry = join(publicDir, "client", "board.js");
 /** Directories in the order they are walked. A name that does not exist is skipped, not an error. */
 const roots = ["server.mjs", "server.ts", "server", "public", "bin"];
 const skip = new Set([".git", ".agents", ".history", "node_modules"]);
@@ -136,16 +136,21 @@ function main() {
 	const reached = clientGraph(clientEntry);
 	said(reached.size > 0, "the client entry was reached", `${reached.size} modules from ${relative(repo, clientEntry)}`);
 
+	// One rule serves every client module: the daemon accepts `/client/**/*.js` and nothing else. The same
+	// shape is asked of each module the page reaches, so a module outside it is a blank board waiting.
+	const CLIENT_URL = /^\/client\/[a-z0-9/_-]+\.js$/;
+	const ruled = files.some((file) => readFileSync(file, "utf8").includes("/^\\/client\\/[a-z0-9/_-]+\\.js$/"));
+	said(ruled, "the daemon serves the client by one rule", ruled ? "found in the server sources" : "no /client/ rule in any server module");
+
 	const unserved = [];
 	for (const file of reached) {
-		const name = relative(publicDir, file).split("\\").join("/");
-		const listed = served.table.get(`/${name}`);
-		if (listed !== name) unserved.push(listed ? `/${name} is listed as ${listed}` : `/${name} is not in the allowlist`);
+		const url = `/${relative(publicDir, file).split("\\").join("/")}`;
+		if (!CLIENT_URL.test(url)) unserved.push(`${url} does not match the /client/ rule`);
 	}
 	said(
 		unserved.length === 0,
-		"every module the client reaches is served with its own path",
-		unserved.length ? unserved.join(" | ") : `${reached.size} modules, ${served.table.size} static paths`,
+		"every module the client reaches is served under /client/",
+		unserved.length ? unserved.join(" | ") : `${reached.size} modules`,
 	);
 }
 

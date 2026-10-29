@@ -79,11 +79,16 @@ export const server = createServer((req, res) => {
 				"/": ["welcome.html", "text/html; charset=utf-8"],
 				"/welcome.js": ["welcome.js", "text/javascript; charset=utf-8"],
 				"/welcome.css": ["welcome.css", "text/css; charset=utf-8"],
-				"/board.js": ["board.js", "text/javascript; charset=utf-8"],
 			};
 			const hit = statics[url.pathname];
 			if (hit) {
 				serveStatic(res, hit[0], hit[1]);
+				return;
+			}
+			// Every client module lives under public/client/ and is served by one rule rather than an entry
+			// per file. The shape is checked before the path is joined, so `..` cannot walk out of public/.
+			if (/^\/client\/[a-z0-9/_-]+\.js$/.test(url.pathname)) {
+				serveStatic(res, url.pathname.slice(1), "text/javascript; charset=utf-8");
 				return;
 			}
 			// A workspace's board is the same page for every folder; the id in the path tells it which.
