@@ -16,6 +16,7 @@ import { describeTool, firstLine, headline, rowResult } from "./child/describe.t
 import { join } from "node:path";
 import { settleTreeBranch } from "./worktrees/name.ts";
 import { noteGit } from "./git/graph.ts";
+import { finished, statsArrived } from "./waiters.ts";
 
 
 
@@ -229,6 +230,8 @@ export function handleChildLine(board, thread, line) {
 			}
 			update(board, thread);
 			scheduleSave(board);
+			// The numbers a spawn is waiting for have arrived.
+			statsArrived(thread);
 		} else if (event.command === "get_state" && typeof event.data?.sessionId === "string") {
 			thread.sessionId = event.data.sessionId;
 			update(board, thread);
@@ -313,6 +316,8 @@ export function handleChildLine(board, thread, line) {
 		return;
 	}
 	if (event.type === "turn_end" && event.message?.role === "assistant") {
+		// One assistant turn, which is what a spawn's turn ceiling counts.
+		thread.runTurns = (thread.runTurns ?? 0) + 1;
 		// A thought whose message ended without its end event stops where it stands.
 		settleThoughts(board, thread);
 		const message = event.message;
@@ -425,6 +430,8 @@ export function handleChildLine(board, thread, line) {
 			prompt(board, thread, typeof next === "string" ? next : next.message, target);
 			return;
 		}
+		// Nothing else is queued, so the run is over for anyone waiting on it.
+		finished(thread);
 		// What the run spent is only known to the child, so it is asked before stdin closes. The close
 		// waits for the answer.
 		const child = board.children.get(thread.id);

@@ -154,9 +154,76 @@ const askTool = defineTool({
 	},
 });
 
+const threadTool = defineTool({
+	name: "board_thread",
+	label: "Spawn a thread",
+	description:
+		"Spawn a child thread on the board and wait for it. The child has its own session, its own worktree cut from yours, and the role you give it, and its last message comes back to you as the result. Call it twice in one turn to run two children side by side. A thread spawned this way cannot spawn further threads, and the timeout is the only thing that ends a child you are waiting on.",
+	parameters: Type.Object({
+		title: Type.String({ description: "Short name for the child's card." }),
+		task: Type.String({
+			description:
+				"The child's whole assignment: goal and why, bounded scope or the one question, known evidence and paths, acceptance criteria, the checks it may run, and the output you want back.",
+		}),
+		role: Type.Optional(
+			Type.Union(["scout", "implement", "review", "chore", "architect"].map((role) => Type.Literal(role)), {
+				description:
+					"scout maps unknown files and relationships; implement changes one coherent slice; review judges an artifact against the goal; chore runs separable tests, checks and maintenance; architect settles one structural decision, read-only.",
+			}),
+		),
+		after: Type.Optional(
+			Type.Array(Type.String(), {
+				description:
+					"Card or thread ids this child hangs under, one arrow drawn from each. Use them to show what the child follows from, chronological or logical.",
+			}),
+		),
+		provider: Type.Optional(Type.String({ description: "Provider override, together with model." })),
+		model: Type.Optional(Type.String({ description: "Model override, together with provider." })),
+		thinking: Type.Optional(
+			Type.Union(["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((level) => Type.Literal(level)), {
+				description: "Thinking override; otherwise the role's own level.",
+			}),
+		),
+		timeoutSeconds: Type.Optional(Type.Number({ description: "Hard limit on the child's run. Default 600, at most 3600." })),
+		maxTurns: Type.Optional(Type.Number({ description: "Turn ceiling, reported rather than enforced." })),
+		maxCostUsd: Type.Optional(Type.Number({ description: "Cost ceiling, reported rather than enforced." })),
+	}),
+	async execute(_id, params) {
+		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
+		try {
+			const result = await call("/thread/spawn", {
+				title: params.title,
+				task: params.task,
+				...(params.role ? { role: params.role } : {}),
+				...(params.after?.length ? { after: params.after } : {}),
+				...(params.provider && params.model ? { provider: params.provider, model: params.model } : {}),
+				...(params.thinking ? { thinking: params.thinking } : {}),
+				...(Number.isFinite(params.timeoutSeconds) ? { timeoutSeconds: params.timeoutSeconds } : {}),
+				...(Number.isFinite(params.maxTurns) ? { maxTurns: params.maxTurns } : {}),
+				...(Number.isFinite(params.maxCostUsd) ? { maxCostUsd: params.maxCostUsd } : {}),
+			});
+			const crossed = [
+				result.breached?.timeout ? "timed out" : "",
+				result.breached?.turns ? "over its turn ceiling" : "",
+				result.breached?.cost ? "over its cost ceiling" : "",
+			].filter(Boolean);
+			const spent = `$${(result.usage?.cost ?? 0).toFixed(2)}, ${result.usage?.turns ?? 0} turns`;
+			const head = `Child ${result.cardId} ${result.status ?? "done"} — ${spent}${crossed.length ? ` (${crossed.join(", ")})` : ""}`;
+			return {
+				content: [{ type: "text", text: `${head}\n\n${String(result.output ?? "").trim() || "(the child said nothing)"}` }],
+				details: result,
+			};
+		} catch (error) {
+			return failure(error);
+		}
+	},
+});
+
+
 export default function boardBridge(pi) {
 	if (!attached()) return;
 	pi.registerTool(noteTool);
 	pi.registerTool(sourceTool);
 	pi.registerTool(askTool);
+	pi.registerTool(threadTool);
 }

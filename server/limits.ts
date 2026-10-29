@@ -32,3 +32,15 @@ export const BROWSE_LIMIT = 200;
 
 
 export const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+
+
+/** A spawned run is bounded: the timeout is the only thing that ends a child nobody is watching. */
+export const SPAWN_TIMEOUT_MS = 10 * 60_000;
+
+
+/** A child asked to stop still reports what it had, so the kill waits a moment for that. */
+export const SPAWN_ABORT_GRACE_MS = 5_000;
+
+
+/** What a spawned child may say back. The master reads it in its own context, so it has a ceiling. */
+export const SPAWN_REPLY_CHARS = 20_000;

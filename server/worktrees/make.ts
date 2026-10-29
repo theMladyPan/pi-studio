@@ -74,7 +74,12 @@ export function ensureWorktree(board, thread) {
 		thread.worktree = { skipped: "this folder is not a git repository" };
 		return thread.worktree;
 	}
-	const base = baseRef(repo);
+	// A spawned thread reads the work of the thread that spawned it, so its tree starts at that
+	// thread's HEAD rather than at the branch the board was cut from. Uncommitted work stays behind —
+	// git cannot hand it over — which is why the flows keep the writes in the master.
+	const parentTree = thread.parentThread ? board.threads.get(thread.parentThread)?.worktree : undefined;
+	const parentHead = parentTree?.path && existsSync(parentTree.path) ? gitIn(parentTree.path, ["rev-parse", "HEAD"]) : null;
+	const base = parentHead?.ok && parentHead.out ? parentHead.out : baseRef(repo);
 	if (!base) {
 		thread.worktree = { skipped: "the repository has no branch to cut from" };
 		return thread.worktree;

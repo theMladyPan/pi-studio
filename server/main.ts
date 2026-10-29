@@ -20,7 +20,7 @@ import { onBrowse, onEdit, onNote, onRename, onSource } from "./routes/board/con
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
-import { onThread } from "./routes/board/thread.ts";
+import { onThread, onThreadSpawn } from "./routes/board/thread.ts";
 import { onAnswer, onAsk } from "./routes/board/answer.ts";
 import { onMessage } from "./routes/board/message.ts";
 import { onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
@@ -38,6 +38,30 @@ export const token = (() => {
 	const saved = readJsonFile(STATE_FILE, null);
 	return typeof saved?.token === "string" && saved.token ? saved.token : randomToken();
 })();
+
+
+
+/** The routes a child may reach. Everything else on this daemon belongs to the human. */
+const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/thread/spawn"]);
+
+
+
+/**
+ * Who is asking. The daemon's own token is the human at the keyboard; a token minted for a child is
+ * that one thread and nothing else, so the depth rule and the board scope read a decision rather than
+ * a field the caller wrote. It is a guardrail, not a wall: a child that can read the state folder can
+ * read the human's token, and nothing short of a separate OS user changes that.
+ */
+export function callerOf(given) {
+	if (!given) return null;
+	if (given === token) return { human: true };
+	for (const board of boards.values()) {
+		for (const thread of board.threads.values()) {
+			if (thread.token && thread.token === given) return { human: false, board, thread };
+		}
+	}
+	return null;
+}
 
 
 
@@ -97,12 +121,27 @@ export const server = createServer((req, res) => {
 				return;
 			}
 		}
-		if (url.searchParams.get("token") !== token) {
+		const caller = callerOf(url.searchParams.get("token"));
+		if (!caller) {
 			// A refused POST has to have its body taken off the wire, otherwise the client's next
 			// request rides the same socket into the leftovers and reads as a reset.
 			req.resume();
 			fail(res, 403, "forbidden");
 			return;
+		}
+		// A child may write cards on its own board and ask for work of its own, which the depth rule then
+		// decides. Layout, close, kill, config and clean belong to the human, and so does every other board.
+		if (!caller.human) {
+			if (req.method !== "POST" || !THREAD_ROUTES.has(url.pathname)) {
+				req.resume();
+				fail(res, 403, "a thread may not use that");
+				return;
+			}
+			if (url.searchParams.get("workspace") !== caller.board.id) {
+				req.resume();
+				fail(res, 403, "a thread may not use another board");
+				return;
+			}
 		}
 
 		// ----- streams -----
@@ -245,7 +284,7 @@ export const server = createServer((req, res) => {
 			if (!board) return;
 			answer(res, 200, {
 				workspace: describeWorkspace({ id: board.id, folder: board.folder, name: board.name, openedAt: 0 }),
-				threads: [...board.threads.values()].map((thread) => ({ ...thread, live: board.children.has(thread.id) })),
+				threads: [...board.threads.values()].map(({ token: _token, ...thread }) => ({ ...thread, live: board.children.has(thread.id) })),
 				cards: cardsFor(board),
 				closed: closedCards(board),
 				activity: board.activity,
@@ -258,6 +297,7 @@ export const server = createServer((req, res) => {
 		if (req.method === "POST") {
 			const routing = {
 				"/thread": onThread,
+				"/thread/spawn": onThreadSpawn,
 				"/card/note": onNote,
 				"/card/source": onSource,
 				"/card/ask": onAsk,
@@ -279,7 +319,7 @@ export const server = createServer((req, res) => {
 			if (handler) {
 				const board = boardFrom(url, res);
 				if (!board) return;
-				await handler(req, res, board);
+				await handler(req, res, board, caller);
 				return;
 			}
 			if (url.pathname === "/stop") {

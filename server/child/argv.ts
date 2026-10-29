@@ -13,6 +13,7 @@ import { workdirOf } from "../worktrees/make.ts";
 import { sessionCwd, sessionDir } from "../session.ts";
 import { sameFolder } from "../worktrees/retire.ts";
 import { BRIDGE } from "../paths.ts";
+import { ROLE_THINKING, ROLE_TOOLS_OFF, roleSystemPrompt } from "./roles.ts";
 
 
 
@@ -116,6 +117,10 @@ export function childArgv(board, thread) {
 	const recorded = thread.sessionId ? sessionCwd(sessionDir(board), thread.sessionId) : "";
 	const moved = recorded && !sameFolder(recorded, workdir);
 	const session = thread.sessionId ? [moved ? "--fork" : "--session", thread.sessionId] : [];
+	// Tools a role may not use join the ones the board already leaves out, once each.
+	const toolsOff = [...new Set([...toolsOffFor(board), ...(ROLE_TOOLS_OFF[thread.role] ?? [])])];
+	// A role brings a thinking level; what the human chose on the card wins over it.
+	const thinking = thread.thinking ?? ROLE_THINKING[thread.role];
 	return [
 		"--mode",
 		"rpc",
@@ -129,15 +134,15 @@ export function childArgv(board, thread) {
 		...extensionsFor(board).flatMap((path) => ["-e", path]),
 		// No allowlist unless one was asked for: a thread gets the tools a console pi gets.
 		...(TOOLS ? ["--tools", TOOLS] : []),
-		// What the board itself leaves out, by pi's own tool names. `--exclude-tools` is applied after
-		// every other selection option, so a tool the panel turned off stays off.
-		...(toolsOffFor(board).length ? ["--exclude-tools", toolsOffFor(board).join(",")] : []),
+		// What the board itself leaves out, by pi's own tool names, and what a role may not use: a scout
+		// or a reviewer reads and runs checks, and never edits the tree it is judging.
+		...(toolsOff.length ? ["--exclude-tools", toolsOff.join(",")] : []),
 		"--append-system-prompt",
-		boardPrompt(board, thread),
+		[roleSystemPrompt(thread.role), boardPrompt(board, thread)].filter(Boolean).join("\n\n"),
 		"--provider",
 		thread.provider,
 		"--model",
 		thread.model,
-		...(thread.thinking ? ["--thinking", thread.thinking] : []),
+		...(thinking ? ["--thinking", thinking] : []),
 	];
 }
