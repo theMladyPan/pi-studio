@@ -373,6 +373,15 @@ buttons beside them; the crossroads gained the defaults panel. No framework, no 
 
 ## Fixed on the way
 
+- `board_ask` was dead for every thread: the routes a child token may reach listed `/card/note`,
+  `/card/source` and `/thread/spawn` but not `/card/ask`, so the third bridge tool answered 403
+  "a thread may not use that" while the bridge already read its 409 and its `answers[]`. The route is
+  allowed now, and the decision lives in `threadRefusal` beside `callerOf` rather than inside the
+  request handler, so a test can call it: a child's token is minted inside the spawn and no HTTP
+  client can forge one. A test that boots a daemon with a stub `pi` under `PI_MANAGED_INSTALL_ROOT`
+  proves the real wire — its own token posts the question, the answer settles it, and the same token
+  is still refused `GET /state` and `POST /layout` — and the unit test compares the whole route list,
+  because a route added to it and not to the test went unnoticed once already.
 - A reply could land on the wrong card: when the card a run was answering for was closed mid-run,
   `turn_end` fell back to the thread's own last turn and overwrote an older answer. It now writes
   nowhere, and closing the card stops the turn and clears `thread.answering`.
