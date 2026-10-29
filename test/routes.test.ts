@@ -97,7 +97,8 @@ test("a route without the token is refused, and the page is not", async () => {
 	try {
 		assert.equal((await get(daemon, "/state")).status, 403);
 		assert.equal((await get(daemon, "/")).status, 200);
-		const script = await get(daemon, "/board.js");
+		// Every client module is served under /client/; the entry is the only one the page names.
+		const script = await get(daemon, "/client/board.js");
 		assert.equal(script.status, 200);
 		assert.match(script.type, /javascript/);
 	} finally {
