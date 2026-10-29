@@ -1148,14 +1148,22 @@ function makeCard(data, quiet = false) {
     (event) => {
       if (event.button === 1) return;
       card.style.zIndex = z++;
-      selectCard(card);
+      // A press in the field the card already holds is typing, not a change of reading position: taking it
+      // as one would retarget the message to the thread and park the words under the card it is about.
+      if (!event.target.closest("#composer")) selectCard(card);
     },
     true,
   );
 
   // The keyboard and the mouse agree on which card is current: focus landing inside a card marks
-  // it, so the outline, `r` and the digit keys follow the keyboard rather than the last click.
+  // it, so the outline, `r` and the digit keys follow the keyboard rather than the last click. A press
+  // in the field the card already holds is not a change of reading position, so it leaves the card the
+  // message is about alone: taking it as one would turn every reply into a reply to the thread itself.
   card.addEventListener("focusin", (event) => {
+    if (event.target.closest("#composer")) {
+      reveal(event.target);
+      return;
+    }
     selectCard(card);
     reveal(event.target);
   });
@@ -1167,7 +1175,8 @@ function makeCard(data, quiet = false) {
     // A folded card has no room for a field, so folding puts the draft away and unfolding brings it
     // back when the card has one.
     if (mini) {
-      if (replyTarget && replyTarget.id === entry.id) setReplyTarget(null);
+      // Folding the window takes the field with it, whichever card the message is about.
+      if (replyTarget && windowOf(replyTarget)?.id === entry.id) setReplyTarget(null);
     } else if (!replyTarget && drafts.has(entry.id)) {
       setReplyTarget(entry, { focus: false });
     }
@@ -1708,8 +1717,9 @@ function closeCard(entry) {
 function dropCard(entry) {
   const record = byId.get(entry.id);
   if (!record) return;
-  // Compared by id: a remote remove arrives as a bare { id } and would never match the entry.
-  if (replyTarget && replyTarget.id === record.id) setReplyTarget(null);
+  // Compared by id: a remote remove arrives as a bare { id } and would never match the entry. The window
+  // the field is docked in counts as well, or removing it would take the field off the page with it.
+  if (replyTarget && (replyTarget.id === record.id || windowOf(replyTarget)?.id === record.id)) setReplyTarget(null);
   record.card.remove();
   forgetSeen(record.card);
   inView.delete(record.card);
@@ -3914,6 +3924,25 @@ function restoreDraft() {
 }
 
 /**
+ * The card that stands for the thread which answers this card: a thread card is its own window, and a note,
+ * source or question is read on the window of the thread that wrote it. The thread that answers comes first,
+ * because that is the thread the server sends the message to; a thread with no card of its own is read
+ * through the card it answers, so the walk carries on from there. A card with no thread card above it at
+ * all — one whose thread was closed — stays its own window, which is where the field went before.
+ */
+function windowOf(entry) {
+  if (!entry) return null;
+  const seen = new Set();
+  let held = entry;
+  while (held && !seen.has(held.id)) {
+    if (held.data.type === "sticky") return held;
+    seen.add(held.id);
+    held = byId.get(held.data.ownerThread) ?? byId.get(held.data.threadRoot) ?? byId.get(held.data.answersWith?.thread);
+  }
+  return entry;
+}
+
+/**
  * A reply is aimed at one card, so the composer shows which until it is sent or cleared.
  * Without this the follow-up would arrive as a new sticky and the thread would be lost. A bind
  * driven by a click passes `focus: false`: the reader is reading cards, not typing.
@@ -3925,8 +3954,14 @@ function setReplyTarget(entry, { focus = true } = {}) {
     replyTarget = next;
     restoreDraft();
   }
-  for (const record of byId.values()) record.card.classList.toggle("replying", record === replyTarget);
-  dockComposer(replyTarget);
+  // The field lives in the thread's own window and never in a card the message is merely about: the
+  // card is named in the chip and travels as the cardId the server quotes to the agent.
+  const pane = windowOf(replyTarget);
+  for (const record of byId.values()) {
+    record.card.classList.toggle("replying", record === pane);
+    record.card.classList.toggle("referenced", Boolean(replyTarget) && record === replyTarget && record !== pane);
+  }
+  dockComposer(pane);
   replyChip.hidden = !replyTarget;
   // Forking only differs when there is a thread that would otherwise answer, so the button says
   // nothing on a thread card or on a card nobody has asked about yet.
@@ -3942,7 +3977,10 @@ function setReplyTarget(entry, { focus = true } = {}) {
     // A card is answered by a thread that has no card of its own, so there is no name to show: the
     // chip names the card, and says when a fork is the thing that will answer.
     const owned = replyTarget.data.type !== "thread" && Boolean(replyTarget.data.answersWith);
-    replyChipText.textContent = forkNext && owned ? `in “${name}” · a new thread answers` : `in “${name}”`;
+    // `in` when the field is in that very card, `about` when the card is elsewhere on the board.
+    const where = pane === replyTarget ? "in" : "about";
+    replyChipText.textContent = forkNext && owned ? `${where} “${name}” · a new thread answers` : `${where} “${name}”`;
+    replyChip.title = where === "about" ? "asked in this thread's window, about that card" : "";
     msgBox.placeholder = "ask a follow-up about this card…  (esc to send to the board instead)";
     if (focus) msgBox.focus();
   } else {
@@ -4952,6 +4990,11 @@ async function sendMessage() {
     else setReplyTarget(null);
     // With no run in flight the message is being sent, not queued behind one.
     composerHint.textContent = metaRunning !== true ? "sent" : sendMode === "steer" ? "steered" : "queued";
+    // The exchange is drawn on the card the message was about, which may be elsewhere on the board, so
+    // the footer says where it went. The composer's own hint is hidden while the field is docked.
+    if (sentTarget && windowOf(sentTarget) !== sentTarget) {
+      footNote(`asked in this thread, about ↳ ${sentTarget.titleEl.textContent || sentTarget.data.path || "that card"}`);
+    }
   } catch (error) {
     const gone = error instanceof TypeError; // fetch rejects like this when nothing answers
     composerHint.textContent = gone
