@@ -18,14 +18,14 @@ and return that card's id.
 
 - [ ] tool shape: `board_thread {title, prompt?, model?}`, answer with the new card id
 - [ ] no `prompt`: card created, no child spawned. That is what `POST /thread` already does
-  (`server.mjs:2831`), so this half costs nothing and is the safe default
+  (`server/routes/board/thread.ts`), so this half costs nothing and is the safe default
 - [ ] with `prompt`: the new thread's own child starts on it, so the caller's run is the grandparent
   of a run it cannot steer
 - [ ] placement: `call()` already sends `threadRoot` (`bridge/child-bridge.mjs:33`), but `onThread`
   drops it, so a card made this way lands wherever the daemon puts a fresh thread. `onNote` sends the
-  same field through `anchorOf` (`server.mjs:3062`); a thread card would need the same, and
-  `threadRoot` is already on the thread row (`server.mjs:566`)
-- [ ] depth: nothing caps nesting. `MAX_THREADS = 200` (`server.mjs:322`) caps the board, not the
+  same field through `anchorOf` (`server/routes/board/thread.ts`); a thread card would need the same, and
+  `threadRoot` is already on the thread row (`server/store.ts`)
+- [ ] depth: nothing caps nesting. `MAX_THREADS = 200` (`server/store.ts`) caps the board, not the
   chain, so one child could fill a board with children of its own
 - [ ] register it in `boardBridge` beside the other three
 

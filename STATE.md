@@ -7,7 +7,7 @@ commit's own account rather than on a check run now, the section below says so.
 
 ## Works
 
-- `server.mjs`, Node builtins only, `node server.mjs` or `bin/pi-studio`. It opens the crossroads in a
+- `server.ts` starting `server/`, Node builtins only, `node server.ts` or `bin/pi-studio`. It opens the crossroads in a
   browser unless started with `--no-open`.
 - **Two surfaces**: `/` is the crossroads (workspaces, a preview of one, facts about it), `/w/<id>` is
   that workspace's board in its own tab. The crossroads opens a board with
@@ -522,7 +522,7 @@ kept. Seeded rows in the old shape and the new one were opened in a browser: a f
 `board_note` drawn as a card with its table, task list and `[[shape]]` link, a `board_ask` with its
 options, a `browser_screenshot` with and without its picture, an answer with its thinking, and a row
 still running (`running · 37s`, the command and nothing else). The 64 000-character ceiling and the
-argument cut are checked by an offline harness that pulls the real function text out of `server.mjs`
+argument cut are checked by an offline harness that pulls the real function text out of `public/client/board.js`
 and runs it — eight cases, all passing, including a 70 000-character output and a 70 000-character
 argument; no live row reached the ceiling, because pi cuts a bash result at 50 KB first.
 
@@ -585,7 +585,7 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
   board pans; ctrl+drag inside a card selects its text. Controls keep their own press: header buttons,
   the docked composer, links, checkboxes, editable fields and the resize corner.
 - **A reload in development.** The daemon reuses the port it printed last, so `npm run dev`
-  (`node --watch server.mjs --no-open`) restarts behind the URL a tab is already on, and the tab
+  (`node --watch server.ts --no-open`) restarts behind the URL a tab is already on, and the tab
   reconnects to a snapshot by itself. Client files need only a browser reload.
 
 ## Next, in order

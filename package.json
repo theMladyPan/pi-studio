@@ -16,7 +16,8 @@
     "dev": "node --watch server.ts --no-open",
     "smoke": "node bin/smoke.mjs",
     "dev:alt": "node --watch server.ts --no-open --state ~/.pi/agent/state/pi-studio-dev",
-    "test": "node --test"
+    "test": "node --test",
+    "precheck": "node -e \"try{require.resolve(\\\"typescript/package.json\\\")}catch{console.error(\\\"pi-studio: npm run check needs the dev dependency, so run npm install once. The daemon itself needs nothing.\\\");process.exit(1)}\""
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
