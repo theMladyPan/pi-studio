@@ -4,7 +4,7 @@
  * across three generations of on-disk shape that must keep loading.
  */
 import { join } from "node:path";
-import { STATE_DIR, readJsonFile, writeJsonFile } from "./paths.ts";
+import { STATE_VERSION, boardFile, readJsonFile, writeJsonFile } from "./paths.ts";
 import { card, diskRow } from "./bus.ts";
 import { ownedCards } from "./routes/board/message.ts";
 import { activeConfig, homeDefaults, workspaceById } from "./workspaces.ts";
@@ -16,11 +16,6 @@ import { MODEL, PROVIDER, THINKING_LEVELS } from "./models.ts";
 /** @type {Map<string, Board>} boards that this daemon has loaded, one per workspace. */
 export const boards = new Map();
 
-
-
-export function boardFile(workspace) {
-	return join(STATE_DIR, "boards", `${workspace.id}.json`);
-}
 
 
 
@@ -307,9 +302,6 @@ export function boardFrom(url, res) {
 	}
 	return boardFor(workspace);
 }
-
-
-export const STATE_VERSION = 1;
 
 
 export const MAX_ACTIVITY = 300;

@@ -55,6 +55,14 @@ export const INSTANCE = STATE_DIR === homeStateDir() ? "" : basename(STATE_DIR);
 export const STATE_FILE = join(STATE_DIR, "daemon.json");
 export const WORKSPACES_FILE = join(STATE_DIR, "workspaces.json");
 
+/** The schema the board and workspace files are written with. */
+export const STATE_VERSION = 1;
+
+/** One board file per workspace, named by the folder's identity rather than by its path. */
+export function boardFile(workspace: { id: string }) {
+	return join(STATE_DIR, "boards", `${workspace.id}.json`);
+}
+
 /** Read a JSON file, or the fallback when it is missing, unreadable or not JSON at all. */
 export function readJsonFile<T>(file: string, fallback: T): T {
 	try {

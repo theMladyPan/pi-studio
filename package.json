@@ -12,7 +12,7 @@
   },
   "scripts": {
     "start": "node server.ts",
-    "check": "node --check server.ts && node --check public/board.js && node --check bin/smoke.mjs && node --check bin/check-imports.mjs && node bin/check-imports.mjs && tsc -p tsconfig.node.json",
+    "check": "node --check server.ts && node --check public/board.js && node --check bin/smoke.mjs && node --check bin/check-imports.mjs && node bin/check-imports.mjs && tsc -p tsconfig.node.json && node --test",
     "dev": "node --watch server.ts --no-open",
     "smoke": "node bin/smoke.mjs",
     "dev:alt": "node --watch server.ts --no-open --state ~/.pi/agent/state/pi-studio-dev",
