@@ -154,7 +154,7 @@
   .min:hover { background: #21262d; color: var(--text); }
   /* Folded: the head is the whole card, and the real height stays saved for restoring. */
   .card.mini { height: auto !important; min-height: 0; }
-  .card.mini .body, .card.mini .thread, .card.mini .resize { display: none; }
+  .card.mini .body, .card.mini .thread, .card.mini .card-live, .card.mini .resize { display: none; }
   .card.mini .head { border-bottom: none; }
   /* The pulse would repaint the halo of a card that holds the composer, so the amber ring is left
      to say it is the reply target. */
@@ -170,6 +170,17 @@
   .thread { flex: none; border-top: 1px solid var(--border);
     background: #0f141b; padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 8px; }
   .thread[hidden] { display: none; }
+  /* What the thread is doing right now, in the same rows the log keeps: the live step is read where
+     its answer will appear, and it leaves for the log the moment it settles. It sits below the
+     answer, pinned, so a long note cannot hide it; the column above keeps its scroll and its place. */
+  .card-live { flex: 0 1 auto; min-height: 0; max-height: 50%; overflow-y: auto;
+    border-top: 1px solid var(--border); background: #0b1017;
+    padding: 6px 12px 8px; display: flex; flex-direction: column; gap: 4px; }
+  .card-live:empty { display: none; }
+  /* The frame belongs to the rail, so a row in a card is the card's own: no box inside a box. */
+  .card-live .act { background: transparent; border-color: transparent; padding: 2px 0; }
+  /* The thread is the card, so a row in it has nobody to name. */
+  .card-live .act .who { display: none; }
   .turn { display: flex; flex-direction: column; gap: 5px; }
   .turn + .turn { border-top: 1px dashed #21262d; padding-top: 8px; }
   .turn-q { color: #f0e6d2; background: #2a2415; border-left: 3px solid #d29922;
@@ -183,6 +194,9 @@
   .turn-a { padding: 0; color: #c9d1d9; font-size: 14px; }
   /* An answer with no words yet draws nothing, and the caret is what says text is still arriving. */
   .turn-a:empty { display: none; }
+  /* A live step says the run is going and says what it is doing, so the empty answer is silent:
+     a blinking bar is the one signal that says nothing at all. */
+  .card.live .turn-a .caret { display: none; }
   .turn-a .caret { display: inline-block; width: 6px; height: 13px; margin-left: 3px;
     vertical-align: -1px; border-radius: 1px; background: var(--accent);
     animation: caret-blink 1.1s steps(2, start) infinite; }
@@ -402,6 +416,8 @@
     cursor: pointer; font: 12px var(--mono); padding: 0 2px; line-height: 1; }
   #railToggle:hover { color: var(--text); }
   #railNow { padding: 0 8px 6px; display: flex; flex-direction: column; gap: 4px; }
+  /* A running row lives in its thread's card, so this strip holds only the runs whose card is closed. */
+  #railNow:empty { display: none; }
   #railLog { flex: 1; overflow-y: auto; padding: 4px 8px 10px; display: flex; flex-direction: column; gap: 4px; }
   /* Cards first: the rail is the map of a board too big to read on the canvas. The cap keeps
      the activity feed below it visible however many cards there are. */
