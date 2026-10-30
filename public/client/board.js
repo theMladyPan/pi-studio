@@ -4098,12 +4098,19 @@ function cardOfThread(threadId) {
 }
 
 /**
- * Whether the thread behind a card is in a run. A thread card says so with its own status, and a card a
- * hidden child answers for with that child's.
+ * Whether this card is where a run is being read, which is the one card that wears a strip.
+ *
+ * A thread card is the run's own surface, so it is live while it answers. A card a hidden child answers
+ * for is live while that child writes one of its turns, because the card is the only place the child is
+ * read. A card a drawn thread owns is written by nobody — its question and its answer land on the
+ * thread card — so an artifact of a busy thread must not wear a strip that looks like work there:
+ * `answersWith.running` names that thread's whole run, and it is true for every card it ever made. That
+ * is how a thread and the note it once wrote both came up saying `waiting`.
  */
 function threadOn(entry) {
   const data = entry.data || {};
-  return data.type === "sticky" ? data.status === "sent" : data.answersWith?.running === true;
+  if (data.type === "sticky") return data.status === "sent";
+  return Array.isArray(data.turns) && data.turns.some((turn) => turn.streaming === true);
 }
 
 /** Whether this card's last turn is having its answer written right now. */

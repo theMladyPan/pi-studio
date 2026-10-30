@@ -232,6 +232,10 @@ commit's own account rather than on a check run now, the section below says so.
   wait, and it moves the box by nothing when the next row lands. The word follows the card: `waiting`
   while nothing is arriving, `answering` while the answer itself is being written. A thought's tail
   drops its 2px gap while it runs, so a thought, a tool and the wait row all stand the same height.
+  **One card wears the strip**: the card the run is read on. That is the thread card while it answers,
+  and a plain card only while one of its own turns is streaming — the card a hidden child answers for.
+  `answersWith.running` names the thread's whole run and is true for every card that thread ever made,
+  so reading it as "this card is live" put a `waiting` row on a note and on the thread card at once.
 - **A running row is a fixed slot.** One head line and `--act-detail` lines under it — three by default
   — and the same height from the first delta to the last, because a row that grows while it streams
   walks the rows around it about. The head says the tool in one word (`bash`, `edit`, `read`) and the
