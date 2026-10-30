@@ -31,6 +31,24 @@ test("a thread file from today reloads with its fields intact", () => {
 	assert.equal(thread.folder, "/tmp/folder");
 });
 
+test("a boss comes back as a boss, with the flow it was running", () => {
+	// The mode is what stops a boss doing the work itself, so a restart that dropped it would hand a
+	// boss the write tool and a task it was told to delegate.
+	const thread = restoredThread(
+		{ id: "t2", title: "run the flow", mode: "boss", path: "advanced", pathChosenBy: "human", at: now, turns: [] },
+		"/tmp/folder",
+	)!;
+	assert.equal(thread.mode, "boss");
+	assert.equal(thread.path, "advanced");
+	assert.equal(thread.pathChosenBy, "human");
+});
+
+test("and a mode that is not one of the three is dropped rather than trusted", () => {
+	const thread = restoredThread({ id: "t3", title: "x", mode: "wizard", path: "quick", at: now, turns: [] }, "/tmp/folder")!;
+	assert.equal(thread.mode, undefined);
+	assert.equal(thread.path, undefined);
+});
+
 test("a board written before hidden was a flag still hides the card", () => {
 	// `behind: <cardId>` is the old spelling. Read as anything else, those cards come back on top of a
 	// board nobody put them on.

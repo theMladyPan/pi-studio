@@ -52,6 +52,9 @@ function threadSpec(board, body, caller) {
 	// A role whose prompt file is missing is a child that does not know what it is for, so the spawn is
 	// refused here rather than showing up later as a strange answer.
 	if (role && !roleSystemPrompt(role)) return { error: `role prompt missing: prompts/roles/${role}.md` };
+	// A role is what a spawn gives a child. A thread the human started is theirs to define with a mode, and
+	// a root thread carrying a role would be a child's instructions on a conversation nobody spawned.
+	if (role && !parent) return { error: "a role belongs to a spawned thread" };
 	// A mode belongs to a thread the human started, and only there: a spawned thread is given a role, and
 	// a child that also carried a mode would be two instructions about what it is for.
 	const mode = MODE_NAMES.includes(body.mode) ? body.mode : "";
@@ -308,6 +311,10 @@ export async function onPath(req, res, board, caller = { human: true }) {
 	if (!thread) return void fail(res, 409, "no such thread");
 	if (thread.mode !== "boss") return void fail(res, 409, "a path belongs to a boss thread");
 	if (!caller.human && path === "auto") return void fail(res, 409, "a boss reports the path it chose, not auto");
+	// A flow the human pinned is already decided, so a boss cannot quietly choose another one.
+	if (!caller.human && thread.pathChosenBy === "human" && thread.path !== "auto") {
+		return void fail(res, 409, "the human already chose this thread's flow");
+	}
 	thread.path = path;
 	thread.pathChosenBy = caller.human ? "human" : "auto";
 	update(board, thread);

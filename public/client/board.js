@@ -1623,8 +1623,13 @@ function rememberThread(data) {
   const role = data.role || "";
   const parent = data.parentThread || "";
   const status = data.status || "";
-  if (known.title !== title || known.role !== role || known.parent !== parent || known.status !== status) {
-    threadMeta.set(data.id, { title, role, parent, status });
+  if (known.title === title && known.role === role && known.parent === parent && known.status === status) return;
+  threadMeta.set(data.id, { title, role, parent, status });
+  // A master's sub line says which child it is waiting on, so a child that starts or settles repaints the
+  // card above it. One level is all the depth rule allows, so this cannot walk a chain.
+  if (parent && known.status !== status) {
+    const master = byId.get(parent);
+    if (master && !master.editing) paintCard(master, master.data);
   }
 }
 
@@ -1697,6 +1702,9 @@ function paintCard(entry, data) {
     (isSource ? data.path : data.type === "question" ? "question" : data.type === "sticky" ? "" : "note");
   entry.titleEl.textContent = shownTitle;
   entry.titleEl.title = shownTitle;
+  // The thread is remembered before the sub line is written: a boss's line asks which of its children is
+  // still running, and that answer comes from what the cards have said so far.
+  rememberThread(data);
   entry.subEl.textContent = isSource
     ? `${data.content.split("\n").length} lines`
     : data.type === "question"
@@ -1706,7 +1714,6 @@ function paintCard(entry, data) {
         : noteSub(data, entry);
   // The role is the promise a child was started under, so the card wears it as a chip. A thread the
   // human made has no role and the chip takes no space.
-  rememberThread(data);
   const role = data.type === "sticky" ? data.role || "" : "";
   entry.roleEl.textContent = role;
   entry.roleEl.title = role ? `spawned with the ${role} role` : "";
@@ -1815,7 +1822,8 @@ function renumberQueue() {
  * a delegate card is re-broadcast every few seconds whether or not anything moved.
  */
 function cardChanged(before, after) {
-  const fields = ["title", "markdown", "details", "text", "question", "reply", "status"];
+  // A mode or a flow is repainted too: `/mode` and `/thread/path` change nothing else on the card.
+  const fields = ["title", "markdown", "details", "text", "question", "reply", "status", "mode", "path", "pathChosenBy"];
   if (fields.some((field) => before[field] !== after[field])) return true;
   if (JSON.stringify(before.worktree ?? null) !== JSON.stringify(after.worktree ?? null)) return true;
   // A follow-up's answer settles into the turn it was asked with, so the thread changes without
@@ -1953,6 +1961,8 @@ function dropCard(entry) {
   const at = cards.indexOf(record.card);
   if (at >= 0) cards.splice(at, 1);
   byId.delete(record.id);
+  // A closed card is a thread the board no longer draws, so it stops being a child its master waits on.
+  threadMeta.delete(record.id);
   foldState.delete(record.id);
   drafts.delete(record.id);
   // Links pointing at the card that just went have to stop looking live.
@@ -4402,9 +4412,24 @@ const modePick = document.getElementById("modePick");
 const pathPick = document.getElementById("pathPick");
 const MODE_ORDER = ["agent", "plan", "boss"];
 const PATH_ORDER = ["auto", "simple", "advanced", "complex"];
-// What a new thread is born with, or what the card the composer is aimed at carries.
-let modeChoice = "agent";
-let pathChoice = "auto";
+// What a new thread is born with. `pathNext` empty means the board's own flow, so a board that always
+// works the same way is not overridden by a picker nobody touched.
+let modeNext = "agent";
+let pathNext = "";
+
+/** The thread card the composer is aimed at, if it is aimed at one. */
+function aimedThread() {
+  return replyTarget && replyTarget.data?.type === "sticky" ? replyTarget : null;
+}
+
+/** What the two buttons say: this card's mode, or the one a new thread would be born with. */
+function modeShown() {
+  const aimed = aimedThread();
+  return {
+    mode: aimed ? aimed.data.mode || "agent" : modeNext,
+    path: aimed ? aimed.data.path || "auto" : pathNext || boardConfig.path || "auto",
+  };
+}
 
 /**
  * A mode decides whether the thread works, plans, or spawns; a boss also runs a flow. Both are the
@@ -4412,25 +4437,21 @@ let pathChoice = "auto";
  * the board, where a press that spawns work would read like a press that does work.
  */
 function paintMode() {
-  const aimed = replyTarget && replyTarget.data?.type === "sticky" ? replyTarget.data : null;
-  if (aimed) {
-    modeChoice = aimed.mode || "agent";
-    pathChoice = aimed.path || "auto";
-  }
-  modePick.textContent = modeChoice;
-  modePick.classList.toggle("on", modeChoice !== "agent");
+  const { mode, path } = modeShown();
+  modePick.textContent = mode;
+  modePick.classList.toggle("on", mode !== "agent");
   modePick.title =
-    modeChoice === "boss"
+    mode === "boss"
       ? "a boss: it spawns children with roles and does no work itself"
-      : modeChoice === "plan"
+      : mode === "plan"
         ? "a planner: a plan and throwaway checks under /tmp, no edits"
         : "an agent: it does the work itself";
-  pathPick.hidden = modeChoice !== "boss";
-  pathPick.textContent = pathChoice;
+  pathPick.hidden = mode !== "boss";
+  pathPick.textContent = path;
   pathPick.title =
-    pathChoice === "auto"
+    path === "auto"
       ? "the boss picks the flow at its first turn and says which one"
-      : `the ${pathChoice} flow, read from prompts/flows/${pathChoice}.md`;
+      : `the ${path} flow, read from prompts/flows/${path}.md`;
 }
 
 function setReplyTarget(entry, { focus = true } = {}) {
@@ -4948,13 +4969,13 @@ async function chooseRuntime(kind, value) {
 
 /** Writes the mode on the thread the composer is aimed at, or leaves it as the next thread's. */
 async function chooseMode(mode) {
-  const target = replyTarget && replyTarget.data?.type === "sticky" ? replyTarget : null;
+  const target = aimedThread();
   if (!target) return;
   await postThreadField("/mode", { cardId: target.id, mode });
 }
 
 async function choosePath(path) {
-  const target = replyTarget && replyTarget.data?.type === "sticky" ? replyTarget : null;
+  const target = aimedThread();
   if (!target) return;
   await postThreadField("/thread/path", { cardId: target.id, path });
 }
@@ -4975,18 +4996,21 @@ async function postThreadField(route, body) {
 }
 
 modePick.addEventListener("click", () => {
-  modeChoice = MODE_ORDER[(MODE_ORDER.indexOf(modeChoice) + 1) % MODE_ORDER.length];
-  if (modeChoice !== "boss") pathChoice = "auto";
+  const next = MODE_ORDER[(MODE_ORDER.indexOf(modeShown().mode) + 1) % MODE_ORDER.length];
+  // Aimed at a thread, the press changes that thread; with nothing aimed, it sets the next one's mode.
+  if (aimedThread()) void chooseMode(next);
+  else modeNext = next;
+  if (next !== "boss") pathNext = "";
   paintMode();
-  hintLine(`mode: ${modeChoice}`);
-  void chooseMode(modeChoice);
+  hintLine(`mode: ${next}`);
 });
 
 pathPick.addEventListener("click", () => {
-  pathChoice = PATH_ORDER[(PATH_ORDER.indexOf(pathChoice) + 1) % PATH_ORDER.length];
+  const next = PATH_ORDER[(PATH_ORDER.indexOf(modeShown().path) + 1) % PATH_ORDER.length];
+  if (aimedThread()) void choosePath(next);
+  else pathNext = next === "auto" ? "" : next;
   paintMode();
-  hintLine(`path: ${pathChoice}`);
-  void choosePath(pathChoice);
+  hintLine(`path: ${next}`);
 });
 
 modelChip.addEventListener("click", () => void openPick("model"));
@@ -5153,10 +5177,9 @@ cfgPath.addEventListener("click", async () => {
 // ---------- the prompt files ----------------------------------------------
 // A role, a mode and a flow are markdown under `prompts/`. They are read when a thread starts, so an
 // edit changes the next run and never rewrites one already going.
-let promptsLoaded = false;
-
 async function loadPrompts() {
-  if (promptsLoaded) return;
+  // Read afresh each time the editor opens: a file added to `prompts/` by hand is a prompt the human
+  // should see without restarting the daemon.
   const response = await fetch(`/prompts?${auth}`);
   if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
   const { prompts } = await response.json();
@@ -5168,7 +5191,6 @@ async function loadPrompts() {
       return option;
     }),
   );
-  promptsLoaded = true;
 }
 
 async function openPrompt(name) {
@@ -5722,8 +5744,9 @@ async function startThread() {
     const response = await fetch(`/thread?${auth}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // A new thread is born with the mode the composer is showing; a boss also carries its flow.
-      body: JSON.stringify({ mode: modeChoice, ...(modeChoice === "boss" ? { path: pathChoice } : {}) }),
+      // A new thread is born with the mode the composer is showing. A flow is named only when the human
+      // picked one: otherwise the board's own default decides, which is what `/config` is for.
+      body: JSON.stringify({ mode: modeNext, ...(modeNext === "boss" && pathNext ? { path: pathNext } : {}) }),
     });
     if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
     const created = await response.json();

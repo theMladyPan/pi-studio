@@ -3,7 +3,7 @@
  * the flows a boss may run. They are plain markdown in `prompts/`, read by the daemon when a thread
  * starts, so an edit here takes effect on the next run and never rewrites one already going.
  */
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { answer, fail, readJson } from "../../http.ts";
@@ -70,6 +70,22 @@ export async function onPromptWrite(req: IncomingMessage, res: ServerResponse) {
 	const name = promptName(body.name);
 	if (!name) return void fail(res, 400, "no such prompt");
 	if (typeof body.text !== "string") return void fail(res, 400, "a prompt is text");
-	writeFileSync(join(PROMPT_DIR, name), body.text);
-	answer(res, 200, { name, saved: true });
+	const path = join(PROMPT_DIR, name);
+	// A prompt is read by a thread that is starting, so it is replaced in one move: a half-written file
+	// would be a role with half its instructions. A symlink is refused rather than followed, because the
+	// name pattern guards the folder and a link would step outside it.
+	try {
+		if (existsSync(path) && !lstatSync(path).isFile()) return void fail(res, 409, "that prompt is not a plain file");
+		const temporary = `${path}.tmp-${process.pid}`;
+		writeFileSync(temporary, body.text);
+		renameSync(temporary, path);
+		answer(res, 200, { name, saved: true });
+	} catch (error) {
+		try {
+			unlinkSync(`${path}.tmp-${process.pid}`);
+		} catch {
+			// Nothing was left behind, which is the usual case for a failed write.
+		}
+		fail(res, 500, `could not save that prompt: ${(error as Error).message}`);
+	}
 }

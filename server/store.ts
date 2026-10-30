@@ -72,6 +72,11 @@ export function saveBoard(board) {
 			...(Number.isFinite(thread.depth) ? { depth: thread.depth } : {}),
 			...(thread.after?.length ? { after: thread.after } : {}),
 			...(thread.role ? { role: thread.role } : {}),
+			// A mode and a flow are decisions the human made about this thread, so they are written with it:
+			// a restart that forgot them would turn a boss back into an agent that does the work itself.
+			...(thread.mode ? { mode: thread.mode } : {}),
+			...(thread.path ? { path: thread.path } : {}),
+			...(thread.pathChosenBy ? { pathChosenBy: thread.pathChosenBy } : {}),
 			...(thread.hidden ? { hidden: true } : {}),
 			...(thread.closedAt ? { closedAt: thread.closedAt } : {}),
 			...(thread.type ? { type: thread.type } : {}),

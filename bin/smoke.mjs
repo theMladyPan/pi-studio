@@ -214,6 +214,8 @@ async function main() {
 	said(agentPath.status === 409, "a path on an agent is refused", `${agentPath.status} ${agentPath.body.slice(0, 60)}`);
 	const childMode = await post(one, `/thread${board}`, { title: "odd", parentThread: parent.threadId, mode: "boss" });
 	said(childMode.status === 409, "a spawned thread may not be given a mode", `${childMode.status} ${childMode.body.slice(0, 60)}`);
+	const rootRole = await post(one, `/thread${board}`, { title: "odd", role: "scout" });
+	said(rootRole.status === 409, "and a thread the human started may not be given a role", `${rootRole.status} ${rootRole.body.slice(0, 60)}`);
 	const moved = JSON.parse((await post(one, `/thread/path${board}`, { cardId: boss.threadId, path: "complex" })).body || "{}");
 	said(
 		moved.card?.path === "complex" && moved.card?.pathChosenBy === "human",
@@ -239,6 +241,17 @@ async function main() {
 	said(boardPath.config?.path === "complex", "the board can prefer a flow for new bosses", `path ${boardPath.config?.path}`);
 	const badBoardPath = await post(one, `/config${board}`, { path: "quick" });
 	said(badBoardPath.status === 400, "and an unknown one is refused", `${badBoardPath.status}`);
+	// Written down, not only answered: a board file that forgot the mode would come back as an agent that
+	// does the work itself, and the tool rules would follow it.
+	await new Promise((resolve) => setTimeout(resolve, 1200));
+	const savedBoard = JSON.parse(readFileSync(join(first, "boards", `${opened.board.id}.json`), "utf8"));
+	const savedBoss = (savedBoard.threads || []).find((thread) => thread.id === boss.threadId);
+	said(
+		savedBoss?.mode === "boss" && savedBoss?.path === "complex",
+		"the mode and the flow are written into the board file",
+		`mode ${savedBoss?.mode} path ${savedBoss?.path}`,
+	);
+
 	const toAgent = JSON.parse((await post(one, `/mode${board}`, { cardId: boss.threadId, mode: "agent" })).body || "{}");
 	said(
 		toAgent.card?.mode === "agent" && !toAgent.card?.path,
