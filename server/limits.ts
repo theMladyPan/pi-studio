@@ -28,6 +28,10 @@ export const MAX_TITLE_CHARS = 200;
 export const ASK_TIMEOUT_MS = 5 * 60_000;
 
 
+/** One card asks at most this many questions: more than five tabs is a form, not a question. */
+export const MAX_ASK_QUESTIONS = 5;
+
+
 export const BROWSE_LIMIT = 200;
 
 

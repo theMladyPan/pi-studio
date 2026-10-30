@@ -96,9 +96,12 @@ export function saveBoard(board) {
 			...(Number.isFinite(card.line) ? { line: card.line } : {}),
 			...(typeof card.question === "string" ? { question: card.question } : {}),
 			...(Array.isArray(card.options) ? { options: card.options } : {}),
+			// The tabs of a card that asks several questions, so a restart reads the same card back.
+			...(Array.isArray(card.questions) && card.questions.length ? { questions: card.questions } : {}),
 			...(card.type === "question" ? { allowFreeText: card.allowFreeText !== false } : {}),
 			...(typeof card.status === "string" ? { status: card.status } : {}),
 			...(typeof card.answer === "string" ? { answer: card.answer } : {}),
+			...(Array.isArray(card.answers) && card.answers.length ? { answers: card.answers } : {}),
 			...(Number.isFinite(card.expiresAt) ? { expiresAt: card.expiresAt } : {}),
 			...(card.updatedAt ? { updatedAt: card.updatedAt } : {}),
 			...(card.key ? { key: card.key } : {}),
@@ -201,6 +204,20 @@ export function restoredThread(raw, folder) {
 
 
 
+/** The tabs of a card that asked several questions, kept as far as the file makes sense. */
+function restoredQuestions(raw) {
+	return raw
+		.filter((one) => one && typeof one === "object" && typeof one.question === "string" && Array.isArray(one.options))
+		.map((one) => ({
+			question: one.question,
+			options: one.options.filter((option) => typeof option === "string"),
+			...(one.multiple === true ? { multiple: true } : {}),
+			allowFreeText: one.allowFreeText !== false,
+		}));
+}
+
+
+
 /** Rebuild a plain card from its file. One without the body its type needs is nothing, so it goes. */
 export function restoredPlainCard(raw) {
 	if (!raw || typeof raw !== "object" || typeof raw.id !== "string") return null;
@@ -208,7 +225,9 @@ export function restoredPlainCard(raw) {
 	const type = raw.type === "source" || raw.type === "question" ? raw.type : "note";
 	if (type === "note" && typeof raw.markdown !== "string") return null;
 	if (type === "source" && (typeof raw.path !== "string" || typeof raw.content !== "string")) return null;
-	if (type === "question" && typeof raw.question !== "string") return null;
+	// A question is a card with words on it: several of them, or the one the flat fields carry.
+	const asked = Array.isArray(raw.questions) ? restoredQuestions(raw.questions) : [];
+	if (type === "question" && typeof raw.question !== "string" && !asked.length) return null;
 	const rect = cleanRect(raw.rect);
 	const card = {
 		id: raw.id,
@@ -219,7 +238,9 @@ export function restoredPlainCard(raw) {
 			? { markdown: raw.markdown }
 			: type === "source"
 				? { path: raw.path, content: raw.content }
-				: { question: raw.question, options: Array.isArray(raw.options) ? raw.options.filter((one) => typeof one === "string") : [] }),
+				: asked.length
+					? { questions: asked }
+					: { question: raw.question, options: Array.isArray(raw.options) ? raw.options.filter((one) => typeof one === "string") : [] }),
 		// A question is answered by an agent that was waiting for it, and that agent is gone: whatever
 		// the file says, a restored question is settled.
 		...(type === "question"

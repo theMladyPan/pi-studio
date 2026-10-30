@@ -202,6 +202,61 @@ test("a question that takes one answer is answered by one click, as before", asy
 	}
 });
 
+test("a card asks up to five questions on tabs, and settles them all at once", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-ask-tabs-"));
+	const daemon = await boot(folder);
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		const board = JSON.parse(opened.body).board;
+		// A card of six tabs is a form rather than a question, so the daemon refuses it and the card is
+		// never written.
+		const tooMany = await postTo(daemon, board.id, "/card/ask", {
+			questions: Array.from({ length: 6 }, (_, at) => ({ question: `q${at}?`, options: ["a", "b"] })),
+		});
+		assert.equal(tooMany.status, 400);
+
+		const held = postTo(daemon, board.id, "/card/ask", {
+			title: "three things",
+			questions: [
+				{ question: "which one?", options: ["a", "b"] },
+				{ question: "which of these?", options: ["x", "y"], multiple: true, allowFreeText: false },
+				{ question: "any words?", options: ["yes", "no"] },
+			],
+		});
+		const card = await questionCard(daemon, board.id);
+		assert.ok(card, "the questions never reached the board");
+		assert.equal(card.questions.length, 3);
+		assert.equal(card.questions[1].multiple, true);
+		assert.equal(card.questions[1].allowFreeText, false);
+
+		// Every tab sends its own answer, in tab order: a card of tabs is one call and half a form is not
+		// a card the child can read.
+		const short = await postTo(daemon, board.id, "/answer", { cardId: card.id, answers: ["a", ["x"]] });
+		assert.equal(short.status, 400);
+		const stray = await postTo(daemon, board.id, "/answer", { cardId: card.id, answers: ["a", ["x", "z"], "yes"] });
+		assert.equal(stray.status, 400);
+		const empty = await postTo(daemon, board.id, "/answer", { cardId: card.id, answers: ["a", ["x"], ""] });
+		assert.equal(empty.status, 400);
+
+		const sent = await postTo(daemon, board.id, "/answer", { cardId: card.id, answers: ["b", ["x", "y"], "my own words"] });
+		assert.equal(sent.status, 200);
+		const reply = JSON.parse((await held).body);
+		assert.deepEqual(reply.answers, ["b", "x, y", "my own words"]);
+		assert.equal(reply.answer, "b; x, y; my own words");
+
+		const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		const settled = (state.cards as any[]).find((one) => one.id === card.id);
+		assert.equal(settled.status, "answered");
+		assert.deepEqual(settled.answers, ["b", "x, y", "my own words"]);
+		// The tabs are still on the card once it is settled, so a reader sees what was asked as well as
+		// what was answered.
+		assert.equal(settled.questions.length, 3);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
 test("a closed note comes back on /undo, with its id and its key", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-undo-"));
 	const daemon = await boot(folder);

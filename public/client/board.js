@@ -742,7 +742,22 @@ function sourceBody(data) {
   return scroll;
 }
 
+/**
+ * The questions a card asks, in the one shape that draws them.
+ *
+ * One question is the card the board always had: its options answer it where they are drawn, and a
+ * click is the answer. A card that asks several draws a tab per question and one send under them,
+ * because the call that asked is held until every tab has an answer.
+ */
 function questionBody(data, entry) {
+  const asked = Array.isArray(data.questions) ? data.questions.filter((one) => one && one.question) : [];
+  if (asked.length > 1) return tabbedQuestions(data, entry, asked);
+  // A card that carries its one question in the list form reads the same once it is spread flat.
+  return oneQuestion(asked.length ? { ...data, ...asked[0] } : data, entry);
+}
+
+/** A settled question names its answer, and the boxes it left ticked keep their ticks. */
+function oneQuestion(data, entry) {
   // A question that ran out of time is as settled as an answered one: its buttons are dead and
   // the header says which of the two happened.
   const settled = data.status === "answered" || data.status === "expired";
@@ -841,6 +856,236 @@ function questionBody(data, entry) {
   return holder;
 }
 
+/**
+ * A card that asks several questions: a numbered tab per question, a radio or a box under each, and
+ * one send at the foot. The tabs are numbers because five questions do not fit across a card, and a
+ * tab that already has an answer carries a tick, so the reader sees what is left without opening each.
+ */
+function tabbedQuestions(data, entry, asked) {
+  // A question that ran out of time is as settled as an answered one, and every tab keeps what it was
+  // answered with: the card is the record of the exchange, not only the form for it.
+  const settled = data.status === "answered" || data.status === "expired";
+  const said = settled && Array.isArray(data.answers) ? data.answers : [];
+  const holder = el("div", "q-body");
+  const tabs = el("div", "q-tabs");
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "questions");
+  holder.appendChild(tabs);
+  const panels = [];
+  const tabButtons = [];
+
+  // What one tab has been answered with: the picks for a question that takes several, else one answer.
+  const valueAt = (at) => {
+    const panel = panels[at];
+    const picks = [...panel.querySelectorAll(".q-opt.picked")].map((button) => button.textContent);
+    const typed = panel.querySelector(".q-free input")?.value.trim() || "";
+    // Typing and picking are two ways to say one thing: on a question with one answer the words are the
+    // answer, and on a question of boxes they are one more box.
+    if (asked[at].multiple === true) return typed ? [...picks, typed] : picks;
+    return typed || picks[0] || "";
+  };
+  const answeredAt = (at) => {
+    const value = valueAt(at);
+    return Array.isArray(value) ? value.length > 0 : Boolean(value);
+  };
+  const setTab = (at, focus) => {
+    tabButtons.forEach((button, index) => {
+      const on = index === at;
+      button.classList.toggle("on", on);
+      button.setAttribute("aria-selected", on ? "true" : "false");
+      // One tab is in the tab order, so Tab reaches the row once and the arrows move inside it.
+      button.tabIndex = on ? 0 : -1;
+      panels[index].hidden = !on;
+    });
+    if (focus) tabButtons[at].focus();
+  };
+  // The tab stands for its question: a tick says it is answered, and the panel below carries the words.
+  const markTabs = () => {
+    tabButtons.forEach((button, at) => {
+      const done = settled ? Boolean(said[at]) : answeredAt(at);
+      button.classList.toggle("done", done);
+      button.title = settled && said[at] ? `${asked[at].question}\nanswered: ${said[at]}` : asked[at].question;
+    });
+  };
+
+  let foot = null;
+  let send = null;
+  let count = null;
+  const refresh = () => {
+    markTabs();
+    if (settled) return;
+    const missing = asked.filter((one, at) => !answeredAt(at)).length;
+    count.textContent = missing ? `${asked.length - missing} of ${asked.length} answered` : "all answered — send";
+    send.disabled = missing > 0;
+  };
+
+  // The arrows walk the tab row, as a tab list is expected to.
+  tabs.addEventListener("keydown", (event) => {
+    const at = tabButtons.indexOf(document.activeElement);
+    if (at < 0) return;
+    const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    setTab((at + step + tabButtons.length) % tabButtons.length, true);
+  });
+
+  asked.forEach((one, at) => {
+    const tab = el("button", "q-tab");
+    tab.type = "button";
+    tab.setAttribute("role", "tab");
+    tab.textContent = String(at + 1);
+    tab.addEventListener("click", () => setTab(at, false));
+    tabs.appendChild(tab);
+    tabButtons.push(tab);
+
+    const panel = el("div", "q-panel");
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-label", `question ${at + 1}`);
+    panels.push(panel);
+
+    const text = el("div", "q-text");
+    text.innerHTML = inlineMd(one.question || "");
+    panel.appendChild(text);
+
+    const buttons = el("div", "q-options");
+    buttons.tabIndex = -1;
+    const multiple = one.multiple === true;
+    // A settled tab shows what was ticked rather than a form nobody can send again.
+    const chosen = new Set(settled && said[at] ? String(said[at]).split(", ") : []);
+    let input = null;
+    let freeRow = null;
+    if (!settled && one.allowFreeText !== false) {
+      freeRow = el("div", "q-free");
+      input = el("input");
+      input.placeholder = multiple ? "or add a note…" : "or type an answer…";
+      input.addEventListener("input", () => {
+        // One question has one answer, so typed words clear the picked option and the option clears them.
+        if (!multiple) for (const button of buttons.children) button.classList.remove("picked");
+        refresh();
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        send.click();
+      });
+      freeRow.appendChild(input);
+    }
+
+    for (const option of one.options || []) {
+      const button = el("button", multiple ? "q-opt q-check" : "q-opt");
+      button.type = "button";
+      button.textContent = option;
+      if (settled) {
+        button.disabled = true;
+        if (chosen.has(option)) button.classList.add("picked");
+        if (multiple) button.setAttribute("aria-pressed", chosen.has(option) ? "true" : "false");
+      } else if (multiple) {
+        // A box, not an answer: clicking it fills the tab in and lets the human tick a second.
+        button.setAttribute("aria-pressed", "false");
+        button.addEventListener("click", () => {
+          const on = button.classList.toggle("picked");
+          button.setAttribute("aria-pressed", on ? "true" : "false");
+          refresh();
+        });
+      } else {
+        button.setAttribute("aria-pressed", "false");
+        button.addEventListener("click", () => {
+          for (const other of buttons.children) {
+            other.classList.remove("picked");
+            other.setAttribute("aria-pressed", "false");
+          }
+          button.classList.add("picked");
+          button.setAttribute("aria-pressed", "true");
+          if (input) input.value = "";
+          refresh();
+          // One click is the whole answer to a question with one answer, so the empty tab after it is
+          // where the reader goes next. The keyboard lands on the options, not on a button Space presses.
+          const after = asked.findIndex((other, index) => index > at && !answeredAt(index));
+          const next = after > -1 ? after : asked.findIndex((other, index) => !answeredAt(index));
+          if (next > -1) {
+            setTab(next, false);
+            panels[next].querySelector(".q-options")?.focus({ preventScroll: true });
+          }
+        });
+      }
+      buttons.appendChild(button);
+    }
+    panel.appendChild(buttons);
+    if (freeRow) panel.appendChild(freeRow);
+    if (settled && said[at]) {
+      const done = el("div", "q-done");
+      done.textContent = `answered: ${said[at]}`;
+      panel.appendChild(done);
+    }
+    holder.appendChild(panel);
+  });
+
+  if (!settled) {
+    foot = el("div", "q-actions");
+    count = el("span", "q-count");
+    send = el("button", "q-opt q-send");
+    send.type = "button";
+    send.textContent = "send answers";
+    send.addEventListener("click", () => {
+      // A send that left a tab empty would wake the child with half a form, so the button walks to the
+      // question it is waiting on instead of sending.
+      const missing = asked.findIndex((one, at) => !answeredAt(at));
+      if (missing > -1) {
+        setTab(missing, true);
+        return;
+      }
+      void sendTabbed(entry, holder, asked.map((one, at) => valueAt(at)), foot);
+    });
+    foot.appendChild(count);
+    foot.appendChild(send);
+    holder.appendChild(foot);
+  }
+
+  setTab(0, false);
+  refresh();
+  return holder;
+}
+
+/** Send every tab at once, and put the form back to being filled in when the send failed. */
+async function sendTabbed(entry, holder, answers, foot) {
+  const live = [...holder.querySelectorAll("button, input")];
+  for (const node of live) node.disabled = true;
+  foot.hidden = true;
+  const problem = await postAnswer(entry, { answers });
+  if (!problem) return;
+  for (const node of live) node.disabled = false;
+  foot.hidden = false;
+  showProblem(holder, problem);
+}
+
+/** Send one answer to the daemon, and hand back what went wrong, or nothing at all. */
+async function postAnswer(entry, body) {
+  try {
+    const response = await fetch(`/answer?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: entry.id, ...body }),
+    });
+    // A 409 means the question expired or another tab answered it, so nothing was delivered.
+    if (!response.ok) return (await response.text()).trim() || "could not send — the question may have expired";
+  } catch {
+    return "could not reach the board server";
+  }
+  return "";
+}
+
+/** A send that failed says so where the answer was given, styled as a failure rather than a note. */
+function showProblem(holder, problem) {
+  let warn = holder.querySelector(".q-done");
+  if (!warn) {
+    warn = el("div", "q-done");
+    warn.setAttribute("role", "alert");
+    holder.appendChild(warn);
+  }
+  warn.classList.add("q-problem");
+  warn.textContent = problem;
+}
+
 async function submitAnswer(entry, answer, buttons, freeRow) {
   // An answer that is a list came from the boxes. The ticks stay on screen while the send is in
   // flight: they are the question being filled in, and a failed send must not undo them.
@@ -853,18 +1098,7 @@ async function submitAnswer(entry, answer, buttons, freeRow) {
       if (button.textContent === answer) button.classList.add("picked");
     }
   }
-  let problem = "";
-  try {
-    const response = await fetch(`/answer?${auth}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(multi ? { cardId: entry.id, answers: answer } : { cardId: entry.id, answer }),
-    });
-    // A 409 means the question expired or another tab answered it, so nothing was delivered.
-    if (!response.ok) problem = (await response.text()).trim() || "could not send — the question may have expired";
-  } catch {
-    problem = "could not reach the board server";
-  }
+  const problem = await postAnswer(entry, multi ? { answers: answer } : { answer });
   if (!problem) return;
   // The agent got nothing, so the card goes back to looking unanswered: a picked option and
   // dead buttons would read as sent. On a question with boxes the ticks are the human's work, so
@@ -872,16 +1106,7 @@ async function submitAnswer(entry, answer, buttons, freeRow) {
   for (const button of options) button.disabled = false;
   if (!multi) for (const button of options) button.classList.remove("picked");
   if (freeRow) buttons.after(freeRow);
-  const holder = buttons.parentElement;
-  let warn = holder.querySelector(".q-done");
-  if (!warn) {
-    warn = el("div", "q-done");
-    warn.setAttribute("role", "alert");
-    holder.appendChild(warn);
-  }
-  // Styled as a failure, so it does not read as a muted "answered: …" line.
-  warn.classList.add("q-problem");
-  warn.textContent = problem;
+  showProblem(buttons.parentElement, problem);
 }
 
 /**
@@ -1723,14 +1948,15 @@ function noteSub(data, entry) {
 }
 
 /**
- * An open question says when it gives up, so the wait has a visible end. A settled one says
- * what actually happened: an answer, or a question the board abandoned.
+ * An open question says when it gives up, so the wait has a visible end, and a card of tabs says how
+ * many it asks. A settled one says what actually happened: an answer, or a question the board abandoned.
  */
 function questionSub(data) {
-  if (data.status === "answered") return "answered";
-  if (data.status === "expired") return "expired — no answer sent";
-  if (!data.expiresAt) return "waiting for you";
-  return `expires ${new Date(data.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  const tabs = Array.isArray(data.questions) && data.questions.length > 1 ? `${data.questions.length} questions · ` : "";
+  if (data.status === "answered") return `${tabs}answered`;
+  if (data.status === "expired") return `${tabs}expired — no answer sent`;
+  if (!data.expiresAt) return `${tabs}waiting for you`;
+  return `${tabs}expires ${new Date(data.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function paintCard(entry, data) {
@@ -2371,8 +2597,10 @@ function centreQuestion(record) {
   // The rule jumpToFresh uses: never arrive so far out that the ring and the text stop reading.
   view.k = Math.min(1.1, Math.max(view.k, 0.6));
   centerOn(record);
-  // preventScroll: centring already moved the canvas, and a second jump would fight it.
-  record.body.querySelector(".q-options")?.focus({ preventScroll: true });
+  // A card of tabs starts on its tab row; a single question has only its options. preventScroll:
+  // centring already moved the canvas, and a second jump would fight it.
+  const target = record.body.querySelector(".q-tab.on") || record.body.querySelector(".q-options");
+  target?.focus({ preventScroll: true });
 }
 
 /** True while the keystroke belongs to a field the user is typing in. */
@@ -3838,16 +4066,30 @@ const ACT_VIEWS = {
     if (said) add(panelSection("result", said, cut.has("output")));
   },
   board_ask(payload, args, cut, add) {
-    if (typeof args.question === "string") add(panelSection("question", args.question, cut.has("args")));
-    const options = Array.isArray(args.options) ? args.options : [];
-    if (options.length) {
+    // A card may ask one question or several: the sheet reads the arguments, so it draws whichever
+    // arrived as the tabs the card will draw.
+    const asked = Array.isArray(args.questions) && args.questions.length ? args.questions : null;
+    if (asked) {
       const list = el("ol", "act-options");
-      for (const option of options) list.appendChild(el("li")).textContent = String(option);
-      add(panelBlock("options", list));
+      for (const one of asked) {
+        const row = el("li");
+        row.textContent = `${one?.question ?? ""}${one?.multiple === true ? " (any of them)" : ""}`;
+        list.appendChild(row);
+      }
+      add(panelBlock("questions", list, cut.has("args")));
+    } else {
+      if (typeof args.question === "string") add(panelSection("question", args.question, cut.has("args")));
+      const options = Array.isArray(args.options) ? args.options : [];
+      if (options.length) {
+        const list = el("ol", "act-options");
+        for (const option of options) list.appendChild(el("li")).textContent = String(option);
+        add(panelBlock("options", list));
+      }
     }
     add(
       panelFields([
         ["title", args.title],
+        ["tabs", asked ? String(asked.length) : ""],
         ["picks", args.multiple === true ? "any of them" : "one of them"],
         ["free text", args.allowFreeText === false ? "no" : "yes"],
       ]),
@@ -6074,7 +6316,8 @@ document.addEventListener("keydown", (event) => {
   undoClose();
 });
 
-// `1`–`6` answer the question the agent is waiting on, so a decision needs no mouse.
+// `1`–`6` answer the question the agent is waiting on, so a decision needs no mouse. A card of tabs
+// answers inside the tab the human is reading, not the first one of five.
 document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey || !/^[1-6]$/.test(event.key)) return;
   if (typingSomewhere()) return;
@@ -6082,7 +6325,8 @@ document.addEventListener("keydown", (event) => {
   const record = openQuestion();
   if (!record) return;
   // The option buttons carry their own click handler, so this reuses the whole answer path.
-  const button = record.body.querySelectorAll(".q-options .q-opt")[Number(event.key) - 1];
+  const shown = record.body.querySelector(".q-panel:not([hidden])") || record.body;
+  const button = shown.querySelectorAll(".q-options .q-opt")[Number(event.key) - 1];
   if (!button || button.disabled) return;
   event.preventDefault();
   button.click();
