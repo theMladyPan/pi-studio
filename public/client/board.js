@@ -1742,7 +1742,6 @@ function paintCard(entry, data) {
   entry.body.replaceChildren(node);
   paintThread(entry, data);
   fitContent(entry, data);
-  renumberQueue();
   syncRailCard(entry);
 }
 
@@ -1782,30 +1781,6 @@ function fitContent(entry, data) {
       void saveLayout(entry.id, rect);
     });
   });
-}
-
-/**
- * Pending messages read as next, 2nd, 3rd in the order they will be answered, and the
- * labels shift up as each one is dealt with.
- */
-function ordinalPosition(position) {
-  if (position === 1) return "next";
-  const suffix = ["th", "st", "nd", "rd"];
-  const rest = position % 100;
-  return `${position}${suffix[(rest - 20) % 10] || suffix[rest] || suffix[0]}`;
-}
-
-function renumberQueue() {
-  let position = 0;
-  for (const card of cards) {
-    const record = byId.get(card.dataset.id);
-    if (!record || record.data.type !== "sticky") continue;
-    if (record.data.status === "answered" || record.data.status === "stopped") continue;
-    position += 1;
-    record.chipEl.textContent = ordinalPosition(position);
-    record.chipEl.classList.add("queue-pos");
-    record.chipEl.style.display = "";
-  }
 }
 
 /**
@@ -1963,7 +1938,6 @@ function dropCard(entry) {
   refreshXrefs();
   dropRailCard(record.id);
   releaseSpot(record.card);
-  renumberQueue();
   recomputePill();
   updateEmpty();
   paintFocus();

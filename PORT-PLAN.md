@@ -99,7 +99,7 @@ public/client/body/thread.js   turnNode, turnShape, paintThread, stickyBody
 public/client/card/make.js     makeCard, compact, paintSections, paintFooter, fitContent, bodyFor
 public/client/card/paint.js    paintCard, bodySame, applyMessage, cardChanged, markUpdated
 public/client/card/select.js   selectCard, attentionCard, reveal, dropCard, closeCard, clearBoard
-public/client/card/order.js    ordinalPosition, renumberQueue, tidy, stack, startCardDrag, jumpToFresh
+public/client/card/order.js    tidy, stack, startCardDrag, jumpToFresh
 public/client/card/fresh.js    armSeen, clearFresh, paintPill, recomputePill
 public/client/rail/shell.js    the rail, railSection, applyActivity, trimRail, applyClosed
 public/client/rail/transcript.js  trLoad, trOpen, trClose, agoText
@@ -235,7 +235,7 @@ One commit per step, each mergeable on its own. Daemon first.
    take, then the state object with every assignment site rewritten. Prove: screenshot, `tsc` on the
    client, tests for the pure shape helpers.
 10. **`body/*.js`, then `card/{make,paint,select,order,fresh}.js`.** Prove: screenshot, tests for
-    `ordinalPosition`, `renumberQueue` and `questionWants`.
+    `questionWants`.
 11. **`rail/{shell,transcript,detail,panels}.js`, `pick/*.js`, `files.js`.** Prove: screenshot, tests
     for `looksLikeDiff`, `diffFromEdits`, `shortModel`, `shortenPath`.
 12. **The remaining panels** — `view`, `minimap`, `gitstrip`, `header`, `transport`, `composer`,
