@@ -106,3 +106,47 @@ commit.
 3. In a browser: the shelf lists real workspaces, typing filters, `~/…` opens a folder, `Enter` opens a
    board tab, `settings →` renders the tree from the daemon's document, closing groups survives a
    reload, and changing the thinking level says `saved` and survives a reload too.
+
+## Addendum (asked for after the first pass): every prompt on the settings page
+
+The settings page must carry **all** of the app's prompts: the files in `prompts/roles/`,
+`prompts/modes/` and `prompts/flows/`. They already have a read and a guarded write route
+(`GET /prompts`, `GET /prompt?name=`, `POST /prompt` in `server/routes/board/prompts.ts`), so this is
+a document change and a control type, not a new store.
+
+The document grows one top-level group after `new-boards`, collapsed by default:
+
+```
+Prompts                                   (collapsed)
+  Roles        -> architect, chore, implement, review, scout
+  Modes        -> boss, plan
+  Flows        -> advanced, complex, simple
+```
+
+Each prompt file is one field:
+
+```json
+{ "id": "prompt-roles-implement", "label": "implement.md", "type": "prompt",
+  "value": "<the whole file, verbatim>",
+  "help": "<its first non-empty line>",
+  "source": "/prompt?name=roles%2Fimplement.md",
+  "write": { "route": "/prompt", "method": "POST", "keys": { "name": "roles/implement.md", "text": "@value" } } }
+```
+
+- The group tree is built from what is on disk when the document is read, so a prompt file added to
+  `prompts/` appears on the page with no code change. Order: folders `roles`, `modes`, `flows`, and
+  the files in each sorted by name.
+- `write` is the general form of the mapping the three defaults already use: `route`, `method`,
+  optional fixed `keys`, and `@value` standing for the control's value. A field with no `write` keeps
+  going through `store` to `POST /defaults`.
+- Type `prompt` draws a monospace textarea, and it does **not** auto-save on every change: it keeps
+  the text dirty until the human presses the field's own `save`, then reports `saved`, and `revert`
+  puts the last saved text back. The three defaults stay auto-save; a prompt is a file, and a file
+  written on every keystroke is not a file anyone meant.
+- `POST /prompt` already refuses a name outside the three folders, a name that is not a plain file,
+  and a missing body. The page shows its answer on the field.
+- The page carries every prompt file, so the payload grows by about 12 kB; that is fine and reads
+  faster than ten round trips.
+
+Nothing writes to `prompts/` in a test: a test may list, and may save a file's own bytes back to
+exercise the route, but the repository's prompts must be byte-identical when the suite ends.
