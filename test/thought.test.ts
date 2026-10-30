@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { handleChildLine } from "../server/thought.ts";
+import { handleChildLine, settleRows } from "../server/thought.ts";
 
 /**
  * The smallest board the line reader will accept. It is a plain object on purpose: the reader is a
@@ -16,6 +16,7 @@ function fakeBoard() {
 		clients: new Set(),
 		trees: [],
 		cards: [],
+		activity: [],
 		config: { model: "m", provider: "p", thinking: "off" },
 	};
 }
@@ -101,4 +102,27 @@ test("a context pi cannot measure yet keeps the estimate the compaction gave", (
 	handleChildLine(board, thread, STATS({ tokens: null, contextWindow: 200000, percent: null }));
 	assert.equal(thread.stats.context, 32000);
 	assert.equal(thread.stats.contextPercent, 16);
+});
+
+/**
+ * The bug this covers: the rail said `activity 1` over a board where nothing was running, because a
+ * call whose child was killed never sent its end line and its row kept a clock for ever.
+ */
+test("a thread that stops closes the calls it was in, and nobody else's", () => {
+	const board = fakeBoard();
+	const thread = fakeThread();
+	const before = Date.now() - 5000;
+	board.activity.push(
+		{ id: "call-in-flight", kind: "tool", tool: "bash", status: "running", startedAt: before, thread: { id: thread.id, title: thread.title } },
+		{ id: "call-done", kind: "tool", tool: "read", status: "ok", startedAt: before, durationMs: 12, thread: { id: thread.id, title: thread.title } },
+		{ id: "other-thread-call", kind: "tool", tool: "bash", status: "running", startedAt: before, thread: { id: "another", title: "a busy neighbour" } },
+	);
+	settleRows(board, thread);
+	const rows = new Map(board.activity.map((row: any) => [row.id, row]));
+	assert.equal(rows.get("call-in-flight").status, "stopped");
+	assert.ok(rows.get("call-in-flight").durationMs >= 4000);
+	// A row that has already reported its own end is not touched, and neither is another thread's work.
+	assert.equal(rows.get("call-done").status, "ok");
+	assert.equal(rows.get("call-done").durationMs, 12);
+	assert.equal(rows.get("other-thread-call").status, "running");
 });
