@@ -209,11 +209,18 @@ commit's own account rather than on a check run now, the section below says so.
   rename belongs to the name, so the card does not also drag, and one press still drags it.
 - **A card draws only what it has.** A thread card's `text` is empty by design — the turns are the
   conversation — so an empty text draws no bubble and no state line.
-- **The rail is a stack of threads.** Every activity row says which thread wrote it, and a settled row
-  is filed in that thread's foldable section: title, count, newest thread on top. A folded section is
-  remembered for the session only. Rows still running stay in the strip above the log, so what is
-  happening now is visible however far the log is scrolled; that strip belongs to no section, so a
-  running row names its own thread beside the tool.
+- **The rail is a stack of threads.** A settled row is filed in the thread that wrote it, in that
+  thread's foldable section: title, count, newest thread on top. A folded section is remembered for the
+  session only. The rail is what has already happened, so its log no longer moves while a run is live.
+- **A step that is still running is read in its thread's card.** The card carries a `.card-live` box
+  pinned under the answer and above the resize grip, drawing the same `.act` rows the log keeps: the
+  tool it is calling, the thought it is having, the clock. It is written where the answer will appear,
+  and when the row settles it leaves the card for the log's section for that thread. The box is
+  hidden while it is empty (`.card-live:empty`), takes at most half the card and scrolls inside it, so
+  a step that grows moves nothing on the board. A card with a live step drops the answer's blinking
+  caret (`.card.live`), because the row already says the run is going and says what it is doing. The
+  strip above the log (`#railNow`) now holds a running row only when its thread's card is closed or
+  not on this board, so a run is never invisible; a row living there still names its own thread.
 - **A thought is a row of its own.** `thinking_start`, `thinking_delta` and `thinking_end` on the
   child's stream each land in a rail row of kind `thinking`, so what a run is doing when it has not
   said anything is visible while it happens. The rail carries the newest 400 characters and a rate read

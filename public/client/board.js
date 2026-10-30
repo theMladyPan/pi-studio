@@ -1217,9 +1217,13 @@ function makeCard(data, quiet = false) {
   const body = el("div", "body");
   const thread = el("div", "thread");
   thread.hidden = true;
+  // What the thread is doing right now, drawn in the same rows the log keeps: the live step is read
+  // where the answer will appear, and it leaves for the log the moment it settles. Pinned under the
+  // answer rather than inside the scrolling column, so a long note cannot hide the run.
+  const live = el("div", "card-live");
   scroll.append(body, thread);
   const grip = el("div", "resize");
-  card.append(head, scroll, grip);
+  card.append(head, scroll, live, grip);
   world.appendChild(card);
   cards.push(card);
   scheduleMap();
@@ -1255,6 +1259,7 @@ function makeCard(data, quiet = false) {
     scroll,
     body,
     thread,
+    live,
     titleEl: head.querySelector(".title"),
     subEl: head.querySelector(".sub"),
     chipEl: head.querySelector(".chip"),
@@ -3343,13 +3348,16 @@ function reopenCard(row, name) {
     .catch(() => hintLine("could not reach the board server", true));
 }
 
-function actRow(row) {
+function actRow(row, inCard = false) {
   const thinking = row.kind === "thinking";
   const node = el("div", `act ${row.kind === "reply" ? "reply" : ""} ${thinking ? "thinking" : ""} ${row.status}`);
   // The row carries its kind and status so a patch can update it in place and the one clock can
   // leave a thinking row's rate alone.
   node.dataset.kind = String(row.kind ?? "");
   node.dataset.status = String(row.status ?? "");
+  // The thread a row belongs to rides on the node, so a row that arrives before its card can be put
+  // where it belongs once the board finds that card.
+  node.dataset.thread = String(row.thread?.id ?? "");
   const top = el("div", "top");
   top.appendChild(el("span", "dot"));
   const name = el("span", "name");
@@ -3357,9 +3365,10 @@ function actRow(row) {
   name.textContent = row.kind === "reply" ? "answer" : thinking ? "thinking" : row.label || row.tool || "tool";
   if (row.tool) name.title = row.tool;
   top.appendChild(name);
-  // A running row waits in the strip above the log, where no section names the thread that is
-  // working, so the row says it itself. A settled row is filed under its thread and needs no label.
-  if (row.status === "running" && row.thread?.title) {
+  // A running row waits in the rail strip when its thread's card is not here, and no section names
+  // the thread that is working, so the row says it itself. In the card the thread is the card, and a
+  // settled row is filed under its thread: neither needs the label.
+  if (row.status === "running" && !inCard && row.thread?.title) {
     const who = el("span", "who");
     who.textContent = row.thread.title;
     who.title = `thread: ${row.thread.title}`;
@@ -3850,8 +3859,9 @@ function thoughtTail(text, keep = 180) {
 }
 
 // Settled rows are filed under the thread that wrote them, one foldable section per thread, newest
-// thread on top. A running row stays in the strip above: that strip is what you look at while a run
-// is in flight, and the sections are what you read afterwards.
+// thread on top. A row that is still running is read in its own thread's card, where its answer will
+// appear; the strip above the log holds it only when that card is not on this board, so a run is
+// never invisible and the log below is only ever about what has already happened.
 const railSections = new Map();
 /** A section the reader folded shut. Session only: a reload shows everything again. */
 const foldedSections = new Set();
@@ -3929,6 +3939,64 @@ function clearRailLog() {
   foldedSections.clear();
   actEls.clear();
   heldRows = 0;
+  // A live row can sit in a card, so a replay empties those boxes as well as the log.
+  for (const entry of byId.values()) entry.live?.replaceChildren();
+  paintLive();
+}
+
+/**
+ * The card a thread draws on. A thread card IS its own card; a plain card belongs to the thread that
+ * made it. The facts pass fills this map, so the scan behind it only runs for a row that arrives
+ * before the board has been repainted with the card that would answer for it.
+ */
+function cardOfThread(threadId) {
+  if (!threadId) return null;
+  const known = threadFacts.get(threadId);
+  const direct = known ? byId.get(known.cardId) : null;
+  if (direct?.live) return direct;
+  for (const entry of byId.values()) {
+    const data = entry.data || {};
+    const owner = data.type === "sticky" ? entry.id : data.answersWith?.thread;
+    if (owner === threadId && entry.live) return entry;
+  }
+  return null;
+}
+
+/**
+ * Whether a card is showing a live step. The card keeps its own height and the column scrolls, so a
+ * field that grows under the answer moves nothing else on the board.
+ */
+function paintLive() {
+  for (const entry of byId.values()) {
+    if (entry.live) entry.card.classList.toggle("live", entry.live.childElementCount > 0);
+  }
+}
+
+/** Every row that is still running, wherever it is drawn: the count the rail head and the tab show. */
+function runningCount() {
+  let running = 0;
+  for (const node of actEls.values()) if (node.dataset.status === "running") running++;
+  return running;
+}
+
+/**
+ * Where a running row is read: its thread's card while that card is here, and the rail strip when it is
+ * not, so a run always has somewhere to be seen. Moving a node that is already home is not moving it.
+ */
+function homeRunning(node) {
+  const card = cardOfThread(node.dataset.thread);
+  const box = card ? card.live : railNow;
+  if (node.parentElement !== box) box.prepend(node);
+}
+
+/**
+ * A snapshot replays its activity rows before the cards that should hold them, so a row can arrive at a
+ * board with nowhere to live yet. This runs after every repaint, when the board knows which card draws
+ * which thread, and puts the rows that are still running where they belong.
+ */
+function homeLiveRows() {
+  for (const node of actEls.values()) if (node.dataset.status === "running") homeRunning(node);
+  paintLive();
 }
 
 function applyActivity(row) {
@@ -3942,14 +4010,16 @@ function applyActivity(row) {
   // A thought patches four times a second while its status stays put. Rebuilding the node would
   // restart the dot's pulse and drop a text selection, so it is updated where it stands.
   if (previous && row.kind === "thinking" && previous.dataset.status === row.status) {
+    homeRunning(previous);
     paintThought(previous, row);
     return;
   }
-  const node = actRow(row);
+  const card = row.status === "running" ? cardOfThread(row.thread?.id) : null;
+  const node = actRow(row, card !== null);
   if (previous) previous.remove();
   actEls.set(row.id, node);
   if (row.status === "running") {
-    railNow.prepend(node);
+    homeRunning(node);
   } else {
     const section = railSection(row);
     section.body.prepend(node);
@@ -3960,9 +4030,10 @@ function applyActivity(row) {
     heldRows++;
     trimRail();
   }
-  const running = railNow.childElementCount ? String(railNow.childElementCount) : "";
-  railRunning.textContent = running;
-  railOpenCount.textContent = running;
+  paintLive();
+  const running = runningCount();
+  railRunning.textContent = running ? String(running) : "";
+  railOpenCount.textContent = running ? String(running) : "";
   syncTicker();
 }
 
@@ -4316,6 +4387,7 @@ function paintRuntime() {
     });
   }
   paintSections();
+  homeLiveRows();
   paintFooter();
   paintCtx();
   modelChip.textContent = shortModel(runtime.model);
@@ -5450,7 +5522,11 @@ function applyMeta(meta) {
   // A run that settled without closing its row would keep it counting for ever, so the rail
   // settles it here and the header and the ticker cannot disagree.
   if (!metaRunning) {
-    for (const node of railNow.querySelectorAll(".act.running")) node.classList.replace("running", "error");
+    for (const node of actEls.values()) {
+      if (node.dataset.status !== "running") continue;
+      node.dataset.status = "error";
+      node.classList.replace("running", "error");
+    }
   }
   renderLive();
   syncTicker();
@@ -5592,7 +5668,10 @@ function rowClock(ms) {
 // ticking, so an idle board does not wake its tab every second.
 function tick() {
   if (metaRunning === true) renderLive();
-  for (const node of railNow.querySelectorAll(".act.running")) {
+  for (const node of actEls.values()) {
+    // A row lives in its thread's card or in the rail strip, so the clock walks the rows themselves
+    // rather than either box.
+    if (node.dataset.status !== "running") continue;
     const started = Number(node.dataset.startedAt);
     const timing = node.querySelector(".ms");
     if (!started || !timing) continue;
@@ -5612,7 +5691,7 @@ function tick() {
 }
 
 function syncTicker() {
-  const wanted = metaRunning === true || railNow.querySelector(".act.running") !== null || railRows.size > 0;
+  const wanted = metaRunning === true || runningCount() > 0 || railRows.size > 0;
   if (wanted && !ticker) {
     ticker = setInterval(tick, 1000);
   } else if (!wanted && ticker) {
