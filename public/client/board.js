@@ -4077,7 +4077,9 @@ function paintCtx() {
 
 ctxBtn.addEventListener("click", async () => {
   const held = answeringCtx();
-  if (!held || compacting) return;
+  // One thread at a time, and only the button that is waiting says so: a compaction in another card
+  // leaves this one working.
+  if (!held || compacting === held.threadId) return;
   // The card is what the daemon resolves to a thread, the same way the model and thinking chips do.
   const cardId = replyTarget.id;
   compacting = held.threadId;

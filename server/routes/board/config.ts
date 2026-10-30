@@ -13,7 +13,7 @@ import { activeConfig } from "../../workspaces.ts";
 import { randomUUID } from "node:crypto";
 import { COMPACT_TIMEOUT_MS } from "../../limits.ts";
 import { ensureChild } from "../../child/run.ts";
-import { whenCompacted, whenStats } from "../../waiters.ts";
+import { whenCompacted } from "../../waiters.ts";
 import { homeCard, refreshOwned } from "./message.ts";
 import { cardFor, plainCardFor } from "../../cards.ts";
 import { join } from "node:path";
@@ -85,6 +85,11 @@ export async function onThinking(req, res, board) {
 
 
 
+/** Threads with a summarising call in flight, so two tabs cannot pay for the same summary twice. */
+const compacting = new Set();
+
+
+
 /**
  * The one piece of housekeeping a human presses: squeeze the thread's context before it fills the
  * window. pi owns compaction, so the board asks the child and reads the answer back; the figures the
@@ -100,31 +105,47 @@ export async function onCompact(req, res, board) {
 	if (thread.status === "running") return void fail(res, 409, "this thread is answering: compact when it is idle");
 	// A thread nobody has asked anything has no session, and therefore no context to squeeze.
 	if (!thread.sessionId) return void fail(res, 409, "this thread has not run yet, so there is nothing to compact");
-	// The child between two runs is gone, so a compaction starts one for the same session: nothing is
-	// asked of a model but the summary itself.
-	const ask = () => {
-		const child = ensureChild(board, thread);
-		child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "compact" })}\n`);
-	};
-	const heard = whenCompacted(thread, COMPACT_TIMEOUT_MS);
+	// The run that just ended is still reading its last stats, and its close is already on the way: a
+	// frame written now would be dropped by the child as it goes.
+	if (thread.pendingClose) return void fail(res, 409, "this thread is finishing its run: try again in a moment");
+	// Two tabs are one human, and a summarising call twice over is money for the same summary.
+	if (compacting.has(thread.id)) return void fail(res, 409, "a compaction is already running for this thread");
+	compacting.add(thread.id);
 	try {
-		ask();
-	} catch {
-		// The child from the run that just ended is still this thread's voice, and its stdin is closing.
-		// A fresh child resumes the same session, and that is the one the compaction belongs to.
-		board.children.delete(thread.id);
+		// The child between two runs is gone, so a compaction starts one for the same session: nothing is
+		// asked of a model but the summary itself.
+		const ask = () => {
+			const child = ensureChild(board, thread);
+			child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "compact" })}\n`);
+		};
+		const heard = whenCompacted(thread, COMPACT_TIMEOUT_MS);
 		try {
 			ask();
-		} catch (error) {
-			return void fail(res, 409, `could not send the compaction: ${error.message}`);
+		} catch {
+			// A child whose pipe has broken is not this thread's voice any more; a fresh one resumes the
+			// same session, and that is the one the compaction belongs to.
+			board.children.delete(thread.id);
+			try {
+				ask();
+			} catch (error) {
+				return void fail(res, 409, `could not send the compaction: ${error.message}`);
+			}
 		}
+		const result = await heard;
+		if (result?.timedOut) {
+			// A child that was started only to compact and never answered is not kept: the next prompt would
+			// write into a wedged process. A run of its own keeps it.
+			const held = board.children.get(thread.id);
+			if (thread.status !== "running" && held?.stdin?.writable) held.stdin.end();
+			return void fail(res, 504, "the child has not answered the compaction yet");
+		}
+		if (result?.error) return void fail(res, 409, result.error);
+		// The figure the button reads next comes over the board's own stream, from the stats the child's
+		// answer asks for, so this route has nothing left to wait on.
+		answer(res, 200, { threadId: thread.id, ...result });
+	} finally {
+		compacting.delete(thread.id);
 	}
-	const result = await heard;
-	if (result?.timedOut) return void fail(res, 504, "the child has not answered the compaction yet");
-	if (result?.error) return void fail(res, 409, result.error);
-	// The context figure is read before the answer goes out, so the button repaints cooler at once.
-	await whenStats(thread, 2_000);
-	answer(res, 200, { threadId: thread.id, ...result });
 }
 
 

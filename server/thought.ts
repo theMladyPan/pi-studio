@@ -226,7 +226,9 @@ export function handleChildLine(board, thread, line) {
 			};
 			if (thread.pendingClose) {
 				thread.pendingClose = false;
-				board.children.get(thread.id)?.stdin?.end();
+				// A run that started while these numbers were on their way owns the child now, so the
+				// close it was waiting for is its own settle's business and not this answer's.
+				if (thread.status !== "running") board.children.get(thread.id)?.stdin?.end();
 			}
 			update(board, thread);
 			scheduleSave(board);
@@ -237,9 +239,12 @@ export function handleChildLine(board, thread, line) {
 			// next request carries is smaller now, so the numbers are read again before it goes, and the
 			// route that asked for the compaction hears what came back.
 			const child = board.children.get(thread.id);
+			// A run can start between the press and this answer: the turn owns the child then, and closing
+			// its stdin would take the answer with it, so the close waits for that run's own settle.
+			const free = thread.status !== "running";
 			if (event.success === false) {
 				// A child started only to compact has nothing else to do, so it goes the way a settled run's does.
-				if (child?.stdin?.writable) child.stdin.end();
+				if (free && child?.stdin?.writable) child.stdin.end();
 				compacted(thread, { error: String(event.error ?? "the child refused the compaction") });
 			} else {
 				const data = event.data ?? {};
@@ -249,7 +254,7 @@ export function handleChildLine(board, thread, line) {
 					...(Number.isFinite(before) ? { tokensBefore: before } : {}),
 					...(Number.isFinite(after) ? { estimatedTokensAfter: after } : {}),
 				});
-				if (child?.stdin?.writable) {
+				if (free && child?.stdin?.writable) {
 					thread.pendingClose = true;
 					try {
 						child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "get_session_stats" })}\n`);
