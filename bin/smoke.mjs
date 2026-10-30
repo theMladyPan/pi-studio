@@ -220,6 +220,25 @@ async function main() {
 		"a pinned flow can be changed from the composer",
 		`path ${moved.card?.path}`,
 	);
+	// The prompt files the settings page edits. Only reading and refusals here: a smoke run that wrote
+	// one would leave the repository it is testing with a modified file.
+	const listed = JSON.parse((await get(one, `/prompts?token=${one.token}&workspace=${opened.board.id}`)).body || "{}");
+	const names = (listed.prompts || []).map((one) => one.name);
+	said(
+		names.includes("roles/scout.md") && names.includes("modes/boss.md") && names.includes("flows/advanced.md"),
+		"the prompts list names the roles, the modes and the flows",
+		`${names.length} files`,
+	);
+	const one_prompt = await get(one, `/prompt?token=${one.token}&workspace=${opened.board.id}&name=roles/scout.md`);
+	said(one_prompt.status === 200 && one_prompt.body.includes("scout"), "and one of them can be read whole", `${one_prompt.status}`);
+	const escape = await get(one, `/prompt?token=${one.token}&workspace=${opened.board.id}&name=../../etc/passwd`);
+	said(escape.status === 400, "a name outside the prompts folder is refused", `${escape.status}`);
+	const writeEscape = await post(one, `/prompt?token=${one.token}&workspace=${opened.board.id}`, { name: "../evil.md", text: "x" });
+	said(writeEscape.status === 400, "and so is a write to one", `${writeEscape.status}`);
+	const boardPath = JSON.parse((await post(one, `/config${board}`, { path: "complex" })).body || "{}");
+	said(boardPath.config?.path === "complex", "the board can prefer a flow for new bosses", `path ${boardPath.config?.path}`);
+	const badBoardPath = await post(one, `/config${board}`, { path: "quick" });
+	said(badBoardPath.status === 400, "and an unknown one is refused", `${badBoardPath.status}`);
 	const toAgent = JSON.parse((await post(one, `/mode${board}`, { cardId: boss.threadId, mode: "agent" })).body || "{}");
 	said(
 		toAgent.card?.mode === "agent" && !toAgent.card?.path,

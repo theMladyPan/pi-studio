@@ -5003,6 +5003,14 @@ const cfgThinking = document.getElementById("cfgThinking");
 const cfgThinkingValue = document.getElementById("cfgThinkingValue");
 const cfgTools = document.getElementById("cfgTools");
 const cfgToolsValue = document.getElementById("cfgToolsValue");
+const cfgPath = document.getElementById("cfgPath");
+const cfgPathValue = document.getElementById("cfgPathValue");
+const cfgPrompts = document.getElementById("cfgPrompts");
+const pePanel = document.getElementById("promptEditor");
+const pePick = document.getElementById("pePick");
+const peText = document.getElementById("peText");
+const peHint = document.getElementById("peHint");
+const peSave = document.getElementById("peSave");
 
 /**
  * The tools a thread can be given, as the daemon sees them: pi's own four by name, and the extension
@@ -5043,11 +5051,14 @@ function paintConfig() {
   cfgModelValue.textContent = shortModel(boardConfig.model);
   cfgThinkingValue.textContent = boardConfig.thinking || "off";
   cfgToolsValue.textContent = toolsSummary();
+  cfgPathValue.textContent = boardConfig.path || "auto";
 }
 
 function shownConfig(on) {
   configPanel.hidden = !on;
   configBtn.setAttribute("aria-expanded", on ? "true" : "false");
+  // The prompt editor was opened from this panel and belongs to it, so it leaves when the panel does.
+  if (!on) pePanel.hidden = true;
 }
 
 // ---------- clean and new ------------------------------------------------
@@ -5121,6 +5132,87 @@ configBtn.addEventListener("click", () => {
 // in this panel made it taller than the board. It opens the same picker a model does.
 cfgTools.addEventListener("click", () => void openPick("tools", cfgTools, true));
 
+/** The flow a new boss starts on, cycled from the panel and stored on the board. */
+cfgPath.addEventListener("click", async () => {
+  const next = PATH_ORDER[(PATH_ORDER.indexOf(boardConfig.path || "auto") + 1) % PATH_ORDER.length];
+  try {
+    const response = await fetch(`/config?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: next }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    const payload = await response.json();
+    if (payload.config) applyConfig(payload.config);
+    paintConfig();
+  } catch (error) {
+    hintLine(`could not set it: ${error.message || error}`, true);
+  }
+});
+
+// ---------- the prompt files ----------------------------------------------
+// A role, a mode and a flow are markdown under `prompts/`. They are read when a thread starts, so an
+// edit changes the next run and never rewrites one already going.
+let promptsLoaded = false;
+
+async function loadPrompts() {
+  if (promptsLoaded) return;
+  const response = await fetch(`/prompts?${auth}`);
+  if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+  const { prompts } = await response.json();
+  pePick.replaceChildren(
+    ...prompts.map((one) => {
+      const option = document.createElement("option");
+      option.value = one.name;
+      option.textContent = `${one.kind} · ${one.title}`;
+      return option;
+    }),
+  );
+  promptsLoaded = true;
+}
+
+async function openPrompt(name) {
+  const chosen = name || pePick.value;
+  if (!chosen) return;
+  const response = await fetch(`/prompt?${auth}&name=${encodeURIComponent(chosen)}`);
+  if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+  const { text } = await response.json();
+  pePick.value = chosen;
+  peText.value = text;
+  peHint.textContent = chosen;
+}
+
+cfgPrompts.addEventListener("click", async () => {
+  pePanel.hidden = !pePanel.hidden;
+  if (pePanel.hidden) return;
+  try {
+    await loadPrompts();
+    await openPrompt(pePick.value);
+  } catch (error) {
+    peHint.textContent = `could not read them: ${error.message || error}`;
+  }
+});
+
+pePick.addEventListener("change", () => {
+  void openPrompt(pePick.value).catch((error) => {
+    peHint.textContent = `could not read it: ${error.message || error}`;
+  });
+});
+
+peSave.addEventListener("click", async () => {
+  try {
+    const response = await fetch(`/prompt?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: pePick.value, text: peText.value }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    peHint.textContent = `saved ${pePick.value} — the next thread reads it`;
+  } catch (error) {
+    peHint.textContent = `could not save it: ${error.message || error}`;
+  }
+});
+
 cfgDim.addEventListener("click", async () => {
   const want = boardConfig.dimOthers === false;
   try {
@@ -5145,7 +5237,9 @@ window.addEventListener("resize", () => {
 document.addEventListener(
   "pointerdown",
   (event) => {
-    if (event.target.closest("#runtimePick, #modelPick, #thinkPick, #boardConfig, #configBtn")) return;
+    // The prompt editor is opened from this panel and is part of it: a press inside it is not a press
+    // outside the settings, which would otherwise shut the panel the editor was opened from.
+    if (event.target.closest("#runtimePick, #modelPick, #thinkPick, #boardConfig, #configBtn, #promptEditor")) return;
     if (!runtimePick.hidden) closePick();
     if (!configPanel.hidden) shownConfig(false);
   },

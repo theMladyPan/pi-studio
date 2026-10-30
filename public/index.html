@@ -813,6 +813,26 @@
   #boardConfig .cfg-row b { display: block; color: var(--accent); font: 12px var(--mono); font-weight: 500;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #boardConfig .cfg-note { margin: 6px 2px 0; color: var(--muted); font: 10px/1.45 var(--mono); }
+  /* The prompt files are plain markdown, so the editor is a list and a textarea: what is saved is what
+     the daemon reads on the next thread that starts. */
+  #promptEditor { position: fixed; z-index: 2100; top: 46px; right: 252px; display: flex;
+    flex-direction: column; gap: 6px; width: 420px; padding: 10px; background: #0d1117;
+    border: 1px solid var(--border-bright); border-radius: 8px; box-shadow: 0 12px 32px rgba(1, 4, 9, .55); }
+  #promptEditor[hidden] { display: none; }
+  #promptEditor .cfg-head { margin: 0; color: var(--muted); font: 10px var(--mono);
+    text-transform: uppercase; letter-spacing: .5px; }
+  #promptEditor select { background: #161b22; color: var(--text); border: 1px solid var(--border-bright);
+    border-radius: 5px; font: 12px var(--mono); padding: 3px 4px; }
+  #promptEditor textarea { height: 340px; resize: vertical; background: #010409; color: var(--text);
+    border: 1px solid var(--border-bright); border-radius: 5px; padding: 8px;
+    font: 12px/1.5 var(--mono); outline: none; }
+  #promptEditor textarea:focus-visible { border-color: var(--accent-dim); }
+  #promptEditor .pe-foot { display: flex; align-items: center; gap: 8px; }
+  #promptEditor .pe-foot span { flex: 1; min-width: 0; color: var(--muted); font: 10px var(--mono);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #promptEditor .pe-foot button { background: #21262d; color: var(--text); border: 1px solid var(--border-bright);
+    border-radius: 5px; font: 11px var(--mono); padding: 3px 10px; cursor: pointer; }
+  #promptEditor .pe-foot button:hover { background: #30363d; }
   .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted);
     font-size: 14px; pointer-events: none; text-align: center; padding: 20px; }
   /* Each of the board's three animations repeats a state the text already spells out, so the board
@@ -867,7 +887,19 @@
   <button type="button" class="cfg-row" id="cfgModel"><span>default model</span><b id="cfgModelValue"></b></button>
   <button type="button" class="cfg-row" id="cfgThinking"><span>default thinking</span><b id="cfgThinkingValue"></b></button>
   <button type="button" class="cfg-row" id="cfgTools"><span>tools in a new thread</span><b id="cfgToolsValue"></b></button>
+  <button type="button" class="cfg-row" id="cfgPath"><span>flow for a new boss</span><b id="cfgPathValue">auto</b></button>
+  <button type="button" class="cfg-row" id="cfgPrompts"><span>prompts</span><b id="cfgPromptsValue">roles · modes · flows</b></button>
   <p class="cfg-note">a new thread starts with these. new boards take their defaults from the crossroads.</p>
+</div>
+
+<div id="promptEditor" hidden role="dialog" aria-label="prompt files">
+  <p class="cfg-head">prompts</p>
+  <select id="pePick" aria-label="which prompt"></select>
+  <textarea id="peText" spellcheck="false" aria-label="the prompt text"></textarea>
+  <div class="pe-foot">
+    <span id="peHint" role="status" aria-live="polite"></span>
+    <button type="button" id="peSave">save</button>
+  </div>
 </div>
 
 <aside id="rail">

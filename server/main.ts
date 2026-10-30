@@ -24,6 +24,7 @@ import { onMode, onPath, onThread, onThreadSpawn } from "./routes/board/thread.t
 import { onAnswer, onAsk } from "./routes/board/answer.ts";
 import { onMessage } from "./routes/board/message.ts";
 import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
+import { onPrompt, onPromptWrite, onPrompts } from "./routes/board/prompts.ts";
 import { onClean, onClose, onKill, onNew, onReopen, onStop, onUndo } from "./routes/board/lifecycle.ts";
 
 
@@ -288,6 +289,16 @@ export const server = createServer((req, res) => {
 			});
 			return;
 		}
+		if (req.method === "GET" && url.pathname === "/prompts") {
+			// The files a role, a mode and a flow are, listed for the settings page. Reading one is a
+			// separate call, so the list stays small even when a prompt is long.
+			onPrompts(res);
+			return;
+		}
+		if (req.method === "GET" && url.pathname === "/prompt") {
+			onPrompt(url, res);
+			return;
+		}
 		if (req.method === "GET" && url.pathname === "/state") {
 			const board = boardFrom(url, res);
 			if (!board) return;
@@ -324,6 +335,7 @@ export const server = createServer((req, res) => {
 				"/thinking": onThinking,
 				"/kill": onKill,
 				"/config": onConfig,
+				"/prompt": onPromptWrite,
 				"/compact": onCompact,
 				"/clean": onClean,
 				"/new": onNew,

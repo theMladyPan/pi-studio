@@ -60,13 +60,17 @@ function threadSpec(board, body, caller) {
 	if (mode && mode !== "agent" && !promptText("modes", mode)) return { error: `mode prompt missing: prompts/modes/${mode}.md` };
 	// A path is the boss's: it says which flow that thread runs. An agent or a planner with a path would be
 	// a flow nothing is following.
-	const flow = PATH_NAMES.includes(body.path) ? body.path : "";
-	if (typeof body.path === "string" && body.path && !flow) return { error: `unknown path: ${body.path}` };
-	if (flow && mode !== "boss") return { error: "a path belongs to a boss thread" };
+	const named = PATH_NAMES.includes(body.path) ? body.path : "";
+	if (typeof body.path === "string" && body.path && !named) return { error: `unknown path: ${body.path}` };
+	if (named && mode !== "boss") return { error: "a path belongs to a boss thread" };
+	// A boss starts on the board's own flow unless this thread names one, so a board that always works
+	// the same way says it once instead of on every thread.
+	const boardPath = PATH_NAMES.includes(board.config?.path) ? board.config.path : "";
+	const flow = mode === "boss" ? named || boardPath || "auto" : "";
 	if (flow && flow !== "auto" && !promptText("flows", flow)) {
 		return { error: `flow prompt missing: prompts/flows/${flow}.md` };
 	}
-	return { parent, depth, after: follow, role, mode, path: mode === "boss" ? flow || "auto" : "" };
+	return { parent, depth, after: follow, role, mode, path: flow };
 }
 
 

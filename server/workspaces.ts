@@ -9,6 +9,7 @@ import { sessionFacts } from "./session.ts";
 import { basename } from "node:path";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, MODEL, PROVIDER, THINKING_LEVELS, run } from "./models.ts";
 import { existsSync, realpathSync, statSync } from "node:fs";
+import { PATH_NAMES } from "./child/modes.ts";
 import { spawnSync } from "node:child_process";
 
 
@@ -267,6 +268,8 @@ export function activeConfig(board) {
 		extensionsOff: Array.isArray(chosen.extensionsOff)
 			? chosen.extensionsOff.filter((name) => CHILD_EXTENSIONS.some((one) => one.name === name))
 			: [],
+		// The flow a boss starts on: `auto` unless the board prefers one.
+		path: PATH_NAMES.includes(chosen.path) ? chosen.path : "auto",
 	};
 }
 
