@@ -1505,11 +1505,10 @@ function paintSections() {
     entry.head.children[3].textContent = bits.join(" · ");
     entry.head.children[4].hidden = held?.running !== true;
     // The role arrives with the thread's card, which can land after its first activity row.
-    const { role = "", parent = "" } = threadMeta.get(entry.id) ?? {};
+    const { role = "" } = threadMeta.get(entry.id) ?? {};
     entry.roleEl.textContent = role;
     entry.roleEl.hidden = !role;
-    entry.section.classList.toggle("child", Boolean(parent));
-    placeRailSection(entry);
+    orderRail();
   }
 }
 
@@ -1638,7 +1637,8 @@ function masterTitle(threadId) {
 function stickySub(data) {
   const status = data.status || "queued";
   if (!data.parentThread) return status;
-  const master = masterTitle(data.parentThread);
+  // A hidden master has no card on the board, so the child carries its name in the payload.
+  const master = masterTitle(data.parentThread) || data.parentTitle || "";
   return master ? `spawned by ${master} · ${status}` : `spawned · ${status}`;
 }
 
@@ -3927,6 +3927,9 @@ function applyFold(entry) {
   entry.head.setAttribute("aria-expanded", foldedSections.has(entry.id) ? "false" : "true");
 }
 
+/** The rail's rows in the order they arrived, so the oldest is findable by its number. */
+let railSeq = 0;
+
 function railSection(row) {
   const id = row.thread?.id || "";
   let entry = railSections.get(id);
@@ -3960,7 +3963,8 @@ function railSection(row) {
     });
     // The section says which thread it is, so a right click can read that thread's conversation.
     section.dataset.thread = id;
-    entry = { section, head, body, id, title: "", roleEl: head.children[5], host: null };
+    entry = { section, head, body, id, title: "", roleEl: head.children[5], at: 0 };
+    entry.roleEl.hidden = true;
     railSections.set(id, entry);
     applyFold(entry);
   }
@@ -3974,38 +3978,68 @@ function railSection(row) {
 }
 
 /**
- * A child's section sits directly under the one that spawned it, and a master that just spoke takes
- * its children to the top with it. The log stays a flat list of sections, so trimming, folding and
- * the replay all keep working; only where a section sits is decided here.
+ * Where the sections sit. The thread that spoke last is on top, so a busy board reads as a stack of
+ * conversations, and a child always sits directly under the master that spawned it. The log itself
+ * stays a flat list, because trimming, folding and the replay all assume that, so the order is
+ * recomputed and only the sections that are out of place are moved.
  */
-function placeRailSection(entry) {
-  const parent = threadMeta.get(entry.id)?.parent || "";
-  const host = parent && parent !== entry.id ? railSections.get(parent) : null;
-  const under = host?.section.isConnected ? host.id : "";
-  if (entry.host !== under) {
-    if (host) host.section.after(entry.section);
-    else railLog.prepend(entry.section);
-    entry.host = under;
+function orderRail() {
+  const parentOf = (entry) => threadMeta.get(entry.id)?.parent || "";
+  const ranked = [...railSections.values()].sort((a, b) => b.at - a.at);
+  const wanted = [];
+  for (const master of ranked) {
+    // A child is only nested while the section it hangs under is still there; a master whose own
+    // rows were trimmed away has no head left to sit under, so the child reads as a thread of its own.
+    const nested = Boolean(parentOf(master)) && railSections.has(parentOf(master));
+    master.section.classList.toggle("child", nested);
+    if (nested) continue;
+    wanted.push(master);
+    for (const kid of ranked) {
+      if (kid === master || parentOf(kid) !== master.id) continue;
+      kid.section.classList.add("child");
+      wanted.push(kid);
+    }
   }
-  for (const kid of railSections.values()) {
-    if (kid === entry || (threadMeta.get(kid.id)?.parent || "") !== entry.id) continue;
-    if (kid.section.previousElementSibling !== entry.section) entry.section.after(kid.section);
+  let cursor = railLog.firstElementChild;
+  for (const entry of wanted) {
+    if (entry.section === cursor) {
+      cursor = cursor.nextElementSibling;
+      continue;
+    }
+    railLog.insertBefore(entry.section, cursor);
   }
 }
 
-/** The log is a tail, not a history: the oldest row of the oldest section goes first, then the shell. */
+/** The oldest row in the log, whichever section it sits in. */
+function oldestRailRow() {
+  let oldest = null;
+  let at = Infinity;
+  for (const entry of railSections.values()) {
+    const row = entry.body.lastElementChild;
+    const seen = Number(row?.dataset.seq ?? NaN);
+    if (row && seen < at) {
+      oldest = row;
+      at = seen;
+    }
+  }
+  return oldest;
+}
+
+/** The log is a tail, not a history: the oldest row goes first, whatever section it belongs to. */
 function trimRail() {
   while (heldRows > 200) {
-    const section = railLog.lastElementChild;
-    const row = section?.querySelector(".rail-thread-body")?.lastElementChild;
-    if (!section || !row) {
-      section?.remove();
-      if (section) for (const [id, entry] of railSections) if (entry.section === section) railSections.delete(id);
-      return;
-    }
+    const row = oldestRailRow();
+    if (!row) return;
     for (const [id, elem] of actEls) if (elem === row) actEls.delete(id);
+    const section = row.closest(".rail-thread");
     row.remove();
     heldRows--;
+    // A section with no rows left says nothing, so it goes: its children then sort as threads of
+    // their own instead of nesting under a head that is no longer there.
+    if (section && !section.querySelector(".rail-thread-body")?.childElementCount) {
+      section.remove();
+      for (const [id, entry] of railSections) if (entry.section === section) railSections.delete(id);
+    }
   }
 }
 
@@ -4093,6 +4127,9 @@ function applyActivity(row) {
   }
   const card = row.status === "running" ? cardOfThread(row.thread?.id) : null;
   const node = actRow(row, card !== null);
+  // The row carries when it arrived, so trimming can find the oldest one without trusting the order
+  // of the sections, which the rail reorders to keep a child under its master.
+  node.dataset.seq = String(++railSeq);
   if (previous) previous.remove();
   actEls.set(row.id, node);
   if (row.status === "running") {
@@ -4100,10 +4137,11 @@ function applyActivity(row) {
   } else {
     const section = railSection(row);
     section.body.prepend(node);
+    section.at = railSeq;
     section.head.children[2].textContent = String(section.body.childElementCount);
     // The thread that just spoke goes on top, so a board with many threads reads like a stack of
     // conversations rather than one long line of tool calls. A child goes under its master instead.
-    placeRailSection(section);
+    orderRail();
     heldRows++;
     trimRail();
   }
