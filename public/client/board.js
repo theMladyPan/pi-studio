@@ -4629,8 +4629,6 @@ function windowOf(entry) {
 // ---------- what a thread is for -------------------------------------------
 const modePick = document.getElementById("modePick");
 const pathPick = document.getElementById("pathPick");
-const MODE_ORDER = ["agent", "plan", "boss"];
-const PATH_ORDER = ["auto", "simple", "advanced", "complex"];
 // What a new thread is born with. `pathNext` empty means the board's own flow, so a board that always
 // works the same way is not overridden by a picker nobody touched.
 let modeNext = "agent";
@@ -5120,6 +5118,15 @@ async function openPick(which, anchor = null, forBoard = false) {
   pickAnchor = anchor;
   pickBoard = forBoard;
   runtimePick.hidden = false;
+  // The mode and the flow are two short lists this page already holds, so they open at once and the
+  // search box has nothing to search: no request, no waiting.
+  if (which === "mode" || which === "path") {
+    runtimeSearch.hidden = true;
+    if (which === "mode") drawModePick();
+    else drawPathPick();
+    placeRuntimePick();
+    return;
+  }
   runtimeSearch.hidden = which === "thinking";
   runtimeSearch.placeholder = which === "tools" ? "search tools…" : "search models…";
   // The tools are a question of their own, so they are asked for on their own: pi's four names and
@@ -5187,6 +5194,75 @@ async function chooseRuntime(kind, value) {
   }
 }
 
+/** The flow a new boss starts on, written on the board rather than on a thread. */
+async function setBoardPath(path) {
+  try {
+    const response = await fetch(`/config?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    const payload = await response.json();
+    if (payload.config) applyConfig(payload.config);
+    paintConfig();
+  } catch (error) {
+    hintLine(`could not set it: ${error.message || error}`, true);
+  }
+}
+
+/** What each mode and flow is, in the words the picker shows beside the name. */
+const MODE_HINTS = [
+  ["agent", "does the work itself"],
+  ["plan", "a plan and /tmp checks, no edits"],
+  ["boss", "spawns children, does no work"],
+];
+const PATH_HINTS = [
+  ["auto", "the boss picks, and says which"],
+  ["simple", "one step with checks"],
+  ["advanced", "a plan, a review that reads it"],
+  ["complex", "triage, parallel scouts, re-review"],
+];
+
+/** The two lists are local, so the panel draws them without asking the daemon for anything. */
+function drawModePick() {
+  const { mode } = modeShown();
+  runtimeList.replaceChildren(
+    pickHead("what this thread is for"),
+    ...MODE_HINTS.map(([name, hint]) => pickRow(name, hint, mode === name, () => void pickMode(name))),
+  );
+}
+
+function drawPathPick() {
+  const path = pickBoard ? boardConfig.path || "auto" : modeShown().path;
+  runtimeList.replaceChildren(
+    pickHead(pickBoard ? "the flow a new boss starts on" : "the flow a boss runs"),
+    ...PATH_HINTS.map(([name, hint]) => pickRow(name, hint, path === name, () => void pickPath(name))),
+  );
+}
+
+/**
+ * A mode or a flow chosen from the list. Aimed at a thread it is written on that thread; with nothing
+ * aimed it is what the next thread is born with, which is what the composer is for.
+ */
+async function pickMode(mode) {
+  if (aimedThread()) await chooseMode(mode);
+  else modeNext = mode;
+  if (mode !== "boss") pathNext = "";
+  closePick();
+  paintMode();
+  hintLine(`mode: ${mode}`);
+}
+
+async function pickPath(path) {
+  if (pickBoard) await setBoardPath(path);
+  else if (aimedThread()) await choosePath(path);
+  else pathNext = path === "auto" ? "" : path;
+  closePick();
+  paintMode();
+  hintLine(`path: ${path}`);
+}
+
 /** Writes the mode on the thread the composer is aimed at, or leaves it as the next thread's. */
 async function chooseMode(mode) {
   const target = aimedThread();
@@ -5215,23 +5291,8 @@ async function postThreadField(route, body) {
   }
 }
 
-modePick.addEventListener("click", () => {
-  const next = MODE_ORDER[(MODE_ORDER.indexOf(modeShown().mode) + 1) % MODE_ORDER.length];
-  // Aimed at a thread, the press changes that thread; with nothing aimed, it sets the next one's mode.
-  if (aimedThread()) void chooseMode(next);
-  else modeNext = next;
-  if (next !== "boss") pathNext = "";
-  paintMode();
-  hintLine(`mode: ${next}`);
-});
-
-pathPick.addEventListener("click", () => {
-  const next = PATH_ORDER[(PATH_ORDER.indexOf(modeShown().path) + 1) % PATH_ORDER.length];
-  if (aimedThread()) void choosePath(next);
-  else pathNext = next === "auto" ? "" : next;
-  paintMode();
-  hintLine(`path: ${next}`);
-});
+modePick.addEventListener("click", () => void openPick("mode", modePick));
+pathPick.addEventListener("click", () => void openPick("path", pathPick));
 
 modelChip.addEventListener("click", () => void openPick("model"));
 thinkChip.addEventListener("click", () => void openPick("thinking"));
@@ -5376,23 +5437,8 @@ configBtn.addEventListener("click", () => {
 // in this panel made it taller than the board. It opens the same picker a model does.
 cfgTools.addEventListener("click", () => void openPick("tools", cfgTools, true));
 
-/** The flow a new boss starts on, cycled from the panel and stored on the board. */
-cfgPath.addEventListener("click", async () => {
-  const next = PATH_ORDER[(PATH_ORDER.indexOf(boardConfig.path || "auto") + 1) % PATH_ORDER.length];
-  try {
-    const response = await fetch(`/config?${auth}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: next }),
-    });
-    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
-    const payload = await response.json();
-    if (payload.config) applyConfig(payload.config);
-    paintConfig();
-  } catch (error) {
-    hintLine(`could not set it: ${error.message || error}`, true);
-  }
-});
+/** The flow a new boss starts on. The same list as a thread's, aimed at the board instead. */
+cfgPath.addEventListener("click", () => void openPick("path", cfgPath, true));
 
 // ---------- the prompt files ----------------------------------------------
 // A role, a mode and a flow are markdown under `prompts/`. They are read when a thread starts, so an
@@ -5481,7 +5527,7 @@ document.addEventListener(
   (event) => {
     // The prompt editor is opened from this panel and is part of it: a press inside it is not a press
     // outside the settings, which would otherwise shut the panel the editor was opened from.
-    if (event.target.closest("#runtimePick, #modelPick, #thinkPick, #boardConfig, #configBtn, #promptEditor")) return;
+    if (event.target.closest("#runtimePick, #modelPick, #thinkPick, #modePick, #pathPick, #boardConfig, #configBtn, #promptEditor")) return;
     if (!runtimePick.hidden) closePick();
     if (!configPanel.hidden) shownConfig(false);
   },
