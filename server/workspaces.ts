@@ -45,8 +45,8 @@ import { spawnSync } from "node:child_process";
  * @property {string} [stderrTail]
  * @property {string} [threadRoot]
  * @property {boolean} [hidden] the thread is not drawn as a card of its own; the cards it answers for
- *   are where it is read. A child forked onto a card starts hidden, and a thread whose own card is closed
- *   while it still owns cards becomes hidden rather than dying.
+ *   are where it is read. The child a card nobody answers for starts hidden, and a thread whose own card
+ *   is closed while it still owns cards becomes hidden rather than dying.
  */
 
 /**

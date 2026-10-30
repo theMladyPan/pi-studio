@@ -161,18 +161,21 @@ commit's own account rather than on a check run now, the section below says so.
 - **Commenting on a card**: a thread answers in itself. A card without a child is asked of the thread
   that made it — its `threadRoot` — and the card is quoted at the top of the message, so the agent
   that wrote the note is the one that answers about it. `{"fork": true}` on `/message`, the composer's
-  `fork` button, asks a new thread under the card instead, with the same quote and its own
-  conversation. A card nobody made, or one whose thread has ended, starts that thread too. The card
-  is only quoted: the question and the answer are drawn on the thread card, next to the field that
-  asked. A queued message carries the quote and the turn it belongs to.
+  `fork` button, asks a new thread *beside* that card instead: the thread is drawn as a card of its
+  own, cascades under the card it was asked about, and the card keeps its owner. A card nobody made,
+  or one whose thread has ended, starts a child under the card too. Either way the card is only
+  quoted: the question and the answer are drawn on the card of the thread that answered, next to the
+  field that asked. A queued message carries the quote and the turn it belongs to.
 - **A card has a thread behind it, not a thread card beside it.** `threadRoot` on a plain card is where
   the card cascades; `ownerThread` is the thread that answers comments on it; and a thread marked
   `hidden` is never drawn — the card is the surface. A comment on a card that already has an owner is
   answered by that thread, and the exchange is kept in `thread.turns`: the composer is docked in that
   thread's card, so that is where the answer is read. Only a hidden child, which has no card of its
-  own, keeps the turn in `card.turns`, because the card is the only place it can be read. A fork, or a
-  card nobody answers for yet, starts a hidden child and hands the card to it, so the conversation
-  moves to a fresh session while the card stays where it is. `plainCardFor` carries `answersWith`
+  own, keeps the turn in `card.turns`, because the card is the only place it can be read. A card nobody
+  answers for yet starts a hidden child and hands the card to it, so the conversation moves to a fresh
+  session while the card stays where it is. A fork is the other shape: a thread with a card of its own,
+  hanging under the card it was asked about, which leaves that card to its owner and to every later
+  comment on it. `plainCardFor` carries `answersWith`
   (provider, model, thinking) so the composer can name and change what answers a card without the
   thread behind it ever being drawn.
 - **A child lives while it has a card.** Closing the thread's own card does not end its child: the
@@ -317,15 +320,17 @@ commit's own account rather than on a check run now, the section below says so.
   note, source or question is answered by the thread behind it, and the question and the answer are
   written to `thread.turns`, where the composer that asked them is docked. The card is quoted into
   the preamble instead of being written on, so its markdown stays what the child made and the
-  exchange reads beside the field. A hidden child — a fork, or the child a card nobody answers for
-  gets — has no card of its own and keeps the turn in `card.turns`. `thread.answering` remembers
+  exchange reads beside the field. A thread that starts on a comment is drawn as a card, so a fork
+  answers on its own card; only the child a card nobody answers for gets has no card of its own, and
+  it keeps the turn in `card.turns`. `thread.answering` remembers
   which turn the run in flight writes back to, by card or by index, so a queued message is answered
   where it was asked rather than at the end of the thread. The chain is quoted into the preamble —
   the card's own turns, last three, 200 characters each — so a fresh child, a fork or a restarted
   thread still knows what was already said about the card. Verified by route tests against a stub
   child: a comment on a note leaves the note's `turns` empty, the thread's second turn carries the
-  reply, and the child is handed `The card says: …`; two messages sent into one run land on one turn
-  each. Not seen in a browser.
+  reply, and the child is handed `The card says: …`; a fork starts a thread with a card of its own,
+  hanging under the card, and leaves that card's owner and turns alone; two messages sent into one run
+  land on one turn each. Not seen in a browser.
 - **Sessions resume**: the child writes its session under the app's own session dir, the thread
   stores the id, and a message after a daemon restart resumes that session. Verified: after a
   restart the agent remembered the word it had answered in the previous run.
@@ -511,7 +516,8 @@ Against real children, after the review: a fork's child owning the card with its
 and no card of its own, a note written by that hidden child cascading under the card it serves and owned
 by the child, the card's chain intact across both, the crossroads listing only drawn threads, and
 closing the card removing its child. A choice made on a closed card landed on the board default and the
-next thread started with it.
+next thread started with it. **The fork part of that is no longer what the daemon does**: a fork starts a
+drawn thread now, and a card nobody answers for is the only thing that gets a hidden child.
 
 Seen in a browser (the only part of this app that has been): the note card with its comment chain, the
 composer docked in it, the model and thinking chips reading `claude-sonnet-5-5` and `think medium`, the
@@ -525,7 +531,10 @@ thread card kept only its own turn; they are written to the thread card now, and
 there. A second comment chains under the first and the child answers about the previous question; a
 fork makes its own thread card and leaves the note alone; the chain comes back after a restart; a
 comment written while the owner was busy waited, then answered on the card — on the thread card, by
-the same rule.
+the same rule. **A fork went the other way for a while**: it handed the card to a hidden child, so the
+note carried the exchange and its own markdown was pushed out of sight, the fork had no card and no
+rail row, and a second fork left the first child alive owning nothing. A fork starts a drawn thread
+again, verified by a route test against the stub child and not yet in a browser.
 
 Notes, against a daemon on a throwaway `HOME` and a scratch folder: created with and without a
 `rect`, refused when the markdown is blank, carried in the `snapshot` and in `GET /state`, edited

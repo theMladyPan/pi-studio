@@ -26,8 +26,8 @@ export async function onMessage(req, res, board) {
 	const askedCard = asked ? board.cards.get(asked) : undefined;
 	let thread = asked && !askedCard ? board.threads.get(asked) : undefined;
 	if (asked && !askedCard && !thread) return void fail(res, 409, "no such card");
-	// Only an existing thread answering for its own card keeps the question on that card. A fork, or
-	// a card nobody answers for, gets a thread of its own, and a thread card is where its turns belong.
+	// Only the thread that already answers for a card keeps the question on that card. A fork, or a card
+	// nobody answers for, gets a thread of its own, and a thread card is where its turns belong.
 	let answeredByOwner = false;
 	if (askedCard && !fork) {
 		// Boards written before ownership was its own field have only the thread that made the card.
@@ -40,8 +40,11 @@ export async function onMessage(req, res, board) {
 	}
 	const preamble = askedCard ? cardPreamble(askedCard, !answeredByOwner) : "";
 	if (!thread) {
-		// A card gets a child, not a second card: the child answers for the card and is not drawn,
-		// because the card already is the surface this conversation is read on.
+		// Two shapes, and only one of them is drawn. A card nobody answers for gets a hidden child: the
+		// child answers for the card and is not drawn, because the card already is the surface this
+		// conversation is read on. A fork asks for the opposite — a new thread beside that card — so it
+		// is drawn as a card of its own, cascades under the card it was asked about, and leaves that card
+		// to its owner.
 		const title = askedCard?.title ?? text;
 		thread = {
 			id: randomUUID(),
@@ -52,18 +55,19 @@ export async function onMessage(req, res, board) {
 			at: Date.now(),
 			turns: [],
 			queued: [],
-			...(askedCard ? { threadRoot: askedCard.id, hidden: true } : {}),
+			...(askedCard ? { threadRoot: askedCard.id } : {}),
+			...(askedCard && !fork ? { hidden: true } : {}),
 			folder: board.folder,
 		};
 		board.threads.set(thread.id, thread);
-		// Only a thread with a card of its own is drawn; a child behind a card is announced through it.
-		if (askedCard) updateCard(board, askedCard);
-		else card(board, thread);
-		// The thread that answers for a card owns it. That is what makes a fork a fork: the new thread
-		// inherits this card, and every later comment on it is answered by the new thread.
-		if (askedCard) {
+		if (thread.hidden) {
+			// The thread that answers for a card owns it, so every later comment on the card is answered
+			// by this child, which is what makes it the card's thread.
 			askedCard.ownerThread = thread.id;
 			updateCard(board, askedCard);
+		} else {
+			// A thread with a card of its own is drawn; a child behind a card is announced through it.
+			card(board, thread);
 		}
 	}
 	if (thread.status === "dead") return void fail(res, 409, "thread ended");
@@ -71,9 +75,10 @@ export async function onMessage(req, res, board) {
 	// The card shows what the human typed; the child is told what card it is about. The answer is kept
 	// where it will be read: a thread that is drawn has a card of its own, the field is docked in that
 	// card, and the answer belongs under the words that asked for it. So a note, source or question is
-	// only quoted, never written on — the entry stays the artifact the child made, and later comments
-	// on it start a chain on the thread card with the card's own text in the preamble. A child with no
-	// card of its own, one forked onto a card, has nowhere else to be read and keeps the turn on it.
+	// only quoted, never written on — the entry stays the artifact the child made, and the question and
+	// the answer are read on the card of the thread that answered. A fork is such a thread now. Only a
+	// child a card nobody answers for got has no card of its own, so the card is the only place its turn
+	// can be read, and it keeps the turn there.
 	const message = `${preamble}${text}`;
 	const holding = askedCard && thread.hidden ? askedCard : null;
 	let target = null;

@@ -651,6 +651,47 @@ test("a question about a note is answered on the thread's card, and the note kee
 	}
 });
 
+test("a fork answers on a card of its own, and the note keeps its owner and its turns", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-fork-thread-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-fork-thread-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" })).status, 200);
+		await settledThread(daemon, board.id, threadId, 1);
+		const note = JSON.parse((await postTo(daemon, board.id, "/card/note", { markdown: "the artifact", key: "a-forked-artifact", threadRoot: threadId })).body);
+
+		const asked = await postTo(daemon, board.id, "/message", { cardId: note.cardId, fork: true, text: "what does this show?" });
+		assert.equal(asked.status, 200);
+		const forkId = JSON.parse(asked.body).id;
+		assert.notEqual(forkId, threadId, "the fork was answered by the thread that made the card");
+
+		// A fork is a thread of its own, read in a card of its own that cascades under the card asked about.
+		const settled = await settledThread(daemon, board.id, forkId, 1);
+		assert.equal(settled.hidden ?? false, false, "the fork is not drawn as a card");
+		assert.equal(settled.threadRoot, note.cardId, "the fork does not hang under the card it was asked about");
+		assert.equal(settled.turns[0].text, "what does this show?");
+		assert.equal(settled.turns[0].reply, "the stub answered");
+		const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		assert.ok(
+			state.cards.some((one: any) => one.id === forkId),
+			"the fork answers where nothing is drawn",
+		);
+
+		// The card was only asked about: it keeps its owner and gains no turn of another thread.
+		const card = await cardState(daemon, board.id, note.cardId);
+		assert.equal(card.ownerThread, threadId, "the fork took the card over");
+		assert.deepEqual(card.turns ?? [], [], "the note kept the fork's turn");
+		const prompts = framesOf(stub).filter((frame: any) => frame.type === "prompt");
+		assert.match(prompts[1].message, /The card says: the artifact/, "the fork was not told which card it is about");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
 test("a message queued behind a run lands on its own turn, once", async () => {
 	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-queue-turns-"));
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-queue-turns-work-"));
