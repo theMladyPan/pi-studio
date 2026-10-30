@@ -765,3 +765,37 @@ test("a message queued behind a run lands on its own turn, once", async () => {
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
 	}
 });
+
+test("a prompt file's own bytes go back through POST /prompt, and the repository keeps them", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-prompt-route-"));
+	const daemon = await boot(folder);
+	// The file the settings page writes is a file in the repository, so it is put back exactly as it was.
+	const path = join(repo, "prompts", "roles", "scout.md");
+	const original = readFileSync(path, "utf8");
+	try {
+		const listed = JSON.parse((await get(daemon, `/prompts?token=${daemon.token}`)).body);
+		assert.ok(listed.prompts.some((one: any) => one.name === "roles/scout.md"), "the file is not in GET /prompts");
+		const one = await get(daemon, `/prompt?token=${daemon.token}&name=${encodeURIComponent("roles/scout.md")}`);
+		assert.equal(one.status, 200);
+		assert.equal(JSON.parse(one.body).text, original);
+
+		// Saving it unchanged is the write the page's `save` makes: same bytes in, same bytes on disk.
+		const wrote = await post(daemon, "/prompt", { name: "roles/scout.md", text: original });
+		assert.equal(wrote.status, 200, wrote.body);
+		assert.equal(readFileSync(path, "utf8"), original);
+
+		// The document the page draws carries the same text under the field that writes it back.
+		const document = JSON.parse((await get(daemon, `/settings/defaults?token=${daemon.token}`)).body);
+		const field = leavesOf(document).find((leaf) => leaf.id === "prompt-roles-scout");
+		assert.equal(field?.value, original, "the prompt field does not carry the file");
+		assert.equal(field?.write?.route, "/prompt");
+
+		// And the route still refuses a name it does not own, which is the answer the field shows.
+		const refused = await post(daemon, "/prompt", { name: "../../etc/passwd", text: "x" });
+		assert.equal(refused.status, 400);
+	} finally {
+		writeFileSync(path, original);
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});

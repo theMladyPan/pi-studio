@@ -3,14 +3,13 @@
  * the flows a boss may run. They are plain markdown in `prompts/`, read by the daemon when a thread
  * starts, so an edit here takes effect on the next run and never rewrites one already going.
  */
-import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { answer, fail, readJson } from "../../http.ts";
-import { PROMPT_DIR } from "../../child/modes.ts";
+import { PROMPT_DIR, promptFiles } from "../../child/modes.ts";
 
-/** The folders a prompt may live in, and the names a prompt may have: lowercase, one file each. */
-const FOLDERS = ["roles", "modes", "flows"];
+/** The names a prompt may have: lowercase, one file each, in one of the three folders. */
 const NAME = /^(roles|modes|flows)\/[a-z][a-z-]*\.md$/;
 
 /**
@@ -25,30 +24,12 @@ function promptName(given: string): string {
 
 /** The files there are, with the first line of each, which is what tells a human what it is. */
 export function onPrompts(res: ServerResponse) {
-	const prompts: { name: string; kind: string; title: string; firstLine: string }[] = [];
-	for (const folder of FOLDERS) {
-		let files = [];
-		try {
-			files = readdirSync(join(PROMPT_DIR, folder)).filter((file) => file.endsWith(".md"));
-		} catch {
-			continue;
-		}
-		for (const file of files.sort()) {
-			const path = join(PROMPT_DIR, folder, file);
-			let text = "";
-			try {
-				text = readFileSync(path, "utf8");
-			} catch {
-				continue;
-			}
-			prompts.push({
-				name: `${folder}/${file}`,
-				kind: folder.replace(/s$/, ""),
-				title: file.replace(/\.md$/, ""),
-				firstLine: text.split("\n").find((line) => line.trim()) ?? "",
-			});
-		}
-	}
+	const prompts = promptFiles().map((one) => ({
+		name: one.name,
+		kind: one.folder.replace(/s$/, ""),
+		title: one.file.replace(/\.md$/, ""),
+		firstLine: one.firstLine,
+	}));
 	answer(res, 200, { prompts });
 }
 

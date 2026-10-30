@@ -347,6 +347,8 @@
   function lineOf(field) {
     const labels = Array.isArray(field.labels) ? field.labels : ["off", "on"];
     if (field.type === "toggle") return `${field.label}: ${field.value ? labels[labels.length - 1] : labels[0]}`;
+    // A prompt's value is a whole file, so a folded group names the file and says nothing about its text.
+    if (field.type === "prompt") return field.label;
     const value = String(field.value ?? "");
     if (!value) return `${field.label}: none`;
     const parts = value.split("/");
@@ -406,6 +408,57 @@
       return fallback;
     }
     return Object.hasOwn(defaults, field.id) ? defaults[field.id] : fallback;
+  }
+
+  /**
+   * The body a field's own `write` mapping asks for: its fixed keys as written, and `@value` standing for
+   * the control's value. Nothing here knows which route a field names.
+   */
+  function bodyOf(write, value) {
+    const body = {};
+    for (const [key, given] of Object.entries(write.keys || {})) body[key] = given === "@value" ? value : given;
+    return body;
+  }
+
+  /** A field that carries a `write` mapping is saved when the human says so, not on every change. */
+  async function commitWrite(entry, value, paint) {
+    const field = entry.field;
+    const write = field.write;
+    if (!write?.route) return;
+    const method = write.method || "POST";
+    const route = `${write.route}${write.route.includes("?") ? "&" : "?"}${qs()}`;
+    const body = bodyOf(write, value);
+    paint("saving…", "dirty");
+    setSaved("dirty", `saving… · ${field.label}`);
+    try {
+      const response = await fetch(route, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const reason = (await response.text()).slice(0, 160) || response.statusText;
+        showFieldError(entry, `${response.status} ${reason}`);
+        setSaved("error", `not saved · ${field.label}`);
+        nodes.settingsReadout.textContent = `${method} ${write.route} → ${response.status} · ${field.label}`;
+        paint("not saved", "error");
+        return;
+      }
+      await response.json();
+      // The daemon keeps the bytes it was given, so what it accepted is what the field holds now.
+      entry.lastGood = value;
+      field.value = value;
+      clearFieldError(entry);
+      setSaved("saved", `saved · ${field.label}`);
+      nodes.settingsReadout.textContent = `${method} ${write.route} → 200 · ${field.label}`;
+      paint("saved", "saved");
+      refreshPreviews();
+    } catch (error) {
+      showFieldError(entry, `${error.message || error}`);
+      setSaved("error", `not saved · ${field.label}`);
+      nodes.settingsReadout.textContent = `not saved · ${field.label}`;
+      paint("not saved", "error");
+    }
   }
 
   async function commit(entry, value) {
@@ -521,6 +574,42 @@
         for (const [other, node] of buttons) node.setAttribute("aria-pressed", String(other === value));
       };
       line.append(seg);
+    } else if (field.type === "prompt") {
+      // A prompt is a file, not a setting: the text stays dirty until the human presses this field's own
+      // save, because a file written on every keystroke is not a file anybody meant. `write` says where
+      // the text goes, so the same control serves any field that names a route.
+      line.classList.add("cfg-control-stack");
+      const area = el("textarea", "cfg-prompt");
+      area.id = `field-${field.id}`;
+      area.value = String(field.value ?? "");
+      area.rows = 10;
+      area.spellcheck = false;
+      area.disabled = disabled;
+      const actions = el("div", "cfg-prompt-actions");
+      const save = el("button", "cfg-prompt-save", "save");
+      save.type = "button";
+      save.disabled = disabled;
+      const back = el("button", "cfg-revert", "revert");
+      back.type = "button";
+      back.title = "put the last saved text back";
+      back.disabled = disabled;
+      const state = el("span", "cfg-prompt-state", "");
+      const paint = (text, tone) => {
+        state.textContent = text;
+        state.dataset.state = tone || "";
+      };
+      area.addEventListener("input", () => paint("unsaved", "dirty"));
+      save.addEventListener("click", () => void commitWrite(entry, area.value, paint));
+      back.addEventListener("click", () => {
+        area.value = String(entry.lastGood ?? "");
+        clearFieldError(entry);
+        paint("reverted", "saved");
+      });
+      entry.set = (value) => {
+        area.value = String(value ?? "");
+      };
+      actions.append(save, back, state);
+      line.append(area, actions);
     } else {
       // `text` and `number`, and any type a later document adds: an input is the honest fallback.
       const input = el("input", "cfg-input");
@@ -577,7 +666,10 @@
       nodes.settingsReadout.textContent = lineOf(field);
       refreshPreviews();
     });
-    error.append(message, revert);
+    error.append(message);
+    // A field with its own `write` already carries its own revert beside the control, so this row only
+    // says what the daemon said.
+    if (!field.write) error.append(revert);
     error.hidden = true;
     entry.error = error;
     entry.message = message;
@@ -655,7 +747,7 @@
       // The tree opens as the daemon just read it, so no badge: a badge reports an action somebody took,
       // and nobody has taken one yet.
       setSaved("", "");
-      nodes.settingsReadout.textContent = "saved as you change it · POST /defaults";
+      nodes.settingsReadout.textContent = "defaults save on change · prompts when you press save";
     } catch (error) {
       doc = null;
       entries.clear();

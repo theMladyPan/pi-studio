@@ -11,17 +11,21 @@ import { fileURLToPath } from "node:url";
 import { readJsonFile } from "./paths.ts";
 import { activeHomeDefaults } from "./workspaces.ts";
 import { THINKING_LEVELS, modelCatalog, readScope, resolveScope } from "./models.ts";
+import { PROMPT_FOLDERS, promptFiles } from "./child/modes.ts";
 
 /**
  * One control the page draws. `store` is the mapping a write back to POST /defaults needs when the
  * stored key is not the field's own id: `model` is two keys of the defaults written as `provider/model`.
+ * `write` is the general form of it for a field that has a route of its own: where to send the value, by
+ * which method, and under which keys, with `@value` standing for the control's value.
  */
 export type SettingsField = {
 	id: string;
 	label: string;
-	type: "combo" | "select" | "toggle" | "text" | "number";
+	type: "combo" | "select" | "toggle" | "text" | "number" | "prompt";
 	value: unknown;
 	store?: { split?: string; keys: string[] };
+	write?: { route: string; method?: string; keys?: Record<string, string> };
 	source?: string;
 	options?: string[];
 	levels?: string[];
@@ -101,6 +105,38 @@ function hydrate(group: SettingsGroup, values: Record<string, unknown>, catalogu
 }
 
 /**
+ * The prompts as one more top-level group: a sub-group per folder, a field per file, built from what is on
+ * disk when the document is read. A file dropped into `prompts/roles/` is on the page with no code in
+ * between, which is the point of reading the folders here rather than in the template.
+ */
+function promptGroups(): SettingsGroup {
+	const files = promptFiles();
+	return {
+		id: "prompts",
+		label: "Prompts",
+		help: "The files in prompts/, whole. A thread reads one when it starts; a save here reaches the next thread, never one already running.",
+		collapsed: true,
+		groups: PROMPT_FOLDERS.map((folder) => ({
+			id: `prompts-${folder}`,
+			label: folder.charAt(0).toUpperCase() + folder.slice(1),
+			fields: files
+				.filter((one) => one.folder === folder)
+				.map((one): SettingsField => ({
+					id: `prompt-${folder}-${one.file.replace(/\.md$/, "")}`,
+					label: one.file,
+					type: "prompt",
+					// The whole file, verbatim: the textarea has to show exactly what the daemon will read.
+					value: one.text,
+					help: one.firstLine,
+					source: `/prompt?name=${encodeURIComponent(one.name)}`,
+					// A prompt is a file, so it is written when a human presses save: `@value` is the textarea.
+					write: { route: "/prompt", method: "POST", keys: { name: one.name, text: "@value" } },
+				})),
+		})),
+	};
+}
+
+/**
  * The document the settings page renders. Read fresh on every call, because the catalogue is read by pi
  * and the values are written by the page itself; a cached copy would answer yesterday's choice.
  */
@@ -114,5 +150,7 @@ export async function settingsDocument(): Promise<SettingsDocument> {
 	const values = activeHomeDefaults() as Record<string, unknown>;
 	const document = structuredClone(template);
 	for (const group of document.groups) hydrate(group, values, catalogue);
+	// The prompts are not in the template: they are whatever is in `prompts/` right now.
+	document.groups.push(promptGroups());
 	return document;
 }
