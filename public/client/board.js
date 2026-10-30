@@ -4071,8 +4071,10 @@ function answeringCtx() {
   // written before it worked out the percentage itself.
   const said = Number(runtime.stats?.contextPercent);
   const percent = Number.isFinite(said) ? said : context && max ? (context / max) * 100 : NaN;
-  // No figures yet — a thread nobody has asked anything has none — so there is nothing to draw.
-  if (!threadId || !Number.isFinite(percent)) return null;
+  // A thread nobody has asked anything has no figure at all, and then there is nothing to draw. A thread
+  // whose window pi has not reported is different: it has a size, and pressing the button is still the
+  // thing to do, so it says the size and leaves the fill out.
+  if (!threadId || !context) return null;
   return { threadId, context, max, percent, running: sticky ? replyTarget.data.status === "sent" : runtime.running === true };
 }
 
@@ -4080,19 +4082,20 @@ function paintCtx() {
   const held = answeringCtx();
   ctxBtn.hidden = !held;
   if (!held) return;
-  const percent = Math.round(held.percent);
+  const known = Number.isFinite(held.percent);
+  const percent = known ? Math.round(held.percent) : 0;
   const busy = compacting === held.threadId;
   const shown = Math.max(0, Math.min(100, percent));
-  ctxLabel.textContent = busy ? "compacting…" : `ctx ${percent}%`;
-  ctxBtn.style.setProperty("--fill", `${shown}%`);
-  ctxBtn.classList.toggle("hot", percent >= CTX_HOT && percent < CTX_FULL);
-  ctxBtn.classList.toggle("full", percent >= CTX_FULL);
+  ctxLabel.textContent = busy ? "compacting…" : known ? `ctx ${percent}%` : `ctx ${compact(held.context)}`;
+  ctxBtn.style.setProperty("--fill", `${known ? shown : 0}%`);
+  ctxBtn.classList.toggle("hot", known && percent >= CTX_HOT && percent < CTX_FULL);
+  ctxBtn.classList.toggle("full", known && percent >= CTX_FULL);
   ctxBtn.classList.toggle("working", busy);
-  const size = held.context && held.max ? `ctx ${compact(held.context)}/${compact(held.max)}` : `ctx ${percent}% of the window`;
+  const size = held.context && held.max ? `ctx ${compact(held.context)}/${compact(held.max)}` : `${compact(held.context)} tokens in this thread, window not reported yet`;
   ctxBtn.title = held.running
     ? `${size} · compaction waits until this thread stops answering`
     : `${size} · compact the context, the same as /compact`;
-  ctxBtn.setAttribute("aria-label", `context ${percent}% used, compact it`);
+  ctxBtn.setAttribute("aria-label", known ? `context ${percent}% used, compact it` : `compact the context, ${compact(held.context)} tokens`);
 }
 
 ctxBtn.addEventListener("click", async () => {
