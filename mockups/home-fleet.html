@@ -1,0 +1,915 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pi-studio — fleet</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #12151a;
+    --panel-2: #161b22;
+    --raised: #1a1f27;
+    --border: #1f242c;
+    --border-2: #2a303a;
+    --text: #e6edf3;
+    --dim: #c9d1d9;
+    --muted: #8b949e;
+    --accent: #3b82f6;
+    --ok: #3fb950;
+    --warn: #e3b341;
+    --bad: #f85149;
+    --mono: ui-monospace, SFMono-Regular, Menlo, "DejaVu Sans Mono", monospace;
+  }
+
+  * {
+    box-sizing: border-box;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-2) transparent;
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  button, input, select {
+    font: inherit;
+    color: inherit;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  /* Keyboard focus is always explicit and outside the surface so state borders stay intact. */
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  summary:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .shell {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 18px 28px 20px;
+    gap: 18px;
+  }
+
+  /* ── Top instrument bar ── */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+
+  .brand-cluster {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .brand {
+    font: 600 14px/1 var(--mono);
+    letter-spacing: -0.2px;
+    color: var(--text);
+  }
+
+  .telemetry {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font: 11.5px/1 var(--mono);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .telemetry .sig {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .telemetry .sig-running { color: var(--warn); }
+  .telemetry .sig-bad { color: var(--bad); }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: none;
+    background: var(--muted);
+  }
+  .dot.running {
+    background: var(--warn);
+    box-shadow: 0 0 0 3px rgba(227, 179, 65, 0.16);
+  }
+  .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--bad); }
+
+  /* Controls cluster: open folder inline + compact defaults popover */
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: none;
+  }
+
+  .open-folder {
+    display: flex;
+    align-items: center;
+    background: var(--panel);
+    border: 1px solid var(--border-2);
+    border-radius: 6px;
+    padding: 2px 3px 2px 9px;
+    gap: 6px;
+    transition: border-color 0.12s ease;
+  }
+  .open-folder:focus-within {
+    border-color: var(--accent);
+  }
+  .open-folder label {
+    font: 10px/1 var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--muted);
+    user-select: none;
+  }
+  .open-folder input {
+    background: transparent;
+    border: 0;
+    padding: 4px 2px;
+    width: 210px;
+    font: 12px/1.2 var(--mono);
+    color: var(--text);
+  }
+  .open-folder input::placeholder {
+    color: var(--muted);
+    opacity: 0.65;
+  }
+  .open-folder input:focus-visible {
+    outline: none;
+  }
+
+  .btn {
+    background: var(--raised);
+    border: 1px solid var(--border-2);
+    border-radius: 5px;
+    padding: 5px 10px;
+    font: 11.5px/1.2 var(--mono);
+    color: var(--dim);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .btn:hover:not(:disabled) {
+    border-color: #3a424e;
+    color: var(--text);
+  }
+  .btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #06101f;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-weight: 600;
+  }
+  .btn.primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+
+  /* Compact defaults disclosure — replaces the permanent 260px column */
+  .defaults-menu {
+    position: relative;
+  }
+  .defaults-menu summary {
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 11px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font: 11.5px/1.2 var(--mono);
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  .defaults-menu summary::-webkit-details-marker { display: none; }
+  .defaults-menu summary:hover {
+    border-color: var(--border-2);
+    color: var(--dim);
+  }
+  .defaults-menu[open] summary {
+    background: var(--panel-2);
+    border-color: var(--border-2);
+    color: var(--text);
+  }
+  .defaults-menu .summary-val {
+    color: var(--dim);
+  }
+
+  .defaults-popover {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    width: 320px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-2);
+    border-radius: 8px;
+    padding: 12px 14px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .defaults-popover .pop-head {
+    font: 10px/1 var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: var(--muted);
+    margin: 0;
+  }
+  .defaults-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 7px 10px;
+    align-items: center;
+    margin: 0;
+  }
+  .defaults-grid dt {
+    font: 11px var(--mono);
+    color: var(--muted);
+  }
+  .defaults-grid dd {
+    margin: 0;
+  }
+  .defaults-grid input,
+  .defaults-grid select,
+  .defaults-grid button {
+    width: 100%;
+    padding: 5px 8px;
+    background: var(--bg);
+    border: 1px solid var(--border-2);
+    border-radius: 5px;
+    font: 11.5px var(--mono);
+    color: var(--text);
+    text-align: left;
+  }
+
+  /* ── Main Fleet Deck ── */
+  .deck {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    padding-right: 2px;
+  }
+
+  .tier {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .tier-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .tier-label {
+    margin: 0;
+    font: 10px/1 var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--muted);
+  }
+
+  .tier-hint {
+    font: 11px/1 var(--mono);
+    color: var(--muted);
+  }
+
+  /* ── Tier 1: Attention Grid (Running + Broken) ── */
+  .attention-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.85fr) minmax(270px, 1fr);
+    gap: 14px;
+    align-items: stretch;
+  }
+
+  /* Base tile surface */
+  .tile {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    border-radius: 8px;
+    transition: background-color 0.12s ease, border-color 0.12s ease;
+    min-width: 0;
+  }
+
+  /* Focal running tile: the obvious visual anchor of the screen */
+  .tile.is-running {
+    background: var(--panel-2);
+    border: 1px solid var(--border-2);
+    border-left: 3px solid var(--warn);
+    padding: 16px 18px;
+    gap: 14px;
+  }
+  .tile.is-running:hover,
+  .tile.is-running:focus-within {
+    border-color: #3a424e;
+    border-left-color: var(--warn);
+  }
+
+  /* Broken / missing folder tile: honest, unclickable board, high-visibility fault */
+  .tile.is-missing {
+    background: var(--panel);
+    border: 1px dashed rgba(248, 81, 73, 0.45);
+    border-left: 3px solid var(--bad);
+    padding: 16px 18px;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .tile-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .tile-ident {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .ws-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .ws-name-link {
+    font: 600 16px/1.2 var(--mono);
+    color: var(--text);
+    letter-spacing: -0.2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ws-name-link:hover {
+    color: #fff;
+    text-decoration: underline;
+    text-decoration-color: var(--accent);
+    text-underline-offset: 3px;
+  }
+
+  .ws-path {
+    margin: 4px 0 0;
+    font: 11.5px/1.3 var(--mono);
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .board-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--accent);
+    color: #06101f;
+    border-radius: 6px;
+    font: 600 12px/1 system-ui, -apple-system, sans-serif;
+    white-space: nowrap;
+    flex: none;
+  }
+  .board-cta:hover {
+    filter: brightness(1.08);
+  }
+  .board-cta kbd {
+    font: 10px/1 var(--mono);
+    background: rgba(6, 16, 31, 0.18);
+    padding: 2px 4px;
+    border-radius: 3px;
+  }
+
+  /* Running threads list: ONLY rendered on running/active tiles */
+  .live-threads {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 0;
+  }
+
+  .thread-link {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 9px;
+    border-radius: 6px;
+    background: transparent;
+    border: 1px solid transparent;
+    min-width: 0;
+    transition: background-color 0.1s ease, border-color 0.1s ease;
+  }
+  .thread-link:hover {
+    background: var(--raised);
+    border-color: var(--border-2);
+  }
+  .thread-link.running-row {
+    background: rgba(227, 179, 65, 0.05);
+  }
+  .thread-link.running-row:hover {
+    background: rgba(227, 179, 65, 0.1);
+  }
+
+  .thread-title {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12.5px;
+    color: var(--text);
+  }
+  .thread-link:not(.running-row) .thread-title {
+    color: var(--dim);
+  }
+
+  .thread-meta {
+    flex: none;
+    font: 11px/1 var(--mono);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .thread-link.running-row .thread-meta {
+    color: var(--warn);
+  }
+
+  /* Tile instrument footer */
+  .tile-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font: 11px/1.2 var(--mono);
+    color: var(--muted);
+    flex-wrap: wrap;
+  }
+
+  .fact-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .sep {
+    color: var(--border-2);
+    user-select: none;
+  }
+
+  .git-branch { color: var(--dim); }
+  .git-dirty { color: var(--warn); }
+  .git-clean { color: var(--muted); }
+  .git-none { color: var(--muted); font-style: normal; opacity: 0.75; }
+  .status-bad { color: var(--bad); }
+  .status-warn { color: var(--warn); }
+
+  .missing-callout {
+    margin: 0;
+    padding: 8px 10px;
+    background: rgba(248, 81, 73, 0.07);
+    border: 1px solid rgba(248, 81, 73, 0.22);
+    border-radius: 6px;
+    font: 11.5px/1.4 var(--mono);
+    color: var(--dim);
+  }
+  .missing-callout strong {
+    color: var(--bad);
+    font-weight: 600;
+  }
+
+  /* ── Tier 2: Calm Standby Grid (Idle workspaces, zero thread-title noise) ── */
+  .standby-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .tile.is-idle {
+    background: var(--panel);
+    border: 1px solid transparent;
+    padding: 13px 15px;
+    gap: 12px;
+    justify-content: space-between;
+    cursor: pointer;
+  }
+  .tile.is-idle:hover {
+    background: var(--panel-2);
+    border-color: var(--border-2);
+  }
+  .tile.is-idle:focus-visible {
+    background: var(--panel-2);
+    border-color: var(--accent);
+  }
+
+  .tile.is-idle .ws-name {
+    font: 600 13.5px/1.2 var(--mono);
+    color: var(--dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tile.is-idle:hover .ws-name {
+    color: var(--text);
+  }
+
+  .tile.is-idle .idle-count {
+    font: 11px/1 var(--mono);
+    color: var(--muted);
+    white-space: nowrap;
+    flex: none;
+  }
+
+  .tile.is-idle .ws-path {
+    margin-top: 3px;
+    font-size: 11px;
+  }
+
+  .tile.is-idle .tile-foot {
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 10.5px;
+  }
+
+  /* ── Responsive adaptation for 1024x700 and narrower viewports ── */
+  @media (max-width: 1180px) {
+    .shell {
+      padding: 14px 20px 16px;
+      gap: 14px;
+    }
+    .attention-grid {
+      grid-template-columns: minmax(0, 1.55fr) minmax(240px, 1fr);
+      gap: 12px;
+    }
+    .standby-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .open-folder input {
+      width: 155px;
+    }
+  }
+
+  @media (max-height: 740px) {
+    .shell {
+      padding: 12px 20px 14px;
+      gap: 12px;
+    }
+    .topbar {
+      padding-bottom: 10px;
+    }
+    .deck {
+      gap: 14px;
+    }
+    .tile.is-running,
+    .tile.is-missing {
+      padding: 12px 14px;
+      gap: 10px;
+    }
+    .live-threads {
+      padding: 5px 0;
+      gap: 2px;
+    }
+    .thread-link {
+      padding: 4px 8px;
+    }
+    .tile.is-idle {
+      padding: 10px 12px;
+      gap: 8px;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <!-- Top Instrument Bar: Fleet pulse + Open folder + Compact defaults -->
+    <header class="topbar" role="banner">
+      <div class="brand-cluster">
+        <span class="brand">pi-studio</span>
+        <div class="telemetry" aria-label="fleet status">
+          <span class="sig sig-running"><span class="dot running"></span>2 running</span>
+          <span>·</span>
+          <span>6 workspaces</span>
+          <span>·</span>
+          <span class="sig sig-bad">1 missing</span>
+        </div>
+      </div>
+
+      <div class="controls">
+        <form class="open-folder" action="/workspace" method="post" onsubmit="return false;">
+          <label for="folderInput">folder</label>
+          <input
+            id="folderInput"
+            name="folder"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="/home/stanke/projekty/…"
+            aria-label="Open workspace folder path"
+          />
+          <button class="btn" type="button" title="Pick a folder from this machine">browse…</button>
+          <button class="btn primary" type="submit">open</button>
+        </form>
+
+        <details class="defaults-menu" id="defaultsMenu">
+          <summary title="What new boards start with">
+            <span>defaults:</span>
+            <span class="summary-val" id="defaultsSummary">DeepSeek-V4.1-Flash · medium</span>
+          </summary>
+          <div class="defaults-popover" role="group" aria-label="New boards start with">
+            <p class="pop-head">New boards start with</p>
+            <dl class="defaults-grid">
+              <dt><label for="defModel">model</label></dt>
+              <dd>
+                <input
+                  id="defModel"
+                  list="modelList"
+                  spellcheck="false"
+                  autocomplete="off"
+                  value="klotilda/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+                />
+              </dd>
+              <dt><label for="defThinking">thinking</label></dt>
+              <dd>
+                <select id="defThinking">
+                  <option value="off">off</option>
+                  <option value="low">low</option>
+                  <option value="medium" selected>medium</option>
+                  <option value="high">high</option>
+                </select>
+              </dd>
+              <dt><label for="defDim">dim others</label></dt>
+              <dd>
+                <button id="defDim" type="button" aria-pressed="true">on</button>
+              </dd>
+            </dl>
+            <datalist id="modelList">
+              <option value="klotilda/deepseek-ai/DeepSeek-V4.1-Flash-1017"></option>
+              <option value="github-copilot/claude-opus-5.5"></option>
+              <option value="github-copilot/claude-sonnet-5.5"></option>
+              <option value="openrouter/deepseek/deepseek-v4.1-flash-1017"></option>
+            </datalist>
+          </div>
+        </details>
+      </div>
+    </header>
+
+    <!-- Fleet Deck ordered by attention: Running & Broken first, Idle standby below -->
+    <main class="deck" aria-label="Workspaces ordered by attention">
+
+      <!-- Tier 1: Needs Attention (Active agents + Broken folders) -->
+      <section class="tier" aria-labelledby="tierAttention">
+        <div class="tier-head">
+          <h2 class="tier-label" id="tierAttention">Active &amp; attention</h2>
+          <span class="tier-hint">Enter opens primary board · click a thread to jump straight in</span>
+        </div>
+
+        <div class="attention-grid">
+          <!-- Workspace 1: Running agent (Primary Focal Point) + Long thread titles -->
+          <article class="tile is-running" aria-label="pi-studio workspace, 2 running threads">
+            <div class="tile-top">
+              <div class="tile-ident">
+                <div class="ws-title-row">
+                  <span class="dot running" title="2 threads running"></span>
+                  <a class="ws-name-link" href="/w/pi-studio" target="pi-studio-pi-studio">pi-studio</a>
+                </div>
+                <p class="ws-path">/home/stanke/projekty/pi-studio</p>
+              </div>
+              <a class="board-cta" href="/w/pi-studio" target="pi-studio-pi-studio" id="primaryAction">
+                Open board <kbd>↵</kbd>
+              </a>
+            </div>
+
+            <ul class="live-threads" aria-label="Active and recent threads in pi-studio">
+              <li>
+                <a class="thread-link running-row" href="/w/pi-studio?thread=c4426506" target="pi-studio-pi-studio">
+                  <span class="dot running" aria-hidden="true"></span>
+                  <span class="thread-title">Home screen mockups — Fleet instrument panel layout and 1024×700 density budget</span>
+                  <span class="thread-meta">running · 6 turns · just now</span>
+                </a>
+              </li>
+              <li>
+                <a class="thread-link running-row" href="/w/pi-studio?thread=9a18bc02" target="pi-studio-pi-studio">
+                  <span class="dot running" aria-hidden="true"></span>
+                  <span class="thread-title">Reconnect SSE welcome stream when laptop wakes from suspend without losing selection</span>
+                  <span class="thread-meta">running · 14 turns · 1 min ago</span>
+                </a>
+              </li>
+              <li>
+                <a class="thread-link" href="/w/pi-studio?thread=3e7dc838" target="pi-studio-pi-studio">
+                  <span class="dot ok" aria-hidden="true"></span>
+                  <span class="thread-title">Deduplicate named window.open tab navigation on repeated board launches</span>
+                  <span class="thread-meta">4 turns · 28 min ago</span>
+                </a>
+              </li>
+            </ul>
+
+            <footer class="tile-foot">
+              <div class="fact-group">
+                <span class="git-branch">feat/home-screen-mockups</span>
+                <span class="sep">·</span>
+                <span class="git-dirty">3 modified</span>
+              </div>
+              <div class="fact-group">
+                <span class="status-warn">2 running</span>
+                <span class="sep">·</span>
+                <span>5 threads</span>
+                <span class="sep">·</span>
+                <span>last turn just now</span>
+              </div>
+            </footer>
+          </article>
+
+          <!-- Workspace 2: Missing folder on disk (Broken state rises above idle) -->
+          <article class="tile is-missing" aria-label="ytrack-tools workspace, folder missing">
+            <div class="tile-top">
+              <div class="tile-ident">
+                <div class="ws-title-row">
+                  <span class="dot bad" title="Folder missing from disk"></span>
+                  <span class="ws-name-link" style="color: var(--dim); text-decoration: none;">ytrack-tools</span>
+                </div>
+                <p class="ws-path">/home/stanke/projekty/ytrack-tools</p>
+              </div>
+              <span class="thread-meta status-bad">folder missing</span>
+            </div>
+
+            <p class="missing-callout">
+              <strong>Path not found on disk.</strong> 2 threads and 9 sessions (1.8 MB) are still held by the daemon; restore the directory to reopen the board.
+            </p>
+
+            <footer class="tile-foot">
+              <div class="fact-group">
+                <span class="git-none">branch unknown</span>
+              </div>
+              <div class="fact-group">
+                <span>2 threads</span>
+                <span class="sep">·</span>
+                <span>last turn 3 d ago</span>
+              </div>
+            </footer>
+          </article>
+        </div>
+      </section>
+
+      <!-- Tier 2: Idle Standby (Calm grid, no individual thread titles drawn) -->
+      <section class="tier" aria-labelledby="tierStandby">
+        <div class="tier-head">
+          <h2 class="tier-label" id="tierStandby">Idle standby</h2>
+          <span class="tier-hint">4 workspaces at rest · thread titles hidden until active</span>
+        </div>
+
+        <div class="standby-grid">
+          <!-- Idle Workspace 3: Dirty git tree -->
+          <a class="tile is-idle" href="/w/dashboard" target="pi-studio-dashboard" aria-label="Open dashboard board, 4 threads, 2 modified files on main">
+            <div>
+              <div class="tile-top">
+                <div class="ws-title-row">
+                  <span class="dot ok" aria-hidden="true"></span>
+                  <span class="ws-name">dashboard</span>
+                </div>
+                <span class="idle-count">4 threads</span>
+              </div>
+              <p class="ws-path">/home/stanke/projekty/dashboard</p>
+            </div>
+            <div class="tile-foot">
+              <span class="Fact"><span class="git-branch">main</span> · <span class="git-dirty">2 modified</span></span>
+              <span>turn · 2 h ago</span>
+            </div>
+          </a>
+
+          <!-- Idle Workspace 4: Clean git tree -->
+          <a class="tile is-idle" href="/w/pi" target="pi-studio-pi" aria-label="Open pi board, 6 threads, clean tree on release/1.4">
+            <div>
+              <div class="tile-top">
+                <div class="ws-title-row">
+                  <span class="dot ok" aria-hidden="true"></span>
+                  <span class="ws-name">pi</span>
+                </div>
+                <span class="idle-count">6 threads</span>
+              </div>
+              <p class="ws-path">/home/stanke/projekty/pi</p>
+            </div>
+            <div class="tile-foot">
+              <span><span class="git-branch">release/1.4</span> · <span class="git-clean">clean</span></span>
+              <span>turn · 5 h ago</span>
+            </div>
+          </a>
+
+          <!-- Idle Workspace 5: Not a git repository -->
+          <a class="tile is-idle" href="/w/agent-skills" target="pi-studio-agent-skills" aria-label="Open agent-skills board, 1 thread, not a git repo">
+            <div>
+              <div class="tile-top">
+                <div class="ws-title-row">
+                  <span class="dot ok" aria-hidden="true"></span>
+                  <span class="ws-name">agent-skills</span>
+                </div>
+                <span class="idle-count">1 thread</span>
+              </div>
+              <p class="ws-path">/home/stanke/.agents/skills</p>
+            </div>
+            <div class="tile-foot">
+              <span class="git-none">not a repo</span>
+              <span>turn · 1 d ago</span>
+            </div>
+          </a>
+
+          <!-- Idle Workspace 6: 0 threads -->
+          <a class="tile is-idle" href="/w/swan-proxy" target="pi-studio-swan-proxy" aria-label="Open swan-proxy board, 0 threads, clean tree on main">
+            <div>
+              <div class="tile-top">
+                <div class="ws-title-row">
+                  <span class="dot" aria-hidden="true"></span>
+                  <span class="ws-name">swan-proxy</span>
+                </div>
+                <span class="idle-count">0 threads</span>
+              </div>
+              <p class="ws-path">/home/stanke/projekty/swan-proxy</p>
+            </div>
+            <div class="tile-foot">
+              <span><span class="git-branch">main</span> · <span class="git-clean">clean</span></span>
+              <span>opened · 4 d ago</span>
+            </div>
+          </a>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    // Progressive enhancement: Enter on body opens the primary active board; Escape closes the defaults popover.
+    (() => {
+      const primary = document.getElementById("primaryAction");
+      const menu = document.getElementById("defaultsMenu");
+      const dimBtn = document.getElementById("defDim");
+
+      if (dimBtn) {
+        dimBtn.addEventListener("click", () => {
+          const next = dimBtn.textContent.trim() === "on" ? "off" : "on";
+          dimBtn.textContent = next;
+          dimBtn.setAttribute("aria-pressed", String(next === "on"));
+        });
+      }
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && menu && menu.open) {
+          menu.open = false;
+          return;
+        }
+        if (
+          event.key === "Enter" &&
+          document.activeElement === document.body &&
+          primary
+        ) {
+          event.preventDefault();
+          primary.click();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

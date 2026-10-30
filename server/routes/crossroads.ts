@@ -6,11 +6,12 @@ import { answer, fail, readJson } from "../http.ts";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
-import { activeHomeDefaults, describeWorkspace, homeDefaults, rememberWorkspace, saveWorkspaces, setHomeDefaults } from "../workspaces.ts";
+import { activeHomeDefaults, describeWorkspace, homeDefaults, rememberWorkspace, setHomeDefaults } from "../workspaces.ts";
 import { boardFor } from "../store.ts";
 import { nudgeWelcome } from "../bus.ts";
 import { cardFor } from "../cards.ts";
 import { THINKING_LEVELS, modelCatalog } from "../models.ts";
+import { settingsDocument } from "../settings.ts";
 import { spawn } from "node:child_process";
 
 
@@ -58,8 +59,17 @@ export async function onDefaults(req, res) {
 		next.model = body.model;
 	}
 	setHomeDefaults(next);
-	saveWorkspaces();
 	answer(res, 200, { defaults: activeHomeDefaults() });
+}
+
+
+
+/**
+ * The settings page's whole content: the same defaults as GET /defaults, with this machine's catalogue
+ * and pi's levels filled in, so the page needs no second request to draw a picker.
+ */
+export async function onSettingsDefaults(res) {
+	answer(res, 200, await settingsDocument());
 }
 
 
