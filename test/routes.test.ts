@@ -133,6 +133,51 @@ test("a route without the token is refused, and the page is not", async () => {
 	}
 });
 
+/** The leaves of the whole tree, which is how the page finds the controls it draws. */
+function leavesOf(document: any): any[] {
+	const found: any[] = [];
+	const walk = (group: any) => {
+		for (const field of group.fields ?? []) found.push(field);
+		for (const child of group.groups ?? []) walk(child);
+	};
+	for (const group of document.groups ?? []) walk(group);
+	return found;
+}
+
+test("the settings document is served behind the token, and what /defaults saves reads back in it", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-settings-route-"));
+	const daemon = await boot(folder);
+	try {
+		// It holds the daemon's own defaults, so it is behind the same gate as the routes beside it.
+		assert.equal((await get(daemon, "/settings/defaults")).status, 403);
+
+		const served = await get(daemon, `/settings/defaults?token=${daemon.token}`);
+		assert.equal(served.status, 200);
+		const body = JSON.parse(served.body);
+		assert.equal(body.version, 1);
+		// The page draws a control per leaf, so the three settings have to be leaves of the tree.
+		assert.ok(leavesOf(body).some((field) => field.id === "model"), "no model field in the document");
+		const byId = Object.fromEntries(leavesOf(body).map((field) => [field.id, field]));
+		assert.ok((byId.model.options ?? []).length > 0, "the model catalogue is not filled in");
+		assert.ok((byId.thinking?.levels ?? []).length >= 4, "thinking does not carry pi's levels");
+		assert.equal(byId.dimOthers?.type, "toggle");
+
+		// Saving a level used to throw `Assignment to constant variable` at the route, which answered 500
+		// and lost the choice: the write went to an imported binding instead of to the module that owns it.
+		const saved = await post(daemon, "/defaults", { thinking: "low" });
+		assert.equal(saved.status, 200, saved.body);
+		const after = JSON.parse((await get(daemon, `/settings/defaults?token=${daemon.token}`)).body);
+		const thinking = leavesOf(after).find((field) => field.id === "thinking");
+		assert.equal(thinking?.value, "low", "the document does not read back what /defaults wrote");
+		// And it is on disk, in the one file the daemon reloads its defaults from.
+		const kept = JSON.parse(readFileSync(join(folder, "workspaces.json"), "utf8"));
+		assert.equal(kept.defaults?.thinking, "low");
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
 test("a question that takes several answers keeps all of them", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-ask-"));
 	const daemon = await boot(folder);
