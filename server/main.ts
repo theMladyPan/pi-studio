@@ -15,7 +15,7 @@ import { boardMeta, cardsFor } from "./cards.ts";
 import { closedCards } from "./bus.ts";
 import { gitPicture, refreshGit, unwatchGit, watchGit } from "./git/graph.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
-import { onDefaults, onOpenWorkspace, onPickFolder } from "./routes/crossroads.ts";
+import { onDefaults, onOpenWorkspace, onPickFolder, onSettingsDefaults } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onRename, onSource } from "./routes/board/content.ts";
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, transcriptOf } from "./session.ts";
@@ -209,6 +209,12 @@ export const server = createServer((req, res) => {
 		}
 		if (req.method === "POST" && url.pathname === "/defaults") {
 			await onDefaults(req, res);
+			return;
+		}
+		// The same values as a document the settings page draws: the tree, this machine's catalogue, and
+		// pi's levels, so the page needs nothing else to render a control per setting.
+		if (req.method === "GET" && url.pathname === "/settings/defaults") {
+			await onSettingsDefaults(res);
 			return;
 		}
 		if (req.method === "POST" && url.pathname === "/workspace") {

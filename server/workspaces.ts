@@ -147,6 +147,18 @@ export function saveWorkspaces() {
 
 
 
+/**
+ * The one place `homeDefaults` is written. An `import` is a constant binding, so a route that assigned to
+ * it threw `Assignment to constant variable` and answered 500 on every save; the write belongs here, with
+ * the file it has to reach.
+ */
+export function setHomeDefaults(next) {
+	homeDefaults = next;
+	saveWorkspaces();
+}
+
+
+
 /** The crossroads' defaults with the daemon's own model filled in, so the page can show them. */
 export function activeHomeDefaults() {
 	return {
