@@ -279,7 +279,7 @@ process.stdin.on("data", (chunk) => {
 		// Asked after the run settles, and the child is closed once it answers.
 		if (frame.type === "get_session_stats") {
 			const tokens = existsSync(flag("compacted")) ? 32000 : 150000;
-			say({ type: "response", command: "get_session_stats", success: true, data: { tokens: { input: 1, output: 1, total: 2 }, totalMessages: 1, contextUsage: { tokens, maxTokens: 200000 } } });
+			say({ type: "response", command: "get_session_stats", success: true, data: { tokens: { input: 1, output: 1, total: 2 }, totalMessages: 1, contextUsage: { tokens, contextWindow: 200000, percent: Math.round((tokens / 200000) * 100) } } });
 		}
 		// Compaction: the summary a real child writes, and the flag the next stats answer reads.
 		if (frame.type === "compact") {
@@ -437,6 +437,8 @@ test("a compaction reaches the thread's child, and the context comes back smalle
 		}
 		assert.equal(after?.stats?.context, 32000);
 		assert.equal(after?.stats?.contextMax, 200000);
+		// pi reports the window as `contextWindow`, which is the denominator the meter needs.
+		assert.equal(after?.stats?.contextPercent, 16);
 
 		// The card the composer sends is not always the thread: a note the thread wrote carries the
 		// thread in `ownerThread`, and that is the walk the model and thinking chips already use.

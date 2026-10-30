@@ -211,6 +211,14 @@ export function handleChildLine(board, thread, line) {
 	if (event.type === "response") {
 		if (event.command === "get_session_stats" && event.data?.tokens) {
 			const data = event.data;
+			// pi names the window `contextWindow`. `maxTokens` is the older name a few builds used, and
+			// reading only that left the figure without a denominator, so no percentage could be drawn.
+			const usage = data.contextUsage ?? null;
+			const window = usage?.contextWindow ?? usage?.maxTokens ?? 0;
+			// pi's own estimate is null until an answer lands after a compaction, and the compaction said
+			// how big the result is: that estimate stands in until a run can measure it properly.
+			const carried = usage?.tokens ?? usage?.used ?? thread.compactedTo ?? 0;
+			thread.compactedTo = 0;
 			// Context is what the last request carried, so it is the number a compaction turns on; the
 			// totals are what this thread has spent since it started.
 			thread.stats = {
@@ -221,8 +229,9 @@ export function handleChildLine(board, thread, line) {
 				cost: typeof data.cost === "number" ? data.cost : 0,
 				messages: data.totalMessages ?? 0,
 				tools: data.toolCalls ?? 0,
-				...(data.contextUsage ? { context: data.contextUsage.tokens ?? data.contextUsage.used } : {}),
-				...(data.contextUsage?.maxTokens ? { contextMax: data.contextUsage.maxTokens } : {}),
+				...(carried ? { context: carried } : {}),
+				...(window ? { contextMax: window } : {}),
+				...(carried && window ? { contextPercent: Math.round((carried / window) * 100) } : {}),
 			};
 			if (thread.pendingClose) {
 				thread.pendingClose = false;
@@ -250,6 +259,9 @@ export function handleChildLine(board, thread, line) {
 				const data = event.data ?? {};
 				const before = Number(data.tokensBefore);
 				const after = Number(data.estimatedTokensAfter);
+				// What the summary left behind, for the stats read that follows: pi reports nothing until a
+				// real answer is measured, and the button that was just pressed should not go blank.
+				if (Number.isFinite(after) && after > 0) thread.compactedTo = after;
 				compacted(thread, {
 					...(Number.isFinite(before) ? { tokensBefore: before } : {}),
 					...(Number.isFinite(after) ? { estimatedTokensAfter: after } : {}),

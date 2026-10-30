@@ -4052,9 +4052,13 @@ function answeringCtx() {
   const threadId = sticky ? replyTarget.id : (runtime.thread ?? "");
   const context = Number(runtime.stats?.context) || 0;
   const max = Number(runtime.stats?.contextMax) || 0;
+  // The daemon divides for the same reason the footer does; the ratio is the fallback for a board
+  // written before it worked out the percentage itself.
+  const said = Number(runtime.stats?.contextPercent);
+  const percent = Number.isFinite(said) ? said : context && max ? (context / max) * 100 : NaN;
   // No figures yet — a thread nobody has asked anything has none — so there is nothing to draw.
-  if (!threadId || !context || !max) return null;
-  return { threadId, context, max, percent: (context / max) * 100, running: sticky ? replyTarget.data.status === "sent" : runtime.running === true };
+  if (!threadId || !Number.isFinite(percent)) return null;
+  return { threadId, context, max, percent, running: sticky ? replyTarget.data.status === "sent" : runtime.running === true };
 }
 
 function paintCtx() {
@@ -4069,9 +4073,10 @@ function paintCtx() {
   ctxBtn.classList.toggle("hot", percent >= CTX_HOT && percent < CTX_FULL);
   ctxBtn.classList.toggle("full", percent >= CTX_FULL);
   ctxBtn.classList.toggle("working", busy);
+  const size = held.context && held.max ? `ctx ${compact(held.context)}/${compact(held.max)}` : `ctx ${percent}% of the window`;
   ctxBtn.title = held.running
-    ? `ctx ${compact(held.context)}/${compact(held.max)} · compaction waits until this thread stops answering`
-    : `ctx ${compact(held.context)}/${compact(held.max)} · compact the context, the same as /compact`;
+    ? `${size} · compaction waits until this thread stops answering`
+    : `${size} · compact the context, the same as /compact`;
   ctxBtn.setAttribute("aria-label", `context ${percent}% used, compact it`);
 }
 

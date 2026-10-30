@@ -320,8 +320,10 @@ commit's own account rather than on a check run now, the section below says so.
   answering (a summary would cut the answer in half), starts the child that a settled run left
   closed, and writes `{"type":"compact"}`. Its reply carries `tokensBefore` and
   `estimatedTokensAfter`, and the stats read that follows is the one a settled run already uses, so
-  the figure drops by itself. The button reads `ctx 42%` over a fill of the same width, sits with the
-  mode chips where the field's other buttons are, hides until a percentage is known, turns amber at
+  the figure drops by itself. pi reports the window as `contextUsage.contextWindow`, so the daemon
+  keeps that as `contextMax` and works out `contextPercent` itself: reading only `maxTokens` left the
+  figure with no denominator and the button hid. The button reads `ctx 42%` over a fill of the
+  same width, sits with the mode chips where the field's other buttons are, hides until a percentage is known, turns amber at
   50% with a sheen crossing it, and red near the window's edge. The header chip `#statCtx` stays for
   a board that reports `meta.contextPercent`, which a board of threads never does.
 - **The wheel has one target.** Ctrl/Cmd zooms at the pointer. Otherwise an open editor under the
