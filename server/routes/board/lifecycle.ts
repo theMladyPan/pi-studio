@@ -10,7 +10,7 @@ import { ownedCards, refreshOwned } from "./message.ts";
 import { answer, fail, readJson } from "../../http.ts";
 import { field } from "./thread.ts";
 import { randomUUID } from "node:crypto";
-import { cleanBoard, clearBoard } from "../../cards.ts";
+import { cleanBoard, clearBoard, plainCardFor } from "../../cards.ts";
 import { finished } from "../../waiters.ts";
 
 
@@ -34,6 +34,26 @@ export function closeThread(board, thread) {
 	board.threads.delete(thread.id);
 	// A thread that goes takes its place in the closed list with it.
 	nudgeClosed(board);
+}
+
+
+
+/**
+ * How many closed cards the board can still put back. A close is one keystroke away from the `q` that
+ * reads like a scroll key, so undo has to reach the mistake; a board left open for a day does not need
+ * every card it ever closed kept alive for it.
+ */
+const TRASH_KEPT = 20;
+
+/**
+ * Keep what a close took off the board, so `ctrl+z` can put it back. The entry holds the thing itself
+ * rather than a copy: a hidden thread is still in the board's map, and a thread whose child was killed
+ * kept its turns, its session id and its worktree, which is everything a card needs to be drawn again.
+ */
+function rememberClosed(board, entry) {
+	if (!Array.isArray(board.trash)) board.trash = [];
+	board.trash.push({ at: Date.now(), ...entry });
+	if (board.trash.length > TRASH_KEPT) board.trash.splice(0, board.trash.length - TRASH_KEPT);
 }
 
 
@@ -148,6 +168,7 @@ export async function onClose(req, res, board) {
 	if (plain) {
 		board.cards.delete(id);
 		forgetCard(board, id);
+		rememberClosed(board, { kind: "card", card: plain });
 		broadcast(board, { type: "remove", id });
 		scheduleSave(board);
 		answer(res, 200, { closed: id });
@@ -168,6 +189,8 @@ export async function onClose(req, res, board) {
 		closeThread(board, thread);
 		broadcast(board, { type: "remove", id });
 	}
+	// Either way the card is off the board and the human may want it back, so both shapes are kept.
+	rememberClosed(board, { kind: "thread", thread });
 	scheduleSave(board);
 	nudgeWelcome();
 	answer(res, 200, { closed: id, kept: kept.length });
@@ -193,6 +216,44 @@ export async function onReopen(req, res, board) {
 	card(board, thread);
 	nudgeClosed(board);
 	answer(res, 200, { reopened: id });
+}
+
+
+
+/**
+ * Put back the last card the human closed. This undoes a close and nothing else: the board's other
+ * changes are not a history, and a key that sometimes moved a card and sometimes reopened one would be
+ * a key nobody could predict.
+ */
+export async function onUndo(req, res, board) {
+	req.resume();
+	// An entry that is already back belongs to a second tab that got there first, so it is passed over
+	// rather than reported as the undo.
+	while (Array.isArray(board.trash) && board.trash.length) {
+		const entry = board.trash.pop();
+		if (entry.kind === "card") {
+			if (board.cards.has(entry.card.id)) continue;
+			// The card keeps its id, its key and its rect, so whatever pointed at it and wherever it sat
+			// are both still true. `restored` says it is not an arrival: the tab draws it without the
+			// new-card badge and pill, because the human is looking at a card they already had.
+			board.cards.set(entry.card.id, entry.card);
+			broadcast(board, { type: "card", card: plainCardFor(entry.card, board), restored: true });
+			scheduleSave(board);
+			return void answer(res, 200, { restored: entry.card.id });
+		}
+		const thread = entry.thread;
+		// A hidden thread was never off the board, so it comes back where it was; one whose child was
+		// killed was deleted, and the session file it kept means the next message resumes the work.
+		if (thread.hidden) {
+			thread.hidden = false;
+			delete thread.closedAt;
+		}
+		if (!board.threads.has(thread.id)) board.threads.set(thread.id, thread);
+		card(board, thread, { restored: true });
+		nudgeClosed(board);
+		return void answer(res, 200, { restored: thread.id });
+	}
+	fail(res, 409, "nothing to undo");
 }
 
 

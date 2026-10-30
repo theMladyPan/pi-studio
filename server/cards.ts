@@ -202,6 +202,9 @@ export function cleanBoard(board) {
 	});
 	// A thought still streaming belongs to a row that is still here; one whose row is gone is worth nothing.
 	for (const id of dropped) liveThoughts.delete(id);
+	// What undo would put back is exactly what this sweep retires: a killed thread's tree may already be
+	// gone, so the entries go with it rather than restoring a card that points at nothing.
+	board.trash = [];
 	scheduleSave(board);
 	return { removed, rows: before - board.activity.length, trees };
 }
@@ -219,6 +222,7 @@ export function clearBoard(board) {
 	for (const row of board.activity) liveThoughts.delete(row.id);
 	board.activity = [];
 	board.askers.clear();
+	board.trash = [];
 	scheduleSave(board);
 }
 

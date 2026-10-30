@@ -54,8 +54,8 @@ export function nudgeWelcome() {
 
 
 
-export const card = (board, thread) => {
-	broadcast(board, { type: "card", card: cardFor(thread, board) });
+export const card = (board, thread, extra = {}) => {
+	broadcast(board, { type: "card", card: cardFor(thread, board), ...extra });
 	scheduleSave(board);
 	nudgeWelcome();
 };

@@ -3311,6 +3311,21 @@ function applyClosed(rows) {
 }
 
 /**
+ * `ctrl+z` puts back the card that was closed last. The × and `q` both take a card off the board, and a
+ * note closed by accident is otherwise only in the rail when it held a conversation. The daemon keeps
+ * what a close removed, so the card returns with its id, its place and its key intact.
+ */
+function undoClose() {
+  void fetch(`/undo?${auth}`, { method: "POST" })
+    .then(async (response) => {
+      if (response.ok) return;
+      const said = (await response.text()).trim();
+      hintLine(said === "nothing to undo" ? "nothing to undo" : `could not undo: ${said}`, true);
+    })
+    .catch(() => hintLine("could not reach the board server", true));
+}
+
+/**
  * Put a closed card back. The card comes with the turns it had and lands where it was, so this is one
  * request: the row goes when the board says the list has changed, not when the click lands.
  */
@@ -5340,6 +5355,15 @@ document.addEventListener("keydown", (event) => {
   setReplyTarget(record);
 });
 
+// `ctrl+z` is the undo a close needs: the daemon holds the last cards a close removed, so one key puts
+// back the one that went by mistake. A field keeps its own undo, so half-typed text is never replaced.
+document.addEventListener("keydown", (event) => {
+  if (event.key.toLowerCase() !== "z" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+  if (typingSomewhere()) return;
+  event.preventDefault();
+  undoClose();
+});
+
 // `1`–`6` answer the question the agent is waiting on, so a decision needs no mouse.
 document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey || !/^[1-6]$/.test(event.key)) return;
@@ -5691,12 +5715,22 @@ function connect() {
       // An open question is re-broadcast on every update, so its blink has to key on the
       // transition into blocking the agent, not on the state the tab already shows.
       const wasOpen = known && questionWants(byId.get(payload.card.id).data);
-      applyMessage(payload.card, payload.quiet === true);
+      // A card put back by an undo was on the board once already: it is drawn the way a replay draws
+      // it, so it carries no new tag and takes no place in the new-card pill.
+      const wasReplaying = replaying;
+      if (payload.restored === true) replaying = true;
+      try {
+        applyMessage(payload.card, payload.quiet === true);
+      } finally {
+        replaying = wasReplaying;
+      }
       paintRuntime();
       // A quiet repaint and a card the tab already holds are not news; only an arrival or a
       // question that has just started blocking the agent is worth a blink in a background tab.
       const record = byId.get(payload.card.id);
-      if ((!known && payload.quiet !== true) || (record && !wasOpen && questionWants(record.data))) startFlash();
+      if ((!known && payload.quiet !== true && payload.restored !== true) || (record && !wasOpen && questionWants(record.data))) {
+        startFlash();
+      }
     } else if (payload.type === "closed") {
       applyClosed(payload.closed);
     } else if (payload.type === "hint") {
