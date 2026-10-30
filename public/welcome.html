@@ -7,62 +7,110 @@
 <link rel="stylesheet" href="/welcome.css" />
 </head>
 <body>
-<main id="crossroads">
-  <aside class="col workspaces">
-    <button id="newWorkspace" class="new" type="button">+ New workspace</button>
-    <form id="newForm" class="new-form" hidden>
-      <label for="folder">folder</label>
-      <div class="row">
-        <input id="folder" spellcheck="false" placeholder="~/projekty/something" autocomplete="off" />
-        <button id="browse" type="button" title="pick a folder from this machine">browse…</button>
-      </div>
-      <div class="row">
-        <button id="create" type="submit" class="primary">open</button>
-        <button id="cancelNew" type="button">cancel</button>
-      </div>
-      <p class="err" id="newError" role="status" aria-live="polite"></p>
-    </form>
-    <p class="head" id="recentHead">RECENT</p>
-    <ul id="wsList" aria-label="workspaces"></ul>
-    <p class="empty" id="wsEmpty" hidden>no workspace yet — name a folder above</p>
-  </aside>
 
-  <section class="col preview" aria-live="polite">
-    <h1 id="wsName">pi-studio</h1>
-    <p id="wsPath" class="path"></p>
-    <div id="preview">
-      <p class="hint" id="previewHint">Pick a workspace on the left, or open a folder to begin.</p>
-      <div id="previewBody" hidden>
-        <p class="head">LAST THREADS</p>
-        <ul id="threads"></ul>
-        <p class="hint" id="lastActivity"></p>
+<main class="shelf-stage" aria-label="pi-studio workspaces and settings">
+  <!-- One masthead for both views. Its left side says where you are, its right side is the one door
+       between the shelf and the settings page. -->
+  <header class="masthead">
+    <div class="brand">
+      <span class="brand-title">pi-studio</span>
+      <span class="brand-sep" id="mastheadSep">·</span>
+      <span class="brand-summary" id="mastheadContext"></span>
+    </div>
+
+    <!-- Shown on the settings page: one click, Esc or Alt+M returns to the shelf. -->
+    <button type="button" class="masthead-nav-btn is-back" id="backToShelfBtn" hidden
+            title="Return to the workspaces shelf (Esc or Alt+M)">
+      <span class="glyph" aria-hidden="true">←</span>
+      <span>back to workspaces</span>
+    </button>
+
+    <!-- Shown on the shelf: the door to the page that renders /settings/defaults. -->
+    <button type="button" class="masthead-nav-btn" id="openSettingsBtn" hidden
+            title="What a new board starts with (Alt+M)">
+      <span class="glyph">settings →</span>
+    </button>
+  </header>
+
+  <!-- ========================================================================
+       VIEW 1: SETTINGS. The tree below is drawn from the daemon's JSON document.
+       ======================================================================== -->
+  <section class="shelf-box" id="settingsView" hidden aria-label="New board defaults">
+    <div class="settings-head">
+      <div class="settings-head-left">
+        <div class="settings-title-row">
+          <h1 class="settings-title" id="docTitle">Settings</h1>
+          <span class="settings-schema-tag" id="docVersion"></span>
+        </div>
+        <p class="settings-help" id="docHelp"></p>
+      </div>
+      <div class="settings-head-right">
+        <span class="save-status" id="saveStatus" role="status" aria-live="polite"></span>
+        <button type="button" class="fold-btn" id="toggleAllGroupsBtn" title="Fold or unfold every group">
+          collapse all
+        </button>
       </div>
     </div>
-    <div class="actions">
-      <button id="open" class="primary big" type="button" disabled>Open workspace</button>
-      <span class="hint" id="openHint">opens in a new tab, and reuses it next time</span>
-    </div>
+
+    <div class="settings-tree" id="settingsTree" role="region" aria-label="Settings groups" tabindex="-1"></div>
+
+    <footer class="shelf-foot">
+      <div class="foot-keys">
+        <span><kbd>Tab</kbd> navigate</span>
+        <span><kbd>Space</kbd><kbd>↵</kbd> fold group</span>
+        <span><kbd>Esc</kbd> back to shelf</span>
+      </div>
+      <span class="foot-selected-path" id="settingsFootReadout">defaults save on change · prompts when you press save</span>
+    </footer>
   </section>
 
-  <aside class="col facts" aria-live="polite">
-    <!-- What every board opened from here is born with. A board may change its own copy and nobody
-         else's, which is why this is not a global setting. -->
-    <p class="head">NEW BOARDS START WITH</p>
-    <dl id="defaults" class="defaults">
-      <dt>model</dt><dd><input id="defModel" list="modelList" spellcheck="false" autocomplete="off" /></dd>
-      <dt>thinking</dt><dd><select id="defThinking"></select></dd>
-      <dt>dim others</dt><dd><button id="defDim" type="button" title="dim the cards of other threads while one is selected">on</button></dd>
-    </dl>
-    <datalist id="modelList"></datalist>
-    <p class="hint" id="defNote"></p>
-    <p class="head">WORKSPACE</p>
-    <dl id="facts"></dl>
-    <p class="head">AGENT</p>
-    <dl id="agent"></dl>
-    <p class="head">STATE</p>
-    <dl id="state"></dl>
-  </aside>
+  <!-- ========================================================================
+       VIEW 2: THE SHELF. One column of workspaces and one dual-purpose input.
+       ======================================================================== -->
+  <section class="shelf-box" id="shelfView" aria-label="Workspaces shelf">
+    <div class="omnibar">
+      <span class="omni-prompt" aria-hidden="true">/</span>
+      <input
+        id="omniInput"
+        class="omni-input"
+        type="text"
+        spellcheck="false"
+        autocomplete="off"
+        placeholder="Filter workspaces, or type a folder path (~/projekty/…) and press Enter"
+        aria-label="Filter workspaces or enter a folder path to open"
+      />
+      <span id="omniModeBadge" class="omni-mode" hidden>open path ↵</span>
+      <button type="button" class="omni-browse" id="browseBtn" title="Pick a folder with the machine's own dialog (POST /pick-folder)">
+        browse…
+      </button>
+    </div>
+
+    <div id="pathActionRow" class="path-action-row" hidden>
+      <div class="path-action-target">
+        <span id="pathActionLabel">Open folder as workspace: </span><strong id="pathActionText"></strong>
+      </div>
+      <span class="path-action-hint">↵ Enter opens its board</span>
+    </div>
+
+    <ul class="ws-list" id="wsList" role="listbox" aria-label="Workspaces"></ul>
+
+    <div class="empty-shelf" id="emptyShelf" hidden>
+      <p class="empty-title" id="emptyTitle"></p>
+      <p class="empty-copy" id="emptyCopy"></p>
+    </div>
+
+    <footer class="shelf-foot">
+      <div class="foot-keys">
+        <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+        <span><kbd>↵</kbd> open board</span>
+        <span><kbd>Esc</kbd> clear</span>
+        <span><kbd>Alt+M</kbd> settings</span>
+      </div>
+      <span class="foot-selected-path" id="selectedPathReadout"></span>
+    </footer>
+  </section>
 </main>
+
 <script src="/welcome.js"></script>
 </body>
 </html>

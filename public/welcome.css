@@ -1,4 +1,5 @@
-/* The crossroads. Same palette as the board so the two read as one application. */
+/* The shelf and the settings page it opens, from mockups/home-shelf-settings.html. Same palette as
+   the board so the two read as one application. */
 :root {
   --bg: #0b0d10;
   --panel: #12151a;
@@ -14,113 +15,1169 @@
   --warn: #e3b341;
   --bad: #f85149;
   --mono: ui-monospace, SFMono-Regular, Menlo, "DejaVu Sans Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
-* { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
+
+* {
+  box-sizing: border-box;
+  /* Thin dark scrollbars, so the settings tree and a long shelf read as part of the page instead of
+     carrying the platform's grey trough, the way the board's do. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-2) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3d444d;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
 body {
   background: var(--bg);
   color: var(--text);
-  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 13px/1.5 var(--sans);
   -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 24px;
 }
-button, input { font: inherit; color: inherit; }
-button {
-  background: var(--raised);
-  border: 1px solid var(--border-2);
-  border-radius: 7px;
-  padding: 7px 12px;
+
+button, input, select {
+  font: inherit;
+  color: inherit;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* Shelf wrapper: sits in the upper-middle optical zone */
+.shelf-stage {
+  width: 100%;
+  max-width: 880px;
+  margin-top: min(11vh, 96px);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - min(15vh, 136px));
+  min-height: 0;
+  position: relative;
+}
+
+/* Masthead above the shelf: brand on left, page switch on right */
+.masthead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 2px 10px;
+  gap: 12px;
+  flex: none;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.brand-title {
+  font: 600 13px/1 var(--mono);
+  color: var(--text);
+  letter-spacing: -0.2px;
+  flex: none;
+  white-space: nowrap;
+}
+
+.brand-sep {
+  font: 11.5px/1 var(--mono);
+  color: var(--border-2);
+}
+
+.brand-summary {
+  font: 11.5px/1 var(--mono);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand-summary .live-count {
+  color: var(--warn);
+}
+
+/* Masthead navigation trigger: enters settings from shelf, or returns to shelf from settings */
+.masthead-nav-btn {
   cursor: pointer;
+  font: 11.5px/1.2 var(--mono);
+  color: var(--muted);
+  background: transparent;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
 }
-button:hover:not(:disabled) { border-color: #3a424e; }
-button:focus-visible, input:focus-visible, li:focus-visible {
+
+.masthead-nav-btn:hover {
+  color: var(--dim);
+  background: var(--panel);
+  border-color: var(--border);
+}
+
+.masthead-nav-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
-button:disabled { opacity: .5; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #06101f; font-weight: 600; }
-button.primary:hover:not(:disabled) { filter: brightness(1.08); }
-button.big { padding: 10px 18px; font-size: 13px; }
-input {
-  background: #0d1117;
+
+.masthead-nav-btn.is-back {
+  color: var(--dim);
+  background: var(--panel);
+  border-color: var(--border-2);
+}
+
+.masthead-nav-btn.is-back:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+.masthead-nav-btn .sep {
+  color: var(--border-2);
+}
+
+.masthead-nav-btn .glyph {
+  color: var(--accent);
+}
+
+/* Main 880px surface container (shared by both Shelf and Settings page) */
+.shelf-box {
+  background: var(--panel);
   border: 1px solid var(--border-2);
-  border-radius: 7px;
-  padding: 7px 10px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ==========================================================================
+   SETTINGS PAGE SURFACE
+   ========================================================================== */
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.settings-head-left {
   min-width: 0;
-  font-family: var(--mono);
-  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-#crossroads {
-  display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) 260px;
-  height: 100%;
-  min-height: 100vh;
+.settings-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
-.col { min-width: 0; overflow: auto; }
-.col.workspaces, .col.facts { background: var(--panel); }
-.col.workspaces { border-right: 1px solid var(--border); padding: 16px 14px; }
-.col.facts { border-left: 1px solid var(--border); padding: 16px 16px; }
-.col.preview { padding: 28px 32px; display: flex; flex-direction: column; gap: 10px; }
 
-.head {
-  margin: 18px 0 6px;
+.settings-title {
+  margin: 0;
+  font: 600 13px/1.2 var(--mono);
+  color: var(--text);
+}
+
+.settings-schema-tag {
+  font: 10.5px/1 var(--mono);
   color: var(--muted);
-  font: 9px/1 var(--mono);
-  letter-spacing: .8px;
-  text-transform: uppercase;
 }
-.hint, .empty { color: var(--muted); font-size: 11.5px; margin: 0; }
-/* The defaults read as one small form, so a change is a change to a value rather than a preference. */
-.defaults { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; margin: 0; align-items: center; }
-.defaults dt { color: var(--muted); font: 10px var(--mono); text-transform: uppercase; letter-spacing: .6px; }
-.defaults dd { margin: 0; min-width: 0; }
-.defaults input, .defaults select, .defaults button {
-  width: 100%; padding: 3px 6px; background: var(--panel-2); border: 1px solid var(--border);
-  border-radius: 6px; font: 11px var(--mono); color: var(--text); }
-.defaults button { text-align: left; cursor: pointer; }
-.defaults button:hover { border-color: var(--border-2); }
-.defaults input:focus, .defaults select:focus { outline: none; border-color: var(--accent); }
-.err { color: var(--bad); font-size: 11.5px; margin: 2px 0 0; min-height: 1em; }
 
-button.new { width: 100%; text-align: left; background: var(--panel-2); }
-.new-form { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding: 10px;
-  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; }
-.new-form label { color: var(--muted); font: 9px/1 var(--mono); text-transform: uppercase; letter-spacing: .8px; }
-.new-form .row { display: flex; gap: 6px; }
-.new-form input { flex: 1; }
+.settings-help {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-#wsList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-#wsList li {
-  padding: 8px 10px;
+.settings-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.save-status {
+  font: 11px/1.2 var(--mono);
+  padding: 3px 7px;
+  border-radius: 4px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  white-space: nowrap;
+}
+
+/* Nothing has been saved yet, so there is no chip to draw. */
+.save-status:empty {
+  display: none;
+}
+
+.save-status[data-state="saved"] {
+  color: var(--ok);
+  background: rgba(63, 185, 80, 0.08);
+  border-color: rgba(63, 185, 80, 0.25);
+}
+
+.save-status[data-state="dirty"] {
+  color: var(--warn);
+  background: rgba(227, 179, 65, 0.1);
+  border-color: rgba(227, 179, 65, 0.3);
+}
+
+.save-status[data-state="error"] {
+  color: var(--bad);
+  background: rgba(248, 81, 73, 0.1);
+  border-color: rgba(248, 81, 73, 0.35);
+}
+
+.fold-btn {
+  background: var(--raised);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font: 11px/1.2 var(--mono);
+  color: var(--dim);
   cursor: pointer;
 }
-#wsList li:hover { background: var(--panel-2); }
-#wsList li[aria-selected="true"] { background: #1b2432; border-color: var(--border-2); }
-#wsList .name { display: flex; align-items: center; gap: 6px; font: 12.5px var(--mono); }
-#wsList .sub { color: var(--muted); font: 10.5px var(--mono); overflow-wrap: anywhere; }
-#wsList .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; }
-#wsList .dot.running { background: var(--warn); }
-#wsList .dot.idle { background: var(--ok); }
-#wsList .missing { color: var(--bad); }
 
-h1 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -.2px; }
-.path { margin: 0; color: var(--muted); font: 11.5px var(--mono); overflow-wrap: anywhere; }
-#previewBody { display: flex; flex-direction: column; }
-#threads { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-#threads li {
-  display: flex; align-items: center; gap: 8px;
-  padding: 7px 10px; border-radius: 7px; border: 1px solid transparent; cursor: pointer;
+.fold-btn:hover {
+  color: var(--text);
+  border-color: #3a424e;
 }
-#threads li:hover { background: var(--panel-2); border-color: var(--border); }
-#threads .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
-#threads .when { color: var(--muted); font: 10.5px var(--mono); }
-.actions { margin-top: auto; display: flex; align-items: center; gap: 12px; padding-top: 20px; }
 
-dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
-dt { color: var(--muted); font: 10.5px var(--mono); }
-dd { margin: 0; font: 11px var(--mono); overflow-wrap: anywhere; }
-dd.good { color: var(--ok); }
-dd.warn { color: var(--warn); }
-dd.bad { color: var(--bad); }
+.fold-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Scrollable settings tree region */
+.settings-tree {
+  padding: 8px 10px;
+  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Collapsible group node at any depth */
+.cfg-group {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  margin: 0;
+}
+
+/* Depth 0: top-level group card */
+.cfg-group[data-depth="0"] {
+  background: var(--panel);
+  border-color: var(--border-2);
+}
+
+/* Depth >= 1: nested groups use a left guide rail instead of heavy boxes */
+.cfg-group:not([data-depth="0"]) {
+  border: 0;
+  border-left: 1px solid var(--border-2);
+  border-radius: 0;
+  background: transparent;
+  margin: 2px 0 4px 11px;
+  padding-left: 10px;
+}
+
+.cfg-summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  min-width: 0;
+}
+
+.cfg-group:not([data-depth="0"]) > .cfg-summary {
+  padding: 5px 8px;
+}
+
+.cfg-summary::-webkit-details-marker {
+  display: none;
+}
+
+.cfg-summary:hover {
+  background: var(--panel-2);
+}
+
+.cfg-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  background: var(--raised);
+}
+
+.cfg-sum-left {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.cfg-caret {
+  font: 11px/1 var(--mono);
+  color: var(--muted);
+  width: 10px;
+  display: inline-block;
+  transition: transform 0.1s ease;
+  flex: none;
+}
+
+.cfg-group[open] > .cfg-summary .cfg-caret {
+  transform: rotate(90deg);
+  color: var(--dim);
+}
+
+.cfg-label {
+  font: 600 12px/1.3 var(--mono);
+  color: var(--text);
+  white-space: nowrap;
+  /* The group's own name never truncates: the badge and the help line give way first. */
+  flex: none;
+}
+
+.cfg-group:not([data-depth="0"]) > .cfg-summary .cfg-label {
+  font-weight: 500;
+  color: var(--dim);
+}
+
+.cfg-status-badge {
+  font: 10.5px/1 var(--mono);
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+
+.cfg-inline-help {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* When a group is closed, hide its inline help and show its live value summary on the right */
+.cfg-sum-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  font: 11px/1.2 var(--mono);
+  color: var(--muted);
+  max-width: 52%;
+}
+
+.cfg-folded-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.cfg-group[open] > .cfg-summary .cfg-folded-preview {
+  display: none;
+}
+
+.cfg-group:not([open]) > .cfg-summary .cfg-inline-help {
+  display: none;
+}
+
+.cfg-body {
+  padding: 2px 10px 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cfg-group:not([data-depth="0"]) > .cfg-body {
+  padding: 2px 4px 4px 2px;
+}
+
+/* Field rows inside a group */
+.cfg-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cfg-field {
+  display: grid;
+  grid-template-columns: minmax(110px, 148px) 1fr;
+  gap: 6px 12px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
+.cfg-field.is-disabled {
+  opacity: 0.62;
+}
+
+.cfg-field.has-error {
+  border-color: var(--bad);
+  background: #191215;
+}
+
+/* A prompt is a whole file rather than a short value: its label sits on one line above the control and the
+   text runs the width of the group, because 1.5 kB of markdown beside a 148px label column is unreadable.
+   The row shape follows the field's type, so the three defaults keep the two-column row they have. */
+.cfg-field.is-wide {
+  grid-template-columns: 1fr;
+  align-items: start;
+  gap: 4px 0;
+}
+
+.cfg-field.is-wide .cfg-field-meta {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.cfg-field-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cfg-field-label {
+  font: 500 11.5px/1.2 var(--mono);
+  color: var(--text);
+}
+
+.cfg-field-id {
+  font: 10px/1 var(--mono);
+  color: var(--muted);
+}
+
+.cfg-field-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cfg-control-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cfg-input,
+.cfg-select {
+  width: 100%;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  padding: 5px 8px;
+  font: 11.5px/1.2 var(--mono);
+  color: var(--text);
+}
+
+.cfg-input[type="number"] {
+  max-width: 140px;
+}
+
+/* A control that runs the full width with its own actions under it: a whole prompt file and the buttons
+   that write it. */
+.cfg-control-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+/* A prompt is markdown that keeps its markers. The box holds the text and takes the caret; a mirror
+   behind it draws the same characters styled, so `**bold**` is bold with its asterisks on show. The two
+   layers are one monospace at one fixed line height, and no token below may add padding: a line box that
+   sat elsewhere, or a glyph that pushed the rest of its line sideways, would leave the caret beside the
+   wrong character. */
+.cfg-editor {
+  position: relative;
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+}
+
+.cfg-editor:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+.cfg-mark,
+.cfg-prompt {
+  margin: 0;
+  padding: 6px 8px;
+  font: 11.5px/17px var(--mono);
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.cfg-mark {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  color: var(--text);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cfg-prompt {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 88px;
+  /* The words are the mirror's; the box draws only its caret and its selection. */
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: transparent;
+  caret-color: var(--text);
+}
+
+.cfg-prompt::selection {
+  background: rgba(59, 130, 246, 0.3);
+}
+
+.cfg-prompt:disabled {
+  cursor: not-allowed;
+}
+
+/* The tokens the mirror draws, in the board's own colours. Weight, colour and size only, never padding. */
+.md-mark {
+  color: #5b6673;
+}
+
+.md-fence {
+  color: var(--muted);
+}
+
+.md-strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+.md-em {
+  color: #d2a8ff;
+}
+
+.md-code {
+  background: #21262d;
+  border-radius: 3px;
+  color: var(--text);
+}
+
+.md-key,
+.md-link {
+  color: #79c0ff;
+}
+
+.md-quote {
+  color: var(--muted);
+}
+
+/* A heading is bigger with its hashes still in front of it, and its advance is held at the base width by
+   the negative tracking: the glyphs grow inside the line box, the line does not move. */
+.md-h {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.md-h .md-mark {
+  color: var(--accent);
+}
+
+.md-h1 {
+  font-size: 13.5px;
+  letter-spacing: calc(6.9px - 0.6em);
+}
+
+.md-h2 {
+  font-size: 12.5px;
+  letter-spacing: calc(6.9px - 0.6em);
+}
+
+.md-h3 {
+  font-size: 12px;
+  letter-spacing: calc(6.9px - 0.6em);
+}
+
+.cfg-prompt-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* A prompt is a file, so how big a file it is belongs on the line that saves it. */
+.cfg-prompt-size {
+  margin-left: auto;
+  font: 10.5px/1.2 var(--mono);
+  color: var(--muted);
+}
+
+.cfg-prompt-save {
+  background: var(--raised);
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font: 10.5px/1.2 var(--mono);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.cfg-prompt-save:hover {
+  border-color: var(--accent);
+}
+
+.cfg-prompt-save:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.cfg-prompt-save:disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+}
+
+.cfg-prompt-state {
+  font: 10.5px/1.2 var(--mono);
+  color: var(--muted);
+}
+
+.cfg-prompt-state[data-state="dirty"] {
+  color: var(--warn);
+}
+
+.cfg-prompt-state[data-state="saved"] {
+  color: var(--ok);
+}
+
+.cfg-prompt-state[data-state="error"] {
+  color: var(--bad);
+}
+
+.cfg-input:focus-visible,
+.cfg-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+.cfg-input:disabled,
+.cfg-select:disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+}
+
+.cfg-source-tag {
+  font: 10px/1 var(--mono);
+  color: var(--muted);
+  white-space: nowrap;
+  flex: none;
+}
+
+.cfg-field-help {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.cfg-field-error {
+  margin: 0;
+  font: 11px/1.3 var(--mono);
+  color: var(--bad);
+}
+
+/* Segmented control used for select (<=6 options) and toggle */
+.seg-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.seg-row button {
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  padding: 3px 9px;
+  font: 11px/1.2 var(--mono);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.seg-row button[aria-pressed="true"] {
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border-2);
+}
+
+.seg-row button:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.seg-row button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.seg-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* ==========================================================================
+   UNCHANGED SHELF SURFACE (reachable via masthead back link)
+   ========================================================================== */
+.omnibar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.omnibar:focus-within {
+  border-bottom-color: var(--accent);
+}
+
+.omni-prompt {
+  font: 600 13px/1 var(--mono);
+  color: var(--accent);
+  user-select: none;
+  flex: none;
+}
+
+.omni-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  padding: 2px 0;
+  font: 13px/1.4 var(--mono);
+  color: var(--text);
+}
+
+.omni-input::placeholder {
+  color: var(--muted);
+}
+
+.omni-input:focus {
+  outline: none;
+}
+
+.omni-mode {
+  font: 11px/1 var(--mono);
+  color: var(--accent);
+  background: #132238;
+  border: 1px solid #23416b;
+  padding: 3px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.omni-browse {
+  background: var(--raised);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  padding: 4px 9px;
+  font: 11.5px/1.2 var(--mono);
+  color: var(--dim);
+  cursor: pointer;
+  flex: none;
+}
+
+.omni-browse:hover {
+  border-color: #3a424e;
+  color: var(--text);
+}
+
+.omni-browse:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.path-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: #121c2b;
+  border-bottom: 1px solid var(--border);
+  font: 12px/1.4 var(--mono);
+}
+
+.path-action-target {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-action-target span {
+  color: var(--muted);
+}
+
+.path-action-hint {
+  color: var(--accent);
+  font-size: 11px;
+  white-space: nowrap;
+  flex: none;
+}
+
+.ws-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ws-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+}
+
+.ws-row:hover {
+  background: var(--panel-2);
+}
+
+.ws-row[aria-selected="true"] {
+  background: var(--raised);
+  border-color: var(--border-2);
+}
+
+.ws-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  background: var(--raised);
+}
+
+.ws-row.is-missing {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.ws-row.is-missing[aria-selected="true"] {
+  border-color: #4b2324;
+  background: #181316;
+}
+
+.ws-left {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border-2);
+  flex: none;
+  align-self: center;
+}
+
+.status-dot.running {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(227, 179, 65, 0.16);
+}
+
+.status-dot.idle {
+  background: var(--ok);
+}
+
+.status-dot.missing {
+  background: var(--bad);
+}
+
+.ws-name {
+  font: 600 13px/1.3 var(--mono);
+  color: var(--text);
+  white-space: nowrap;
+  flex: none;
+}
+
+.ws-row.is-missing .ws-name {
+  color: var(--dim);
+  text-decoration: line-through;
+  text-decoration-color: var(--bad);
+}
+
+.ws-context {
+  font: 11.5px/1.3 var(--mono);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.ws-row[aria-selected="true"] .ws-context,
+.ws-row.is-running .ws-context {
+  color: var(--dim);
+}
+
+.ws-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  font: 11.5px/1 var(--mono);
+}
+
+.sig-running {
+  color: var(--warn);
+  background: rgba(227, 179, 65, 0.1);
+  border: 1px solid rgba(227, 179, 65, 0.3);
+  padding: 3px 7px;
+  border-radius: 4px;
+}
+
+.sig-missing {
+  color: var(--bad);
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  padding: 3px 7px;
+  border-radius: 4px;
+}
+
+.sig-quiet {
+  color: var(--muted);
+}
+
+.enter-glyph {
+  color: var(--muted);
+  font: 11px/1 var(--mono);
+  opacity: 0;
+  width: 14px;
+  text-align: right;
+}
+
+.ws-row[aria-selected="true"]:not(.is-missing) .enter-glyph {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.empty-shelf {
+  padding: 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.empty-title {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.empty-copy {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 52ch;
+}
+
+/* Bottom status & keybind ledger inside the shelf */
+.shelf-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  font: 11px/1.2 var(--mono);
+  color: var(--muted);
+  flex: none;
+}
+
+.foot-keys {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.foot-keys kbd {
+  font: 10.5px/1 var(--mono);
+  color: var(--dim);
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  border-radius: 3px;
+  padding: 2px 5px;
+  margin-right: 4px;
+}
+
+.foot-selected-path {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 420px;
+}
+
+/* 1024x700 and compact height resilience */
+@media (max-height: 760px) {
+  .shelf-stage {
+    margin-top: 24px;
+    max-height: calc(100vh - 40px);
+  }
+  .settings-head {
+    padding: 8px 12px;
+  }
+  .cfg-summary {
+    padding: 5px 8px;
+  }
+  .cfg-field {
+    padding: 5px 8px;
+  }
+  .ws-row {
+    padding: 7px 10px;
+  }
+}
+
+@media (max-width: 720px) {
+  body {
+    padding: 0 12px;
+  }
+  .foot-selected-path {
+    display: none;
+  }
+  .cfg-field {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* A refused value stays on its own field: the daemon's reason and the way back to the last saved
+   value sit under the control, not in a banner across the tree. */
+.cfg-revert {
+  background: transparent;
+  border: 1px solid rgba(248, 81, 73, 0.35);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font: 10.5px/1.2 var(--mono);
+  color: var(--dim);
+  cursor: pointer;
+}
+
+/* The refusal line holds the daemon's reason and this button in a `<p>`, with no gap of its own. */
+.cfg-field-error .cfg-revert {
+  margin-left: 8px;
+}
+
+.cfg-revert:hover {
+  color: var(--text);
+  border-color: var(--bad);
+}
+
+.cfg-revert:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* An omnibar entry the daemon refused: the path line carries the reason in the bad colour. */
+.path-action-row.is-error .path-action-target {
+  color: var(--bad);
+}
+
+/* A settings view that could not read its document: one sentence where the tree would be. */
+.settings-failure {
+  margin: 0;
+  padding: 12px 6px;
+  font: 11.5px/1.4 var(--mono);
+  color: var(--bad);
+}

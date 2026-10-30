@@ -15,14 +15,14 @@ import { boardMeta, cardsFor } from "./cards.ts";
 import { closedCards } from "./bus.ts";
 import { gitPicture, refreshGit, unwatchGit, watchGit } from "./git/graph.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
-import { onDefaults, onOpenWorkspace, onPickFolder } from "./routes/crossroads.ts";
+import { onDefaults, onOpenWorkspace, onPickFolder, onSettingsDefaults } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onRename, onSource } from "./routes/board/content.ts";
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
 import { onMode, onPath, onThread, onThreadSpawn } from "./routes/board/thread.ts";
 import { onAnswer, onAsk } from "./routes/board/answer.ts";
-import { onMessage } from "./routes/board/message.ts";
+import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.ts";
 import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
 import { onPrompt, onPromptWrite, onPrompts } from "./routes/board/prompts.ts";
 import { onClean, onClose, onKill, onNew, onReopen, onStop, onUndo } from "./routes/board/lifecycle.ts";
@@ -211,6 +211,18 @@ export const server = createServer((req, res) => {
 			await onDefaults(req, res);
 			return;
 		}
+		// A prompt is a file every board reads and none of them owns, so this route takes no workspace: the
+		// settings page can be the first page a human sees, with no workspace opened yet.
+		if (req.method === "POST" && url.pathname === "/prompt") {
+			await onPromptWrite(req, res);
+			return;
+		}
+		// The same values as a document the settings page draws: the tree, this machine's catalogue, and
+		// pi's levels, so the page needs nothing else to render a control per setting.
+		if (req.method === "GET" && url.pathname === "/settings/defaults") {
+			await onSettingsDefaults(res);
+			return;
+		}
 		if (req.method === "POST" && url.pathname === "/workspace") {
 			await onOpenWorkspace(req, res);
 			return;
@@ -327,6 +339,8 @@ export const server = createServer((req, res) => {
 				"/rename": onRename,
 				"/answer": onAnswer,
 				"/message": onMessage,
+				"/message/edit": onMessageEdit,
+				"/message/drop": onMessageDrop,
 				"/layout": onLayout,
 				"/close": onClose,
 				"/reopen": onReopen,
@@ -335,7 +349,6 @@ export const server = createServer((req, res) => {
 				"/thinking": onThinking,
 				"/kill": onKill,
 				"/config": onConfig,
-				"/prompt": onPromptWrite,
 				"/compact": onCompact,
 				"/clean": onClean,
 				"/new": onNew,

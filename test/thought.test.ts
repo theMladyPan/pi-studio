@@ -3,6 +3,20 @@ import { test } from "node:test";
 import { handleChildLine, settleRows } from "../server/thought.ts";
 
 /**
+ * One activity row as the tests hand it to the reader and read back: the fields the rail, the store and a
+ * settle touch. Narrow on purpose, so a row missing its tool or holding a stringly duration fails to check.
+ */
+type ActivityRow = {
+	id: string;
+	kind: string;
+	tool: string;
+	status: string;
+	startedAt: number;
+	durationMs?: number;
+	thread: { id: string; title: string };
+};
+
+/**
  * The smallest board the line reader will accept. It is a plain object on purpose: the reader is a
  * state machine over the child's JSON, and everything it touches is passed in.
  */
@@ -16,7 +30,8 @@ function fakeBoard() {
 		clients: new Set(),
 		trees: [],
 		cards: [],
-		activity: [],
+		// The rows the reader settles, pushed onto by the tests that give it calls to settle.
+		activity: [] as ActivityRow[],
 		config: { model: "m", provider: "p", thinking: "off" },
 	};
 }
@@ -118,11 +133,13 @@ test("a thread that stops closes the calls it was in, and nobody else's", () => 
 		{ id: "other-thread-call", kind: "tool", tool: "bash", status: "running", startedAt: before, thread: { id: "another", title: "a busy neighbour" } },
 	);
 	settleRows(board, thread);
-	const rows = new Map(board.activity.map((row: any) => [row.id, row]));
-	assert.equal(rows.get("call-in-flight").status, "stopped");
-	assert.ok(rows.get("call-in-flight").durationMs >= 4000);
+	const rows = new Map(board.activity.map((row) => [row.id, row] as const));
+	const inFlight = rows.get("call-in-flight");
+	assert.ok(inFlight, "the call that was running was dropped from the board");
+	assert.equal(inFlight.status, "stopped");
+	assert.ok(typeof inFlight.durationMs === "number" && inFlight.durationMs >= 4000);
 	// A row that has already reported its own end is not touched, and neither is another thread's work.
-	assert.equal(rows.get("call-done").status, "ok");
-	assert.equal(rows.get("call-done").durationMs, 12);
-	assert.equal(rows.get("other-thread-call").status, "running");
+	assert.equal(rows.get("call-done")?.status, "ok");
+	assert.equal(rows.get("call-done")?.durationMs, 12);
+	assert.equal(rows.get("other-thread-call")?.status, "running");
 });

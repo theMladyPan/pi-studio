@@ -111,12 +111,32 @@ const askTool = defineTool({
 	name: "board_ask",
 	label: "Ask on board",
 	description:
-		"Ask the human a question on the board and wait for their click. Use it for a decision that is genuinely theirs instead of guessing, or when two readings of the request lead to different work. Blocks this turn until they answer or the question expires, so ask one thing at a time. Set `multiple: true` when more than one of the options can apply: the human then ticks boxes and sends them together, and the answer is all of them.",
+		"Ask the human a question on the board and wait for their click. Use it for a decision that is genuinely theirs instead of guessing, or when two readings of the request lead to different work. Blocks this turn until they answer or the question expires. Set `multiple: true` when more than one of the options can apply: the human then ticks boxes and sends them together, and the answer is all of them. Ask several decisions at once with `questions`, up to five: each lands on its own tab and the answer comes back as one line per question.",
 	parameters: Type.Object({
-		question: Type.String({ description: "The question, in one or two sentences." }),
-		options: Type.Array(Type.String(), {
-			description: "Two to four choices they can click, each a short phrase.",
-		}),
+		question: Type.Optional(
+			Type.String({ description: "The question, in one or two sentences. Leave it out when you ask several with `questions`." }),
+		),
+		options: Type.Optional(
+			Type.Array(Type.String(), { description: "Two to four choices they can click, each a short phrase." }),
+		),
+		questions: Type.Optional(
+			Type.Array(
+				Type.Object({
+					question: Type.String({ description: "One question, in one or two sentences." }),
+					options: Type.Array(Type.String(), { description: "Two to four choices they can click, each a short phrase." }),
+					multiple: Type.Optional(
+						Type.Boolean({ description: "Let them tick more than one option on this tab. Defaults to false." }),
+					),
+					allowFreeText: Type.Optional(
+						Type.Boolean({ description: "Also allow a typed answer on this tab. Defaults to true." }),
+					),
+				}),
+				{
+					description:
+						"Up to five questions asked together, one tab each, sent in one go. Use it instead of several board_ask calls when the answers belong together.",
+				},
+			),
+		),
 		title: Type.Optional(Type.String({ description: "Optional card title." })),
 		allowFreeText: Type.Optional(Type.Boolean({ description: "Also allow a typed answer. Defaults to true." })),
 		multiple: Type.Optional(
@@ -128,18 +148,36 @@ const askTool = defineTool({
 	}),
 	async execute(_id, params) {
 		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
+		const listed = Array.isArray(params.questions) ? params.questions.filter((one) => one && one.question) : [];
+		if (!listed.length && !params.question) {
+			return {
+				content: [
+					{ type: "text", text: "Nothing was asked: give `question` and `options`, or a `questions` list of the same." },
+				],
+			};
+		}
+		// The card has one row of tabs, so more than five questions wants a second card rather than a
+		// scroll, and the daemon refuses the same number.
+		if (listed.length > 5) {
+			return { content: [{ type: "text", text: "A card asks up to five questions. Ask these five, then ask the rest." }] };
+		}
 		try {
 			const result = await call("/card/ask", {
-				question: params.question,
-				options: params.options,
+				...(listed.length ? { questions: listed } : {}),
+				...(params.question ? { question: params.question } : {}),
+				...(Array.isArray(params.options) ? { options: params.options } : {}),
 				...(params.title ? { title: params.title } : {}),
 				...(typeof params.allowFreeText === "boolean" ? { allowFreeText: params.allowFreeText } : {}),
 				...(params.multiple === true ? { multiple: true } : {}),
 			});
 			// A question that took several answers comes back as the list, so the child reads the picks
-			// rather than one line it would have to split again.
+			// rather than one line it would have to split again. A card of tabs comes back one line per tab.
 			const picked = Array.isArray(result.answers) && result.answers.length ? result.answers : null;
-			const said = picked ? `The human chose: ${picked.join(", ")}` : `The human answered: ${result.answer}`;
+			const said = !picked
+				? `The human answered: ${result.answer}`
+				: listed.length
+					? `The human answered all ${picked.length} questions: ${picked.map((one, at) => `${at + 1}) ${one}`).join(" · ")}`
+					: `The human chose: ${picked.join(", ")}`;
 			return {
 				content: [{ type: "text", text: said }],
 				details: { cardId: result.cardId, answer: result.answer, ...(picked ? { answers: picked } : {}) },

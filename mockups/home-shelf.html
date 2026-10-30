@@ -1,0 +1,1167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pi-studio</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #12151a;
+    --panel-2: #161b22;
+    --raised: #1a1f27;
+    --border: #1f242c;
+    --border-2: #2a303a;
+    --text: #e6edf3;
+    --dim: #c9d1d9;
+    --muted: #8b949e;
+    --accent: #3b82f6;
+    --ok: #3fb950;
+    --warn: #e3b341;
+    --bad: #f85149;
+    --mono: ui-monospace, SFMono-Regular, Menlo, "DejaVu Sans Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.5 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0 24px;
+    /* subtle structural grid hairlines to anchor the column at 1440x900 without decorative washes */
+    background-image:
+      linear-gradient(to right, transparent calc(50% - 320px), var(--border) calc(50% - 320px), var(--border) calc(50% - 319px), transparent calc(50% - 319px)),
+      linear-gradient(to right, transparent calc(50% + 319px), var(--border) calc(50% + 319px), var(--border) calc(50% + 320px), transparent calc(50% + 320px));
+  }
+
+  button, input, select {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* Shelf wrapper: sits in the upper-middle optical zone */
+  .shelf-stage {
+    width: 100%;
+    max-width: 640px;
+    margin-top: min(13vh, 116px);
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - min(18vh, 160px));
+    min-height: 0;
+    position: relative;
+  }
+
+  /* Masthead above the shelf: brand on left, quiet defaults trigger on right */
+  .masthead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 0 2px 10px;
+    gap: 12px;
+    flex: none;
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .brand-title {
+    font: 600 13px/1 var(--mono);
+    color: var(--text);
+    letter-spacing: -0.2px;
+  }
+
+  .brand-summary {
+    font: 11.5px/1 var(--mono);
+    color: var(--muted);
+  }
+
+  .brand-summary .live-count {
+    color: var(--warn);
+  }
+
+  /* Quiet inline defaults trigger (no permanent form column) */
+  .defaults-wrap {
+    position: relative;
+  }
+
+  .defaults-wrap summary {
+    list-style: none;
+    cursor: pointer;
+    font: 11.5px/1.2 var(--mono);
+    color: var(--muted);
+    padding: 4px 8px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    user-select: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .defaults-wrap summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .defaults-wrap summary:hover {
+    color: var(--dim);
+    background: var(--panel);
+    border-color: var(--border);
+  }
+
+  .defaults-wrap summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .defaults-wrap[open] summary {
+    color: var(--text);
+    background: var(--panel-2);
+    border-color: var(--border-2);
+  }
+
+  .defaults-wrap summary .sep {
+    color: var(--border-2);
+  }
+
+  .defaults-popover {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    width: 356px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-2);
+    border-radius: 8px;
+    padding: 12px 14px;
+    z-index: 30;
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.55);
+  }
+
+  .popover-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0 0 10px;
+    font: 10px/1 var(--mono);
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+  }
+
+  .defaults-grid {
+    display: grid;
+    grid-template-columns: 76px 1fr;
+    gap: 8px 10px;
+    align-items: center;
+    margin: 0;
+  }
+
+  .defaults-grid dt {
+    font: 11px/1 var(--mono);
+    color: var(--muted);
+  }
+
+  .defaults-grid dd {
+    margin: 0;
+    min-width: 0;
+  }
+
+  .defaults-grid input,
+  .defaults-grid select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border-2);
+    border-radius: 5px;
+    padding: 5px 8px;
+    font: 11.5px/1.2 var(--mono);
+    color: var(--text);
+  }
+
+  .defaults-grid input:focus-visible,
+  .defaults-grid select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 0;
+    border-color: var(--accent);
+  }
+
+  .seg-row {
+    display: inline-flex;
+    background: var(--bg);
+    border: 1px solid var(--border-2);
+    border-radius: 5px;
+    padding: 2px;
+    gap: 2px;
+  }
+
+  .seg-row button {
+    background: transparent;
+    border: 0;
+    border-radius: 3px;
+    padding: 3px 8px;
+    font: 11px/1.2 var(--mono);
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .seg-row button[aria-pressed="true"] {
+    background: var(--raised);
+    color: var(--text);
+  }
+
+  .seg-row button:hover {
+    color: var(--text);
+  }
+
+  .popover-foot {
+    margin: 10px 0 0;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 11.5px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .popover-saved {
+    font: 10.5px/1 var(--mono);
+    color: var(--ok);
+  }
+
+  /* Main command-palette / shelf surface */
+  .shelf-box {
+    background: var(--panel);
+    border: 1px solid var(--border-2);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Omnibox bar: filter existing or type a folder path to open */
+  .omnibar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 14px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+
+  .omnibar:focus-within {
+    border-bottom-color: var(--accent);
+  }
+
+  .omni-prompt {
+    font: 600 13px/1 var(--mono);
+    color: var(--accent);
+    user-select: none;
+    flex: none;
+  }
+
+  .omni-input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 0;
+    padding: 2px 0;
+    font: 13px/1.4 var(--mono);
+    color: var(--text);
+  }
+
+  .omni-input::placeholder {
+    color: var(--muted);
+  }
+
+  .omni-input:focus {
+    outline: none;
+  }
+
+  .omni-mode {
+    font: 11px/1 var(--mono);
+    color: var(--accent);
+    background: #132238;
+    border: 1px solid #23416b;
+    padding: 3px 7px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  .omni-browse {
+    background: var(--raised);
+    border: 1px solid var(--border-2);
+    border-radius: 5px;
+    padding: 4px 9px;
+    font: 11.5px/1.2 var(--mono);
+    color: var(--dim);
+    cursor: pointer;
+    flex: none;
+  }
+
+  .omni-browse:hover {
+    border-color: #3a424e;
+    color: var(--text);
+  }
+
+  .omni-browse:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  /* Path creation banner when typing an unvisited path */
+  .path-action-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    background: #121c2b;
+    border-bottom: 1px solid var(--border);
+    font: 12px/1.4 var(--mono);
+  }
+
+  .path-action-row[hidden] {
+    display: none;
+  }
+
+  .path-action-target {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .path-action-target span {
+    color: var(--muted);
+  }
+
+  .path-action-hint {
+    color: var(--accent);
+    font-size: 11px;
+    white-space: nowrap;
+    flex: none;
+  }
+
+  /* Workspace list: scrollable if 30 workspaces exist */
+  .ws-list {
+    list-style: none;
+    margin: 0;
+    padding: 6px;
+    overflow-y: auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .ws-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 9px 10px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    text-decoration: none;
+    color: inherit;
+    min-width: 0;
+  }
+
+  .ws-row:hover {
+    background: var(--panel-2);
+  }
+
+  .ws-row[aria-selected="true"] {
+    background: var(--raised);
+    border-color: var(--border-2);
+  }
+
+  .ws-row:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+    background: var(--raised);
+  }
+
+  .ws-row.is-missing {
+    opacity: 0.72;
+    cursor: not-allowed;
+  }
+
+  .ws-row.is-missing[aria-selected="true"] {
+    border-color: #4b2324;
+    background: #181316;
+  }
+
+  .ws-left {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--border-2);
+    flex: none;
+    align-self: center;
+  }
+
+  .status-dot.running {
+    background: var(--warn);
+    box-shadow: 0 0 0 3px rgba(227, 179, 65, 0.16);
+  }
+
+  .status-dot.idle {
+    background: var(--ok);
+  }
+
+  .status-dot.missing {
+    background: var(--bad);
+  }
+
+  .ws-name {
+    font: 600 13px/1.3 var(--mono);
+    color: var(--text);
+    white-space: nowrap;
+    flex: none;
+  }
+
+  .ws-row.is-missing .ws-name {
+    color: var(--dim);
+    text-decoration: line-through;
+    text-decoration-color: var(--bad);
+  }
+
+  /* Secondary context: disambiguates folders or surfaces active running thread title */
+  .ws-context {
+    font: 11.5px/1.3 var(--mono);
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .ws-row[aria-selected="true"] .ws-context,
+  .ws-row.is-running .ws-context {
+    color: var(--dim);
+  }
+
+  .ws-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: none;
+    font: 11.5px/1 var(--mono);
+  }
+
+  .sig-running {
+    color: var(--warn);
+    background: rgba(227, 179, 65, 0.1);
+    border: 1px solid rgba(227, 179, 65, 0.3);
+    padding: 3px 7px;
+    border-radius: 4px;
+  }
+
+  .sig-missing {
+    color: var(--bad);
+    background: rgba(248, 81, 73, 0.1);
+    border: 1px solid rgba(248, 81, 73, 0.3);
+    padding: 3px 7px;
+    border-radius: 4px;
+  }
+
+  .sig-quiet {
+    color: var(--muted);
+  }
+
+  .enter-glyph {
+    color: var(--muted);
+    font: 11px/1 var(--mono);
+    opacity: 0;
+    width: 14px;
+    text-align: right;
+  }
+
+  .ws-row[aria-selected="true"]:not(.is-missing) .enter-glyph {
+    opacity: 1;
+    color: var(--accent);
+  }
+
+  /* Zero-workspace / first-run state */
+  .empty-shelf {
+    padding: 22px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .empty-shelf[hidden] {
+    display: none;
+  }
+
+  .empty-title {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .empty-copy {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
+    max-width: 52ch;
+  }
+
+  .empty-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 2px;
+  }
+
+  .empty-chip {
+    font: 11.5px/1.3 var(--mono);
+    color: var(--dim);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 5px 9px;
+    cursor: pointer;
+  }
+
+  .empty-chip:hover {
+    border-color: var(--border-2);
+    color: var(--text);
+  }
+
+  /* Bottom status & keybind ledger inside the shelf */
+  .shelf-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 14px;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    font: 11px/1.2 var(--mono);
+    color: var(--muted);
+    flex: none;
+  }
+
+  .foot-keys {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  .foot-keys kbd {
+    font: 10.5px/1 var(--mono);
+    color: var(--dim);
+    background: var(--panel-2);
+    border: 1px solid var(--border-2);
+    border-radius: 3px;
+    padding: 2px 5px;
+    margin-right: 4px;
+  }
+
+  .foot-selected-path {
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 260px;
+  }
+
+  /* Mockup inspection switch: lets the human preview First-time / 30-workspace / Default states */
+  .mockup-lens {
+    margin-top: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 2px;
+    font: 11px/1 var(--mono);
+    color: var(--muted);
+    flex: none;
+  }
+
+  .lens-pills {
+    display: flex;
+    gap: 4px;
+  }
+
+  .lens-pill {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 7px;
+    font: 10.5px/1.2 var(--mono);
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .lens-pill:hover {
+    color: var(--dim);
+    border-color: var(--border-2);
+  }
+
+  .lens-pill[aria-pressed="true"] {
+    background: var(--panel-2);
+    color: var(--text);
+    border-color: var(--border-2);
+  }
+
+  /* 1024x700 and compact height resilience */
+  @media (max-height: 760px) {
+    .shelf-stage {
+      margin-top: 36px;
+      max-height: calc(100vh - 56px);
+    }
+    .ws-row {
+      padding: 7px 10px;
+    }
+  }
+
+  @media (max-width: 720px) {
+    body {
+      background-image: none;
+      padding: 0 12px;
+    }
+    .foot-selected-path {
+      display: none;
+    }
+  }
+</style>
+</head>
+<body>
+
+<main class="shelf-stage" aria-label="pi-studio workspaces">
+  <!-- Header row: brand identity on left, quiet defaults summary on right -->
+  <header class="masthead">
+    <div class="brand">
+      <span class="brand-title">pi-studio</span>
+      <span class="brand-summary" id="shelfSummary">6 workspaces · <span class="live-count">2 running</span></span>
+    </div>
+
+    <!-- Rarer action #2: changing default model/thinking for new boards without permanent chrome -->
+    <details class="defaults-wrap" id="defaultsMenu">
+      <summary title="What new boards start with (Alt+M)">
+        <span>new boards:</span>
+        <span id="defSummaryModel" style="color: var(--dim);">klotilda/DeepSeek-V4.1-Flash</span>
+        <span class="sep">·</span>
+        <span id="defSummaryThinking">medium</span>
+      </summary>
+      <div class="defaults-popover" role="region" aria-label="New board defaults">
+        <div class="popover-head">
+          <span>New boards start with</span>
+          <span class="popover-saved" id="defSavedState">saved</span>
+        </div>
+        <dl class="defaults-grid">
+          <dt><label for="defModelInput">model</label></dt>
+          <dd>
+            <input id="defModelInput" list="modelCatalog" value="klotilda/deepseek-ai/DeepSeek-V4.1-Flash-1017" spellcheck="false" autocomplete="off" />
+            <datalist id="modelCatalog">
+              <option value="klotilda/deepseek-ai/DeepSeek-V4.1-Flash-1017"></option>
+              <option value="github-copilot/claude-opus-5.5"></option>
+              <option value="github-copilot/claude-sonnet-5.5"></option>
+              <option value="github-copilot/gpt-6.1-sol"></option>
+              <option value="openrouter/z-ai/glm-5.3"></option>
+            </datalist>
+          </dd>
+          <dt>thinking</dt>
+          <dd>
+            <div class="seg-row" role="group" aria-label="thinking level" id="thinkingSeg">
+              <button type="button" data-level="off" aria-pressed="false">off</button>
+              <button type="button" data-level="low" aria-pressed="false">low</button>
+              <button type="button" data-level="medium" aria-pressed="true">medium</button>
+              <button type="button" data-level="high" aria-pressed="false">high</button>
+            </div>
+          </dd>
+          <dt>dim others</dt>
+          <dd>
+            <div class="seg-row" role="group" aria-label="dim other cards while one is selected" id="dimSeg">
+              <button type="button" data-dim="on" aria-pressed="true">on</button>
+              <button type="button" data-dim="off" aria-pressed="false">off</button>
+            </div>
+          </dd>
+        </dl>
+        <p class="popover-foot">
+          <span>Each open board keeps its own copy.</span>
+          <span>Esc to close</span>
+        </p>
+      </div>
+    </details>
+  </header>
+
+  <!-- Central Shelf Container -->
+  <section class="shelf-box">
+    <!-- Single dual-purpose input: filters existing workspaces OR opens a folder path on Enter -->
+    <div class="omnibar">
+      <span class="omni-prompt" aria-hidden="true">/</span>
+      <input
+        id="omniInput"
+        class="omni-input"
+        type="text"
+        spellcheck="false"
+        autocomplete="off"
+        autofocus
+        placeholder="Filter workspaces, or type a folder path (~/projekty/…) and press Enter"
+        aria-label="Filter workspaces or enter a folder path to open"
+      />
+      <span id="omniModeBadge" class="omni-mode" hidden>open path ↵</span>
+      <button type="button" class="omni-browse" id="browseBtn" title="Pick a folder using the system dialog (POST /pick-folder)">
+        browse…
+      </button>
+    </div>
+
+    <!-- Appears dynamically when input looks like a path or has no matching workspace -->
+    <div id="pathActionRow" class="path-action-row" hidden>
+      <div class="path-action-target">
+        <span>Open folder as workspace: </span><strong id="pathActionText">~/projekty/new-service</strong>
+      </div>
+      <span class="path-action-hint">↵ Enter creates &amp; opens board</span>
+    </div>
+
+    <!-- Quiet keyboard-driven workspace list -->
+    <ul class="ws-list" id="wsList" role="listbox" aria-label="Recent workspaces">
+      <!-- 1. Running workspace (2 agents active, long thread title) -->
+      <li class="ws-row is-running" role="option" tabindex="0" aria-selected="true"
+          data-id="pi-studio"
+          data-name="pi-studio"
+          data-folder="/home/stanke/projekty/pi-studio"
+          data-missing="false">
+        <div class="ws-left">
+          <span class="status-dot running" title="2 threads running"></span>
+          <span class="ws-name">pi-studio</span>
+          <span class="ws-context">Home screen mockups — Hypothesis C Shelf</span>
+        </div>
+        <div class="ws-right">
+          <span class="sig-running">2 running</span>
+          <span class="enter-glyph" aria-hidden="true">↵</span>
+        </div>
+      </li>
+
+      <!-- 2. Running workspace (1 agent active, very long realistic thread title) -->
+      <li class="ws-row is-running" role="option" tabindex="-1" aria-selected="false"
+          data-id="ytrack-tools"
+          data-name="ytrack-tools"
+          data-folder="/home/stanke/projekty/ytrack-tools"
+          data-missing="false">
+        <div class="ws-left">
+          <span class="status-dot running" title="1 thread running"></span>
+          <span class="ws-name">ytrack-tools</span>
+          <span class="ws-context">Audit aggregate Subtask of: TZ-511 pagination and retry backoff under rate limit</span>
+        </div>
+        <div class="ws-right">
+          <span class="sig-running">1 running</span>
+          <span class="enter-glyph" aria-hidden="true">↵</span>
+        </div>
+      </li>
+
+      <!-- 3. Idle workspace with existing threads -->
+      <li class="ws-row" role="option" tabindex="-1" aria-selected="false"
+          data-id="dashboard"
+          data-name="dashboard"
+          data-folder="/home/stanke/projekty/dashboard"
+          data-missing="false">
+        <div class="ws-left">
+          <span class="status-dot idle" title="Idle · 4 threads"></span>
+          <span class="ws-name">dashboard</span>
+          <span class="ws-context">~/projekty/dashboard</span>
+        </div>
+        <div class="ws-right">
+          <span class="sig-quiet">22m ago</span>
+          <span class="enter-glyph" aria-hidden="true">↵</span>
+        </div>
+      </li>
+
+      <!-- 4. Plain folder (not a git repository — git: null) -->
+      <li class="ws-row" role="option" tabindex="-1" aria-selected="false"
+          data-id="rfc-notes"
+          data-name="rfc-notes"
+          data-folder="/home/stanke/notes/rfc-notes"
+          data-missing="false">
+        <div class="ws-left">
+          <span class="status-dot idle" title="Idle · 2 threads (plain folder, not a git repo)"></span>
+          <span class="ws-name">rfc-notes</span>
+          <span class="ws-context">~/notes/rfc-notes</span>
+        </div>
+        <div class="ws-right">
+          <span class="sig-quiet">3h ago</span>
+          <span class="enter-glyph" aria-hidden="true">↵</span>
+        </div>
+      </li>
+
+      <!-- 5. Quiet workspace with 0 active threads -->
+      <li class="ws-row" role="option" tabindex="-1" aria-selected="false"
+          data-id="agent-skills"
+          data-name="agent-skills"
+          data-folder="/home/stanke/.agents/skills"
+          data-missing="false">
+        <div class="ws-left">
+          <span class="status-dot" title="0 threads"></span>
+          <span class="ws-name">agent-skills</span>
+          <span class="ws-context">~/.agents/skills</span>
+        </div>
+        <div class="ws-right">
+          <span class="sig-quiet">2d ago</span>
+          <span class="enter-glyph" aria-hidden="true">↵</span>
+        </div>
+      </li>
+
+      <!-- 6. Missing folder on disk (missing: true) -->
+      <li class="ws-row is-missing" role="option" tabindex="-1" aria-selected="false" aria-disabled="true"
+          data-id="legacy-bridge"
+          data-name="legacy-bridge"
+          data-folder="/home/stanke/projekty/legacy-bridge"
+          data-missing="true">
+        <div class="ws-left">
+          <span class="status-dot missing" title="Folder missing from disk"></span>
+          <span class="ws-name">legacy-bridge</span>
+          <span class="ws-context">/home/stanke/projekty/legacy-bridge</span>
+        </div>
+        <div class="ws-right">
+          <span class="sig-missing">folder missing</span>
+          <span class="enter-glyph" aria-hidden="true">↵</span>
+        </div>
+      </li>
+    </ul>
+
+    <!-- Rarer action #1: First-time user with zero workspaces (or empty filter) -->
+    <div class="empty-shelf" id="emptyShelf" hidden>
+      <p class="empty-title" id="emptyTitle">No workspaces opened yet.</p>
+      <p class="empty-copy" id="emptyCopy">
+        A workspace is any folder on this machine. Type a path above and press Enter, or pick a folder to open your first board.
+      </p>
+      <div class="empty-steps">
+        <button type="button" class="empty-chip" data-fill-path="/home/stanke/projekty/pi-studio">
+          open ~/projekty/pi-studio ↵
+        </button>
+        <button type="button" class="empty-chip" data-fill-path="/home/stanke/projekty/">
+          type ~/projekty/…
+        </button>
+        <button type="button" class="empty-chip" id="emptyBrowseTrigger">
+          browse machine folders…
+        </button>
+      </div>
+    </div>
+
+    <!-- Single-line keybind and path bar -->
+    <footer class="shelf-foot">
+      <div class="foot-keys">
+        <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+        <span><kbd>↵</kbd> open board</span>
+        <span><kbd>Esc</kbd> clear</span>
+        <span><kbd>Alt+M</kbd> defaults</span>
+      </div>
+      <span class="foot-selected-path" id="selectedPathReadout">/home/stanke/projekty/pi-studio</span>
+    </footer>
+  </section>
+
+  <!-- Subtle state switcher at bottom of mockup so the human can test edge cases in file:// -->
+  <nav class="mockup-lens" aria-label="Mockup state preview">
+    <span>mockup state:</span>
+    <div class="lens-pills">
+      <button type="button" class="lens-pill" data-lens="default" aria-pressed="true">6 workspaces (default)</button>
+      <button type="button" class="lens-pill" data-lens="empty" aria-pressed="false">0 workspaces (first run)</button>
+      <button type="button" class="lens-pill" data-lens="thirty" aria-pressed="false">30 workspaces (scale)</button>
+      <button type="button" class="lens-pill" data-lens="defaults-open" aria-pressed="false">defaults popover</button>
+    </div>
+  </nav>
+</main>
+
+<script>
+(() => {
+  const input = document.getElementById("omniInput");
+  const list = document.getElementById("wsList");
+  const emptyShelf = document.getElementById("emptyShelf");
+  const emptyTitle = document.getElementById("emptyTitle");
+  const emptyCopy = document.getElementById("emptyCopy");
+  const pathRow = document.getElementById("pathActionRow");
+  const pathText = document.getElementById("pathActionText");
+  const modeBadge = document.getElementById("omniModeBadge");
+  const pathReadout = document.getElementById("selectedPathReadout");
+  const summaryEl = document.getElementById("shelfSummary");
+  const defaultsMenu = document.getElementById("defaultsMenu");
+  const defModelInput = document.getElementById("defModelInput");
+  const defSummaryModel = document.getElementById("defSummaryModel");
+  const defSummaryThinking = document.getElementById("defSummaryThinking");
+
+  const initialMarkup = list.innerHTML;
+
+  function visibleRows() {
+    return Array.from(list.querySelectorAll(".ws-row:not([hidden])"));
+  }
+
+  function selectRow(targetRow, focusInput = true) {
+    const rows = visibleRows();
+    rows.forEach((r) => {
+      const active = r === targetRow;
+      r.setAttribute("aria-selected", String(active));
+      r.tabIndex = active ? 0 : -1;
+    });
+    if (targetRow) {
+      const folder = targetRow.dataset.folder || "";
+      const missing = targetRow.dataset.missing === "true";
+      pathReadout.textContent = missing ? `${folder} (missing on disk)` : folder;
+      pathReadout.style.color = missing ? "var(--bad)" : "var(--muted)";
+      targetRow.scrollIntoView({ block: "nearest" });
+    } else {
+      pathReadout.textContent = input.value.trim() || "no workspace selected";
+      pathReadout.style.color = "var(--muted)";
+    }
+    if (focusInput && document.activeElement !== input) {
+      input.focus();
+    }
+  }
+
+  function looksLikePath(val) {
+    return val.startsWith("/") || val.startsWith("~/") || val.startsWith("./") || val.includes("/");
+  }
+
+  function applyFilter() {
+    const raw = input.value.trim();
+    const q = raw.toLowerCase();
+    const allRows = Array.from(list.querySelectorAll(".ws-row"));
+    let matchCount = 0;
+
+    allRows.forEach((row) => {
+      const name = (row.dataset.name || "").toLowerCase();
+      const folder = (row.dataset.folder || "").toLowerCase();
+      const context = (row.querySelector(".ws-context")?.textContent || "").toLowerCase();
+      const match = !q || name.includes(q) || folder.includes(q) || context.includes(q);
+      row.hidden = !match;
+      if (match) matchCount++;
+    });
+
+    const isPath = looksLikePath(raw);
+    modeBadge.hidden = !isPath;
+
+    if (raw && (isPath || matchCount === 0)) {
+      pathRow.hidden = false;
+      pathText.textContent = raw;
+    } else {
+      pathRow.hidden = true;
+    }
+
+    if (allRows.length === 0) {
+      list.hidden = true;
+      emptyShelf.hidden = false;
+      emptyTitle.textContent = "No workspaces opened yet.";
+      emptyCopy.textContent = "A workspace is any folder on this machine. Type a path above and press Enter, or pick a folder to open your first board.";
+    } else if (matchCount === 0) {
+      list.hidden = true;
+      emptyShelf.hidden = false;
+      emptyTitle.textContent = `No existing workspace matches "${raw}".`;
+      emptyCopy.textContent = "Press Enter to open that path as a new workspace, or press Escape to clear the filter.";
+    } else {
+      list.hidden = false;
+      emptyShelf.hidden = true;
+    }
+
+    const vis = visibleRows();
+    const currentSelected = vis.find((r) => r.getAttribute("aria-selected") === "true");
+    selectRow(currentSelected || vis[0] || null, false);
+  }
+
+  function triggerOpen(row) {
+    if (!row) {
+      const raw = input.value.trim();
+      if (raw) {
+        pathReadout.textContent = `→ POST /workspace { folder: "${raw}" }`;
+        pathReadout.style.color = "var(--accent)";
+      }
+      return;
+    }
+    if (row.dataset.missing === "true") {
+      pathReadout.textContent = `cannot open: ${row.dataset.folder} no longer exists on disk`;
+      pathReadout.style.color = "var(--bad)";
+      return;
+    }
+    pathReadout.textContent = `→ opening /w/${row.dataset.id} in named tab…`;
+    pathReadout.style.color = "var(--ok)";
+  }
+
+  input.addEventListener("input", applyFilter);
+
+  document.addEventListener("keydown", (e) => {
+    if (e.altKey && e.key.toLowerCase() === "m") {
+      e.preventDefault();
+      defaultsMenu.open = !defaultsMenu.open;
+      if (defaultsMenu.open) defModelInput.focus();
+      else input.focus();
+      return;
+    }
+
+    if (e.key === "Escape") {
+      if (defaultsMenu.open) {
+        defaultsMenu.open = false;
+        input.focus();
+        return;
+      }
+      if (input.value) {
+        e.preventDefault();
+        input.value = "";
+        applyFilter();
+        input.focus();
+      }
+      return;
+    }
+
+    if (defaultsMenu.open && defaultsMenu.contains(document.activeElement)) {
+      return;
+    }
+
+    const vis = visibleRows();
+    const idx = vis.findIndex((r) => r.getAttribute("aria-selected") === "true");
+
+    if (e.key === "ArrowDown") {
+      if (!vis.length) return;
+      e.preventDefault();
+      const next = vis[Math.min(idx + 1, vis.length - 1)] || vis[0];
+      selectRow(next);
+    } else if (e.key === "ArrowUp") {
+      if (!vis.length) return;
+      e.preventDefault();
+      const prev = vis[Math.max(idx - 1, 0)] || vis[0];
+      selectRow(prev);
+    } else if (e.key === "Enter" && document.activeElement === input) {
+      e.preventDefault();
+      const raw = input.value.trim();
+      if (raw && (looksLikePath(raw) || vis.length === 0)) {
+        triggerOpen(null);
+      } else if (vis[idx >= 0 ? idx : 0]) {
+        triggerOpen(vis[idx >= 0 ? idx : 0]);
+      }
+    }
+  });
+
+  list.addEventListener("click", (e) => {
+    const row = e.target.closest(".ws-row");
+    if (!row) return;
+    selectRow(row);
+    triggerOpen(row);
+  });
+
+  // Defaults popover interactive controls
+  defModelInput.addEventListener("input", () => {
+    const parts = defModelInput.value.trim().split("/");
+    defSummaryModel.textContent = parts.length > 1 ? `${parts[0]}/${parts[parts.length - 1]}` : defModelInput.value;
+  });
+
+  document.getElementById("thinkingSeg").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-level]");
+    if (!btn) return;
+    e.currentTarget.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+    defSummaryThinking.textContent = btn.dataset.level;
+  });
+
+  document.getElementById("dimSeg").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-dim]");
+    if (!btn) return;
+    e.currentTarget.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+  });
+
+  // Empty state quick-fill chips
+  document.querySelectorAll("[data-fill-path]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      input.value = btn.dataset.fillPath;
+      applyFilter();
+      input.focus();
+    });
+  });
+
+  // Mockup state switcher (6 workspaces / 0 workspaces / 30 workspaces / defaults popover)
+  const extraNames = [
+    ["pi", "/home/stanke/projekty/pi", "4h ago"],
+    ["pi-mono", "/home/stanke/projekty/pi-mono", "6h ago"],
+    ["codemode-eval", "/home/stanke/projekty/codemode-eval", "9h ago"],
+    ["netbird-mesh", "/home/stanke/infra/netbird-mesh", "1d ago"],
+    ["swan-proxy", "/home/stanke/infra/swan-proxy", "1d ago"],
+    ["logfire-cli", "/home/stanke/projekty/logfire-cli", "2d ago"],
+    ["tz-kb-sync", "/home/stanke/projekty/tz-kb-sync", "3d ago"],
+    ["cortex-m-hal", "/home/stanke/embedded/cortex-m-hal", "3d ago"],
+    ["rp2040-usb", "/home/stanke/embedded/rp2040-usb", "4d ago"],
+    ["esp32-telemetry", "/home/stanke/embedded/esp32-telemetry", "5d ago"],
+    ["ponytail-bench", "/home/stanke/projekty/ponytail-bench", "5d ago"],
+    ["sqlite-vec-lab", "/home/stanke/scratch/sqlite-vec-lab", "6d ago"],
+    ["mermaid-render", "/home/stanke/projekty/mermaid-render", "1w ago"],
+    ["prompt-corpus", "/home/stanke/notes/prompt-corpus", "1w ago"],
+    ["auth-token- rotates", "/home/stanke/infra/auth-token-rotates", "1w ago"],
+    ["worktree-gc", "/home/stanke/projekty/worktree-gc", "2w ago"],
+    ["model-router", "/home/stanke/projekty/model-router", "2w ago"],
+    ["tui-keybindings", "/home/stanke/projekty/tui-keybindings", "2w ago"],
+    [" dotfiles", "/home/stanke/.dotfiles", "3w ago"],
+    ["arch-pkgbuilds", "/home/stanke/infra/arch-pkgbuilds", "3w ago"],
+    ["pdf-export", "/home/stanke/projekty/pdf-export", "1mo ago"],
+    ["session-replay", "/home/stanke/projekty/session-replay", "1mo ago"],
+    ["vllm-bench", "/home/stanke/infra/vllm-bench", "1mo ago"],
+    ["scratchpad", "/home/stanke/scratch/scratchpad", "2mo ago"],
+  ];
+
+  document.querySelectorAll(".lens-pill").forEach((pill) => {
+    pill.addEventListener("click", () => {
+      document.querySelectorAll(".lens-pill").forEach((p) => p.setAttribute("aria-pressed", String(p === pill)));
+      const mode = pill.dataset.lens;
+      input.value = "";
+      defaultsMenu.open = false;
+
+      if (mode === "empty") {
+        list.innerHTML = "";
+        summaryEl.innerHTML = "0 workspaces";
+      } else if (mode === "thirty") {
+        const extraHtml = extraNames.map(([name, folder, age]) => `
+          <li class="ws-row" role="option" tabindex="-1" aria-selected="false"
+              data-id="${name.trim()}" data-name="${name.trim()}" data-folder="${folder}" data-missing="false">
+            <div class="ws-left">
+              <span class="status-dot idle"></span>
+              <span class="ws-name">${name.trim()}</span>
+              <span class="ws-context">${folder.replace("/home/stanke", "~")}</span>
+            </div>
+            <div class="ws-right">
+              <span class="sig-quiet">${age}</span>
+              <span class="enter-glyph" aria-hidden="true">↵</span>
+            </div>
+          </li>
+        `).join("");
+        list.innerHTML = initialMarkup + extraHtml;
+        summaryEl.innerHTML = `30 workspaces · <span class="live-count">2 running</span>`;
+      } else {
+        list.innerHTML = initialMarkup;
+        summaryEl.innerHTML = `6 workspaces · <span class="live-count">2 running</span>`;
+        if (mode === "defaults-open") {
+          defaultsMenu.open = true;
+        }
+      }
+      applyFilter();
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -165,6 +165,51 @@ test("a route without the token is refused, and the page is not", async () => {
 	}
 });
 
+/** The leaves of the whole tree, which is how the page finds the controls it draws. */
+function leavesOf(document: any): any[] {
+	const found: any[] = [];
+	const walk = (group: any) => {
+		for (const field of group.fields ?? []) found.push(field);
+		for (const child of group.groups ?? []) walk(child);
+	};
+	for (const group of document.groups ?? []) walk(group);
+	return found;
+}
+
+test("the settings document is served behind the token, and what /defaults saves reads back in it", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-settings-route-"));
+	const daemon = await boot(folder);
+	try {
+		// It holds the daemon's own defaults, so it is behind the same gate as the routes beside it.
+		assert.equal((await get(daemon, "/settings/defaults")).status, 403);
+
+		const served = await get(daemon, `/settings/defaults?token=${daemon.token}`);
+		assert.equal(served.status, 200);
+		const body = JSON.parse(served.body);
+		assert.equal(body.version, 1);
+		// The page draws a control per leaf, so the three settings have to be leaves of the tree.
+		assert.ok(leavesOf(body).some((field) => field.id === "model"), "no model field in the document");
+		const byId = Object.fromEntries(leavesOf(body).map((field) => [field.id, field]));
+		assert.ok((byId.model.options ?? []).length > 0, "the model catalogue is not filled in");
+		assert.ok((byId.thinking?.levels ?? []).length >= 4, "thinking does not carry pi's levels");
+		assert.equal(byId.dimOthers?.type, "toggle");
+
+		// Saving a level used to throw `Assignment to constant variable` at the route, which answered 500
+		// and lost the choice: the write went to an imported binding instead of to the module that owns it.
+		const saved = await post(daemon, "/defaults", { thinking: "low" });
+		assert.equal(saved.status, 200, saved.body);
+		const after = JSON.parse((await get(daemon, `/settings/defaults?token=${daemon.token}`)).body);
+		const thinking = leavesOf(after).find((field) => field.id === "thinking");
+		assert.equal(thinking?.value, "low", "the document does not read back what /defaults wrote");
+		// And it is on disk, in the one file the daemon reloads its defaults from.
+		const kept = JSON.parse(readFileSync(join(folder, "workspaces.json"), "utf8"));
+		assert.equal(kept.defaults?.thinking, "low");
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
 test("a question that takes several answers keeps all of them", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-ask-"));
 	const daemon = await boot(folder);
@@ -228,6 +273,61 @@ test("a question that takes one answer is answered by one click, as before", asy
 		const reply = JSON.parse((await held).body);
 		assert.equal(reply.answer, "b");
 		assert.equal(reply.answers, undefined);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a card asks up to five questions on tabs, and settles them all at once", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-ask-tabs-"));
+	const daemon = await boot(folder);
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		const board = JSON.parse(opened.body).board;
+		// A card of six tabs is a form rather than a question, so the daemon refuses it and the card is
+		// never written.
+		const tooMany = await postTo(daemon, board.id, "/card/ask", {
+			questions: Array.from({ length: 6 }, (_, at) => ({ question: `q${at}?`, options: ["a", "b"] })),
+		});
+		assert.equal(tooMany.status, 400);
+
+		const held = postTo(daemon, board.id, "/card/ask", {
+			title: "three things",
+			questions: [
+				{ question: "which one?", options: ["a", "b"] },
+				{ question: "which of these?", options: ["x", "y"], multiple: true, allowFreeText: false },
+				{ question: "any words?", options: ["yes", "no"] },
+			],
+		});
+		const card = await questionCard(daemon, board.id);
+		assert.ok(card, "the questions never reached the board");
+		assert.equal(card.questions.length, 3);
+		assert.equal(card.questions[1].multiple, true);
+		assert.equal(card.questions[1].allowFreeText, false);
+
+		// Every tab sends its own answer, in tab order: a card of tabs is one call and half a form is not
+		// a card the child can read.
+		const short = await postTo(daemon, board.id, "/answer", { cardId: card.id, answers: ["a", ["x"]] });
+		assert.equal(short.status, 400);
+		const stray = await postTo(daemon, board.id, "/answer", { cardId: card.id, answers: ["a", ["x", "z"], "yes"] });
+		assert.equal(stray.status, 400);
+		const empty = await postTo(daemon, board.id, "/answer", { cardId: card.id, answers: ["a", ["x"], ""] });
+		assert.equal(empty.status, 400);
+
+		const sent = await postTo(daemon, board.id, "/answer", { cardId: card.id, answers: ["b", ["x", "y"], "my own words"] });
+		assert.equal(sent.status, 200);
+		const reply = JSON.parse((await held).body);
+		assert.deepEqual(reply.answers, ["b", "x, y", "my own words"]);
+		assert.equal(reply.answer, "b; x, y; my own words");
+
+		const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		const settled = (state.cards as any[]).find((one) => one.id === card.id);
+		assert.equal(settled.status, "answered");
+		assert.deepEqual(settled.answers, ["b", "x, y", "my own words"]);
+		// The tabs are still on the card once it is settled, so a reader sees what was asked as well as
+		// what was answered.
+		assert.equal(settled.questions.length, 3);
 	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });
@@ -499,6 +599,73 @@ function framesOf(stub: { root: string; envFile: string }) {
 	return readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
+test("a message waiting behind a run can be rewritten or taken back before the child reads it", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-queue-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-queue-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	// The stub's own switches, in the folder it was written to: `hold` keeps a run open, `slow` delays one.
+	const flags = dirname(stub.envFile);
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+
+		// A run that never settles is the window a second message waits in.
+		writeFileSync(join(flags, "hold"), "1");
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "the first words" })).status, 200);
+		const asked = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "the words I regret" });
+		assert.equal(asked.status, 200);
+		const at = JSON.parse(asked.body).turn as number;
+		const waiting = await threadState(daemon, board.id, threadId);
+		assert.equal(waiting.turns[at].status, "queued", "a message sent behind a run was not queued");
+		assert.equal(waiting.queued.length, 1);
+		const told = (words: string) => framesOf(stub).some((frame) => frame.type === "prompt" && String(frame.message).includes(words));
+		assert.equal(told("regret"), false, "the child was given a message that was still waiting");
+
+		const edited = await postTo(daemon, board.id, "/message/edit", { cardId: threadId, turn: at, text: "the words I meant" });
+		assert.equal(edited.status, 200, edited.body);
+		const after = await threadState(daemon, board.id, threadId);
+		assert.equal(after.turns[at].text, "the words I meant", "the card still shows the words that were replaced");
+		assert.equal(after.turns[at].status, "queued");
+		assert.equal(after.queued.length, 1);
+		assert.equal(after.queued[0].message, "the words I meant", "the edited words never reached the queue");
+
+		// The turn the child already reads is not a draft, and says so rather than rewriting what it read.
+		const tooLate = await postTo(daemon, board.id, "/message/edit", { cardId: threadId, turn: 0, text: "too late" });
+		assert.equal(tooLate.status, 409);
+		assert.match(tooLate.body, /not waiting/);
+
+		const spare = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "never mind" });
+		const spareAt = JSON.parse(spare.body).turn as number;
+		assert.equal((await postTo(daemon, board.id, "/message/drop", { cardId: threadId, turn: spareAt })).status, 200);
+		const dropped = await threadState(daemon, board.id, threadId);
+		assert.equal(dropped.queued.length, 1, "the withdrawn message is still waiting");
+		assert.equal(dropped.turns[spareAt].status, "stopped");
+		assert.equal(dropped.turns[spareAt].error, "withdrawn");
+		assert.equal(told("never mind"), false);
+
+		// A second thread, and a run slow enough to queue behind: what the child is finally told is the
+		// message as it reads now, not as it was first typed.
+		rmSync(join(flags, "hold"));
+		writeFileSync(join(flags, "slow"), "1");
+		const second = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: second, text: "slow words" })).status, 200);
+		const late = JSON.parse((await postTo(daemon, board.id, "/message", { cardId: second, text: "a first draft" })).body);
+		const rewritten = await postTo(daemon, board.id, "/message/edit", { cardId: second, turn: late.turn, text: "the second draft" });
+		assert.equal(rewritten.status, 200, rewritten.body);
+		for (let tries = 0; tries < 100; tries++) {
+			const thread = await threadState(daemon, board.id, second);
+			if (thread?.turns?.[late.turn]?.status === "answered") break;
+			await new Promise((done) => setTimeout(done, 50));
+		}
+		assert.equal(told("a first draft"), false, "the child was told the draft that was replaced");
+		assert.equal(told("the second draft"), true, `the child was told ${JSON.stringify(framesOf(stub).filter((frame) => frame.type === "prompt").map((frame) => frame.message))}`);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
 test("a compaction reaches the thread's child, and the context comes back smaller", async () => {
 	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-compact-"));
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-compact-work-"));
@@ -750,5 +917,39 @@ test("a message queued behind a run lands on its own turn, once", async () => {
 	} finally {
 		daemon.child.kill();
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a prompt file's own bytes go back through POST /prompt, and the repository keeps them", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-prompt-route-"));
+	const daemon = await boot(folder);
+	// The file the settings page writes is a file in the repository, so it is put back exactly as it was.
+	const path = join(repo, "prompts", "roles", "scout.md");
+	const original = readFileSync(path, "utf8");
+	try {
+		const listed = JSON.parse((await get(daemon, `/prompts?token=${daemon.token}`)).body);
+		assert.ok(listed.prompts.some((one: any) => one.name === "roles/scout.md"), "the file is not in GET /prompts");
+		const one = await get(daemon, `/prompt?token=${daemon.token}&name=${encodeURIComponent("roles/scout.md")}`);
+		assert.equal(one.status, 200);
+		assert.equal(JSON.parse(one.body).text, original);
+
+		// Saving it unchanged is the write the page's `save` makes: same bytes in, same bytes on disk.
+		const wrote = await post(daemon, "/prompt", { name: "roles/scout.md", text: original });
+		assert.equal(wrote.status, 200, wrote.body);
+		assert.equal(readFileSync(path, "utf8"), original);
+
+		// The document the page draws carries the same text under the field that writes it back.
+		const document = JSON.parse((await get(daemon, `/settings/defaults?token=${daemon.token}`)).body);
+		const field = leavesOf(document).find((leaf) => leaf.id === "prompt-roles-scout");
+		assert.equal(field?.value, original, "the prompt field does not carry the file");
+		assert.equal(field?.write?.route, "/prompt");
+
+		// And the route still refuses a name it does not own, which is the answer the field shows.
+		const refused = await post(daemon, "/prompt", { name: "../../etc/passwd", text: "x" });
+		assert.equal(refused.status, 400);
+	} finally {
+		writeFileSync(path, original);
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
 	}
 });

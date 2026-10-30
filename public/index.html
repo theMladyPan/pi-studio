@@ -214,11 +214,25 @@
   .turn + .turn { border-top: 1px dashed #21262d; padding-top: 8px; }
   .turn-q { color: #f0e6d2; background: #2a2415; border-left: 3px solid #d29922;
     padding: 6px 9px; border-radius: 4px; white-space: pre-wrap; font-size: 13px; }
+  /* A message the child has not been told yet waits behind the run as a draft: dashed, dimmer, and on a
+     line that says so. The one the agent already has is the solid bubble the conversation is made of. */
+  .turn.queued .turn-q { background: #1c1a12; border-left-style: dashed; color: #cbbf9f; }
   .turn-status { font: 11px var(--mono); color: var(--muted); text-transform: uppercase;
-    letter-spacing: .5px; }
+    letter-spacing: .5px; display: flex; align-items: center; gap: 6px; }
   .turn-status.answered { color: var(--green); }
   .turn-status.stopped { color: #f85149; }
   .turn-status.sent { color: var(--accent); }
+  .turn-status.queued { color: #d29922; }
+  /* What a waiting message may still be given: its words rewritten, or itself taken back. */
+  .turn-acts { margin-left: auto; display: flex; gap: 2px; }
+  .turn-act { border: 0; background: transparent; color: var(--muted); font: 11px var(--mono);
+    text-transform: uppercase; letter-spacing: .5px; cursor: pointer; padding: 1px 5px; border-radius: 4px; }
+  .turn-act:hover { background: #21262d; color: var(--text); }
+  .turn-act.drop:hover { color: #f85149; }
+  /* The words of a waiting message while they are being rewritten: the same mono rows the composer uses. */
+  .turn-edit { display: block; width: 100%; box-sizing: border-box; resize: none; overflow: hidden;
+    background: #0d1117; color: var(--text); border: 1px solid var(--accent); border-radius: 4px;
+    padding: 5px 8px; font: 13px var(--mono); line-height: 1.45; outline: none; }
   /* The agent's answer is the thing you came to read, so it reads at the card's own size. */
   .turn-a { padding: 0; color: #c9d1d9; font-size: 14px; }
   /* An answer with no words yet draws nothing, and the caret is what says text is still arriving. */
@@ -365,6 +379,23 @@
   .q-free input:focus { border-color: var(--accent-dim); }
   .q-done { color: var(--muted); font: 12px var(--mono); }
   .q-done.q-problem { color: var(--red); }
+  /* A card that asks several questions: numbered tabs above one panel at a time, and a foot that
+     sends them all at once. The tick on a tab is what says a question is already answered. */
+  .q-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+  .q-tab {
+    min-width: 26px; padding: 4px 7px; font: 12px var(--mono); color: var(--muted);
+    background: #161b22; border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+  }
+  .q-tab:hover { color: var(--text); border-color: var(--accent-dim); }
+  .q-tab.on { color: var(--text); border-color: var(--accent); background: rgba(88,166,255,.12); }
+  .q-tab.done { color: var(--accent); }
+  .q-tab.done::after { content: "✓"; margin-left: 4px; }
+  .q-panel { display: flex; flex-direction: column; gap: 10px; }
+  .q-panel[hidden] { display: none; }
+  .q-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .q-actions[hidden] { display: none; }
+  .q-count { color: var(--muted); font: 11px var(--mono); }
+  .q-send { padding: 6px 12px; }
 
   .resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
     background: linear-gradient(135deg, transparent 50%, var(--border-bright) 50%);

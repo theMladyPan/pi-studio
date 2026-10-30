@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "title": "New board defaults",
+  "help": "What every new workspace board is born with. An open board keeps its own copy.",
+  "groups": [
+    {
+      "id": "new-boards",
+      "label": "New boards",
+      "help": "Inherited once when a folder is first opened as a workspace.",
+      "collapsed": false,
+      "groups": [
+        {
+          "id": "agent",
+          "label": "Agent",
+          "help": "The pi child process that answers the first thread on a new board.",
+          "collapsed": false,
+          "groups": [
+            {
+              "id": "model-routing",
+              "label": "Model & reasoning",
+              "help": "Validated against POST /defaults; the daemon refuses a model this machine cannot run.",
+              "collapsed": false,
+              "fields": [
+                {
+                  "id": "model",
+                  "store": {
+                    "split": "/",
+                    "keys": [
+                      "provider",
+                      "model"
+                    ]
+                  },
+                  "label": "model",
+                  "type": "combo",
+                  "value": "provider/model",
+                  "source": "/models",
+                  "placeholder": "provider/model",
+                  "help": "Provider and model id separated by /. Scoped models from ~/.pi/agent/settings.json appear first."
+                },
+                {
+                  "id": "thinking",
+                  "label": "thinking",
+                  "type": "select",
+                  "value": "medium",
+                  "source": "/defaults#levels",
+                  "help": "Reasoning budget passed to pi for new threads. Clamped if a model does not support it."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "board",
+          "label": "Board",
+          "help": "Canvas behaviour on /w/<id>.",
+          "collapsed": false,
+          "groups": [
+            {
+              "id": "cards",
+              "label": "Cards",
+              "help": "How thread and note cards behave when one is focused.",
+              "collapsed": true,
+              "fields": [
+                {
+                  "id": "dimOthers",
+                  "label": "dim others",
+                  "type": "toggle",
+                  "value": true,
+                  "labels": [
+                    "off",
+                    "on"
+                  ],
+                  "help": "Dim other cards on the canvas while one thread is selected."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

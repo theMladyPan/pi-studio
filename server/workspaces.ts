@@ -148,11 +148,13 @@ export function saveWorkspaces() {
 
 
 /**
- * Replace the defaults a new board is born with. An imported `let` is read-only in the module that
- * imports it, so the crossroads writes through this door instead of assigning the binding.
+ * The one place `homeDefaults` is written. An `import` is a constant binding, so a route that assigned to
+ * it threw `Assignment to constant variable` and answered 500 on every save; the write belongs here, with
+ * the file it has to reach.
  */
 export function setHomeDefaults(next) {
 	homeDefaults = next;
+	saveWorkspaces();
 }
 
 

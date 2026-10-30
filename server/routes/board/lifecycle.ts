@@ -10,7 +10,7 @@ import { ownedCards, refreshOwned } from "./message.ts";
 import { answer, fail, readJson } from "../../http.ts";
 import { field } from "./thread.ts";
 import { randomUUID } from "node:crypto";
-import { cleanBoard, clearBoard, plainCardFor } from "../../cards.ts";
+import { cleanBoard, clearBoard, plainCardFor, stopQueue } from "../../cards.ts";
 import { finished } from "../../waiters.ts";
 import { settleRows } from "../../thought.ts";
 
@@ -75,16 +75,7 @@ export function killChild(board, thread) {
 	}
 	stopStream(thread);
 	// Nothing will arrive to drain the queue now, so what was waiting says stopped instead of waiting.
-	for (const next of thread.queued) {
-		// A queued message names the turn it was written to: a card's, or the thread's own.
-		const held = typeof next === "string" || !next.target?.cardId ? undefined : board.cards.get(next.target.cardId);
-		const parked = typeof next === "string" || !next.target ? undefined : (held ? held.turns?.[next.target.turn] : thread.turns[next.target.turn]);
-		if (parked && parked.status === "queued") {
-			parked.status = "stopped";
-			if (held) updateCard(board, held);
-		}
-	}
-	thread.queued = [];
+	stopQueue(board, thread);
 	thread.answering = null;
 	thread.abortWanted = false;
 	thread.status = "idle";
