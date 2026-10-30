@@ -22,7 +22,7 @@ import { sessionFile, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
 import { onMode, onPath, onThread, onThreadSpawn } from "./routes/board/thread.ts";
 import { onAnswer, onAsk } from "./routes/board/answer.ts";
-import { onMessage } from "./routes/board/message.ts";
+import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.ts";
 import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
 import { onPrompt, onPromptWrite, onPrompts } from "./routes/board/prompts.ts";
 import { onClean, onClose, onKill, onNew, onReopen, onStop, onUndo } from "./routes/board/lifecycle.ts";
@@ -339,6 +339,8 @@ export const server = createServer((req, res) => {
 				"/rename": onRename,
 				"/answer": onAnswer,
 				"/message": onMessage,
+				"/message/edit": onMessageEdit,
+				"/message/drop": onMessageDrop,
 				"/layout": onLayout,
 				"/close": onClose,
 				"/reopen": onReopen,

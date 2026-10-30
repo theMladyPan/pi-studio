@@ -742,7 +742,22 @@ function sourceBody(data) {
   return scroll;
 }
 
+/**
+ * The questions a card asks, in the one shape that draws them.
+ *
+ * One question is the card the board always had: its options answer it where they are drawn, and a
+ * click is the answer. A card that asks several draws a tab per question and one send under them,
+ * because the call that asked is held until every tab has an answer.
+ */
 function questionBody(data, entry) {
+  const asked = Array.isArray(data.questions) ? data.questions.filter((one) => one && one.question) : [];
+  if (asked.length > 1) return tabbedQuestions(data, entry, asked);
+  // A card that carries its one question in the list form reads the same once it is spread flat.
+  return oneQuestion(asked.length ? { ...data, ...asked[0] } : data, entry);
+}
+
+/** A settled question names its answer, and the boxes it left ticked keep their ticks. */
+function oneQuestion(data, entry) {
   // A question that ran out of time is as settled as an answered one: its buttons are dead and
   // the header says which of the two happened.
   const settled = data.status === "answered" || data.status === "expired";
@@ -841,6 +856,236 @@ function questionBody(data, entry) {
   return holder;
 }
 
+/**
+ * A card that asks several questions: a numbered tab per question, a radio or a box under each, and
+ * one send at the foot. The tabs are numbers because five questions do not fit across a card, and a
+ * tab that already has an answer carries a tick, so the reader sees what is left without opening each.
+ */
+function tabbedQuestions(data, entry, asked) {
+  // A question that ran out of time is as settled as an answered one, and every tab keeps what it was
+  // answered with: the card is the record of the exchange, not only the form for it.
+  const settled = data.status === "answered" || data.status === "expired";
+  const said = settled && Array.isArray(data.answers) ? data.answers : [];
+  const holder = el("div", "q-body");
+  const tabs = el("div", "q-tabs");
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "questions");
+  holder.appendChild(tabs);
+  const panels = [];
+  const tabButtons = [];
+
+  // What one tab has been answered with: the picks for a question that takes several, else one answer.
+  const valueAt = (at) => {
+    const panel = panels[at];
+    const picks = [...panel.querySelectorAll(".q-opt.picked")].map((button) => button.textContent);
+    const typed = panel.querySelector(".q-free input")?.value.trim() || "";
+    // Typing and picking are two ways to say one thing: on a question with one answer the words are the
+    // answer, and on a question of boxes they are one more box.
+    if (asked[at].multiple === true) return typed ? [...picks, typed] : picks;
+    return typed || picks[0] || "";
+  };
+  const answeredAt = (at) => {
+    const value = valueAt(at);
+    return Array.isArray(value) ? value.length > 0 : Boolean(value);
+  };
+  const setTab = (at, focus) => {
+    tabButtons.forEach((button, index) => {
+      const on = index === at;
+      button.classList.toggle("on", on);
+      button.setAttribute("aria-selected", on ? "true" : "false");
+      // One tab is in the tab order, so Tab reaches the row once and the arrows move inside it.
+      button.tabIndex = on ? 0 : -1;
+      panels[index].hidden = !on;
+    });
+    if (focus) tabButtons[at].focus();
+  };
+  // The tab stands for its question: a tick says it is answered, and the panel below carries the words.
+  const markTabs = () => {
+    tabButtons.forEach((button, at) => {
+      const done = settled ? Boolean(said[at]) : answeredAt(at);
+      button.classList.toggle("done", done);
+      button.title = settled && said[at] ? `${asked[at].question}\nanswered: ${said[at]}` : asked[at].question;
+    });
+  };
+
+  let foot = null;
+  let send = null;
+  let count = null;
+  const refresh = () => {
+    markTabs();
+    if (settled) return;
+    const missing = asked.filter((one, at) => !answeredAt(at)).length;
+    count.textContent = missing ? `${asked.length - missing} of ${asked.length} answered` : "all answered — send";
+    send.disabled = missing > 0;
+  };
+
+  // The arrows walk the tab row, as a tab list is expected to.
+  tabs.addEventListener("keydown", (event) => {
+    const at = tabButtons.indexOf(document.activeElement);
+    if (at < 0) return;
+    const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    setTab((at + step + tabButtons.length) % tabButtons.length, true);
+  });
+
+  asked.forEach((one, at) => {
+    const tab = el("button", "q-tab");
+    tab.type = "button";
+    tab.setAttribute("role", "tab");
+    tab.textContent = String(at + 1);
+    tab.addEventListener("click", () => setTab(at, false));
+    tabs.appendChild(tab);
+    tabButtons.push(tab);
+
+    const panel = el("div", "q-panel");
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-label", `question ${at + 1}`);
+    panels.push(panel);
+
+    const text = el("div", "q-text");
+    text.innerHTML = inlineMd(one.question || "");
+    panel.appendChild(text);
+
+    const buttons = el("div", "q-options");
+    buttons.tabIndex = -1;
+    const multiple = one.multiple === true;
+    // A settled tab shows what was ticked rather than a form nobody can send again.
+    const chosen = new Set(settled && said[at] ? String(said[at]).split(", ") : []);
+    let input = null;
+    let freeRow = null;
+    if (!settled && one.allowFreeText !== false) {
+      freeRow = el("div", "q-free");
+      input = el("input");
+      input.placeholder = multiple ? "or add a note…" : "or type an answer…";
+      input.addEventListener("input", () => {
+        // One question has one answer, so typed words clear the picked option and the option clears them.
+        if (!multiple) for (const button of buttons.children) button.classList.remove("picked");
+        refresh();
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        send.click();
+      });
+      freeRow.appendChild(input);
+    }
+
+    for (const option of one.options || []) {
+      const button = el("button", multiple ? "q-opt q-check" : "q-opt");
+      button.type = "button";
+      button.textContent = option;
+      if (settled) {
+        button.disabled = true;
+        if (chosen.has(option)) button.classList.add("picked");
+        if (multiple) button.setAttribute("aria-pressed", chosen.has(option) ? "true" : "false");
+      } else if (multiple) {
+        // A box, not an answer: clicking it fills the tab in and lets the human tick a second.
+        button.setAttribute("aria-pressed", "false");
+        button.addEventListener("click", () => {
+          const on = button.classList.toggle("picked");
+          button.setAttribute("aria-pressed", on ? "true" : "false");
+          refresh();
+        });
+      } else {
+        button.setAttribute("aria-pressed", "false");
+        button.addEventListener("click", () => {
+          for (const other of buttons.children) {
+            other.classList.remove("picked");
+            other.setAttribute("aria-pressed", "false");
+          }
+          button.classList.add("picked");
+          button.setAttribute("aria-pressed", "true");
+          if (input) input.value = "";
+          refresh();
+          // One click is the whole answer to a question with one answer, so the empty tab after it is
+          // where the reader goes next. The keyboard lands on the options, not on a button Space presses.
+          const after = asked.findIndex((other, index) => index > at && !answeredAt(index));
+          const next = after > -1 ? after : asked.findIndex((other, index) => !answeredAt(index));
+          if (next > -1) {
+            setTab(next, false);
+            panels[next].querySelector(".q-options")?.focus({ preventScroll: true });
+          }
+        });
+      }
+      buttons.appendChild(button);
+    }
+    panel.appendChild(buttons);
+    if (freeRow) panel.appendChild(freeRow);
+    if (settled && said[at]) {
+      const done = el("div", "q-done");
+      done.textContent = `answered: ${said[at]}`;
+      panel.appendChild(done);
+    }
+    holder.appendChild(panel);
+  });
+
+  if (!settled) {
+    foot = el("div", "q-actions");
+    count = el("span", "q-count");
+    send = el("button", "q-opt q-send");
+    send.type = "button";
+    send.textContent = "send answers";
+    send.addEventListener("click", () => {
+      // A send that left a tab empty would wake the child with half a form, so the button walks to the
+      // question it is waiting on instead of sending.
+      const missing = asked.findIndex((one, at) => !answeredAt(at));
+      if (missing > -1) {
+        setTab(missing, true);
+        return;
+      }
+      void sendTabbed(entry, holder, asked.map((one, at) => valueAt(at)), foot);
+    });
+    foot.appendChild(count);
+    foot.appendChild(send);
+    holder.appendChild(foot);
+  }
+
+  setTab(0, false);
+  refresh();
+  return holder;
+}
+
+/** Send every tab at once, and put the form back to being filled in when the send failed. */
+async function sendTabbed(entry, holder, answers, foot) {
+  const live = [...holder.querySelectorAll("button, input")];
+  for (const node of live) node.disabled = true;
+  foot.hidden = true;
+  const problem = await postAnswer(entry, { answers });
+  if (!problem) return;
+  for (const node of live) node.disabled = false;
+  foot.hidden = false;
+  showProblem(holder, problem);
+}
+
+/** Send one answer to the daemon, and hand back what went wrong, or nothing at all. */
+async function postAnswer(entry, body) {
+  try {
+    const response = await fetch(`/answer?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: entry.id, ...body }),
+    });
+    // A 409 means the question expired or another tab answered it, so nothing was delivered.
+    if (!response.ok) return (await response.text()).trim() || "could not send — the question may have expired";
+  } catch {
+    return "could not reach the board server";
+  }
+  return "";
+}
+
+/** A send that failed says so where the answer was given, styled as a failure rather than a note. */
+function showProblem(holder, problem) {
+  let warn = holder.querySelector(".q-done");
+  if (!warn) {
+    warn = el("div", "q-done");
+    warn.setAttribute("role", "alert");
+    holder.appendChild(warn);
+  }
+  warn.classList.add("q-problem");
+  warn.textContent = problem;
+}
+
 async function submitAnswer(entry, answer, buttons, freeRow) {
   // An answer that is a list came from the boxes. The ticks stay on screen while the send is in
   // flight: they are the question being filled in, and a failed send must not undo them.
@@ -853,18 +1098,7 @@ async function submitAnswer(entry, answer, buttons, freeRow) {
       if (button.textContent === answer) button.classList.add("picked");
     }
   }
-  let problem = "";
-  try {
-    const response = await fetch(`/answer?${auth}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(multi ? { cardId: entry.id, answers: answer } : { cardId: entry.id, answer }),
-    });
-    // A 409 means the question expired or another tab answered it, so nothing was delivered.
-    if (!response.ok) problem = (await response.text()).trim() || "could not send — the question may have expired";
-  } catch {
-    problem = "could not reach the board server";
-  }
+  const problem = await postAnswer(entry, multi ? { answers: answer } : { answer });
   if (!problem) return;
   // The agent got nothing, so the card goes back to looking unanswered: a picked option and
   // dead buttons would read as sent. On a question with boxes the ticks are the human's work, so
@@ -872,16 +1106,7 @@ async function submitAnswer(entry, answer, buttons, freeRow) {
   for (const button of options) button.disabled = false;
   if (!multi) for (const button of options) button.classList.remove("picked");
   if (freeRow) buttons.after(freeRow);
-  const holder = buttons.parentElement;
-  let warn = holder.querySelector(".q-done");
-  if (!warn) {
-    warn = el("div", "q-done");
-    warn.setAttribute("role", "alert");
-    holder.appendChild(warn);
-  }
-  // Styled as a failure, so it does not read as a muted "answered: …" line.
-  warn.classList.add("q-problem");
-  warn.textContent = problem;
+  showProblem(buttons.parentElement, problem);
 }
 
 /**
@@ -937,23 +1162,34 @@ function paintAnswer(wrap, turn) {
   }
 }
 
+/**
+ * What a turn's own line says. The two that matter read apart at a glance: a message the child has been
+ * given is the one the run is working on, and a message waiting behind the run is a draft that can still
+ * be changed.
+ */
+function turnLabel(turn) {
+  if (turn.status === "answered") return "answered";
+  if (turn.status === "stopped") return turn.error ? `stopped · ${turn.error}` : "stopped";
+  if (turn.status === "sent") return turn.mode === "steer" ? "steered into the run" : "sent to the agent";
+  return "queued · waits for the run";
+}
+
 /** One follow-up exchange: your question, what happened to it, then the answer. */
-function turnNode(turn) {
+function turnNode(entry, turn, index) {
   const wrap = el("div", `turn ${turn.status || "queued"}`);
   const question = el("div", "turn-q");
   question.textContent = turn.text || "";
   wrap.appendChild(question);
+  // The child has not been told this one yet, so its words are still the human's to change.
+  if (turn.status === "queued") {
+    question.title = "press twice to rewrite this message";
+    question.addEventListener("dblclick", () => startEditingTurn(entry, wrap, index));
+  }
   const status = el("div", `turn-status ${turn.status || "queued"}`);
-  status.textContent =
-    turn.status === "answered"
-      ? "answered"
-      : turn.status === "stopped"
-        ? turn.error
-          ? `stopped · ${turn.error}`
-          : "stopped"
-        : turn.status === "sent"
-          ? "sent"
-          : `queued · ${turn.mode === "steer" ? "steer" : "queue"}`;
+  const label = el("span", "turn-label");
+  label.textContent = turnLabel(turn);
+  status.appendChild(label);
+  if (turn.status === "queued") status.appendChild(queuedActs(entry, wrap, index));
   // A connection error fits on this line; a longer reason is readable in full on hover.
   if (turn.error) status.title = turn.error;
   wrap.appendChild(status);
@@ -970,6 +1206,121 @@ function turnNode(turn) {
   wrap.appendChild(el("div", "turn-a note-body"));
   paintAnswer(wrap, turn);
   return wrap;
+}
+
+/** The two things a message the child has not read may still be given: new words, or none. */
+function queuedActs(entry, wrap, index) {
+  const acts = el("div", "turn-acts");
+  const edit = el("button", "turn-act");
+  edit.type = "button";
+  edit.textContent = "edit";
+  edit.title = "rewrite this message before the agent reads it";
+  edit.setAttribute("aria-label", "rewrite this queued message");
+  edit.addEventListener("click", (event) => {
+    event.stopPropagation();
+    startEditingTurn(entry, wrap, index);
+  });
+  const drop = el("button", "turn-act drop");
+  drop.type = "button";
+  drop.textContent = "×";
+  drop.title = "take this message back before the agent reads it";
+  drop.setAttribute("aria-label", "withdraw this queued message");
+  drop.addEventListener("click", (event) => {
+    event.stopPropagation();
+    void dropQueued(entry, index);
+  });
+  acts.append(edit, drop);
+  return acts;
+}
+
+/**
+ * The words of a message the child has not read yet become a field holding themselves. Enter keeps what
+ * was typed, Shift+Enter breaks the line, Escape drops it, and a press elsewhere keeps it — the note
+ * editor's rules, on the card's own conversation.
+ */
+function startEditingTurn(entry, wrap, index) {
+  if (wrap.dataset.editing) return;
+  const turn = Array.isArray(entry.data?.turns) ? entry.data.turns[index] : null;
+  if (!turn || turn.status !== "queued") return;
+  const bubble = wrap.querySelector(".turn-q");
+  if (!bubble) return;
+  wrap.dataset.editing = "1";
+  const area = el("textarea", "turn-edit");
+  area.value = turn.text || "";
+  area.spellcheck = false;
+  area.rows = 2;
+  bubble.title = "";
+  bubble.replaceChildren(area);
+  // A field that grows with its words: a queued message is often longer than the two rows it opens with.
+  const grow = () => {
+    area.style.height = "auto";
+    area.style.height = `${area.scrollHeight}px`;
+  };
+  area.addEventListener("input", grow);
+  grow();
+  area.focus();
+  area.setSelectionRange(area.value.length, area.value.length);
+  const finish = (commit) => {
+    if (!wrap.dataset.editing) return;
+    delete wrap.dataset.editing;
+    const wanted = area.value.trim();
+    // The field goes before anything is saved, and the words go back into the bubble as they now read.
+    // A repaint here would take the node under the pointer with it, and the × beside an editor that was
+    // just closed would swallow the click that closed it.
+    area.remove();
+    bubble.title = "press twice to rewrite this message";
+    bubble.textContent = commit && wanted ? wanted : turn.text || "";
+    if (commit && wanted && wanted !== turn.text) void saveTurnText(entry, index, wanted);
+  };
+  area.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      // The editor takes Escape first: dropping an edit must not give up the selection either.
+      event.preventDefault();
+      event.stopPropagation();
+      finish(false);
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      finish(true);
+    }
+  });
+  area.addEventListener("blur", () => finish(true));
+}
+
+/**
+ * The rewritten words go back to the daemon, which is holding the queue: the card is drawn from the answer
+ * it sends, so the field and the message that will be sent cannot drift apart.
+ */
+async function saveTurnText(entry, index, text) {
+  try {
+    const response = await fetch(`/message/edit?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: entry.id, turn: index, text }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 120) || response.statusText);
+    footNote("queued message rewritten");
+  } catch (error) {
+    footNote(`could not rewrite the queued message: ${error.message || error}`, true);
+    // Words that never reached the queue are not words the card stands behind, so it is drawn again from
+    // what the daemon actually holds.
+    paintCard(entry, entry.data);
+  }
+}
+
+/** A message taken back before the child reads it. The daemon stops the turn, so nothing is drawn here. */
+async function dropQueued(entry, index) {
+  try {
+    const response = await fetch(`/message/drop?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: entry.id, turn: index }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 120) || response.statusText);
+    footNote("queued message withdrawn");
+  } catch (error) {
+    footNote(`could not withdraw the queued message: ${error.message || error}`, true);
+  }
 }
 
 /** What a turn draws besides its answer. A turn that changes here has to be redrawn whole. */
@@ -995,25 +1346,31 @@ function paintThread(entry, data) {
   // there; someone who scrolled up to read is left where they are.
   const atBottom = entry.scroll.scrollHeight - entry.scroll.scrollTop - entry.scroll.clientHeight < 24;
   // A reply arriving in deltas would otherwise rebuild the whole conversation ten times a second,
-  // taking the column's scroll and any selection being read with it. While nothing but the last
-  // answer moves, only that answer is repainted.
+  // taking the column's scroll and any selection being read with it. While nothing but an answer
+  // moves, only that answer is repainted.
   const drawn = entry.turnNodes ?? (entry.turnNodes = []);
   const settled =
     drawn.length === turns.length && turns.every((turn, at) => turnShape(turn) === turnShape(drawn[at].turn));
   if (settled) {
-    const at = turns.length - 1;
-    const before = at >= 0 ? drawn[at].turn : null;
-    const moved =
-      before &&
-      (turns[at].reply !== before.reply ||
-        (turns[at].interim ?? []).join("\u0000") !== (before.interim ?? []).join("\u0000") ||
-        Boolean(turns[at].streaming) !== Boolean(before.streaming));
-    if (moved) {
-      paintAnswer(drawn[at].node, turns[at]);
-      drawn[at].turn = { ...turns[at] };
+    // The run writes into the turn it was asked about, which is not always the last one: a message
+    // queued behind the run sits after it, and the answer under it keeps arriving while it waits.
+    const moved = turns.findIndex((turn, at) => {
+      const before = drawn[at].turn;
+      return (
+        turn.reply !== before.reply ||
+        (turn.interim ?? []).join("\u0000") !== (before.interim ?? []).join("\u0000") ||
+        Boolean(turn.streaming) !== Boolean(before.streaming)
+      );
+    });
+    if (moved >= 0) {
+      paintAnswer(drawn[moved].node, turns[moved]);
+      drawn[moved].turn = { ...turns[moved] };
     }
+  } else if (entry.thread.querySelector(".turn-edit")) {
+    // Someone is rewriting a queued message. Rebuilding the conversation under the field would take
+    // the words being typed with it, and the next broadcast draws the turn once the edit is done.
   } else {
-    const nodes = turns.map(turnNode);
+    const nodes = turns.map((turn, at) => turnNode(entry, turn, at));
     entry.thread.replaceChildren(...nodes);
     entry.turnNodes = turns.map((turn, at) => ({ turn: { ...turn }, node: nodes[at] }));
   }
@@ -1723,14 +2080,15 @@ function noteSub(data, entry) {
 }
 
 /**
- * An open question says when it gives up, so the wait has a visible end. A settled one says
- * what actually happened: an answer, or a question the board abandoned.
+ * An open question says when it gives up, so the wait has a visible end, and a card of tabs says how
+ * many it asks. A settled one says what actually happened: an answer, or a question the board abandoned.
  */
 function questionSub(data) {
-  if (data.status === "answered") return "answered";
-  if (data.status === "expired") return "expired — no answer sent";
-  if (!data.expiresAt) return "waiting for you";
-  return `expires ${new Date(data.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  const tabs = Array.isArray(data.questions) && data.questions.length > 1 ? `${data.questions.length} questions · ` : "";
+  if (data.status === "answered") return `${tabs}answered`;
+  if (data.status === "expired") return `${tabs}expired — no answer sent`;
+  if (!data.expiresAt) return `${tabs}waiting for you`;
+  return `${tabs}expires ${new Date(data.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function paintCard(entry, data) {
@@ -2371,8 +2729,10 @@ function centreQuestion(record) {
   // The rule jumpToFresh uses: never arrive so far out that the ring and the text stop reading.
   view.k = Math.min(1.1, Math.max(view.k, 0.6));
   centerOn(record);
-  // preventScroll: centring already moved the canvas, and a second jump would fight it.
-  record.body.querySelector(".q-options")?.focus({ preventScroll: true });
+  // A card of tabs starts on its tab row; a single question has only its options. preventScroll:
+  // centring already moved the canvas, and a second jump would fight it.
+  const target = record.body.querySelector(".q-tab.on") || record.body.querySelector(".q-options");
+  target?.focus({ preventScroll: true });
 }
 
 /** True while the keystroke belongs to a field the user is typing in. */
@@ -3838,16 +4198,30 @@ const ACT_VIEWS = {
     if (said) add(panelSection("result", said, cut.has("output")));
   },
   board_ask(payload, args, cut, add) {
-    if (typeof args.question === "string") add(panelSection("question", args.question, cut.has("args")));
-    const options = Array.isArray(args.options) ? args.options : [];
-    if (options.length) {
+    // A card may ask one question or several: the sheet reads the arguments, so it draws whichever
+    // arrived as the tabs the card will draw.
+    const asked = Array.isArray(args.questions) && args.questions.length ? args.questions : null;
+    if (asked) {
       const list = el("ol", "act-options");
-      for (const option of options) list.appendChild(el("li")).textContent = String(option);
-      add(panelBlock("options", list));
+      for (const one of asked) {
+        const row = el("li");
+        row.textContent = `${one?.question ?? ""}${one?.multiple === true ? " (any of them)" : ""}`;
+        list.appendChild(row);
+      }
+      add(panelBlock("questions", list, cut.has("args")));
+    } else {
+      if (typeof args.question === "string") add(panelSection("question", args.question, cut.has("args")));
+      const options = Array.isArray(args.options) ? args.options : [];
+      if (options.length) {
+        const list = el("ol", "act-options");
+        for (const option of options) list.appendChild(el("li")).textContent = String(option);
+        add(panelBlock("options", list));
+      }
     }
     add(
       panelFields([
         ["title", args.title],
+        ["tabs", asked ? String(asked.length) : ""],
         ["picks", args.multiple === true ? "any of them" : "one of them"],
         ["free text", args.allowFreeText === false ? "no" : "yes"],
       ]),
@@ -4629,8 +5003,6 @@ function windowOf(entry) {
 // ---------- what a thread is for -------------------------------------------
 const modePick = document.getElementById("modePick");
 const pathPick = document.getElementById("pathPick");
-const MODE_ORDER = ["agent", "plan", "boss"];
-const PATH_ORDER = ["auto", "simple", "advanced", "complex"];
 // What a new thread is born with. `pathNext` empty means the board's own flow, so a board that always
 // works the same way is not overridden by a picker nobody touched.
 let modeNext = "agent";
@@ -5120,6 +5492,15 @@ async function openPick(which, anchor = null, forBoard = false) {
   pickAnchor = anchor;
   pickBoard = forBoard;
   runtimePick.hidden = false;
+  // The mode and the flow are two short lists this page already holds, so they open at once and the
+  // search box has nothing to search: no request, no waiting.
+  if (which === "mode" || which === "path") {
+    runtimeSearch.hidden = true;
+    if (which === "mode") drawModePick();
+    else drawPathPick();
+    placeRuntimePick();
+    return;
+  }
   runtimeSearch.hidden = which === "thinking";
   runtimeSearch.placeholder = which === "tools" ? "search tools…" : "search models…";
   // The tools are a question of their own, so they are asked for on their own: pi's four names and
@@ -5187,6 +5568,75 @@ async function chooseRuntime(kind, value) {
   }
 }
 
+/** The flow a new boss starts on, written on the board rather than on a thread. */
+async function setBoardPath(path) {
+  try {
+    const response = await fetch(`/config?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    const payload = await response.json();
+    if (payload.config) applyConfig(payload.config);
+    paintConfig();
+  } catch (error) {
+    hintLine(`could not set it: ${error.message || error}`, true);
+  }
+}
+
+/** What each mode and flow is, in the words the picker shows beside the name. */
+const MODE_HINTS = [
+  ["agent", "does the work itself"],
+  ["plan", "a plan and /tmp checks, no edits"],
+  ["boss", "spawns children, does no work"],
+];
+const PATH_HINTS = [
+  ["auto", "the boss picks, and says which"],
+  ["simple", "one step with checks"],
+  ["advanced", "a plan, a review that reads it"],
+  ["complex", "triage, parallel scouts, re-review"],
+];
+
+/** The two lists are local, so the panel draws them without asking the daemon for anything. */
+function drawModePick() {
+  const { mode } = modeShown();
+  runtimeList.replaceChildren(
+    pickHead("what this thread is for"),
+    ...MODE_HINTS.map(([name, hint]) => pickRow(name, hint, mode === name, () => void pickMode(name))),
+  );
+}
+
+function drawPathPick() {
+  const path = pickBoard ? boardConfig.path || "auto" : modeShown().path;
+  runtimeList.replaceChildren(
+    pickHead(pickBoard ? "the flow a new boss starts on" : "the flow a boss runs"),
+    ...PATH_HINTS.map(([name, hint]) => pickRow(name, hint, path === name, () => void pickPath(name))),
+  );
+}
+
+/**
+ * A mode or a flow chosen from the list. Aimed at a thread it is written on that thread; with nothing
+ * aimed it is what the next thread is born with, which is what the composer is for.
+ */
+async function pickMode(mode) {
+  if (aimedThread()) await chooseMode(mode);
+  else modeNext = mode;
+  if (mode !== "boss") pathNext = "";
+  closePick();
+  paintMode();
+  hintLine(`mode: ${mode}`);
+}
+
+async function pickPath(path) {
+  if (pickBoard) await setBoardPath(path);
+  else if (aimedThread()) await choosePath(path);
+  else pathNext = path === "auto" ? "" : path;
+  closePick();
+  paintMode();
+  hintLine(`path: ${path}`);
+}
+
 /** Writes the mode on the thread the composer is aimed at, or leaves it as the next thread's. */
 async function chooseMode(mode) {
   const target = aimedThread();
@@ -5215,23 +5665,8 @@ async function postThreadField(route, body) {
   }
 }
 
-modePick.addEventListener("click", () => {
-  const next = MODE_ORDER[(MODE_ORDER.indexOf(modeShown().mode) + 1) % MODE_ORDER.length];
-  // Aimed at a thread, the press changes that thread; with nothing aimed, it sets the next one's mode.
-  if (aimedThread()) void chooseMode(next);
-  else modeNext = next;
-  if (next !== "boss") pathNext = "";
-  paintMode();
-  hintLine(`mode: ${next}`);
-});
-
-pathPick.addEventListener("click", () => {
-  const next = PATH_ORDER[(PATH_ORDER.indexOf(modeShown().path) + 1) % PATH_ORDER.length];
-  if (aimedThread()) void choosePath(next);
-  else pathNext = next === "auto" ? "" : next;
-  paintMode();
-  hintLine(`path: ${next}`);
-});
+modePick.addEventListener("click", () => void openPick("mode", modePick));
+pathPick.addEventListener("click", () => void openPick("path", pathPick));
 
 modelChip.addEventListener("click", () => void openPick("model"));
 thinkChip.addEventListener("click", () => void openPick("thinking"));
@@ -5376,23 +5811,8 @@ configBtn.addEventListener("click", () => {
 // in this panel made it taller than the board. It opens the same picker a model does.
 cfgTools.addEventListener("click", () => void openPick("tools", cfgTools, true));
 
-/** The flow a new boss starts on, cycled from the panel and stored on the board. */
-cfgPath.addEventListener("click", async () => {
-  const next = PATH_ORDER[(PATH_ORDER.indexOf(boardConfig.path || "auto") + 1) % PATH_ORDER.length];
-  try {
-    const response = await fetch(`/config?${auth}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: next }),
-    });
-    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
-    const payload = await response.json();
-    if (payload.config) applyConfig(payload.config);
-    paintConfig();
-  } catch (error) {
-    hintLine(`could not set it: ${error.message || error}`, true);
-  }
-});
+/** The flow a new boss starts on. The same list as a thread's, aimed at the board instead. */
+cfgPath.addEventListener("click", () => void openPick("path", cfgPath, true));
 
 // ---------- the prompt files ----------------------------------------------
 // A role, a mode and a flow are markdown under `prompts/`. They are read when a thread starts, so an
@@ -5481,7 +5901,7 @@ document.addEventListener(
   (event) => {
     // The prompt editor is opened from this panel and is part of it: a press inside it is not a press
     // outside the settings, which would otherwise shut the panel the editor was opened from.
-    if (event.target.closest("#runtimePick, #modelPick, #thinkPick, #boardConfig, #configBtn, #promptEditor")) return;
+    if (event.target.closest("#runtimePick, #modelPick, #thinkPick, #modePick, #pathPick, #boardConfig, #configBtn, #promptEditor")) return;
     if (!runtimePick.hidden) closePick();
     if (!configPanel.hidden) shownConfig(false);
   },
@@ -6074,7 +6494,8 @@ document.addEventListener("keydown", (event) => {
   undoClose();
 });
 
-// `1`–`6` answer the question the agent is waiting on, so a decision needs no mouse.
+// `1`–`6` answer the question the agent is waiting on, so a decision needs no mouse. A card of tabs
+// answers inside the tab the human is reading, not the first one of five.
 document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey || !/^[1-6]$/.test(event.key)) return;
   if (typingSomewhere()) return;
@@ -6082,7 +6503,8 @@ document.addEventListener("keydown", (event) => {
   const record = openQuestion();
   if (!record) return;
   // The option buttons carry their own click handler, so this reuses the whole answer path.
-  const button = record.body.querySelectorAll(".q-options .q-opt")[Number(event.key) - 1];
+  const shown = record.body.querySelector(".q-panel:not([hidden])") || record.body;
+  const button = shown.querySelectorAll(".q-options .q-opt")[Number(event.key) - 1];
   if (!button || button.disabled) return;
   event.preventDefault();
   button.click();
