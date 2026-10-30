@@ -43,12 +43,15 @@ function threadSpec(board, body, caller) {
 	if (known.length > 8) return { error: "too many predecessors" };
 	// A hidden thread has no card of its own, so the arrow is drawn from the card it answers for.
 	const after = known.map((id) => (board.threads.get(id)?.hidden ? anchorOf(board, id) : id));
+	// A child hangs under the thread that spawned it, so the arrow is drawn even when the caller named
+	// no predecessor. An explicit `after` still wins: a child may follow from earlier cards as well.
+	const follow = after.length ? after : parent ? [parent.hidden ? anchorOf(board, parent.id) : parent.id] : [];
 	const role = ROLE_NAMES.includes(body.role) ? body.role : "";
 	if (typeof body.role === "string" && body.role && !role) return { error: `unknown role: ${body.role}` };
 	// A role whose prompt file is missing is a child that does not know what it is for, so the spawn is
 	// refused here rather than showing up later as a strange answer.
 	if (role && !roleSystemPrompt(role)) return { error: `role prompt missing: prompts/roles/${role}.md` };
-	return { parent, depth, after, role };
+	return { parent, depth, after: follow, role };
 }
 
 

@@ -138,6 +138,13 @@
   .sub { color: var(--muted); font: 12px var(--mono); white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; }
   .sub.expired { color: var(--red); }
+  /* The role a child was spawned under. Smaller than the queue chip beside it, because it says what
+     the thread is rather than what it is doing right now. */
+  .role-chip { flex: none; font: 10px var(--mono); letter-spacing: .04em; color: var(--accent);
+    background: rgba(88,166,255,.1); border: 1px solid rgba(88,166,255,.22); border-radius: 999px;
+    padding: 0 6px; white-space: nowrap; }
+  /* At this zoom the board is read as a map of threads, so the arrows step out of the way. */
+  #world > svg.away { opacity: 0; }
   .spacer { flex: 1; }
   #stop { color: #f85149; border-color: rgba(248,81,73,.4); }
   #stop[disabled] { color: var(--muted); border-color: #30363d; }
@@ -466,6 +473,14 @@
     background: transparent; color: #f85149; font: 10px/1 system-ui; cursor: pointer; }
   #railLog .rail-thread-stop:hover { background: rgba(248, 81, 73, .14); color: #ff7b72; }
   #railLog .rail-thread-stop[hidden] { display: none; }
+  #railLog .rail-thread-role { flex: none; font: 10px var(--mono); color: var(--accent);
+    background: rgba(88,166,255,.1); border: 1px solid rgba(88,166,255,.22); border-radius: 999px;
+    padding: 0 5px; }
+  #railLog .rail-thread-role[hidden] { display: none; }
+  /* A child sits under the thread that spawned it: indented, and with a rule down its left edge so
+     the fan of children reads as one thing. */
+  #railLog .rail-thread.child { margin-left: 9px; }
+  #railLog .rail-thread.child > .rail-thread-head { border-left: 1px solid #1c2128; border-radius: 0 6px 6px 0; }
   #railLog .rail-thread-body { display: flex; flex-direction: column; gap: 4px; }
   #railLog .rail-thread.folded .rail-thread-body { display: none; }
   .act { border-radius: 6px; padding: 5px 7px; background: #0f141b; border: 1px solid #1c2128;

@@ -233,8 +233,10 @@ const applyView = () => {
     // Older browsers only have the bitmap scale, which softens text while it catches up.
     world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.k})`;
   }
+  // Below this zoom a board is a map of its threads, and a fan of arrows over a fan of cards is
+  // noise. The cards and the rail still say who follows from whom.
+  arrows.classList.toggle("away", view.k < ARROW_MIN_ZOOM);
   if (typeof recomputePill === "function") recomputePill();
-  // The button says the zoom it is showing, not a fixed promise of 100%.
   resetBtn.textContent = `${Math.round(view.k * 100)}%`;
   // The board's zoom scales the focus ring drawn inside it too, so the rule in index.html
   // divides the ring by this to keep it the same thickness at every zoom.
@@ -248,6 +250,8 @@ const applyView = () => {
   // drawn in a single SVG inside the world, so the lines scale with the board for free.
   const ARROW_NS = "http://www.w3.org/2000/svg";
   const ARROW_INK = "#94a3b8";
+  // The zoom under which the arrows stop being drawn: they are read at the size of a conversation.
+  const ARROW_MIN_ZOOM = 0.6;
   const arrows = document.createElementNS(ARROW_NS, "svg");
   // Under the cards: they carry z-index from 1 up, while this layer stays at 0.
   arrows.style.cssText = "position:absolute;left:0;top:0;overflow:visible;pointer-events:none;z-index:0";
@@ -1204,6 +1208,7 @@ function makeCard(data, quiet = false) {
   head.innerHTML = `
     <span class="dot ${dotKind(kind)}"></span>
     <span class="title"></span>
+    <span class="role-chip"></span>
     <span class="sub"></span>
     <span class="spacer"></span>
     <button type="button" class="ask-pill" aria-label="centre this question">answer needed</button>
@@ -1261,6 +1266,7 @@ function makeCard(data, quiet = false) {
     thread,
     live,
     titleEl: head.querySelector(".title"),
+    roleEl: head.querySelector(".role-chip"),
     subEl: head.querySelector(".sub"),
     chipEl: head.querySelector(".chip"),
     askPill: head.querySelector(".ask-pill"),
@@ -1498,6 +1504,11 @@ function paintSections() {
     if (stats?.cost) bits.push(`$${stats.cost < 1 ? stats.cost.toFixed(2) : compact(stats.cost)}`);
     entry.head.children[3].textContent = bits.join(" · ");
     entry.head.children[4].hidden = held?.running !== true;
+    // The role arrives with the thread's card, which can land after its first activity row.
+    const { role = "" } = threadMeta.get(entry.id) ?? {};
+    entry.roleEl.textContent = role;
+    entry.roleEl.hidden = !role;
+    orderRail();
   }
 }
 
@@ -1596,6 +1607,42 @@ function questionWants(data) {
   return Boolean(data) && data.type === "question" && data.status === "open";
 }
 
+/**
+ * What a thread is, as far as the board knows it: its title, the role it was spawned with, and the
+ * thread that spawned it. A thread card carries all three, so this fills in as cards arrive and
+ * needs nothing new from the daemon. The rail reads it to nest a child under its master, and the
+ * sub line reads it for a master whose card is closed.
+ */
+const threadMeta = new Map();
+
+function rememberThread(data) {
+  if (data.type !== "sticky") return;
+  const known = threadMeta.get(data.id) ?? {};
+  const title = data.title || known.title || "";
+  const role = data.role || "";
+  const parent = data.parentThread || "";
+  if (known.title !== title || known.role !== role || known.parent !== parent) {
+    threadMeta.set(data.id, { title, role, parent });
+  }
+}
+
+/** The name of the thread that spawned this one, if the board still knows it. */
+function masterTitle(threadId) {
+  return byId.get(threadId)?.data?.title || threadMeta.get(threadId)?.title || "";
+}
+
+/**
+ * A spawned card says who spawned it. Its own status follows, because a child that has not spoken
+ * yet has no body line to carry it, and `queued` is the one word a human needs there.
+ */
+function stickySub(data) {
+  const status = data.status || "queued";
+  if (!data.parentThread) return status;
+  // A hidden master has no card on the board, so the child carries its name in the payload.
+  const master = masterTitle(data.parentThread) || data.parentTitle || "";
+  return master ? `spawned by ${master} · ${status}` : `spawned · ${status}`;
+}
+
 /** A note says when it arrived, or when it last changed once it has changed. */
 function noteSub(data, entry) {
   if (!entry.updatedAt) return new Date(data.at || Date.now()).toLocaleTimeString();
@@ -1633,8 +1680,15 @@ function paintCard(entry, data) {
     : data.type === "question"
       ? questionSub(data)
       : data.type === "sticky"
-        ? data.status || "queued"
+        ? stickySub(data)
         : noteSub(data, entry);
+  // The role is the promise a child was started under, so the card wears it as a chip. A thread the
+  // human made has no role and the chip takes no space.
+  rememberThread(data);
+  const role = data.type === "sticky" ? data.role || "" : "";
+  entry.roleEl.textContent = role;
+  entry.roleEl.title = role ? `spawned with the ${role} role` : "";
+  entry.roleEl.style.display = role ? "" : "none";
   entry.subEl.classList.toggle("expired", data.type === "question" && data.status === "expired");
   // The pink ring and the pill belong to the question the agent is blocked on, so both go
   // away the moment it is settled.
@@ -1823,6 +1877,7 @@ function clearBoard() {
   for (const card of cards) card.remove();
   cards.length = 0;
   byId.clear();
+  threadMeta.clear();
   scheduleArrows();
   // A replay rebuilds every card, so the observer must let go of the dead ones.
   seenObserver.disconnect();
@@ -3896,6 +3951,9 @@ function applyFold(entry) {
   entry.head.setAttribute("aria-expanded", foldedSections.has(entry.id) ? "false" : "true");
 }
 
+/** The rail's rows in the order they arrived, so the oldest is findable by its number. */
+let railSeq = 0;
+
 function railSection(row) {
   const id = row.thread?.id || "";
   let entry = railSections.get(id);
@@ -3909,6 +3967,7 @@ function railSection(row) {
       el("span", "rail-thread-count"),
       el("span", "rail-thread-stats"),
       el("button", "rail-thread-stop"),
+      el("span", "rail-thread-role"),
     );
     const stop = head.children[4];
     stop.type = "button";
@@ -3928,7 +3987,8 @@ function railSection(row) {
     });
     // The section says which thread it is, so a right click can read that thread's conversation.
     section.dataset.thread = id;
-    entry = { section, head, body, id, title: "" };
+    entry = { section, head, body, id, title: "", roleEl: head.children[5], at: 0 };
+    entry.roleEl.hidden = true;
     railSections.set(id, entry);
     applyFold(entry);
   }
@@ -3941,19 +4001,69 @@ function railSection(row) {
   return entry;
 }
 
-/** The log is a tail, not a history: the oldest row of the oldest section goes first, then the shell. */
+/**
+ * Where the sections sit. The thread that spoke last is on top, so a busy board reads as a stack of
+ * conversations, and a child always sits directly under the master that spawned it. The log itself
+ * stays a flat list, because trimming, folding and the replay all assume that, so the order is
+ * recomputed and only the sections that are out of place are moved.
+ */
+function orderRail() {
+  const parentOf = (entry) => threadMeta.get(entry.id)?.parent || "";
+  const ranked = [...railSections.values()].sort((a, b) => b.at - a.at);
+  const wanted = [];
+  for (const master of ranked) {
+    // A child is only nested while the section it hangs under is still there; a master whose own
+    // rows were trimmed away has no head left to sit under, so the child reads as a thread of its own.
+    const nested = Boolean(parentOf(master)) && railSections.has(parentOf(master));
+    master.section.classList.toggle("child", nested);
+    if (nested) continue;
+    wanted.push(master);
+    for (const kid of ranked) {
+      if (kid === master || parentOf(kid) !== master.id) continue;
+      kid.section.classList.add("child");
+      wanted.push(kid);
+    }
+  }
+  let cursor = railLog.firstElementChild;
+  for (const entry of wanted) {
+    if (entry.section === cursor) {
+      cursor = cursor.nextElementSibling;
+      continue;
+    }
+    railLog.insertBefore(entry.section, cursor);
+  }
+}
+
+/** The oldest row in the log, whichever section it sits in. */
+function oldestRailRow() {
+  let oldest = null;
+  let at = Infinity;
+  for (const entry of railSections.values()) {
+    const row = entry.body.lastElementChild;
+    const seen = Number(row?.dataset.seq ?? NaN);
+    if (row && seen < at) {
+      oldest = row;
+      at = seen;
+    }
+  }
+  return oldest;
+}
+
+/** The log is a tail, not a history: the oldest row goes first, whatever section it belongs to. */
 function trimRail() {
   while (heldRows > 200) {
-    const section = railLog.lastElementChild;
-    const row = section?.querySelector(".rail-thread-body")?.lastElementChild;
-    if (!section || !row) {
-      section?.remove();
-      if (section) for (const [id, entry] of railSections) if (entry.section === section) railSections.delete(id);
-      return;
-    }
+    const row = oldestRailRow();
+    if (!row) return;
     for (const [id, elem] of actEls) if (elem === row) actEls.delete(id);
+    const section = row.closest(".rail-thread");
     row.remove();
     heldRows--;
+    // A section with no rows left says nothing, so it goes: its children then sort as threads of
+    // their own instead of nesting under a head that is no longer there.
+    if (section && !section.querySelector(".rail-thread-body")?.childElementCount) {
+      section.remove();
+      for (const [id, entry] of railSections) if (entry.section === section) railSections.delete(id);
+    }
   }
 }
 
@@ -4041,6 +4151,9 @@ function applyActivity(row) {
   }
   const card = row.status === "running" ? cardOfThread(row.thread?.id) : null;
   const node = actRow(row, card !== null);
+  // The row carries when it arrived, so trimming can find the oldest one without trusting the order
+  // of the sections, which the rail reorders to keep a child under its master.
+  node.dataset.seq = String(++railSeq);
   if (previous) previous.remove();
   actEls.set(row.id, node);
   if (row.status === "running") {
@@ -4048,10 +4161,11 @@ function applyActivity(row) {
   } else {
     const section = railSection(row);
     section.body.prepend(node);
+    section.at = railSeq;
     section.head.children[2].textContent = String(section.body.childElementCount);
     // The thread that just spoke goes on top, so a board with many threads reads like a stack of
-    // conversations rather than one long line of tool calls.
-    railLog.prepend(section.section);
+    // conversations rather than one long line of tool calls. A child goes under its master instead.
+    orderRail();
     heldRows++;
     trimRail();
   }
