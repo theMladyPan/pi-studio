@@ -898,6 +898,10 @@ function tabbedQuestions(data, entry, asked) {
       panels[index].hidden = !on;
     });
     if (focus) tabButtons[at].focus();
+    // A tab taller than the one before it would be cut off by the card's height, and the send row lives
+    // under the last option, so the card is fitted again on every switch. fitContent only ever grows a
+    // card, so a tab that needs less room never pulls the one under it back up.
+    fitContent(entry, data);
   };
   // The tab stands for its question: a tick says it is answered, and the panel below carries the words.
   const markTabs = () => {
