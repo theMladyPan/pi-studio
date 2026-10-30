@@ -467,6 +467,73 @@ function framesOf(stub: { root: string; envFile: string }) {
 	return readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
+test("a message waiting behind a run can be rewritten or taken back before the child reads it", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-queue-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-queue-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	// The stub's own switches, in the folder it was written to: `hold` keeps a run open, `slow` delays one.
+	const flags = dirname(stub.envFile);
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+
+		// A run that never settles is the window a second message waits in.
+		writeFileSync(join(flags, "hold"), "1");
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "the first words" })).status, 200);
+		const asked = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "the words I regret" });
+		assert.equal(asked.status, 200);
+		const at = JSON.parse(asked.body).turn as number;
+		const waiting = await threadState(daemon, board.id, threadId);
+		assert.equal(waiting.turns[at].status, "queued", "a message sent behind a run was not queued");
+		assert.equal(waiting.queued.length, 1);
+		const told = (words: string) => framesOf(stub).some((frame) => frame.type === "prompt" && String(frame.message).includes(words));
+		assert.equal(told("regret"), false, "the child was given a message that was still waiting");
+
+		const edited = await postTo(daemon, board.id, "/message/edit", { cardId: threadId, turn: at, text: "the words I meant" });
+		assert.equal(edited.status, 200, edited.body);
+		const after = await threadState(daemon, board.id, threadId);
+		assert.equal(after.turns[at].text, "the words I meant", "the card still shows the words that were replaced");
+		assert.equal(after.turns[at].status, "queued");
+		assert.equal(after.queued.length, 1);
+		assert.equal(after.queued[0].message, "the words I meant", "the edited words never reached the queue");
+
+		// The turn the child already reads is not a draft, and says so rather than rewriting what it read.
+		const tooLate = await postTo(daemon, board.id, "/message/edit", { cardId: threadId, turn: 0, text: "too late" });
+		assert.equal(tooLate.status, 409);
+		assert.match(tooLate.body, /not waiting/);
+
+		const spare = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "never mind" });
+		const spareAt = JSON.parse(spare.body).turn as number;
+		assert.equal((await postTo(daemon, board.id, "/message/drop", { cardId: threadId, turn: spareAt })).status, 200);
+		const dropped = await threadState(daemon, board.id, threadId);
+		assert.equal(dropped.queued.length, 1, "the withdrawn message is still waiting");
+		assert.equal(dropped.turns[spareAt].status, "stopped");
+		assert.equal(dropped.turns[spareAt].error, "withdrawn");
+		assert.equal(told("never mind"), false);
+
+		// A second thread, and a run slow enough to queue behind: what the child is finally told is the
+		// message as it reads now, not as it was first typed.
+		rmSync(join(flags, "hold"));
+		writeFileSync(join(flags, "slow"), "1");
+		const second = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: second, text: "slow words" })).status, 200);
+		const late = JSON.parse((await postTo(daemon, board.id, "/message", { cardId: second, text: "a first draft" })).body);
+		const rewritten = await postTo(daemon, board.id, "/message/edit", { cardId: second, turn: late.turn, text: "the second draft" });
+		assert.equal(rewritten.status, 200, rewritten.body);
+		for (let tries = 0; tries < 100; tries++) {
+			const thread = await threadState(daemon, board.id, second);
+			if (thread?.turns?.[late.turn]?.status === "answered") break;
+			await new Promise((done) => setTimeout(done, 50));
+		}
+		assert.equal(told("a first draft"), false, "the child was told the draft that was replaced");
+		assert.equal(told("the second draft"), true, `the child was told ${JSON.stringify(framesOf(stub).filter((frame) => frame.type === "prompt").map((frame) => frame.message))}`);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
 test("a compaction reaches the thread's child, and the context comes back smaller", async () => {
 	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-compact-"));
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-compact-work-"));
