@@ -1209,6 +1209,7 @@ function makeCard(data, quiet = false) {
     <span class="dot ${dotKind(kind)}"></span>
     <span class="title"></span>
     <span class="role-chip"></span>
+    <span class="mode-chip"></span>
     <span class="sub"></span>
     <span class="spacer"></span>
     <button type="button" class="ask-pill" aria-label="centre this question">answer needed</button>
@@ -1267,6 +1268,7 @@ function makeCard(data, quiet = false) {
     live,
     titleEl: head.querySelector(".title"),
     roleEl: head.querySelector(".role-chip"),
+    modeEl: head.querySelector(".mode-chip"),
     subEl: head.querySelector(".sub"),
     chipEl: head.querySelector(".chip"),
     askPill: head.querySelector(".ask-pill"),
@@ -1620,9 +1622,18 @@ function rememberThread(data) {
   const title = data.title || known.title || "";
   const role = data.role || "";
   const parent = data.parentThread || "";
-  if (known.title !== title || known.role !== role || known.parent !== parent) {
-    threadMeta.set(data.id, { title, role, parent });
+  const status = data.status || "";
+  if (known.title !== title || known.role !== role || known.parent !== parent || known.status !== status) {
+    threadMeta.set(data.id, { title, role, parent, status });
   }
+}
+
+/** The child a boss is waiting on, if one of its children is still running. */
+function runningChild(threadId) {
+  for (const meta of threadMeta.values()) {
+    if (meta.parent === threadId && meta.status === "sent") return meta.title || "a child";
+  }
+  return "";
 }
 
 /** The name of the thread that spawned this one, if the board still knows it. */
@@ -1640,6 +1651,18 @@ function stickySub(data) {
   // A hidden master has no card on the board, so the child carries its name in the payload.
   const master = masterTitle(data.parentThread) || data.parentTitle || "";
   return master ? `spawned by ${master} · ${status}` : `spawned · ${status}`;
+}
+
+/**
+ * A boss that is blocked in a spawn says what it is waiting for: the card is otherwise a thread that
+ * looks idle while its children run.
+ */
+function bossSub(data, entry) {
+  if (data.mode === "boss") {
+    const waiting = runningChild(entry.id);
+    if (waiting) return `waiting on ${waiting}`;
+  }
+  return stickySub(data);
 }
 
 /** A note says when it arrived, or when it last changed once it has changed. */
@@ -1679,7 +1702,7 @@ function paintCard(entry, data) {
     : data.type === "question"
       ? questionSub(data)
       : data.type === "sticky"
-        ? stickySub(data)
+        ? bossSub(data, entry)
         : noteSub(data, entry);
   // The role is the promise a child was started under, so the card wears it as a chip. A thread the
   // human made has no role and the chip takes no space.
@@ -1688,6 +1711,18 @@ function paintCard(entry, data) {
   entry.roleEl.textContent = role;
   entry.roleEl.title = role ? `spawned with the ${role} role` : "";
   entry.roleEl.style.display = role ? "" : "none";
+  // A boss is a thread the human started that spawns instead of working, so its chip carries the flow it
+  // runs; `auto` is the boss still deciding.
+  const mode = data.type === "sticky" ? data.mode || "" : "";
+  const shownMode = mode === "boss" && data.path ? `boss · ${data.path}` : mode;
+  entry.modeEl.textContent = shownMode;
+  entry.modeEl.title = mode
+    ? mode === "boss"
+      ? `a boss: it spawns children and does no work itself${data.pathChosenBy === "auto" && data.path !== "auto" ? `, flow chosen by the model` : ""}`
+      : `a ${mode} thread`
+    : "";
+  // An agent is the baseline the board always had, so it wears nothing; a planner and a boss say so.
+  entry.modeEl.style.display = mode && mode !== "agent" ? "" : "none";
   entry.subEl.classList.toggle("expired", data.type === "question" && data.status === "expired");
   // The pink ring and the pill belong to the question the agent is blocked on, so both go
   // away the moment it is settled.
@@ -4362,6 +4397,42 @@ function windowOf(entry) {
  * Without this the follow-up would arrive as a new sticky and the thread would be lost. A bind
  * driven by a click passes `focus: false`: the reader is reading cards, not typing.
  */
+// ---------- what a thread is for -------------------------------------------
+const modePick = document.getElementById("modePick");
+const pathPick = document.getElementById("pathPick");
+const MODE_ORDER = ["agent", "plan", "boss"];
+const PATH_ORDER = ["auto", "simple", "advanced", "complex"];
+// What a new thread is born with, or what the card the composer is aimed at carries.
+let modeChoice = "agent";
+let pathChoice = "auto";
+
+/**
+ * A mode decides whether the thread works, plans, or spawns; a boss also runs a flow. Both are the
+ * human's choice, so they live in the composer beside the model and the thinking level rather than on
+ * the board, where a press that spawns work would read like a press that does work.
+ */
+function paintMode() {
+  const aimed = replyTarget && replyTarget.data?.type === "sticky" ? replyTarget.data : null;
+  if (aimed) {
+    modeChoice = aimed.mode || "agent";
+    pathChoice = aimed.path || "auto";
+  }
+  modePick.textContent = modeChoice;
+  modePick.classList.toggle("on", modeChoice !== "agent");
+  modePick.title =
+    modeChoice === "boss"
+      ? "a boss: it spawns children with roles and does no work itself"
+      : modeChoice === "plan"
+        ? "a planner: a plan and throwaway checks under /tmp, no edits"
+        : "an agent: it does the work itself";
+  pathPick.hidden = modeChoice !== "boss";
+  pathPick.textContent = pathChoice;
+  pathPick.title =
+    pathChoice === "auto"
+      ? "the boss picks the flow at its first turn and says which one"
+      : `the ${pathChoice} flow, read from prompts/flows/${pathChoice}.md`;
+}
+
 function setReplyTarget(entry, { focus = true } = {}) {
   const next = entry && byId.has(entry.id) ? entry : null;
   if (next !== replyTarget) {
@@ -4383,6 +4454,8 @@ function setReplyTarget(entry, { focus = true } = {}) {
   paintFork();
   // The model and thinking chips name the thread that answers this card.
   paintRuntime();
+  // What the thread is for belongs to that same card: modes are chosen here, never on the board.
+  paintMode();
   if (replyTarget) {
     // A sticky is titled "you", so it is named by its own words instead.
     const name =
@@ -4872,6 +4945,49 @@ async function chooseRuntime(kind, value) {
     hintLine(`could not set it: ${error.message || error}`, true);
   }
 }
+
+/** Writes the mode on the thread the composer is aimed at, or leaves it as the next thread's. */
+async function chooseMode(mode) {
+  const target = replyTarget && replyTarget.data?.type === "sticky" ? replyTarget : null;
+  if (!target) return;
+  await postThreadField("/mode", { cardId: target.id, mode });
+}
+
+async function choosePath(path) {
+  const target = replyTarget && replyTarget.data?.type === "sticky" ? replyTarget : null;
+  if (!target) return;
+  await postThreadField("/thread/path", { cardId: target.id, path });
+}
+
+async function postThreadField(route, body) {
+  try {
+    const response = await fetch(`${route}?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    const payload = await response.json();
+    if (payload.card) applyMessage(payload.card);
+  } catch (error) {
+    hintLine(`could not set it: ${error.message || error}`, true);
+  }
+}
+
+modePick.addEventListener("click", () => {
+  modeChoice = MODE_ORDER[(MODE_ORDER.indexOf(modeChoice) + 1) % MODE_ORDER.length];
+  if (modeChoice !== "boss") pathChoice = "auto";
+  paintMode();
+  hintLine(`mode: ${modeChoice}`);
+  void chooseMode(modeChoice);
+});
+
+pathPick.addEventListener("click", () => {
+  pathChoice = PATH_ORDER[(PATH_ORDER.indexOf(pathChoice) + 1) % PATH_ORDER.length];
+  paintMode();
+  hintLine(`path: ${pathChoice}`);
+  void choosePath(pathChoice);
+});
 
 modelChip.addEventListener("click", () => void openPick("model"));
 thinkChip.addEventListener("click", () => void openPick("thinking"));
@@ -5512,7 +5628,8 @@ async function startThread() {
     const response = await fetch(`/thread?${auth}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: "{}",
+      // A new thread is born with the mode the composer is showing; a boss also carries its flow.
+      body: JSON.stringify({ mode: modeChoice, ...(modeChoice === "boss" ? { path: pathChoice } : {}) }),
     });
     if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
     const created = await response.json();

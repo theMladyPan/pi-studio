@@ -7,14 +7,15 @@ import { randomUUID } from "node:crypto";
 import { MAX_TITLE_CHARS, SPAWN_TIMEOUT_MS } from "../../limits.ts";
 import { WORK_TYPES } from "../../worktrees/make.ts";
 import { runtimeDefaults } from "../../workspaces.ts";
-import { card } from "../../bus.ts";
+import { card, update } from "../../bus.ts";
 import { cardFor } from "../../cards.ts";
 import { cleanRect, MAX_THREADS } from "../../store.ts";
 import { join } from "node:path";
 import { homeCard } from "./message.ts";
 import { ROLE_NAMES, ROLE_THINKING, roleSystemPrompt } from "../../child/roles.ts";
+import { MODE_NAMES, PATH_NAMES, promptText } from "../../child/modes.ts";
 import { runSpawn } from "../../child/spawn.ts";
-import { killChild } from "./lifecycle.ts";
+import { killChild, threadForRuntime } from "./lifecycle.ts";
 import { THINKING_LEVELS } from "../../models.ts";
 
 
@@ -51,7 +52,21 @@ function threadSpec(board, body, caller) {
 	// A role whose prompt file is missing is a child that does not know what it is for, so the spawn is
 	// refused here rather than showing up later as a strange answer.
 	if (role && !roleSystemPrompt(role)) return { error: `role prompt missing: prompts/roles/${role}.md` };
-	return { parent, depth, after: follow, role };
+	// A mode belongs to a thread the human started, and only there: a spawned thread is given a role, and
+	// a child that also carried a mode would be two instructions about what it is for.
+	const mode = MODE_NAMES.includes(body.mode) ? body.mode : "";
+	if (typeof body.mode === "string" && body.mode && !mode) return { error: `unknown mode: ${body.mode}` };
+	if (mode && parent) return { error: "a spawned thread takes a role, not a mode" };
+	if (mode && mode !== "agent" && !promptText("modes", mode)) return { error: `mode prompt missing: prompts/modes/${mode}.md` };
+	// A path is the boss's: it says which flow that thread runs. An agent or a planner with a path would be
+	// a flow nothing is following.
+	const flow = PATH_NAMES.includes(body.path) ? body.path : "";
+	if (typeof body.path === "string" && body.path && !flow) return { error: `unknown path: ${body.path}` };
+	if (flow && mode !== "boss") return { error: "a path belongs to a boss thread" };
+	if (flow && flow !== "auto" && !promptText("flows", flow)) {
+		return { error: `flow prompt missing: prompts/flows/${flow}.md` };
+	}
+	return { parent, depth, after: follow, role, mode, path: mode === "boss" ? flow || "auto" : "" };
 }
 
 
@@ -80,6 +95,9 @@ function newThread(board, body, spec) {
 		...(spec.parent ? { threadRoot: anchorOf(board, spec.parent.id) } : {}),
 		...(spec.after.length ? { after: spec.after } : {}),
 		...(spec.role ? { role: spec.role } : {}),
+		...(spec.mode ? { mode: spec.mode } : {}),
+		// A path the human pinned is theirs; `auto` means the boss decides and says which one it took.
+		...(spec.path ? { path: spec.path, pathChosenBy: spec.path === "auto" ? "auto" : "human" } : {}),
 		at: Date.now(),
 		turns: [],
 		queued: [],
@@ -242,4 +260,52 @@ export function anchorOf(board, threadId) {
 	const thread = threadId ? board.threads.get(threadId) : undefined;
 	if (!thread?.hidden) return threadId;
 	return homeCard(board, thread)?.id ?? threadId;
+}
+
+/**
+ * What a thread is for. A mode is chosen by the human and only on a thread they started: a spawned
+ * thread's role is what it is for, and two answers to that question is one too many.
+ */
+export async function onMode(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const mode = field(body.mode, 20);
+	if (!MODE_NAMES.includes(mode)) return void fail(res, 400, `a mode is one of ${MODE_NAMES.join(", ")}`);
+	if (mode !== "agent" && !promptText("modes", mode)) return void fail(res, 409, `mode prompt missing: prompts/modes/${mode}.md`);
+	const thread = threadForRuntime(board, body.cardId);
+	if (!thread) return void fail(res, 409, "no such thread");
+	if (thread.parentThread) return void fail(res, 409, "a spawned thread takes a role, not a mode");
+	thread.mode = mode;
+	// A path belongs to a boss: leaving one behind on an agent would be a flow nothing is following.
+	if (mode !== "boss") {
+		delete thread.path;
+		delete thread.pathChosenBy;
+	} else if (!thread.path) {
+		thread.path = "auto";
+		thread.pathChosenBy = "auto";
+	}
+	update(board, thread);
+	answer(res, 200, { card: cardFor(thread, board) });
+}
+
+
+
+/**
+ * Which flow a boss runs. The boss itself reports the one it chose when the thread is on `auto`, and
+ * the human may pin one; a thread may only ever write this on its own row.
+ */
+export async function onPath(req, res, board, caller = { human: true }) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const path = field(body.path, 20);
+	if (!PATH_NAMES.includes(path)) return void fail(res, 400, `a path is one of ${PATH_NAMES.join(", ")}`);
+	if (path !== "auto" && !promptText("flows", path)) return void fail(res, 409, `flow prompt missing: prompts/flows/${path}.md`);
+	const thread = caller.human ? threadForRuntime(board, body.cardId) : caller.thread;
+	if (!thread) return void fail(res, 409, "no such thread");
+	if (thread.mode !== "boss") return void fail(res, 409, "a path belongs to a boss thread");
+	if (!caller.human && path === "auto") return void fail(res, 409, "a boss reports the path it chose, not auto");
+	thread.path = path;
+	thread.pathChosenBy = caller.human ? "human" : "auto";
+	update(board, thread);
+	answer(res, 200, { card: cardFor(thread, board) });
 }

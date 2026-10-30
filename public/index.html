@@ -141,6 +141,11 @@
   .role-chip { flex: none; font: 10px var(--mono); letter-spacing: .04em; color: var(--accent);
     background: rgba(88,166,255,.1); border: 1px solid rgba(88,166,255,.22); border-radius: 999px;
     padding: 0 6px; white-space: nowrap; }
+  /* What a thread is for, next to the role it was spawned under. A mode is the human's, a role is the
+     child's, and neither replaces the queue chip beside them. */
+  .mode-chip { flex: none; font: 10px var(--mono); letter-spacing: .04em; color: #d29922;
+    background: rgba(210,153,34,.12); border: 1px solid rgba(210,153,34,.35); border-radius: 999px;
+    padding: 0 6px; white-space: nowrap; }
   /* At this zoom the board is read as a map of threads, so the arrows step out of the way. */
   #world > svg.away { opacity: 0; }
   .spacer { flex: 1; }
@@ -889,6 +894,8 @@
       <button data-mode="queue" class="on">queue</button>
       <button data-mode="steer">steer</button>
       <button id="forkMode" type="button" title="ask a new thread instead of the one that made this card">fork</button>
+      <button id="modePick" type="button" title="an agent does the work, a plan plans, a boss spawns children">agent</button>
+      <button id="pathPick" type="button" hidden title="the flow a boss runs">auto</button>
       <button id="modelPick" type="button" title="the model this card answers with">model</button>
       <button id="thinkPick" type="button" title="how hard the model thinks before answering">think</button>
       <button id="ctxBtn" type="button" hidden><span id="ctxLabel"></span></button>

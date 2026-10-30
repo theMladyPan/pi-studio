@@ -11,6 +11,7 @@ import { activeConfig, homeDefaults, workspaceById } from "./workspaces.ts";
 import { answer, fail } from "./http.ts";
 import { MODEL, PROVIDER, THINKING_LEVELS } from "./models.ts";
 import { ROLE_NAMES } from "./child/roles.ts";
+import { MODE_NAMES, PATH_NAMES } from "./child/modes.ts";
 
 
 
@@ -166,6 +167,9 @@ export function restoredThread(raw, folder) {
 		...(Number.isFinite(raw.depth) ? { depth: raw.depth } : {}),
 		...(Array.isArray(raw.after) ? { after: raw.after.filter((id) => typeof id === "string") } : {}),
 		...(ROLE_NAMES.includes(raw.role) ? { role: raw.role } : {}),
+		...(MODE_NAMES.includes(raw.mode) ? { mode: raw.mode } : {}),
+		...(PATH_NAMES.includes(raw.path) ? { path: raw.path } : {}),
+		...(raw.pathChosenBy === "human" || raw.pathChosenBy === "auto" ? { pathChosenBy: raw.pathChosenBy } : {}),
 		...(typeof raw.type === "string" && raw.type ? { type: raw.type } : {}),
 		// The tree is not made again after a restart: it is on disk, and its branch is where the work is.
 		...(raw.worktree && typeof raw.worktree === "object" && typeof raw.worktree.path === "string"

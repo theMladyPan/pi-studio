@@ -46,6 +46,9 @@ export function cardFor(thread, board = null) {
 	// predecessors. The board draws one arrow per id, which is the visible reason it is here.
 	if (thread.after?.length) card.after = thread.after;
 	if (thread.parentThread) card.parentThread = thread.parentThread;
+	if (thread.mode) card.mode = thread.mode;
+	if (thread.path) card.path = thread.path;
+	if (thread.pathChosenBy) card.pathChosenBy = thread.pathChosenBy;
 	// A hidden thread has no card of its own, so the child carries the name its arrow points from:
 	// without it the sub line can only say `spawned` and the rail cannot nest it.
 	const master = thread.parentThread ? board?.threads?.get(thread.parentThread) : null;
