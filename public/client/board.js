@@ -4498,10 +4498,11 @@ function setReplyTarget(entry, { focus = true } = {}) {
   // The model and thinking chips name the thread that answers this card.
   paintRuntime();
   if (replyTarget) {
-    // A sticky is titled "you", so it is named by its own words instead.
+    // A thread card is named by its title, and one the human typed into by its own words: a card that
+    // has neither is called what it is.
     const name =
       replyTarget.data.type === "sticky"
-        ? (replyTarget.data.text || "message").replace(/\s+/g, " ").trim().slice(0, 40)
+        ? (replyTarget.data.title || replyTarget.data.text || "message").replace(/\s+/g, " ").trim().slice(0, 40)
         : replyTarget.titleEl.textContent;
     // A card is answered by a thread that has no card of its own, so there is no name to show: the
     // chip names the card, and says when a fork is the thing that will answer.
@@ -5527,12 +5528,14 @@ async function sendMessage() {
   const sentPaths = [...picked.keys()];
   const sentImages = [...pendingImages];
   const sentTarget = replyTarget;
+  // A fork is answered in a card the board has not drawn yet, so the field has to move once it does.
+  const sentFork = Boolean(forkNext && replyTarget);
   sendBtn.disabled = true;
   // Both attempts carry the same id, so a retry after a reset cannot deliver twice.
   const body = JSON.stringify({
     id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
     cardId: replyTarget ? replyTarget.id : undefined,
-    fork: forkNext && replyTarget ? true : undefined,
+    fork: sentFork || undefined,
     text,
     mode: sendMode,
     images: sentImages.map((image) => ({ data: image.data, mimeType: image.mimeType })),
@@ -5554,6 +5557,8 @@ async function sendMessage() {
       }
     }
     if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    // Which thread answered: a fork is a new one, drawn as a card of its own, and the answer is read there.
+    const made = sentFork ? await response.json().catch(() => null) : null;
     if (msgBox.value === draft) msgBox.value = "";
     // The draft that just left is spent, so the slot it came from starts empty next time.
     drafts.delete(sentTarget ? sentTarget.id : "");
@@ -5569,13 +5574,18 @@ async function sendMessage() {
     // message does not need the card clicked again. Escape puts it away.
     // A fork is one send's choice, so the next comment goes to the owner again.
     forkNext = false;
-    if (replyTarget === sentTarget && sentTarget && byId.has(sentTarget.id)) setReplyTarget(sentTarget);
+    if (made?.id) {
+      // A fork answers in its own card, so the field follows the answer instead of staying behind.
+      focusThread(made.id);
+    } else if (replyTarget === sentTarget && sentTarget && byId.has(sentTarget.id)) setReplyTarget(sentTarget);
     else setReplyTarget(null);
     // With no run in flight the message is being sent, not queued behind one.
     composerHint.textContent = metaRunning !== true ? "sent" : sendMode === "steer" ? "steered" : "queued";
     // The exchange is drawn on the card the message was about, which may be elsewhere on the board, so
     // the footer says where it went. The composer's own hint is hidden while the field is docked.
-    if (sentTarget && windowOf(sentTarget) !== sentTarget) {
+    if (sentTarget && made?.id) {
+      footNote(`a new thread answers ↳ ${sentTarget.titleEl.textContent || sentTarget.data.path || "that card"}`);
+    } else if (sentTarget && windowOf(sentTarget) !== sentTarget) {
       footNote(`asked in this thread, about ↳ ${sentTarget.titleEl.textContent || sentTarget.data.path || "that card"}`);
     }
   } catch (error) {
