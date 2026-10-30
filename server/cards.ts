@@ -235,6 +235,27 @@ export function clearBoard(board) {
 
 
 
+/**
+ * What a run that ends without draining its queue leaves behind. A message still marked `queued` beside a
+ * thread nothing will run keeps offering to be edited, and names a turn no child is going to read.
+ */
+export function stopQueue(board, thread, reason = "") {
+	for (const next of thread.queued ?? []) {
+		// A queued message names the turn it was written to: a card's, or the thread's own.
+		const held = typeof next === "string" || !next.target?.cardId ? undefined : board.cards.get(next.target.cardId);
+		const parked = typeof next === "string" || !next.target ? undefined : (held ? held.turns?.[next.target.turn] : thread.turns[next.target.turn]);
+		if (parked && parked.status === "queued") {
+			parked.status = "stopped";
+			// The child's dying words explain a queue that went nowhere; a run a human ended has nothing to add.
+			if (reason) parked.error = reason;
+			if (held) updateCard(board, held);
+		}
+	}
+	thread.queued = [];
+}
+
+
+
 /** Something the daemon cannot paper over: the card shows it as stopped and the console says why. */
 export function threadError(board, thread, message) {
 	console.error(`pi-studio: ${board.name}/${thread.title}: ${message}`);
@@ -258,6 +279,8 @@ export function threadError(board, thread, message) {
 		// Unconditional: a caret cleared on the daemon and not on the browser blinks for ever.
 		updateCard(board, asked);
 	}
+	// A queue behind a child that is gone has nothing left to drain it, so what was waiting stops here.
+	stopQueue(board, thread, message);
 	thread.answering = null;
 	addRow(board, {
 		id: randomUUID(),
