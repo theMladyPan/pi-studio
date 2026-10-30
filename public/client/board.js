@@ -1529,19 +1529,20 @@ function paintFocus() {
 }
 
 /**
- * One place marks which card the board is reading, and the composer is bound to that card, so a
- * selection is also the answer to "who is this message for". Giving the selection up gives the
- * field up too: one docked in a card nobody is reading is a reply to a card left behind.
+ * One place marks which card the board is reading. Reading a card is not asking to answer it: the
+ * field opens with the `↩` in its head or with `r`, so a click that only selects a card cannot land the
+ * caret in a textarea. A field already in the card the click selects stays where it is.
  */
 function selectCard(card) {
   for (const other of cards) other.classList.toggle("active", other === card);
   paintFocus();
   const entry = card ? byId.get(card.dataset.id) : null;
-  // A note card is opened by asking for it, with the reply button or `r`; a thread card is its own
-  // conversation, so reading it is enough. A folded card has no room for a field.
+  // A folded card has no room for a field, so it can never keep one.
   const holds = Boolean(entry) && !entry.card.classList.contains("mini");
-  const wanted = holds && (replyTarget || entry.data.type === "sticky");
-  setReplyTarget(wanted ? entry : null, { focus: false });
+  const keep = holds && replyTarget === entry;
+  // Selection gives a field up rather than moving it: one left in a card nobody is reading is a reply
+  // to a card left behind.
+  setReplyTarget(keep ? entry : null, { focus: false });
 }
 
 /**
@@ -3348,6 +3349,19 @@ function reopenCard(row, name) {
     .catch(() => hintLine("could not reach the board server", true));
 }
 
+/**
+ * What a running call is working on, for the lines under its name: the command it is shelling, the file
+ * it is reading. The summary a settled row shows does not exist yet, so the arguments are what there is
+ * to read while the call is in flight.
+ */
+function liveDetail(row) {
+  const args = row.args ?? {};
+  const said = [args.command, args.path ?? args.file_path, args.url, args.pattern, args.selector, args.query].find(
+    (value) => typeof value === "string" && value.trim(),
+  );
+  return String(said ?? row.summary ?? row.target ?? "").trim();
+}
+
 function actRow(row, inCard = false) {
   const thinking = row.kind === "thinking";
   const node = el("div", `act ${row.kind === "reply" ? "reply" : ""} ${thinking ? "thinking" : ""} ${row.status}`);
@@ -3361,9 +3375,17 @@ function actRow(row, inCard = false) {
   const top = el("div", "top");
   top.appendChild(el("span", "dot"));
   const name = el("span", "name");
-  // The phrase says what the call does; the tool name stays available on hover.
-  name.textContent = row.kind === "reply" ? "answer" : thinking ? "thinking" : row.label || row.tool || "tool";
-  if (row.tool) name.title = row.tool;
+  // A row that is still running says which tool it is in one word and gives the lines below to what
+  // that tool is working on: the command, the file, the page. A long command in the signpost left the
+  // row with nothing to grow into, and a command cut in one line is not readable anyway.
+  name.textContent = row.status === "running" && row.tool
+    ? row.tool
+    : row.kind === "reply"
+      ? "answer"
+      : thinking
+        ? "thinking"
+        : row.label || row.tool || "tool";
+  if (row.tool) name.title = row.label || row.tool;
   top.appendChild(name);
   // A running row waits in the rail strip when its thread's card is not here, and no section names
   // the thread that is working, so the row says it itself. In the card the thread is the card, and a
@@ -3409,11 +3431,13 @@ function actRow(row, inCard = false) {
         ? rowClock(Date.now() - row.startedAt)
         : "…"
       : "";
-  const detail = row.kind === "reply" ? row.text || "" : row.summary || row.target || "";
-  if (detail) {
+  const detail = row.kind === "reply" ? row.text || "" : row.status === "running" ? liveDetail(row) : row.summary || row.target || "";
+  // A running row keeps its two detail lines whether or not it has something to put there, so the box
+  // is the same size from one step of a run to the next and nothing below it moves.
+  if (detail || row.status === "running") {
     const note = el("div", row.kind === "reply" ? "note" : "target");
     note.textContent = detail;
-    note.title = detail;
+    if (detail) note.title = detail;
     node.appendChild(note);
   }
   return node;
@@ -4050,6 +4074,7 @@ const statCtxValue = document.getElementById("statCtxValue");
 const replyChip = document.getElementById("replyChip");
 const replyChipText = document.getElementById("replyChipText");
 let sendMode = "queue";
+const modeToggle = document.getElementById("modeToggle");
 /**
  * A comment on a card without a child goes to the thread that made it. Fork asks a new thread
  * instead, which is what a clone of the card is for: same question, its own conversation.
@@ -4064,11 +4089,20 @@ let hintTimer = null;
  * claiming it waits for a run that is not happening. A stream that is down leaves the composer
  * readable on purpose, so it is the hint that has to stop promising a send.
  */
+/**
+ * The one button that chooses where the next message goes. It flips between the two, and it is offered
+ * whether or not a run is live: the choice is worth making before there is anything to interrupt, and a
+ * control that comes and goes is a control nobody finds.
+ */
 function paintComposer() {
   const running = metaRunning === true;
-  for (const button of document.querySelectorAll("#composer .modes button[data-mode]")) {
-    button.hidden = !running;
-  }
+  modeToggle.textContent = sendMode;
+  modeToggle.classList.toggle("steer", sendMode === "steer");
+  modeToggle.title = running
+    ? sendMode === "steer"
+      ? "steer: this message interrupts the run in flight — click for queue"
+      : "queue: this message waits for the run in flight — click for steer"
+    : "nothing is running, so this message goes now — click to choose steer next time";
   composerHint.classList.remove("bad");
   composerHint.textContent = !linkUp
     ? "offline"
@@ -4945,15 +4979,12 @@ document.getElementById("sess").addEventListener("click", () => {
   window.open(`/?token=${encodeURIComponent(token)}`, "pi-studio-crossroads");
 });
 
-for (const button of document.querySelectorAll("#composer .modes button[data-mode]")) {
-  button.addEventListener("click", () => {
-    sendMode = button.dataset.mode === "steer" ? "steer" : "queue";
-    for (const other of document.querySelectorAll("#composer .modes button[data-mode]")) {
-      other.classList.toggle("on", other === button);
-    }
-    paintComposer();
-  });
-}
+// One button, two states: queue waits for the run in flight, steer interrupts it. The label is the
+// state the next message will use, and its tone says whether that is the interrupting one.
+modeToggle.addEventListener("click", () => {
+  sendMode = sendMode === "steer" ? "queue" : "steer";
+  paintComposer();
+});
 
 // Images pasted into the composer travel with the message, so a screenshot reaches the
 // agent without leaving the board for the terminal.

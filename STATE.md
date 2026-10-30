@@ -221,6 +221,14 @@ commit's own account rather than on a check run now, the section below says so.
   caret (`.card.live`), because the row already says the run is going and says what it is doing. The
   strip above the log (`#railNow`) now holds a running row only when its thread's card is closed or
   not on this board, so a run is never invisible; a row living there still names its own thread.
+- **A running row is a fixed slot.** One head line and `--act-detail` lines under it — three by default
+  — and the same height from the first delta to the last, because a row that grows while it streams
+  walks the rows around it about. The head says the tool in one word (`bash`, `edit`, `read`) and the
+  lines below carry what it is working on: the command, the file, the page, read off the row's
+  arguments, since a summary does not exist until the call is over. A settled row is a line in a list
+  and sizes itself. The figure at the end of a row keeps one width with tabular digits (`min-width:
+  7ch`, `17ch` for a thought's tokens and rate), so a clock counting from `9s` to `1m 05s` does not
+  shove the name beside it.
 - **A thought is a row of its own.** `thinking_start`, `thinking_delta` and `thinking_end` on the
   child's stream each land in a rail row of kind `thinking`, so what a run is doing when it has not
   said anything is visible while it happens. The rail carries the newest 400 characters and a rate read
@@ -301,7 +309,10 @@ commit's own account rather than on a check run now, the section below says so.
 - **Sessions resume**: the child writes its session under the app's own session dir, the thread
   stores the id, and a message after a daemon restart resumes that session. Verified: after a
   restart the agent remembered the word it had answered in the previous run.
-- **Steering and queueing** per thread; a turn a steer displaced reads `stopped`.
+- **Steering and queueing** per thread; a turn a steer displaced reads `stopped`. The composer carries
+  one button for the choice (`#modeToggle`), not two: its label is the mode the next message will use
+  and it flips when pressed, so it is on screen whether or not a run is live. `steer` wears the warning
+  colour, because that is the one that cuts a run short.
 - **Layout**: `POST /layout {cardId, rect, mini}` is saved with the board and restored on open.
 - **Clean and new**: `POST /clean` forgets activity rows whose thread is gone or dead, the dead threads
   and their children, and the ownership their cards still pointed at, so a note left behind starts a
@@ -616,10 +627,11 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
   wheel scrolls that card wherever the pointer is, and cards of other threads drop to 70% opacity
   (`board.config.dimOthers`). With nothing selected the wheel pans the board and every card is equal.
   Escape gives the selection up.
-- **The composer is bound to the selected card.** The field docked in a card is that card's field: a
-  note opens it when you ask, with the reply button or `r`, and a thread card opens it as soon as it is
-  selected, because a thread is always answered. Giving the selection up — Escape, a click on the
-  canvas — puts the field away with it. Selecting another card never carries the text across: every
+- **The composer is bound to the selected card.** The field docked in a card is that card's field, and
+  it opens only when asked: the `↩` in the card's head, or `r` on the selected card. Selecting a card
+  is reading it, so a click on the card body cannot land the caret in a textarea, and a thread card is
+  no exception. Giving the selection up — Escape, a click on the canvas — puts the field away with it.
+  Selecting another card never carries the text across: every
   card keeps its own draft (text, pasted images and picked paths), parked when the field leaves and
   restored when the card comes back, and spent only by the card that sends it. A folded card has no
   room for a field, so folding parks the draft and unfolding brings it back. A panel or an editor
