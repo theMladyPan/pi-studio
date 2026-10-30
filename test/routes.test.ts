@@ -437,6 +437,18 @@ test("a compaction reaches the thread's child, and the context comes back smalle
 		}
 		assert.equal(after?.stats?.context, 32000);
 		assert.equal(after?.stats?.contextMax, 200000);
+
+		// The card the composer sends is not always the thread: a note the thread wrote carries the
+		// thread in `ownerThread`, and that is the walk the model and thinking chips already use.
+		const note = JSON.parse((await postTo(daemon, board.id, "/card/note", { markdown: "a note", key: "under-test", threadRoot: threadId })).body);
+		// The child that answered is closing, and a frame written now would never be read.
+		for (let tries = 0; tries < 100; tries++) {
+			if ((await threadState(daemon, board.id, threadId))?.live === false) break;
+			await new Promise((done) => setTimeout(done, 50));
+		}
+		const throughNote = await postTo(daemon, board.id, "/compact", { cardId: note.cardId });
+		assert.equal(throughNote.status, 200, throughNote.body);
+		assert.equal(JSON.parse(throughNote.body).threadId, threadId);
 	} finally {
 		daemon.child.kill();
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
