@@ -211,6 +211,12 @@ export const server = createServer((req, res) => {
 			await onDefaults(req, res);
 			return;
 		}
+		// A prompt is a file every board reads and none of them owns, so this route takes no workspace: the
+		// settings page can be the first page a human sees, with no workspace opened yet.
+		if (req.method === "POST" && url.pathname === "/prompt") {
+			await onPromptWrite(req, res);
+			return;
+		}
 		// The same values as a document the settings page draws: the tree, this machine's catalogue, and
 		// pi's levels, so the page needs nothing else to render a control per setting.
 		if (req.method === "GET" && url.pathname === "/settings/defaults") {
@@ -341,7 +347,6 @@ export const server = createServer((req, res) => {
 				"/thinking": onThinking,
 				"/kill": onKill,
 				"/config": onConfig,
-				"/prompt": onPromptWrite,
 				"/compact": onCompact,
 				"/clean": onClean,
 				"/new": onNew,

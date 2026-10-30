@@ -225,6 +225,11 @@ button, input, select {
   white-space: nowrap;
 }
 
+/* Nothing has been saved yet, so there is no chip to draw. */
+.save-status:empty {
+  display: none;
+}
+
 .save-status[data-state="saved"] {
   color: var(--ok);
   background: rgba(63, 185, 80, 0.08);
@@ -261,8 +266,6 @@ button, input, select {
 .fold-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-}
-
 }
 
 /* Scrollable settings tree region */
@@ -505,6 +508,86 @@ button, input, select {
 
 .cfg-input[type="number"] {
   max-width: 140px;
+}
+
+/* A control that stacks under its own actions: a whole prompt file and the buttons that write it. */
+.cfg-control-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.cfg-prompt {
+  width: 100%;
+  min-width: 0;
+  min-height: 88px;
+  max-height: 320px;
+  resize: vertical;
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  padding: 6px 8px;
+  font: 11.5px/1.45 var(--mono);
+  color: var(--text);
+  tab-size: 2;
+}
+
+.cfg-prompt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+.cfg-prompt:disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+}
+
+.cfg-prompt-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cfg-prompt-save {
+  background: var(--raised);
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font: 10.5px/1.2 var(--mono);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.cfg-prompt-save:hover {
+  border-color: var(--accent);
+}
+
+.cfg-prompt-save:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.cfg-prompt-save:disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+}
+
+.cfg-prompt-state {
+  font: 10.5px/1.2 var(--mono);
+  color: var(--muted);
+}
+
+.cfg-prompt-state[data-state="dirty"] {
+  color: var(--warn);
+}
+
+.cfg-prompt-state[data-state="saved"] {
+  color: var(--ok);
+}
+
+.cfg-prompt-state[data-state="error"] {
+  color: var(--bad);
 }
 
 .cfg-input:focus-visible,
