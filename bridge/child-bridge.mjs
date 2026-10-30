@@ -220,10 +220,33 @@ const threadTool = defineTool({
 });
 
 
+const pathTool = defineTool({
+	name: "board_path",
+	label: "Say which flow this thread runs",
+	description:
+		"A boss thread started on `auto` reports the flow it chose, so its card shows which one it is running. Call it once, before the first child. It is refused on any other thread.",
+	parameters: Type.Object({
+		path: Type.Union(["simple", "advanced", "complex"].map((path) => Type.Literal(path)), {
+			description: "simple is one step with checks; advanced adds a plan and a review that reads the plan; complex adds triage, parallel scouts and a re-review.",
+		}),
+	}),
+	async execute(_id, params) {
+		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
+		try {
+			const result = await call("/thread/path", { path: params.path });
+			return { content: [{ type: "text", text: `This thread is running the ${result.card?.path ?? params.path} flow.` }], details: result };
+		} catch (error) {
+			return failure(error);
+		}
+	},
+});
+
+
 export default function boardBridge(pi) {
 	if (!attached()) return;
 	pi.registerTool(noteTool);
 	pi.registerTool(sourceTool);
 	pi.registerTool(askTool);
 	pi.registerTool(threadTool);
+	pi.registerTool(pathTool);
 }

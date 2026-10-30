@@ -11,6 +11,7 @@ import { activeConfig, homeDefaults, workspaceById } from "./workspaces.ts";
 import { answer, fail } from "./http.ts";
 import { MODEL, PROVIDER, THINKING_LEVELS } from "./models.ts";
 import { ROLE_NAMES } from "./child/roles.ts";
+import { MODE_NAMES, PATH_NAMES } from "./child/modes.ts";
 
 
 
@@ -74,6 +75,11 @@ export function saveBoard(board) {
 			...(Number.isFinite(thread.depth) ? { depth: thread.depth } : {}),
 			...(thread.after?.length ? { after: thread.after } : {}),
 			...(thread.role ? { role: thread.role } : {}),
+			// A mode and a flow are decisions the human made about this thread, so they are written with it:
+			// a restart that forgot them would turn a boss back into an agent that does the work itself.
+			...(thread.mode ? { mode: thread.mode } : {}),
+			...(thread.path ? { path: thread.path } : {}),
+			...(thread.pathChosenBy ? { pathChosenBy: thread.pathChosenBy } : {}),
 			...(thread.hidden ? { hidden: true } : {}),
 			...(thread.closedAt ? { closedAt: thread.closedAt } : {}),
 			...(thread.type ? { type: thread.type } : {}),
@@ -170,6 +176,9 @@ export function restoredThread(raw, folder) {
 		...(Number.isFinite(raw.depth) ? { depth: raw.depth } : {}),
 		...(Array.isArray(raw.after) ? { after: raw.after.filter((id) => typeof id === "string") } : {}),
 		...(ROLE_NAMES.includes(raw.role) ? { role: raw.role } : {}),
+		...(MODE_NAMES.includes(raw.mode) ? { mode: raw.mode } : {}),
+		...(PATH_NAMES.includes(raw.path) ? { path: raw.path } : {}),
+		...(raw.pathChosenBy === "human" || raw.pathChosenBy === "auto" ? { pathChosenBy: raw.pathChosenBy } : {}),
 		...(typeof raw.type === "string" && raw.type ? { type: raw.type } : {}),
 		// The tree is not made again after a restart: it is on disk, and its branch is where the work is.
 		...(raw.worktree && typeof raw.worktree === "object" && typeof raw.worktree.path === "string"

@@ -20,10 +20,11 @@ import { onBrowse, onEdit, onNote, onRename, onSource } from "./routes/board/con
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
-import { onThread, onThreadSpawn } from "./routes/board/thread.ts";
+import { onMode, onPath, onThread, onThreadSpawn } from "./routes/board/thread.ts";
 import { onAnswer, onAsk } from "./routes/board/answer.ts";
 import { onMessage } from "./routes/board/message.ts";
 import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
+import { onPrompt, onPromptWrite, onPrompts } from "./routes/board/prompts.ts";
 import { onClean, onClose, onKill, onNew, onReopen, onStop, onUndo } from "./routes/board/lifecycle.ts";
 
 
@@ -42,7 +43,7 @@ export const token = (() => {
 
 
 /** The routes a child may reach. Everything else on this daemon belongs to the human. */
-export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn"]);
+export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/path"]);
 
 
 
@@ -288,6 +289,16 @@ export const server = createServer((req, res) => {
 			});
 			return;
 		}
+		if (req.method === "GET" && url.pathname === "/prompts") {
+			// The files a role, a mode and a flow are, listed for the settings page. Reading one is a
+			// separate call, so the list stays small even when a prompt is long.
+			onPrompts(res);
+			return;
+		}
+		if (req.method === "GET" && url.pathname === "/prompt") {
+			onPrompt(url, res);
+			return;
+		}
 		if (req.method === "GET" && url.pathname === "/state") {
 			const board = boardFrom(url, res);
 			if (!board) return;
@@ -307,6 +318,8 @@ export const server = createServer((req, res) => {
 			const routing = {
 				"/thread": onThread,
 				"/thread/spawn": onThreadSpawn,
+				"/thread/path": onPath,
+				"/mode": onMode,
 				"/card/note": onNote,
 				"/card/source": onSource,
 				"/card/ask": onAsk,
@@ -322,6 +335,7 @@ export const server = createServer((req, res) => {
 				"/thinking": onThinking,
 				"/kill": onKill,
 				"/config": onConfig,
+				"/prompt": onPromptWrite,
 				"/compact": onCompact,
 				"/clean": onClean,
 				"/new": onNew,

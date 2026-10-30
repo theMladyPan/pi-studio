@@ -6,6 +6,7 @@
 import { answer, fail, readJson } from "../../http.ts";
 import { field } from "./thread.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog } from "../../models.ts";
+import { PATH_NAMES } from "../../child/modes.ts";
 import { threadForRuntime } from "./lifecycle.ts";
 import { scheduleSave } from "../../store.ts";
 import { broadcast, card, update } from "../../bus.ts";
@@ -202,7 +203,13 @@ export async function onConfig(req, res, board) {
 		next.extensionsOff = body.extensionsOff;
 		changed = true;
 	}
-	if (!changed) return void fail(res, 400, "nothing to change: dimOthers, toolsOff or extensionsOff");
+	// The flow a new boss starts on, so a board that always works the same way says it once.
+	if (body.path !== undefined) {
+		if (!PATH_NAMES.includes(body.path)) return void fail(res, 400, `a path is one of ${PATH_NAMES.join(", ")}`);
+		next.path = body.path;
+		changed = true;
+	}
+	if (!changed) return void fail(res, 400, "nothing to change: dimOthers, toolsOff, extensionsOff or path");
 	board.config = next;
 	scheduleSave(board);
 	broadcast(board, { type: "config", config: activeConfig(board) });

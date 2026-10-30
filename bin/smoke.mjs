@@ -192,6 +192,72 @@ async function main() {
 	said(stray.status === 409, "an unknown predecessor is refused rather than dropped", `${stray.status}`);
 	const noTask = await post(one, `/thread/spawn${board}`, { title: "nothing" });
 	said(noTask.status === 409, "a spawned thread without a task is refused", `${noTask.status}`);
+	// A mode is what a human's thread is for, and a path belongs to a boss: the two refusals that keep a
+	// spawned thread from being told what it is for twice, and an agent from carrying a flow nothing runs.
+	const boss = JSON.parse((await post(one, `/thread${board}`, { title: "boss", mode: "boss", path: "advanced" })).body || "{}");
+	said(
+		boss.card?.mode === "boss" && boss.card?.path === "advanced" && boss.card?.pathChosenBy === "human",
+		"a boss thread carries its mode and the flow the human pinned",
+		`mode ${boss.card?.mode} path ${boss.card?.path} by ${boss.card?.pathChosenBy}`,
+	);
+	const autoBoss = JSON.parse((await post(one, `/thread${board}`, { title: "auto boss", mode: "boss" })).body || "{}");
+	said(
+		autoBoss.card?.path === "auto" && autoBoss.card?.pathChosenBy === "auto",
+		"and one with no flow named starts on auto",
+		`path ${autoBoss.card?.path} by ${autoBoss.card?.pathChosenBy}`,
+	);
+	const badMode = await post(one, `/thread${board}`, { title: "odd", mode: "wizard" });
+	said(badMode.status === 409, "an unknown mode is refused", `${badMode.status} ${badMode.body.slice(0, 40)}`);
+	const badPath = await post(one, `/thread${board}`, { title: "odd", mode: "boss", path: "quick" });
+	said(badPath.status === 409, "an unknown path is refused", `${badPath.status} ${badPath.body.slice(0, 40)}`);
+	const agentPath = await post(one, `/thread${board}`, { title: "odd", mode: "agent", path: "simple" });
+	said(agentPath.status === 409, "a path on an agent is refused", `${agentPath.status} ${agentPath.body.slice(0, 60)}`);
+	const childMode = await post(one, `/thread${board}`, { title: "odd", parentThread: parent.threadId, mode: "boss" });
+	said(childMode.status === 409, "a spawned thread may not be given a mode", `${childMode.status} ${childMode.body.slice(0, 60)}`);
+	const rootRole = await post(one, `/thread${board}`, { title: "odd", role: "scout" });
+	said(rootRole.status === 409, "and a thread the human started may not be given a role", `${rootRole.status} ${rootRole.body.slice(0, 60)}`);
+	const moved = JSON.parse((await post(one, `/thread/path${board}`, { cardId: boss.threadId, path: "complex" })).body || "{}");
+	said(
+		moved.card?.path === "complex" && moved.card?.pathChosenBy === "human",
+		"a pinned flow can be changed from the composer",
+		`path ${moved.card?.path}`,
+	);
+	// The prompt files the settings page edits. Only reading and refusals here: a smoke run that wrote
+	// one would leave the repository it is testing with a modified file.
+	const listed = JSON.parse((await get(one, `/prompts?token=${one.token}&workspace=${opened.board.id}`)).body || "{}");
+	const names = (listed.prompts || []).map((one) => one.name);
+	said(
+		names.includes("roles/scout.md") && names.includes("modes/boss.md") && names.includes("flows/advanced.md"),
+		"the prompts list names the roles, the modes and the flows",
+		`${names.length} files`,
+	);
+	const one_prompt = await get(one, `/prompt?token=${one.token}&workspace=${opened.board.id}&name=roles/scout.md`);
+	said(one_prompt.status === 200 && one_prompt.body.includes("scout"), "and one of them can be read whole", `${one_prompt.status}`);
+	const escape = await get(one, `/prompt?token=${one.token}&workspace=${opened.board.id}&name=../../etc/passwd`);
+	said(escape.status === 400, "a name outside the prompts folder is refused", `${escape.status}`);
+	const writeEscape = await post(one, `/prompt?token=${one.token}&workspace=${opened.board.id}`, { name: "../evil.md", text: "x" });
+	said(writeEscape.status === 400, "and so is a write to one", `${writeEscape.status}`);
+	const boardPath = JSON.parse((await post(one, `/config${board}`, { path: "complex" })).body || "{}");
+	said(boardPath.config?.path === "complex", "the board can prefer a flow for new bosses", `path ${boardPath.config?.path}`);
+	const badBoardPath = await post(one, `/config${board}`, { path: "quick" });
+	said(badBoardPath.status === 400, "and an unknown one is refused", `${badBoardPath.status}`);
+	// Written down, not only answered: a board file that forgot the mode would come back as an agent that
+	// does the work itself, and the tool rules would follow it.
+	await new Promise((resolve) => setTimeout(resolve, 1200));
+	const savedBoard = JSON.parse(readFileSync(join(first, "boards", `${opened.board.id}.json`), "utf8"));
+	const savedBoss = (savedBoard.threads || []).find((thread) => thread.id === boss.threadId);
+	said(
+		savedBoss?.mode === "boss" && savedBoss?.path === "complex",
+		"the mode and the flow are written into the board file",
+		`mode ${savedBoss?.mode} path ${savedBoss?.path}`,
+	);
+
+	const toAgent = JSON.parse((await post(one, `/mode${board}`, { cardId: boss.threadId, mode: "agent" })).body || "{}");
+	said(
+		toAgent.card?.mode === "agent" && !toAgent.card?.path,
+		"and a thread turned back into an agent drops the flow",
+		`mode ${toAgent.card?.mode} path ${String(toAgent.card?.path ?? "")}`,
+	);
 	const afterState = JSON.parse((await get(one, `/state${board}`)).body || "{}");
 	const childRow = afterState.threads?.find((thread) => thread.id === spawned.threadId);
 	said(

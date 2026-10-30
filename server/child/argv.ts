@@ -14,6 +14,7 @@ import { sessionCwd, sessionDir } from "../session.ts";
 import { sameFolder } from "../worktrees/retire.ts";
 import { BRIDGE } from "../paths.ts";
 import { ROLE_THINKING, ROLE_TOOLS_OFF, roleSystemPrompt } from "./roles.ts";
+import { MODE_TOOLS_OFF, modeSystemPrompt } from "./modes.ts";
 
 
 
@@ -117,8 +118,11 @@ export function childArgv(board, thread) {
 	const recorded = thread.sessionId ? sessionCwd(sessionDir(board), thread.sessionId) : "";
 	const moved = recorded && !sameFolder(recorded, workdir);
 	const session = thread.sessionId ? [moved ? "--fork" : "--session", thread.sessionId] : [];
-	// Tools a role may not use join the ones the board already leaves out, once each.
-	const toolsOff = [...new Set([...toolsOffFor(board), ...(ROLE_TOOLS_OFF[thread.role] ?? [])])];
+	// Tools a role may not use join the ones the board already leaves out, once each. A mode narrows the
+	// same list: a planner and a boss read and spawn, and neither edits the tree it is judging.
+	const toolsOff = [
+		...new Set([...toolsOffFor(board), ...(ROLE_TOOLS_OFF[thread.role] ?? []), ...(MODE_TOOLS_OFF[thread.mode] ?? [])]),
+	];
 	// A role brings a thinking level; what the human chose on the card wins over it.
 	const thinking = thread.thinking ?? ROLE_THINKING[thread.role];
 	return [
@@ -138,7 +142,9 @@ export function childArgv(board, thread) {
 		// or a reviewer reads and runs checks, and never edits the tree it is judging.
 		...(toolsOff.length ? ["--exclude-tools", toolsOff.join(",")] : []),
 		"--append-system-prompt",
-		[roleSystemPrompt(thread.role), boardPrompt(board, thread)].filter(Boolean).join("\n\n"),
+		[roleSystemPrompt(thread.role), modeSystemPrompt(thread.mode, thread.path), boardPrompt(board, thread)]
+			.filter(Boolean)
+			.join("\n\n"),
 		"--provider",
 		thread.provider,
 		"--model",

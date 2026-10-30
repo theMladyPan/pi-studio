@@ -1240,6 +1240,7 @@ function makeCard(data, quiet = false) {
     <span class="dot ${dotKind(kind)}"></span>
     <span class="title"></span>
     <span class="role-chip"></span>
+    <span class="mode-chip"></span>
     <span class="sub"></span>
     <span class="spacer"></span>
     <button type="button" class="ask-pill" aria-label="centre this question">answer needed</button>
@@ -1299,6 +1300,7 @@ function makeCard(data, quiet = false) {
     live,
     titleEl: head.querySelector(".title"),
     roleEl: head.querySelector(".role-chip"),
+    modeEl: head.querySelector(".mode-chip"),
     subEl: head.querySelector(".sub"),
     chipEl: head.querySelector(".chip"),
     askPill: head.querySelector(".ask-pill"),
@@ -1665,9 +1667,23 @@ function rememberThread(data) {
   const title = data.title || known.title || "";
   const role = data.role || "";
   const parent = data.parentThread || "";
-  if (known.title !== title || known.role !== role || known.parent !== parent) {
-    threadMeta.set(data.id, { title, role, parent });
+  const status = data.status || "";
+  if (known.title === title && known.role === role && known.parent === parent && known.status === status) return;
+  threadMeta.set(data.id, { title, role, parent, status });
+  // A master's sub line says which child it is waiting on, so a child that starts or settles repaints the
+  // card above it. One level is all the depth rule allows, so this cannot walk a chain.
+  if (parent && known.status !== status) {
+    const master = byId.get(parent);
+    if (master && !master.editing) paintCard(master, master.data);
   }
+}
+
+/** The child a boss is waiting on, if one of its children is still running. */
+function runningChild(threadId) {
+  for (const meta of threadMeta.values()) {
+    if (meta.parent === threadId && meta.status === "sent") return meta.title || "a child";
+  }
+  return "";
 }
 
 /** The name of the thread that spawned this one, if the board still knows it. */
@@ -1685,6 +1701,18 @@ function stickySub(data) {
   // A hidden master has no card on the board, so the child carries its name in the payload.
   const master = masterTitle(data.parentThread) || data.parentTitle || "";
   return master ? `spawned by ${master} · ${status}` : `spawned · ${status}`;
+}
+
+/**
+ * A boss that is blocked in a spawn says what it is waiting for: the card is otherwise a thread that
+ * looks idle while its children run.
+ */
+function bossSub(data, entry) {
+  if (data.mode === "boss") {
+    const waiting = runningChild(entry.id);
+    if (waiting) return `waiting on ${waiting}`;
+  }
+  return stickySub(data);
 }
 
 /** A note says when it arrived, or when it last changed once it has changed. */
@@ -1719,20 +1747,34 @@ function paintCard(entry, data) {
     (isSource ? data.path : data.type === "question" ? "question" : data.type === "sticky" ? "" : "note");
   entry.titleEl.textContent = shownTitle;
   entry.titleEl.title = shownTitle;
+  // The thread is remembered before the sub line is written: a boss's line asks which of its children is
+  // still running, and that answer comes from what the cards have said so far.
+  rememberThread(data);
   entry.subEl.textContent = isSource
     ? `${data.content.split("\n").length} lines`
     : data.type === "question"
       ? questionSub(data)
       : data.type === "sticky"
-        ? stickySub(data)
+        ? bossSub(data, entry)
         : noteSub(data, entry);
   // The role is the promise a child was started under, so the card wears it as a chip. A thread the
   // human made has no role and the chip takes no space.
-  rememberThread(data);
   const role = data.type === "sticky" ? data.role || "" : "";
   entry.roleEl.textContent = role;
   entry.roleEl.title = role ? `spawned with the ${role} role` : "";
   entry.roleEl.style.display = role ? "" : "none";
+  // A boss is a thread the human started that spawns instead of working, so its chip carries the flow it
+  // runs; `auto` is the boss still deciding.
+  const mode = data.type === "sticky" ? data.mode || "" : "";
+  const shownMode = mode === "boss" && data.path ? `boss · ${data.path}` : mode;
+  entry.modeEl.textContent = shownMode;
+  entry.modeEl.title = mode
+    ? mode === "boss"
+      ? `a boss: it spawns children and does no work itself${data.pathChosenBy === "auto" && data.path !== "auto" ? `, flow chosen by the model` : ""}`
+      : `a ${mode} thread`
+    : "";
+  // An agent is the baseline the board always had, so it wears nothing; a planner and a boss say so.
+  entry.modeEl.style.display = mode && mode !== "agent" ? "" : "none";
   entry.subEl.classList.toggle("expired", data.type === "question" && data.status === "expired");
   // The pink ring and the pill belong to the question the agent is blocked on, so both go
   // away the moment it is settled.
@@ -1800,7 +1842,8 @@ function fitContent(entry, data) {
  * a delegate card is re-broadcast every few seconds whether or not anything moved.
  */
 function cardChanged(before, after) {
-  const fields = ["title", "markdown", "details", "text", "question", "reply", "status"];
+  // A mode or a flow is repainted too: `/mode` and `/thread/path` change nothing else on the card.
+  const fields = ["title", "markdown", "details", "text", "question", "reply", "status", "mode", "path", "pathChosenBy"];
   if (fields.some((field) => before[field] !== after[field])) return true;
   if (JSON.stringify(before.worktree ?? null) !== JSON.stringify(after.worktree ?? null)) return true;
   // A follow-up's answer settles into the turn it was asked with, so the thread changes without
@@ -1944,6 +1987,8 @@ function dropCard(entry) {
   const at = cards.indexOf(record.card);
   if (at >= 0) cards.splice(at, 1);
   byId.delete(record.id);
+  // A closed card is a thread the board no longer draws, so it stops being a child its master waits on.
+  threadMeta.delete(record.id);
   foldState.delete(record.id);
   drafts.delete(record.id);
   // Links pointing at the card that just went have to stop looking live.
@@ -4520,6 +4565,53 @@ function windowOf(entry) {
  * Without this the follow-up would arrive as a new sticky and the thread would be lost. A bind
  * driven by a click passes `focus: false`: the reader is reading cards, not typing.
  */
+// ---------- what a thread is for -------------------------------------------
+const modePick = document.getElementById("modePick");
+const pathPick = document.getElementById("pathPick");
+const MODE_ORDER = ["agent", "plan", "boss"];
+const PATH_ORDER = ["auto", "simple", "advanced", "complex"];
+// What a new thread is born with. `pathNext` empty means the board's own flow, so a board that always
+// works the same way is not overridden by a picker nobody touched.
+let modeNext = "agent";
+let pathNext = "";
+
+/** The thread card the composer is aimed at, if it is aimed at one. */
+function aimedThread() {
+  return replyTarget && replyTarget.data?.type === "sticky" ? replyTarget : null;
+}
+
+/** What the two buttons say: this card's mode, or the one a new thread would be born with. */
+function modeShown() {
+  const aimed = aimedThread();
+  return {
+    mode: aimed ? aimed.data.mode || "agent" : modeNext,
+    path: aimed ? aimed.data.path || "auto" : pathNext || boardConfig.path || "auto",
+  };
+}
+
+/**
+ * A mode decides whether the thread works, plans, or spawns; a boss also runs a flow. Both are the
+ * human's choice, so they live in the composer beside the model and the thinking level rather than on
+ * the board, where a press that spawns work would read like a press that does work.
+ */
+function paintMode() {
+  const { mode, path } = modeShown();
+  modePick.textContent = mode;
+  modePick.classList.toggle("on", mode !== "agent");
+  modePick.title =
+    mode === "boss"
+      ? "a boss: it spawns children with roles and does no work itself"
+      : mode === "plan"
+        ? "a planner: a plan and throwaway checks under /tmp, no edits"
+        : "an agent: it does the work itself";
+  pathPick.hidden = mode !== "boss";
+  pathPick.textContent = path;
+  pathPick.title =
+    path === "auto"
+      ? "the boss picks the flow at its first turn and says which one"
+      : `the ${path} flow, read from prompts/flows/${path}.md`;
+}
+
 function setReplyTarget(entry, { focus = true } = {}) {
   const next = entry && byId.has(entry.id) ? entry : null;
   if (next !== replyTarget) {
@@ -4541,6 +4633,8 @@ function setReplyTarget(entry, { focus = true } = {}) {
   paintFork();
   // The model and thinking chips name the thread that answers this card.
   paintRuntime();
+  // What the thread is for belongs to that same card: modes are chosen here, never on the board.
+  paintMode();
   if (replyTarget) {
     // A thread card is named by its title, and one the human typed into by its own words: a card that
     // has neither is called what it is.
@@ -5032,6 +5126,52 @@ async function chooseRuntime(kind, value) {
   }
 }
 
+/** Writes the mode on the thread the composer is aimed at, or leaves it as the next thread's. */
+async function chooseMode(mode) {
+  const target = aimedThread();
+  if (!target) return;
+  await postThreadField("/mode", { cardId: target.id, mode });
+}
+
+async function choosePath(path) {
+  const target = aimedThread();
+  if (!target) return;
+  await postThreadField("/thread/path", { cardId: target.id, path });
+}
+
+async function postThreadField(route, body) {
+  try {
+    const response = await fetch(`${route}?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    const payload = await response.json();
+    if (payload.card) applyMessage(payload.card);
+  } catch (error) {
+    hintLine(`could not set it: ${error.message || error}`, true);
+  }
+}
+
+modePick.addEventListener("click", () => {
+  const next = MODE_ORDER[(MODE_ORDER.indexOf(modeShown().mode) + 1) % MODE_ORDER.length];
+  // Aimed at a thread, the press changes that thread; with nothing aimed, it sets the next one's mode.
+  if (aimedThread()) void chooseMode(next);
+  else modeNext = next;
+  if (next !== "boss") pathNext = "";
+  paintMode();
+  hintLine(`mode: ${next}`);
+});
+
+pathPick.addEventListener("click", () => {
+  const next = PATH_ORDER[(PATH_ORDER.indexOf(modeShown().path) + 1) % PATH_ORDER.length];
+  if (aimedThread()) void choosePath(next);
+  else pathNext = next === "auto" ? "" : next;
+  paintMode();
+  hintLine(`path: ${next}`);
+});
+
 modelChip.addEventListener("click", () => void openPick("model"));
 thinkChip.addEventListener("click", () => void openPick("thinking"));
 
@@ -5046,6 +5186,14 @@ const cfgThinking = document.getElementById("cfgThinking");
 const cfgThinkingValue = document.getElementById("cfgThinkingValue");
 const cfgTools = document.getElementById("cfgTools");
 const cfgToolsValue = document.getElementById("cfgToolsValue");
+const cfgPath = document.getElementById("cfgPath");
+const cfgPathValue = document.getElementById("cfgPathValue");
+const cfgPrompts = document.getElementById("cfgPrompts");
+const pePanel = document.getElementById("promptEditor");
+const pePick = document.getElementById("pePick");
+const peText = document.getElementById("peText");
+const peHint = document.getElementById("peHint");
+const peSave = document.getElementById("peSave");
 
 /**
  * The tools a thread can be given, as the daemon sees them: pi's own four by name, and the extension
@@ -5086,11 +5234,14 @@ function paintConfig() {
   cfgModelValue.textContent = shortModel(boardConfig.model);
   cfgThinkingValue.textContent = boardConfig.thinking || "off";
   cfgToolsValue.textContent = toolsSummary();
+  cfgPathValue.textContent = boardConfig.path || "auto";
 }
 
 function shownConfig(on) {
   configPanel.hidden = !on;
   configBtn.setAttribute("aria-expanded", on ? "true" : "false");
+  // The prompt editor was opened from this panel and belongs to it, so it leaves when the panel does.
+  if (!on) pePanel.hidden = true;
 }
 
 // ---------- clean and new ------------------------------------------------
@@ -5164,6 +5315,85 @@ configBtn.addEventListener("click", () => {
 // in this panel made it taller than the board. It opens the same picker a model does.
 cfgTools.addEventListener("click", () => void openPick("tools", cfgTools, true));
 
+/** The flow a new boss starts on, cycled from the panel and stored on the board. */
+cfgPath.addEventListener("click", async () => {
+  const next = PATH_ORDER[(PATH_ORDER.indexOf(boardConfig.path || "auto") + 1) % PATH_ORDER.length];
+  try {
+    const response = await fetch(`/config?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: next }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    const payload = await response.json();
+    if (payload.config) applyConfig(payload.config);
+    paintConfig();
+  } catch (error) {
+    hintLine(`could not set it: ${error.message || error}`, true);
+  }
+});
+
+// ---------- the prompt files ----------------------------------------------
+// A role, a mode and a flow are markdown under `prompts/`. They are read when a thread starts, so an
+// edit changes the next run and never rewrites one already going.
+async function loadPrompts() {
+  // Read afresh each time the editor opens: a file added to `prompts/` by hand is a prompt the human
+  // should see without restarting the daemon.
+  const response = await fetch(`/prompts?${auth}`);
+  if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+  const { prompts } = await response.json();
+  pePick.replaceChildren(
+    ...prompts.map((one) => {
+      const option = document.createElement("option");
+      option.value = one.name;
+      option.textContent = `${one.kind} · ${one.title}`;
+      return option;
+    }),
+  );
+}
+
+async function openPrompt(name) {
+  const chosen = name || pePick.value;
+  if (!chosen) return;
+  const response = await fetch(`/prompt?${auth}&name=${encodeURIComponent(chosen)}`);
+  if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+  const { text } = await response.json();
+  pePick.value = chosen;
+  peText.value = text;
+  peHint.textContent = chosen;
+}
+
+cfgPrompts.addEventListener("click", async () => {
+  pePanel.hidden = !pePanel.hidden;
+  if (pePanel.hidden) return;
+  try {
+    await loadPrompts();
+    await openPrompt(pePick.value);
+  } catch (error) {
+    peHint.textContent = `could not read them: ${error.message || error}`;
+  }
+});
+
+pePick.addEventListener("change", () => {
+  void openPrompt(pePick.value).catch((error) => {
+    peHint.textContent = `could not read it: ${error.message || error}`;
+  });
+});
+
+peSave.addEventListener("click", async () => {
+  try {
+    const response = await fetch(`/prompt?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: pePick.value, text: peText.value }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    peHint.textContent = `saved ${pePick.value} — the next thread reads it`;
+  } catch (error) {
+    peHint.textContent = `could not save it: ${error.message || error}`;
+  }
+});
+
 cfgDim.addEventListener("click", async () => {
   const want = boardConfig.dimOthers === false;
   try {
@@ -5188,7 +5418,9 @@ window.addEventListener("resize", () => {
 document.addEventListener(
   "pointerdown",
   (event) => {
-    if (event.target.closest("#runtimePick, #modelPick, #thinkPick, #boardConfig, #configBtn")) return;
+    // The prompt editor is opened from this panel and is part of it: a press inside it is not a press
+    // outside the settings, which would otherwise shut the panel the editor was opened from.
+    if (event.target.closest("#runtimePick, #modelPick, #thinkPick, #boardConfig, #configBtn, #promptEditor")) return;
     if (!runtimePick.hidden) closePick();
     if (!configPanel.hidden) shownConfig(false);
   },
@@ -5677,7 +5909,9 @@ async function startThread() {
     const response = await fetch(`/thread?${auth}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: "{}",
+      // A new thread is born with the mode the composer is showing. A flow is named only when the human
+      // picked one: otherwise the board's own default decides, which is what `/config` is for.
+      body: JSON.stringify({ mode: modeNext, ...(modeNext === "boss" && pathNext ? { path: pathNext } : {}) }),
     });
     if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
     const created = await response.json();
