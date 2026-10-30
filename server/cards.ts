@@ -5,7 +5,7 @@
  */
 import { addRow, card, liveThreadIds, threadRef, update, updateCard } from "./bus.ts";
 import { answer } from "./http.ts";
-import { liveThoughts, settleThoughts } from "./thought.ts";
+import { liveThoughts, settleRows, settleThoughts } from "./thought.ts";
 import { port } from "./main.ts";
 import { retireWorktree } from "./worktrees/retire.ts";
 import { stopStream, liveTurn } from "./child/run.ts";
@@ -238,6 +238,8 @@ export function threadError(board, thread, message) {
 	thread.status = "dead";
 	stopStream(thread);
 	settleThoughts(board, thread);
+	// The call the child was in when it died will never report its end, so it is closed here.
+	settleRows(board, thread);
 	const { turn: last, card: asked } = liveTurn(board, thread);
 	if (last) {
 		// What was being written stays as the child left it, but nothing is writing it now.

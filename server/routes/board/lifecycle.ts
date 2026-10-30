@@ -12,6 +12,7 @@ import { field } from "./thread.ts";
 import { randomUUID } from "node:crypto";
 import { cleanBoard, clearBoard, plainCardFor } from "../../cards.ts";
 import { finished } from "../../waiters.ts";
+import { settleRows } from "../../thought.ts";
 
 
 
@@ -87,6 +88,9 @@ export function killChild(board, thread) {
 	thread.answering = null;
 	thread.abortWanted = false;
 	thread.status = "idle";
+	// A killed child never sends the end of the call it was in, and the rail would count that row as
+	// running until the daemon restarts.
+	settleRows(board, thread);
 	try {
 		// Stop asks the child to give up; kill is what happens when it does not.
 		child.kill("SIGKILL");

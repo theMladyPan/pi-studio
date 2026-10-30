@@ -192,6 +192,24 @@ export function settleThoughts(board, thread) {
 
 
 
+/**
+ * Every row of a thread that is still running once the thread has stopped.
+ *
+ * A tool call ends with a line the child sends, and a child that is killed, that dies mid-call or that
+ * never gets its end through leaves that line unsent. The row then keeps a clock and the rail keeps
+ * counting it for as long as the daemon runs: one activity that nothing is doing. A thread that has
+ * stopped has nothing running by definition, so what is left is closed here.
+ */
+export function settleRows(board, thread) {
+	const now = Date.now();
+	for (const row of board.activity) {
+		if (row.status !== "running" || row.thread?.id !== thread.id) continue;
+		patchRow(board, row.id, { status: "stopped", durationMs: now - (Number(row.startedAt) || now) });
+	}
+}
+
+
+
 /** A row as the panel reads it: the whole thought while it streams, the row's own text once it ends. */
 export function rowWithThought(row) {
 	const live = liveThoughts.get(row.id);
@@ -433,6 +451,7 @@ export function handleChildLine(board, thread, line) {
 		thread.abortWanted = false;
 		stopStream(thread);
 		settleThoughts(board, thread);
+		settleRows(board, thread);
 		// A run that edited has either cut its own branch or committed on the detached base, and this is
 		// the moment the board learns which and puts a name on the work.
 		settleTreeBranch(board, thread);

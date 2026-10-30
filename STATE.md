@@ -427,6 +427,13 @@ buttons beside them; the crossroads gained the defaults panel. No framework, no 
 
 ## Fixed on the way
 
+- One activity row could stay `running` for ever, and the rail counted it: a tool call ends with a line
+  the child sends, and a child that was killed by `■`, that died mid-call or that never got its end
+  through left the row with a clock and the head saying `activity 1` over an idle board. Every row of a
+  thread still running is now closed as `stopped` when that thread stops — on `threadError`, on
+  `killChild`, and on `agent_settled` as the safety net — with the time it had been going. Only that
+  thread's rows, so a neighbouring run keeps its own.
+
 - `board_ask` was dead for every thread: the routes a child token may reach listed `/card/note`,
   `/card/source` and `/thread/spawn` but not `/card/ask`, so the third bridge tool answered 403
   "a thread may not use that" while the bridge already read its 409 and its `answers[]`. The route is
