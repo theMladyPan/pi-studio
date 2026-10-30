@@ -16,7 +16,8 @@ function fakeBoard() {
 		clients: new Set(),
 		trees: [],
 		cards: [],
-		activity: [],
+		// The rows the reader settles, pushed onto by the tests that give it calls to settle.
+		activity: [] as any[],
 		config: { model: "m", provider: "p", thinking: "off" },
 	};
 }
