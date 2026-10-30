@@ -40,7 +40,8 @@ export function promptFiles(): PromptFile[] {
 		let files: string[] = [];
 		try {
 			files = readdirSync(join(PROMPT_DIR, folder))
-				.filter((file) => file.endsWith(".md"))
+				// The names the write guard takes, so a file the page lists is a file a save accepts.
+				.filter((file) => /^[a-z][a-z-]*\.md$/.test(file))
 				.sort();
 		} catch {
 			continue;
