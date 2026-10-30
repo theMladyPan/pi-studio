@@ -2481,7 +2481,8 @@ function beginPan(event) {
 
 // The left button pans the background. Over a card it belongs to the card, which drags, resizes
 // and selects with it, so this gesture never starts there. Ctrl (or command) is the reading
-// modifier, and under it no gesture starts at all: the board is being read, not moved.
+// modifier: under it neither that drag nor this pan starts, so the press belongs to the text.
+// The resize grip, the rail grip, the minimap and the middle button keep their own gestures.
 viewport.addEventListener("pointerdown", (event) => {
   if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
   if (event.target.closest(".card")) return;
