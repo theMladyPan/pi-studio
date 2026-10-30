@@ -190,6 +190,13 @@
   .card-live .act { background: transparent; border-color: transparent; padding: 2px 0; }
   /* The thread is the card, so a row in it has nobody to name. */
   .card-live .act .who { display: none; }
+  /* Between two steps the strip holds a wait row instead of nothing: the same head and the same
+     detail lines a running row takes, so the answer above it does not move when a step settles. The
+     caret is the one thing that says the run is still going. */
+  .card-live .act.wait .name { color: var(--muted); }
+  .card-live .act.wait .caret { display: inline-block; width: 6px; height: 12px; border-radius: 1px;
+    background: var(--muted); animation: caret-blink 1.1s steps(2, start) infinite; }
+  @media (prefers-reduced-motion: reduce) { .card-live .act.wait .caret { animation: none; } }
   .turn { display: flex; flex-direction: column; gap: 5px; }
   .turn + .turn { border-top: 1px dashed #21262d; padding-top: 8px; }
   .turn-q { color: #f0e6d2; background: #2a2415; border-left: 3px solid #d29922;
@@ -510,8 +517,10 @@
      --act-detail lines for whatever it is working on. A box that grows while it streams walks the rows
      around it about, and the eye loses what it was reading. A row that has settled is a line in a list
      and sizes itself. One number to trade rows for height. */
+  /* The gap a settled thought keeps above its tail is dropped while it runs, so a thought, a tool and
+     the wait row between them all stand the same height and the strip never grows or shrinks. */
   .act.running .target, .act.running .note, .act.thinking.running .tail {
-    height: calc(var(--act-detail) * 16px); line-height: 16px;
+    height: calc(var(--act-detail) * 16px); line-height: 16px; margin-top: 0;
     overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere;
     display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--act-detail); }
   /* A thought streams in paragraphs, so its tail keeps the newest characters dim and monospaced

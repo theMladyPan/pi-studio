@@ -4098,12 +4098,66 @@ function cardOfThread(threadId) {
 }
 
 /**
- * Whether a card is showing a live step. The card keeps its own height and the column scrolls, so a
- * field that grows under the answer moves nothing else on the board.
+ * Whether the thread behind a card is in a run. A thread card says so with its own status, and a card a
+ * hidden child answers for with that child's.
+ */
+function threadOn(entry) {
+  const data = entry.data || {};
+  return data.type === "sticky" ? data.status === "sent" : data.answersWith?.running === true;
+}
+
+/** Whether this card's last turn is having its answer written right now. */
+function answerArriving(entry) {
+  const turns = Array.isArray(entry.data?.turns) ? entry.data.turns : [];
+  const last = turns[turns.length - 1];
+  return Boolean(last?.streaming && last?.reply);
+}
+
+/**
+ * A run between two steps: the model is being prefilled, a network hop is being taken, or the answer is
+ * being written, and no row has arrived to read. The wait row is the height of a running row, so the
+ * answer above it stays where it is when one step settles and the next arrives, and its blinking caret
+ * is what says the run is still going.
+ */
+function waitRow(word) {
+  const node = el("div", "act wait running");
+  node.dataset.status = "running";
+  node.title = "the run is going and no step has started";
+  const top = el("div", "top");
+  top.appendChild(el("span", "dot"));
+  const name = el("span", "name");
+  name.textContent = word;
+  top.appendChild(name);
+  const caret = el("span", "caret");
+  caret.setAttribute("aria-hidden", "true");
+  top.appendChild(caret);
+  top.appendChild(el("span", "ms"));
+  node.appendChild(top);
+  // The lines a running row gives to what it is working on, left empty: their height is the point.
+  node.appendChild(el("div", "target"));
+  return node;
+}
+
+/**
+ * Whether a card is showing a live step, and what fills its strip while it shows none. The card keeps
+ * its own height and the column scrolls, so a field that grows under the answer moves nothing else on
+ * the board; and the strip is one row tall whether it holds a step or a wait row, so a step settling
+ * does not move the answer either.
  */
 function paintLive() {
   for (const entry of byId.values()) {
-    if (entry.live) entry.card.classList.toggle("live", entry.live.childElementCount > 0);
+    if (!entry.live) continue;
+    const on = threadOn(entry);
+    const wait = entry.live.querySelector(".act.wait");
+    const step = [...entry.live.children].some((node) => !node.classList.contains("wait"));
+    if (on && !step) {
+      const word = answerArriving(entry) ? "answering" : "waiting";
+      if (wait) wait.querySelector(".name").textContent = word;
+      else entry.live.appendChild(waitRow(word));
+    } else if (wait) {
+      wait.remove();
+    }
+    entry.card.classList.toggle("live", on);
   }
 }
 
