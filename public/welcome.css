@@ -485,9 +485,6 @@ button, input, select {
 .cfg-field-label {
   font: 500 11.5px/1.2 var(--mono);
   color: var(--text);
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .cfg-field-id {
@@ -525,7 +522,8 @@ button, input, select {
   max-width: 140px;
 }
 
-/* A control that stacks under its own actions: a whole prompt file and the buttons that write it. */
+/* A control that runs the full width with its own actions under it: a whole prompt file and the buttons
+   that write it. */
 .cfg-control-stack {
   flex-direction: column;
   align-items: stretch;
@@ -1029,10 +1027,14 @@ button, input, select {
   border: 1px solid rgba(248, 81, 73, 0.35);
   border-radius: 4px;
   padding: 1px 6px;
-  margin-left: 8px;
   font: 10.5px/1.2 var(--mono);
   color: var(--dim);
   cursor: pointer;
+}
+
+/* The refusal line holds the daemon's reason and this button in a `<p>`, with no gap of its own. */
+.cfg-field-error .cfg-revert {
+  margin-left: 8px;
 }
 
 .cfg-revert:hover {
