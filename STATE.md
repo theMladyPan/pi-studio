@@ -221,6 +221,14 @@ commit's own account rather than on a check run now, the section below says so.
   caret (`.card.live`), because the row already says the run is going and says what it is doing. The
   strip above the log (`#railNow`) now holds a running row only when its thread's card is closed or
   not on this board, so a run is never invisible; a row living there still names its own thread.
+- **A run between two steps keeps its strip.** A thread that is in a run keeps the `.card-live` box
+  whether or not a row has arrived, and it holds a wait row (`.act.wait`) in place of one: the same
+  head and the same `--act-detail` lines a running row takes, its name drawn muted and a blinking
+  caret after it. Without it the strip folded away between a thought and the tool that followed, and
+  the answer above it moved twice a step. The caret is the only signal during a prefill or a network
+  wait, and it moves the box by nothing when the next row lands. The word follows the card: `waiting`
+  while nothing is arriving, `answering` while the answer itself is being written. A thought's tail
+  drops its 2px gap while it runs, so a thought, a tool and the wait row all stand the same height.
 - **A running row is a fixed slot.** One head line and `--act-detail` lines under it — three by default
   — and the same height from the first delta to the last, because a row that grows while it streams
   walks the rows around it about. The head says the tool in one word (`bash`, `edit`, `read`) and the
