@@ -1162,23 +1162,34 @@ function paintAnswer(wrap, turn) {
   }
 }
 
+/**
+ * What a turn's own line says. The two that matter read apart at a glance: a message the child has been
+ * given is the one the run is working on, and a message waiting behind the run is a draft that can still
+ * be changed.
+ */
+function turnLabel(turn) {
+  if (turn.status === "answered") return "answered";
+  if (turn.status === "stopped") return turn.error ? `stopped · ${turn.error}` : "stopped";
+  if (turn.status === "sent") return turn.mode === "steer" ? "steered into the run" : "sent to the agent";
+  return "queued · waits for the run";
+}
+
 /** One follow-up exchange: your question, what happened to it, then the answer. */
-function turnNode(turn) {
+function turnNode(entry, turn, index) {
   const wrap = el("div", `turn ${turn.status || "queued"}`);
   const question = el("div", "turn-q");
   question.textContent = turn.text || "";
   wrap.appendChild(question);
+  // The child has not been told this one yet, so its words are still the human's to change.
+  if (turn.status === "queued") {
+    question.title = "press twice to rewrite this message";
+    question.addEventListener("dblclick", () => startEditingTurn(entry, wrap, index));
+  }
   const status = el("div", `turn-status ${turn.status || "queued"}`);
-  status.textContent =
-    turn.status === "answered"
-      ? "answered"
-      : turn.status === "stopped"
-        ? turn.error
-          ? `stopped · ${turn.error}`
-          : "stopped"
-        : turn.status === "sent"
-          ? "sent"
-          : `queued · ${turn.mode === "steer" ? "steer" : "queue"}`;
+  const label = el("span", "turn-label");
+  label.textContent = turnLabel(turn);
+  status.appendChild(label);
+  if (turn.status === "queued") status.appendChild(queuedActs(entry, wrap, index));
   // A connection error fits on this line; a longer reason is readable in full on hover.
   if (turn.error) status.title = turn.error;
   wrap.appendChild(status);
@@ -1195,6 +1206,121 @@ function turnNode(turn) {
   wrap.appendChild(el("div", "turn-a note-body"));
   paintAnswer(wrap, turn);
   return wrap;
+}
+
+/** The two things a message the child has not read may still be given: new words, or none. */
+function queuedActs(entry, wrap, index) {
+  const acts = el("div", "turn-acts");
+  const edit = el("button", "turn-act");
+  edit.type = "button";
+  edit.textContent = "edit";
+  edit.title = "rewrite this message before the agent reads it";
+  edit.setAttribute("aria-label", "rewrite this queued message");
+  edit.addEventListener("click", (event) => {
+    event.stopPropagation();
+    startEditingTurn(entry, wrap, index);
+  });
+  const drop = el("button", "turn-act drop");
+  drop.type = "button";
+  drop.textContent = "×";
+  drop.title = "take this message back before the agent reads it";
+  drop.setAttribute("aria-label", "withdraw this queued message");
+  drop.addEventListener("click", (event) => {
+    event.stopPropagation();
+    void dropQueued(entry, index);
+  });
+  acts.append(edit, drop);
+  return acts;
+}
+
+/**
+ * The words of a message the child has not read yet become a field holding themselves. Enter keeps what
+ * was typed, Shift+Enter breaks the line, Escape drops it, and a press elsewhere keeps it — the note
+ * editor's rules, on the card's own conversation.
+ */
+function startEditingTurn(entry, wrap, index) {
+  if (wrap.dataset.editing) return;
+  const turn = Array.isArray(entry.data?.turns) ? entry.data.turns[index] : null;
+  if (!turn || turn.status !== "queued") return;
+  const bubble = wrap.querySelector(".turn-q");
+  if (!bubble) return;
+  wrap.dataset.editing = "1";
+  const area = el("textarea", "turn-edit");
+  area.value = turn.text || "";
+  area.spellcheck = false;
+  area.rows = 2;
+  bubble.title = "";
+  bubble.replaceChildren(area);
+  // A field that grows with its words: a queued message is often longer than the two rows it opens with.
+  const grow = () => {
+    area.style.height = "auto";
+    area.style.height = `${area.scrollHeight}px`;
+  };
+  area.addEventListener("input", grow);
+  grow();
+  area.focus();
+  area.setSelectionRange(area.value.length, area.value.length);
+  const finish = (commit) => {
+    if (!wrap.dataset.editing) return;
+    delete wrap.dataset.editing;
+    const wanted = area.value.trim();
+    // The field goes before anything is saved, and the words go back into the bubble as they now read.
+    // A repaint here would take the node under the pointer with it, and the × beside an editor that was
+    // just closed would swallow the click that closed it.
+    area.remove();
+    bubble.title = "press twice to rewrite this message";
+    bubble.textContent = commit && wanted ? wanted : turn.text || "";
+    if (commit && wanted && wanted !== turn.text) void saveTurnText(entry, index, wanted);
+  };
+  area.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      // The editor takes Escape first: dropping an edit must not give up the selection either.
+      event.preventDefault();
+      event.stopPropagation();
+      finish(false);
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      finish(true);
+    }
+  });
+  area.addEventListener("blur", () => finish(true));
+}
+
+/**
+ * The rewritten words go back to the daemon, which is holding the queue: the card is drawn from the answer
+ * it sends, so the field and the message that will be sent cannot drift apart.
+ */
+async function saveTurnText(entry, index, text) {
+  try {
+    const response = await fetch(`/message/edit?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: entry.id, turn: index, text }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 120) || response.statusText);
+    footNote("queued message rewritten");
+  } catch (error) {
+    footNote(`could not rewrite the queued message: ${error.message || error}`, true);
+    // Words that never reached the queue are not words the card stands behind, so it is drawn again from
+    // what the daemon actually holds.
+    paintCard(entry, entry.data);
+  }
+}
+
+/** A message taken back before the child reads it. The daemon stops the turn, so nothing is drawn here. */
+async function dropQueued(entry, index) {
+  try {
+    const response = await fetch(`/message/drop?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: entry.id, turn: index }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 120) || response.statusText);
+    footNote("queued message withdrawn");
+  } catch (error) {
+    footNote(`could not withdraw the queued message: ${error.message || error}`, true);
+  }
 }
 
 /** What a turn draws besides its answer. A turn that changes here has to be redrawn whole. */
@@ -1220,25 +1346,31 @@ function paintThread(entry, data) {
   // there; someone who scrolled up to read is left where they are.
   const atBottom = entry.scroll.scrollHeight - entry.scroll.scrollTop - entry.scroll.clientHeight < 24;
   // A reply arriving in deltas would otherwise rebuild the whole conversation ten times a second,
-  // taking the column's scroll and any selection being read with it. While nothing but the last
-  // answer moves, only that answer is repainted.
+  // taking the column's scroll and any selection being read with it. While nothing but an answer
+  // moves, only that answer is repainted.
   const drawn = entry.turnNodes ?? (entry.turnNodes = []);
   const settled =
     drawn.length === turns.length && turns.every((turn, at) => turnShape(turn) === turnShape(drawn[at].turn));
   if (settled) {
-    const at = turns.length - 1;
-    const before = at >= 0 ? drawn[at].turn : null;
-    const moved =
-      before &&
-      (turns[at].reply !== before.reply ||
-        (turns[at].interim ?? []).join("\u0000") !== (before.interim ?? []).join("\u0000") ||
-        Boolean(turns[at].streaming) !== Boolean(before.streaming));
-    if (moved) {
-      paintAnswer(drawn[at].node, turns[at]);
-      drawn[at].turn = { ...turns[at] };
+    // The run writes into the turn it was asked about, which is not always the last one: a message
+    // queued behind the run sits after it, and the answer under it keeps arriving while it waits.
+    const moved = turns.findIndex((turn, at) => {
+      const before = drawn[at].turn;
+      return (
+        turn.reply !== before.reply ||
+        (turn.interim ?? []).join("\u0000") !== (before.interim ?? []).join("\u0000") ||
+        Boolean(turn.streaming) !== Boolean(before.streaming)
+      );
+    });
+    if (moved >= 0) {
+      paintAnswer(drawn[moved].node, turns[moved]);
+      drawn[moved].turn = { ...turns[moved] };
     }
+  } else if (entry.thread.querySelector(".turn-edit")) {
+    // Someone is rewriting a queued message. Rebuilding the conversation under the field would take
+    // the words being typed with it, and the next broadcast draws the turn once the edit is done.
   } else {
-    const nodes = turns.map(turnNode);
+    const nodes = turns.map((turn, at) => turnNode(entry, turn, at));
     entry.thread.replaceChildren(...nodes);
     entry.turnNodes = turns.map((turn, at) => ({ turn: { ...turn }, node: nodes[at] }));
   }

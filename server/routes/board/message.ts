@@ -3,7 +3,7 @@
  * A message into a thread, and the bookkeeping that decides which cards a turn owns.
  */
 import { answer, fail, readJson } from "../../http.ts";
-import { cardPreamble } from "./thread.ts";
+import { cardPreamble, field } from "./thread.ts";
 import { randomUUID } from "node:crypto";
 import { runtimeDefaults } from "../../workspaces.ts";
 import { card, update, updateCard } from "../../bus.ts";
@@ -106,11 +106,99 @@ export async function onMessage(req, res, board) {
 			threadError(board, thread, `could not steer the child: ${error.message}`);
 		}
 	} else if (running) {
-		thread.queued.push({ message, text, target });
+		// The card quote is kept beside the words the human typed, so a message still waiting can be
+		// rewritten without losing what the child needs to know about the card it is about.
+		thread.queued.push({ message, text, preamble, target });
 	} else {
 		prompt(board, thread, message, target);
 	}
 	answer(res, 200, { id: thread.id, turn: index });
+}
+
+
+
+/**
+ * A message that is still waiting behind a run, named the way the browser has it: the card the turn is
+ * drawn on, and its place in that card's conversation. A thread's own card names the thread, a card a
+ * hidden child answers for names the card; the two differ only in which turn list holds the turn.
+ */
+function waitingMessage(board, body) {
+	const cardId = field(body.cardId, 100);
+	const at = Number(body.turn);
+	if (!cardId || !Number.isInteger(at) || at < 0) return {};
+	// Not `threadForRuntime`: it lives in lifecycle.ts, which imports this file, and a cycle is a poor
+	// trade for four lines of lookup.
+	const held = board.cards.get(cardId);
+	const owner = held ? (held.ownerThread ?? held.threadRoot) : cardId;
+	const thread = owner ? board.threads.get(owner) : undefined;
+	if (!thread) return {};
+	const target = held ? { cardId, turn: at } : { turn: at };
+	const entry = (thread.queued ?? []).find(
+		(next) => typeof next !== "string" && next.target?.turn === at && (next.target.cardId ?? "") === (target.cardId ?? ""),
+	);
+	return { thread, target, entry };
+}
+
+
+
+/** The turn a queued message is drawn in, wherever it is held. */
+function queuedTurn(board, thread, target) {
+	if (!target.cardId) return thread.turns[target.turn];
+	return board.cards.get(target.cardId)?.turns?.[target.turn];
+}
+
+
+
+/** The surface the queue changed on: the card that holds the turn, or the thread's own card. */
+function showQueue(board, thread, target) {
+	const held = target.cardId ? board.cards.get(target.cardId) : undefined;
+	if (held) updateCard(board, held);
+	else update(board, thread);
+}
+
+
+
+/**
+ * Rewriting a message the child has not been told yet. The words go into the queue and into the turn the
+ * card draws, so the two never disagree about what is about to be sent.
+ */
+export async function onMessageEdit(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const text = typeof body.text === "string" ? body.text.trim() : "";
+	if (!text) return void fail(res, 400, "empty message");
+	const { thread, target, entry } = waitingMessage(board, body);
+	if (!thread) return void fail(res, 409, "no such thread");
+	if (!entry) return void fail(res, 409, "that message is not waiting: the child has it");
+	entry.text = text.slice(0, 4000);
+	// Only the human's own words change: the card quote the message was queued with stays as it was.
+	entry.message = `${entry.preamble ?? ""}${entry.text}`;
+	const turn = queuedTurn(board, thread, target);
+	if (turn) turn.text = entry.text;
+	showQueue(board, thread, target);
+	answer(res, 200, { text: entry.text });
+}
+
+
+
+/**
+ * Taking a message back before the child is told it. The turn stays, wearing the words that were
+ * withdrawn: a card that silently lost a message reads as one that was never typed.
+ */
+export async function onMessageDrop(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const { thread, target, entry } = waitingMessage(board, body);
+	if (!thread) return void fail(res, 409, "no such thread");
+	if (!entry) return void fail(res, 409, "that message is not waiting: the child has it");
+	thread.queued.splice(thread.queued.indexOf(entry), 1);
+	const turn = queuedTurn(board, thread, target);
+	if (turn) {
+		turn.status = "stopped";
+		turn.error = "withdrawn";
+	}
+	showQueue(board, thread, target);
+	answer(res, 200, { withdrawn: target.turn });
 }
 
 
