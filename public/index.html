@@ -551,12 +551,13 @@
     border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
   #composer .modes button.on { color: #0d1117; background: var(--accent); border-color: var(--accent); }
   /* How hard the model thinks is worn by the think chip: its border takes the level's colour from
-     the ironbow ramp and a soft halo of the same hue sits around it. The script sets both colours,
-     and takes them off again at `off`, so the chip then falls back to the plain border it always
-     had. The ramp stops at yellow, so the hardest think reads warm rather than white-hot. */
+     the ironbow ramp and a soft halo of the same hue sits around it. Two shadows, a tight one and a
+     wide one, so the halo has a hot core instead of reading as a flat ring. The script sets both
+     colours, and takes them off again at `off`, so the chip then falls back to the plain border it
+     always had. The ramp stops at yellow, so the hardest think reads warm rather than white-hot. */
   #thinkPick {
     border-color: var(--heat-tint, var(--border));
-    box-shadow: 0 0 7px -1px var(--heat-haze, transparent);
+    box-shadow: 0 0 3px var(--heat-haze, transparent), 0 0 11px var(--heat-haze, transparent);
   }
   #composer #send { font: 12px var(--mono); color: #0d1117; background: var(--green);
     border: 0; border-radius: 6px; padding: 7px 14px; cursor: pointer; }
