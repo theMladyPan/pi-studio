@@ -20,7 +20,9 @@ function fakeBoard() {
 	};
 }
 
-function fakeThread(): Record<string, unknown> {
+// A fake the tests poke at freely: they set fields on it and read back what the child's lines did, so
+// its shape is whatever that particular test needs rather than one the reader has to keep in step.
+function fakeThread(): any {
 	return { id: "abcdef123456", title: "a thread", status: "running", turns: [], queued: [], folder: "/tmp/board" };
 }
 
