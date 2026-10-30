@@ -68,22 +68,28 @@ export async function onMessage(req, res, board) {
 	}
 	if (thread.status === "dead") return void fail(res, 409, "thread ended");
 
-	// The card shows what the human typed; the child is told what card it is about. A comment on a
-	// card is kept on that card, so its chain reads there and the thread card keeps only what was
-	// asked on it directly.
+	// The card shows what the human typed; the child is told what card it is about. The answer is kept
+	// where it will be read: a thread that is drawn has a card of its own, the field is docked in that
+	// card, and the answer belongs under the words that asked for it. So a note, source or question is
+	// only quoted, never written on — the entry stays the artifact the child made, and later comments
+	// on it start a chain on the thread card with the card's own text in the preamble. A child with no
+	// card of its own, one forked onto a card, has nowhere else to be read and keeps the turn on it.
 	const message = `${preamble}${text}`;
+	const holding = askedCard && thread.hidden ? askedCard : null;
 	let target = null;
 	let index;
-	if (askedCard) {
-		askedCard.turns = askedCard.turns ?? [];
+	if (holding) {
+		holding.turns = holding.turns ?? [];
 		// A steer joins the run in flight, so the turn is already being acted on.
-		askedCard.turns.push({ text: text.slice(0, 4000), status: mode === "steer" ? "sent" : "queued", mode, at: Date.now() });
-		index = askedCard.turns.length - 1;
-		target = { cardId: askedCard.id, turn: index };
-		updateCard(board, askedCard);
+		holding.turns.push({ text: text.slice(0, 4000), status: mode === "steer" ? "sent" : "queued", mode, at: Date.now() });
+		index = holding.turns.length - 1;
+		target = { cardId: holding.id, turn: index };
+		updateCard(board, holding);
 	} else {
-		thread.turns.push({ text: text.slice(0, 4000), status: "queued", mode, at: Date.now() });
+		thread.turns.push({ text: text.slice(0, 4000), status: mode === "steer" ? "sent" : "queued", mode, at: Date.now() });
 		index = thread.turns.length - 1;
+		// The thread's own turn is named by its index alone: there is no card holding it.
+		target = { turn: index };
 		update(board, thread);
 	}
 	const running = thread.status === "running";

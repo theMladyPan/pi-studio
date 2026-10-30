@@ -35,8 +35,10 @@ import { spawnSync } from "node:child_process";
  * @property {string} [thinking]
  * @property {number} at
  * @property {Turn[]} turns
- * @property {(string|{message: string, text: string, target?: {cardId: string, turn: number}})[]} queued
- * @property {{cardId: string, turn: number}|null} [answering]
+ * @property {(string|{message: string, text: string, target?: {cardId?: string, turn: number}})[]} queued
+ * @property {{cardId: string, turn: number}|{turn: number}|null} [answering] the turn the run in flight
+ *   writes its answer into: `cardId` names the card when a hidden child answers for one, and a bare
+ *   `turn` is the index of one of the thread's own turns.
  * @property {{x:number,y:number,w:number,h:number}} [rect]
  * @property {boolean} [mini]
  * @property {number} [runStartedAt]

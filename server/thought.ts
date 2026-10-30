@@ -376,7 +376,9 @@ export function handleChildLine(board, thread, line) {
 			.join("")
 			.trim();
 		// When the run was answering for a card, only that card may receive the reply. Falling back to
-		// the thread's own turn would overwrite an older answer with a card's answer.
+		// the thread's own turn would overwrite an older answer with a card's answer. A turn the thread
+		// keeps is named by its index, so the reply lands under the message that asked for it even when
+		// several were queued behind one run.
 		const { turn, card: asked } = liveTurn(board, thread);
 		// The answer is what the whole run said. A run that talks, calls a tool and talks again would
 		// otherwise drop its first half the moment its second arrived.
@@ -423,7 +425,7 @@ export function handleChildLine(board, thread, line) {
 			thread: threadRef(thread),
 		});
 		if (turn && asked) updateCard(board, asked);
-		else if (!thread.answering) update(board, thread);
+		else if (!thread.answering?.cardId) update(board, thread);
 		return;
 	}
 	if (event.type === "agent_settled") {
@@ -443,7 +445,7 @@ export function handleChildLine(board, thread, line) {
 			turn.streaming = false;
 			if (turn.status === "sent") turn.status = "stopped";
 		}
-		const parked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
+		const parked = thread.answering?.cardId ? board.cards.get(thread.answering.cardId) : undefined;
 		if (parked) {
 			for (const turn of parked.turns ?? []) {
 				turn.streaming = false;
@@ -462,10 +464,13 @@ export function handleChildLine(board, thread, line) {
 			const text = typeof next === "string" ? next : next.text;
 			const target = typeof next === "string" ? null : (next.target ?? null);
 			if (target) {
-				const held = board.cards.get(target.cardId);
-				if (held?.turns?.[target.turn]) {
-					held.turns[target.turn].status = "queued";
-					updateCard(board, held);
+				// A card's turn and the thread's own turn differ only in where they are held.
+				const held = target.cardId ? board.cards.get(target.cardId) : undefined;
+				const waiting = held ? held.turns?.[target.turn] : thread.turns[target.turn];
+				if (waiting) {
+					waiting.status = "queued";
+					if (held) updateCard(board, held);
+					else update(board, thread);
 				}
 			} else {
 				thread.turns.push({ text, status: "queued", mode: "queue", at: Date.now() });

@@ -304,7 +304,7 @@ test("the event stream opens with a snapshot the client can draw from", async ()
  * that never ends.
  */
 const STUB_PI = String.raw`
-const { appendFileSync, existsSync, writeFileSync } = require("node:fs");
+const { appendFileSync, existsSync, unlinkSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 
 // A naming run is the other shape of invocation and carries no thread token, so it has nothing to say
@@ -350,6 +350,16 @@ process.stdin.on("data", (chunk) => {
 		if (frame.type === "prompt") {
 			// A "hold" file keeps the run open, which is the state a compaction has to refuse.
 			if (existsSync(flag("hold"))) continue;
+			// A "slow" file delays one answer, which is the window a second message is queued in. It is
+			// spent on the first prompt so the rest of the run answers at once.
+			if (existsSync(flag("slow"))) {
+				unlinkSync(flag("slow"));
+				setTimeout(() => {
+					say({ type: "turn_end", message: { role: "assistant", content: [{ type: "text", text: "the stub answered" }] } });
+					say({ type: "agent_settled" });
+				}, 600);
+				continue;
+			}
 			say({ type: "turn_end", message: { role: "assistant", content: [{ type: "text", text: "the stub answered" }] } });
 			say({ type: "agent_settled" });
 		}
@@ -582,6 +592,88 @@ test("a child that dies before it answers is reported, not waited out", async ()
 		assert.equal(gone.status, 409);
 		assert.match(gone.body, /the child exited before it answered/);
 		assert.ok(Date.now() - started < 20_000, "the press waited on a child that was already gone");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+/** Wait until a thread has run everything asked of it, which is where its turns can be read. */
+async function settledThread(daemon: Daemon, board: string, id: string, turns: number) {
+	let seen = null;
+	for (let tries = 0; tries < 200; tries++) {
+		seen = await threadState(daemon, board, id);
+		const done = (seen?.turns ?? []).length >= turns && (seen?.turns ?? []).every((turn: any) => turn.status !== "sent" && turn.status !== "queued");
+		if (done && seen?.status === "idle") return seen;
+		await new Promise((done) => setTimeout(done, 50));
+	}
+	throw new Error(`thread ${id} never settled: ${JSON.stringify(seen?.turns ?? seen)}`);
+}
+
+/** One card as `/state` draws it. */
+async function cardState(daemon: Daemon, board: string, id: string) {
+	const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board}`)).body);
+	return (state.cards as any[]).find((one) => one.id === id) ?? null;
+}
+
+test("a question about a note is answered on the thread's card, and the note keeps no turn", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-note-reply-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-note-reply-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" })).status, 200);
+		await settledThread(daemon, board.id, threadId, 1);
+
+		// The note the thread made is the artifact the human reads, and the card the composer sends.
+		const note = JSON.parse((await postTo(daemon, board.id, "/card/note", { markdown: "the artifact", key: "an-artifact", threadRoot: threadId })).body);
+		assert.equal(note.card.ownerThread, threadId, "the note was not owned by the thread that wrote it");
+
+		const asked = await postTo(daemon, board.id, "/message", { cardId: note.cardId, text: "what does this show?" });
+		assert.equal(asked.status, 200);
+		const settled = await settledThread(daemon, board.id, threadId, 2);
+
+		// The answer is the thread's own turn, next to the words that asked for it.
+		assert.equal(settled.turns.length, 2, "the thread's conversation has one turn too many or too few");
+		assert.equal(settled.turns[1].text, "what does this show?");
+		assert.equal(settled.turns[1].status, "answered");
+		assert.equal(settled.turns[1].reply, "the stub answered");
+		// The card stays the artifact it was: it is quoted at the child, and written on by nobody.
+		const card = await cardState(daemon, board.id, note.cardId);
+		assert.deepEqual(card.turns ?? [], [], "the note kept the turn");
+		const prompts = framesOf(stub).filter((frame: any) => frame.type === "prompt");
+		assert.match(prompts[1].message, /The card says: the artifact/, "the child was not told which card it is about");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a message queued behind a run lands on its own turn, once", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-queue-turns-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-queue-turns-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	// The first answer is held back, which is the window the second message is queued in.
+	writeFileSync(join(dirname(stub.envFile), "slow"), "1");
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		const note = JSON.parse((await postTo(daemon, board.id, "/card/note", { markdown: "the artifact", key: "queued-artifact", threadRoot: threadId })).body);
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "first" })).status, 200);
+		for (let tries = 0; tries < 100; tries++) {
+			if ((await threadState(daemon, board.id, threadId))?.status === "running") break;
+			await new Promise((done) => setTimeout(done, 20));
+		}
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: note.cardId, text: "second" })).status, 200);
+
+		const settled = await settledThread(daemon, board.id, threadId, 2);
+		// One turn per message: the queued one is marked where it waits, not pushed a second time.
+		assert.deepEqual(settled.turns.map((turn: any) => turn.text), ["first", "second"]);
+		assert.ok(settled.turns.every((turn: any) => turn.status === "answered"), `turns were left waiting: ${JSON.stringify(settled.turns.map((turn: any) => turn.status))}`);
+		assert.deepEqual((await cardState(daemon, board.id, note.cardId))?.turns ?? [], [], "the note kept the queued turn");
 	} finally {
 		daemon.child.kill();
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });

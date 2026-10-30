@@ -3,7 +3,7 @@
  * Opening and closing: the sweep that kills a child, the rows a closed thread leaves, and the reopen
  * that brings one back.
  */
-import { stopStream } from "../../child/run.ts";
+import { liveTurn, stopStream } from "../../child/run.ts";
 import { broadcast, card, closedCards, nudgeWelcome, resync, update, updateCard } from "../../bus.ts";
 import { MAX_PLAIN_CARDS, scheduleSave } from "../../store.ts";
 import { ownedCards, refreshOwned } from "./message.ts";
@@ -67,8 +67,7 @@ export function killChild(board, thread) {
 	if (!child) return false;
 	// The child stops being this thread's voice before it is killed, so its death is not the run failing.
 	board.children.delete(thread.id);
-	const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
-	const turn = thread.answering ? asked?.turns?.[thread.answering.turn] : thread.turns[thread.turns.length - 1];
+	const { turn, card: asked } = liveTurn(board, thread);
 	if (turn) {
 		turn.streaming = false;
 		if (turn.status !== "answered") turn.status = "stopped";
@@ -76,11 +75,12 @@ export function killChild(board, thread) {
 	stopStream(thread);
 	// Nothing will arrive to drain the queue now, so what was waiting says stopped instead of waiting.
 	for (const next of thread.queued) {
-		const held = typeof next === "string" || !next.target ? undefined : board.cards.get(next.target.cardId);
-		const parked = held?.turns?.[next.target.turn];
+		// A queued message names the turn it was written to: a card's, or the thread's own.
+		const held = typeof next === "string" || !next.target?.cardId ? undefined : board.cards.get(next.target.cardId);
+		const parked = typeof next === "string" || !next.target ? undefined : (held ? held.turns?.[next.target.turn] : thread.turns[next.target.turn]);
 		if (parked && parked.status === "queued") {
 			parked.status = "stopped";
-			updateCard(board, held);
+			if (held) updateCard(board, held);
 		}
 	}
 	thread.queued = [];
