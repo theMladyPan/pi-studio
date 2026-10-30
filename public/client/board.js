@@ -1213,6 +1213,7 @@ function makeCard(data, quiet = false) {
     <span class="spacer"></span>
     <button type="button" class="ask-pill" aria-label="centre this question">answer needed</button>
     <span class="chip"></span>
+    <button type="button" class="copy-id" title="copy this card's id">⧉</button>
     <button class="min" title="minimize this card" aria-label="minimize this card">▾</button>
     <button class="reply" title="ask a follow-up about this card" aria-label="ask a follow-up about this card">↩</button>
     <button class="edit" title="edit this note" aria-label="edit this note">✎</button>
@@ -1276,6 +1277,17 @@ function makeCard(data, quiet = false) {
   entry.askPill.addEventListener("click", (event) => {
     event.stopPropagation();
     centreQuestion(entry);
+  });
+  // The id is how a card is named in a message and in a bug report, and nothing on the board shows it:
+  // one press puts it on the clipboard, and the footer repeats it in case the clipboard is refused.
+  const copyId = head.querySelector(".copy-id");
+  copyId.title = `copy this card's id · ${data.id}`;
+  copyId.setAttribute("aria-label", `copy the id of ${data.title || "this card"}`);
+  copyId.addEventListener("click", (event) => {
+    event.stopPropagation();
+    copyText(entry.id)
+      .then(() => footNote(`card id copied · ${entry.id}`))
+      .catch(() => footNote(`the clipboard refused, so the card id is here · ${entry.id}`));
   });
   if (data.mini) setMini(card, true);
   paintCard(entry, data);
@@ -4329,6 +4341,27 @@ function footNote(text, bad = false) {
   footTimer = setTimeout(() => {
     footHint.textContent = "";
   }, 8000);
+}
+
+/**
+ * Text onto the clipboard. A board opened over the network is not a secure context, where the modern
+ * call does not exist, so the old selection trick stands in for it.
+ */
+function copyText(text) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+  return new Promise((resolve, reject) => {
+    const box = el("textarea");
+    box.value = text;
+    box.style.cssText = "position:fixed;left:-9999px;top:0";
+    document.body.appendChild(box);
+    box.select();
+    try {
+      if (document.execCommand("copy")) resolve();
+      else reject(new Error("copy refused"));
+    } finally {
+      box.remove();
+    }
+  });
 }
 
 // Compaction is the agent's own housekeeping, so the board asks the session for it and reports

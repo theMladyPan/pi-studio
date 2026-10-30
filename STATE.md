@@ -208,6 +208,10 @@ commit's own account rather than on a check run now, the section below says so.
   now`. The path is made relative to the workspace, so a card says where it is before what it is.
   Opening the same file again titles the card from the file once more, so a name given by hand to a
   file card lasts until that file is asked for again.
+- **A card's id is one press away.** The `⧉` in a card's head copies the whole id, because a card is
+  named by its id when a bug is reported and nothing on the board showed it. The footer repeats the id
+  when the clipboard refuses — a board opened by its network address is not a secure context, where
+  `navigator.clipboard` is missing, so the old selection trick stands in and says so when it fails too.
 - **A card's name is the human's too.** Two presses on the name in a card's head turn it into a field
   holding itself: Enter or a click elsewhere keeps what was typed, Escape drops it, and an empty name
   keeps the one the card had. `POST /rename {cardId, title}` stores it on the card, or on the thread
