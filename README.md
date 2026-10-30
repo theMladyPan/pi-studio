@@ -65,6 +65,8 @@ npm run smoke   # boots two daemons against scratch folders, runs 19 checks, exi
   thread's pi session is written under `~/.pi/agent/state/pi-studio/sessions/<workspace>/`, so a
   restart of the daemon resumes the conversation instead of starting over.
 - **Steering**: send with `steer` to redirect a run in flight, or `queue` to wait behind it.
+- **A boss thread spawns children instead of working.** It runs one of three flows and gives each child
+  one role; `docs/boss-and-subagents.md` draws the three flows and says what each role may do.
 - **One client, one visual language.** `public/` holds the board client. It is the one the
   dashboard extension used, copied in when this became its own application.
 
