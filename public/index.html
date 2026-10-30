@@ -15,6 +15,8 @@
     --lh: 20px;
     /* One number the rail, the canvas and the composer all agree on. */
     --rail: 252px;
+    /* Lines a running activity row gives to what it is working on, under its own name. */
+    --act-detail: 3;
   }
   body.rail-off { --rail: 0px; }
   * { box-sizing: border-box; }
@@ -476,13 +478,27 @@
   .act .name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .act .who { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; color: var(--muted); font: 10px var(--mono); }
-  .act .ms { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; }
+  .act .ms { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; text-align: right;
+    /* The figure counts while a run is live, so it keeps one width and tabular digits: a clock growing
+       from `9s` to `1m 05s` must not shove the name beside it about. */
+    min-width: 7ch; overflow: hidden; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .act .target, .act .note { color: var(--muted); font-size: 11px; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
   .act.reply { background: #10161e; border-color: #232a33; }
   .act.reply .note, .act.thinking .tail { white-space: pre-wrap; display: -webkit-box;
     -webkit-box-orient: vertical; }
   .act.reply .note { color: #c9d1d9; -webkit-line-clamp: 4; }
+  /* A thought's figure carries tokens and a rate, so it is given the room those two numbers take and
+     no more; a tool's figure is a duration and needs the short slot. */
+  .act.thinking .ms { min-width: 17ch; }
+  /* A row that is still running keeps the size it had when it appeared: one head line, and
+     --act-detail lines for whatever it is working on. A box that grows while it streams walks the rows
+     around it about, and the eye loses what it was reading. A row that has settled is a line in a list
+     and sizes itself. One number to trade rows for height. */
+  .act.running .target, .act.running .note, .act.thinking.running .tail {
+    height: calc(var(--act-detail) * 16px); line-height: 16px;
+    overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--act-detail); }
   /* A thought streams in paragraphs, so its tail keeps the newest characters dim and monospaced
      and clamps the height, which leaves the rest of the rail where it was. No scroll of its own. */
   .act.thinking .tail { margin-top: 2px; color: var(--muted); font: 10px/1.35 var(--mono);

@@ -3349,6 +3349,19 @@ function reopenCard(row, name) {
     .catch(() => hintLine("could not reach the board server", true));
 }
 
+/**
+ * What a running call is working on, for the lines under its name: the command it is shelling, the file
+ * it is reading. The summary a settled row shows does not exist yet, so the arguments are what there is
+ * to read while the call is in flight.
+ */
+function liveDetail(row) {
+  const args = row.args ?? {};
+  const said = [args.command, args.path ?? args.file_path, args.url, args.pattern, args.selector, args.query].find(
+    (value) => typeof value === "string" && value.trim(),
+  );
+  return String(said ?? row.summary ?? row.target ?? "").trim();
+}
+
 function actRow(row, inCard = false) {
   const thinking = row.kind === "thinking";
   const node = el("div", `act ${row.kind === "reply" ? "reply" : ""} ${thinking ? "thinking" : ""} ${row.status}`);
@@ -3362,9 +3375,17 @@ function actRow(row, inCard = false) {
   const top = el("div", "top");
   top.appendChild(el("span", "dot"));
   const name = el("span", "name");
-  // The phrase says what the call does; the tool name stays available on hover.
-  name.textContent = row.kind === "reply" ? "answer" : thinking ? "thinking" : row.label || row.tool || "tool";
-  if (row.tool) name.title = row.tool;
+  // A row that is still running says which tool it is in one word and gives the lines below to what
+  // that tool is working on: the command, the file, the page. A long command in the signpost left the
+  // row with nothing to grow into, and a command cut in one line is not readable anyway.
+  name.textContent = row.status === "running" && row.tool
+    ? row.tool
+    : row.kind === "reply"
+      ? "answer"
+      : thinking
+        ? "thinking"
+        : row.label || row.tool || "tool";
+  if (row.tool) name.title = row.label || row.tool;
   top.appendChild(name);
   // A running row waits in the rail strip when its thread's card is not here, and no section names
   // the thread that is working, so the row says it itself. In the card the thread is the card, and a
@@ -3410,11 +3431,13 @@ function actRow(row, inCard = false) {
         ? rowClock(Date.now() - row.startedAt)
         : "…"
       : "";
-  const detail = row.kind === "reply" ? row.text || "" : row.summary || row.target || "";
-  if (detail) {
+  const detail = row.kind === "reply" ? row.text || "" : row.status === "running" ? liveDetail(row) : row.summary || row.target || "";
+  // A running row keeps its two detail lines whether or not it has something to put there, so the box
+  // is the same size from one step of a run to the next and nothing below it moves.
+  if (detail || row.status === "running") {
     const note = el("div", row.kind === "reply" ? "note" : "target");
     note.textContent = detail;
-    note.title = detail;
+    if (detail) note.title = detail;
     node.appendChild(note);
   }
   return node;

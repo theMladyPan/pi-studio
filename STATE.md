@@ -221,6 +221,14 @@ commit's own account rather than on a check run now, the section below says so.
   caret (`.card.live`), because the row already says the run is going and says what it is doing. The
   strip above the log (`#railNow`) now holds a running row only when its thread's card is closed or
   not on this board, so a run is never invisible; a row living there still names its own thread.
+- **A running row is a fixed slot.** One head line and `--act-detail` lines under it — three by default
+  — and the same height from the first delta to the last, because a row that grows while it streams
+  walks the rows around it about. The head says the tool in one word (`bash`, `edit`, `read`) and the
+  lines below carry what it is working on: the command, the file, the page, read off the row's
+  arguments, since a summary does not exist until the call is over. A settled row is a line in a list
+  and sizes itself. The figure at the end of a row keeps one width with tabular digits (`min-width:
+  7ch`, `17ch` for a thought's tokens and rate), so a clock counting from `9s` to `1m 05s` does not
+  shove the name beside it.
 - **A thought is a row of its own.** `thinking_start`, `thinking_delta` and `thinking_end` on the
   child's stream each land in a rail row of kind `thinking`, so what a run is doing when it has not
   said anything is visible while it happens. The rail carries the newest 400 characters and a rate read
