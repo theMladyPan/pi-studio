@@ -20,6 +20,35 @@
 
 * {
   box-sizing: border-box;
+  /* Thin dark scrollbars, so the settings tree and a long shelf read as part of the page instead of
+     carrying the platform's grey trough, the way the board's do. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-2) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3d444d;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 html, body {
@@ -37,10 +66,6 @@ body {
   flex-direction: column;
   align-items: center;
   padding: 0 24px;
-  /* settled shelf structural grid hairlines at +/-320px */
-  background-image:
-    linear-gradient(to right, transparent calc(50% - 320px), var(--border) calc(50% - 320px), var(--border) calc(50% - 319px), transparent calc(50% - 319px)),
-    linear-gradient(to right, transparent calc(50% + 319px), var(--border) calc(50% + 319px), var(--border) calc(50% + 320px), transparent calc(50% + 320px));
 }
 
 button, input, select {
@@ -55,7 +80,7 @@ button, input, select {
 /* Shelf wrapper: sits in the upper-middle optical zone */
 .shelf-stage {
   width: 100%;
-  max-width: 640px;
+  max-width: 880px;
   margin-top: min(11vh, 96px);
   display: flex;
   flex-direction: column;
@@ -152,7 +177,7 @@ button, input, select {
   color: var(--accent);
 }
 
-/* Main 640px surface container (shared by both Shelf and Settings page) */
+/* Main 880px surface container (shared by both Shelf and Settings page) */
 .shelf-box {
   background: var(--panel);
   border: 1px solid var(--border-2);
@@ -984,7 +1009,7 @@ button, input, select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 270px;
+  max-width: 420px;
 }
 
 /* 1024x700 and compact height resilience */
@@ -1009,7 +1034,6 @@ button, input, select {
 
 @media (max-width: 720px) {
   body {
-    background-image: none;
     padding: 0 12px;
   }
   .foot-selected-path {
