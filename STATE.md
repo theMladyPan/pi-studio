@@ -435,6 +435,17 @@ from the path, carrying `&workspace=` on its routes, and its `board of <name>` l
 crossroads in a tab. The board gained a corner panel for its own settings and the `clean` and `new`
 buttons beside them; the crossroads gained the defaults panel. No framework, no build step.
 
+- **The column is 880px and carries no rails.** Shelf and settings share the one width, and the two
+  1px verticals the 640px column was framed with are gone: a page is not a drawer.
+- **A prompt is edited as markdown and stays markdown.** The box in the settings tree is a textarea with
+  a mirror behind it drawing the same characters styled, so `**bold**` reads bold with its asterisks on
+  show and `## Title` reads as a heading with its hashes kept. Nothing is rendered that a save would
+  drop. Tab indents instead of leaving the field, Enter carries a list on and ends one that is empty,
+  and ⌘B/⌘I wrap the selection, all through `insertText` so one press stays one step of undo. The box
+  grows with the file rather than scrolling inside itself: an inner scrollbar would narrow one layer
+  and not the other, and the two would then wrap different lines. The board's own prompt popover still
+  holds a plain textarea.
+
 ## Fixed on the way
 
 - One activity row could stay `running` for ever, and the rail counted it: a tool call ends with a line

@@ -16,6 +16,8 @@
   const DRAFTS_KEY = "pi-studio.welcome.drafts.v1";
   /** How long a keystroke's draft waits before the store is written; a human types next faster than this. */
   const DRAFT_WRITE_MS = 400;
+  /** A prompt box grows with its text to this height and scrolls after it: ten whole files are not a page. */
+  const PROMPT_MAX_H = 26 * 17 + 12;
 
   const nodes = {
     brand: document.getElementById("mastheadContext"),
@@ -50,6 +52,135 @@
     if (text !== undefined) node.textContent = text;
     return node;
   };
+
+  // ---------- markdown in the prompt box -----------------------------------
+  //
+  // A prompt is markdown and its box shows it as markdown with the markers still on show: `**bold**`
+  // reads bold and keeps its asterisks, `## Title` reads as a heading and keeps its hashes. One textarea
+  // holds the caret; a mirror behind it draws the same characters styled. Every character is escaped
+  // before a span goes round it, so a prompt can never add an element of its own.
+
+  /** The four characters a prompt may type that html would otherwise read. */
+  function escaped(text) {
+    return text.replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[ch]);
+  }
+
+  /** Bold, italics, a card key and a link, inside text already escaped. */
+  function markWords(text) {
+    return text
+      .replace(/(\*\*[^*\n]+\*\*)/g, '<span class="md-strong">$1</span>')
+      .replace(/(^|[\s(])(\*[^*\n]+\*)(?![*])/g, '$1<span class="md-em">$2</span>')
+      .replace(/(\[\[[^\]\n]+\]\])/g, '<span class="md-key">$1</span>')
+      .replace(/(\[[^\]\n]+\]\([^)\s]+\))/g, '<span class="md-link">$1</span>');
+  }
+
+  /** Inline code is drawn as code and holds nothing else: a `**` inside backticks stays two asterisks. */
+  function markInline(text) {
+    return text
+      .split(/(`[^`\n]+`)/g)
+      .map((piece) => (piece.startsWith("`") ? `<span class="md-code">${piece}</span>` : markWords(piece)))
+      .join("");
+  }
+
+  /** One line: a fence, a heading, a list item or a quote keeps its marker and tints what follows. */
+  function markLine(line) {
+    const safe = escaped(line);
+    if (/^\s*```/.test(safe)) return `<span class="md-fence">${safe}</span>`;
+    const head = /^(#{1,6})(\s+)([\s\S]*)$/.exec(safe);
+    if (head) {
+      const level = Math.min(head[1].length, 3);
+      return `<span class="md-h md-h${level}"><span class="md-mark">${head[1]}</span>${head[2]}${markInline(head[3])}</span>`;
+    }
+    const item = /^(\s*)([-*+]|\d+[.)])(\s+)([\s\S]*)$/.exec(safe);
+    if (item) return `${item[1]}<span class="md-mark">${item[2]}</span>${item[3]}${markInline(item[4])}`;
+    const quote = /^(\s*)(&gt;\s?)([\s\S]*)$/.exec(safe);
+    if (quote) return `${quote[1]}<span class="md-mark">${quote[2]}</span><span class="md-quote">${markInline(quote[3])}</span>`;
+    return markInline(safe);
+  }
+
+  /** The mirror's html. The closing newline keeps a last empty line, which html would otherwise drop. */
+  function markPrompt(text) {
+    return `${text.split("\n").map(markLine).join("\n")}\n`;
+  }
+
+  /** `1,487 B · 38 lines`: a prompt is a file a thread reads whole, so its size is worth seeing. */
+  function sizeLine(text) {
+    const bytes = new TextEncoder().encode(text).length;
+    const lines = text ? text.split("\n").length : 0;
+    return `${bytes.toLocaleString()} B · ${lines} line${lines === 1 ? "" : "s"}`;
+  }
+
+  /**
+   * Insert at the caret through the editing command, so one press of a key stays one step of undo; a
+   * plain splice into `value` would throw the browser's undo stack away. The fallback fires the same
+   * `input` event, because every reader of this box — drafts, dirty state, the mirror — listens for it.
+   */
+  function insertAt(area, text) {
+    if (document.execCommand && document.execCommand("insertText", false, text)) return;
+    area.setRangeText(text, area.selectionStart, area.selectionEnd, "end");
+    area.dispatchEvent(new Event("input"));
+  }
+
+  /**
+   * The keys that keep a hand on the keyboard in a markdown box: Tab indents instead of leaving the
+   * field, Enter carries a list on, and ⌘B/⌘I wrap the selection in the markers the mirror then draws.
+   */
+  function markdownKeys(area) {
+    area.addEventListener("keydown", (event) => {
+      const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
+      if (event.key === "Tab" && plain) {
+        event.preventDefault();
+        if (event.shiftKey) outdentLine(area);
+        else insertAt(area, "  ");
+        return;
+      }
+      if (event.key === "Enter" && plain && !event.shiftKey) {
+        const from = area.value.lastIndexOf("\n", area.selectionStart - 1) + 1;
+        const item = /^(\s*)([-*+]|(\d+)[.)])(\s+)(\S?)/.exec(area.value.slice(from, area.selectionStart));
+        if (!item) return;
+        event.preventDefault();
+        if (!item[4]) {
+          // Enter on an item with nothing after its marker ends the list rather than adding another.
+          area.setRangeText("", from, area.selectionStart, "end");
+          area.dispatchEvent(new Event("input"));
+          return;
+        }
+        const next = item[3] ? `${Number(item[3]) + 1}.` : item[2];
+        insertAt(area, `\n${item[1]}${next} `);
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+        const marker = event.key.toLowerCase() === "b" ? "**" : event.key.toLowerCase() === "i" ? "*" : "";
+        if (!marker) return;
+        event.preventDefault();
+        const from = area.selectionStart;
+        const to = area.selectionEnd;
+        area.setRangeText(`${marker}${area.value.slice(from, to)}${marker}`, from, to, "end");
+        // The words stay selected, so the next look at them is the marker going round them.
+        area.setSelectionRange(from + marker.length, to + marker.length);
+        area.dispatchEvent(new Event("input"));
+      }
+    });
+  }
+
+  /** Shift+Tab in a single-level list: the two spaces the caret sits behind go, and the caret follows. */
+  function outdentLine(area) {
+    const from = area.value.lastIndexOf("\n", area.selectionStart - 1) + 1;
+    const head = /^ {1,2}/.exec(area.value.slice(from, area.selectionStart));
+    if (!head) return;
+    area.setRangeText("", from, from + head[0].length, "end");
+    area.dispatchEvent(new Event("input"));
+  }
+
+  /** Every prompt box drawn in the tree, so a narrower window can re-wrap them all at once. */  const repaintPrompts = new Set();
+  window.addEventListener("resize", () => {
+    for (const repaint of repaintPrompts) repaint();
+  });
+  // A group that opens gives its prompts a layout for the first time. `toggle` does not bubble, but it
+  // still reaches a listener in the capture phase, and that is where the boxes measure themselves.
+  nodes.tree.addEventListener("toggle", () => {
+    for (const repaint of repaintPrompts) repaint();
+  }, true);
 
   // ---------- the shelf ----------------------------------------------------
 
@@ -671,6 +802,11 @@
       // save, because a file written on every keystroke is not a file anybody meant. `write` says where
       // the text goes, so the same control serves any field that names a route.
       line.classList.add("cfg-control-stack");
+      // The box holds the text and takes the caret; the mirror behind it draws the same characters as
+      // markdown, so the markers are visible while they are being typed rather than only after a save.
+      const shell = el("div", "cfg-editor");
+      const mirror = el("pre", "cfg-mark");
+      mirror.setAttribute("aria-hidden", "true");
       const area = el("textarea", "cfg-prompt");
       area.id = `field-${field.id}`;
       area.value = String(field.value ?? "");
@@ -678,6 +814,30 @@
       area.spellcheck = false;
       area.disabled = disabled;
       const actions = el("div", "cfg-prompt-actions");
+      const size = el("span", "cfg-prompt-size", "");
+      /**
+       * The mirror's html, the box's height and the size readout, all three from the text. The box grows
+       * with the prompt instead of scrolling inside itself: an inner scrollbar would leave one layer
+       * narrower than the other, and the two would then wrap different lines.
+       */
+      const repaint = () => {
+        mirror.innerHTML = markPrompt(area.value);
+        size.textContent = sizeLine(area.value);
+        // A box inside a closed group has no layout to measure, so it is left at the height its own text
+        // will ask for; the capture listener on the tree repaints it the moment that group opens.
+        if (!area.scrollHeight) return;
+        area.style.height = "auto";
+        area.style.height = `${Math.min(area.scrollHeight, PROMPT_MAX_H)}px`;
+        // Once the box is tall enough to scroll, the mirror takes the width the scrollbar took from the
+        // box and follows it down: a mirror one scrollbar wider would wrap the same text on other lines.
+        mirror.style.width = `${area.clientWidth}px`;
+        mirror.scrollTop = area.scrollTop;
+      };
+      area.addEventListener("scroll", () => {
+        mirror.scrollTop = area.scrollTop;
+      });
+      repaintPrompts.add(repaint);
+      markdownKeys(area);
       const save = el("button", "cfg-prompt-save", "save");
       save.type = "button";
       save.disabled = disabled;
@@ -691,6 +851,7 @@
         state.dataset.state = tone || "";
       };
       area.addEventListener("input", () => {
+        repaint();
         // Only text that differs from the file on disk is a draft; typing a character and deleting it again
         // puts the field back where it was, and says so.
         const dirty = area.value !== String(entry.lastGood ?? "");
@@ -708,6 +869,7 @@
         area.value = draft;
         paint("unsaved", "dirty");
       }
+      repaint();
       save.addEventListener("click", () => {
         void commitWrite(entry, area.value, paint).then(() => {
           // What the daemon accepted is no longer a draft; a refusal keeps the text, so nothing is lost.
@@ -719,6 +881,7 @@
       });
       back.addEventListener("click", () => {
         area.value = String(entry.lastGood ?? "");
+        repaint();
         drafts.delete(field.id);
         saveDrafts();
         clearFieldError(entry);
@@ -731,12 +894,14 @@
       });
       entry.set = (value) => {
         area.value = String(value ?? "");
+        repaint();
       };
-      actions.append(save, back, state);
+      actions.append(save, back, state, size);
       // A prompt's source is the file its text is read from, so the tag rides the line its save and revert
       // sit on rather than taking a row of its own under them.
       if (field.source) actions.append(sourceTag(field, "this text is read from and written to"));
-      line.append(area, actions);
+      shell.append(mirror, area);
+      line.append(shell, actions);
     } else {
       // `text` and `number`, and any type a later document adds: an input is the honest fallback.
       const input = el("input", "cfg-input");
@@ -857,6 +1022,7 @@
   function renderDocument() {
     entries.clear();
     previews.clear();
+    repaintPrompts.clear();
     nodes.docTitle.textContent = doc.title || "Settings";
     // The head counts settings: a prompt is a file the page also carries, and is not one of them.
     const settings = leavesOf(doc).filter((field) => field.type !== "prompt").length;

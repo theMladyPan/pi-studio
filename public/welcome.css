@@ -20,6 +20,35 @@
 
 * {
   box-sizing: border-box;
+  /* Thin dark scrollbars, so the settings tree and a long shelf read as part of the page instead of
+     carrying the platform's grey trough, the way the board's do. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-2) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3d444d;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 html, body {
@@ -37,10 +66,6 @@ body {
   flex-direction: column;
   align-items: center;
   padding: 0 24px;
-  /* settled shelf structural grid hairlines at +/-320px */
-  background-image:
-    linear-gradient(to right, transparent calc(50% - 320px), var(--border) calc(50% - 320px), var(--border) calc(50% - 319px), transparent calc(50% - 319px)),
-    linear-gradient(to right, transparent calc(50% + 319px), var(--border) calc(50% + 319px), var(--border) calc(50% + 320px), transparent calc(50% + 320px));
 }
 
 button, input, select {
@@ -55,7 +80,7 @@ button, input, select {
 /* Shelf wrapper: sits in the upper-middle optical zone */
 .shelf-stage {
   width: 100%;
-  max-width: 640px;
+  max-width: 880px;
   margin-top: min(11vh, 96px);
   display: flex;
   flex-direction: column;
@@ -152,7 +177,7 @@ button, input, select {
   color: var(--accent);
 }
 
-/* Main 640px surface container (shared by both Shelf and Settings page) */
+/* Main 880px surface container (shared by both Shelf and Settings page) */
 .shelf-box {
   background: var(--panel);
   border: 1px solid var(--border-2);
@@ -530,36 +555,134 @@ button, input, select {
   gap: 4px;
 }
 
-.cfg-prompt {
-  width: 100%;
-  min-width: 0;
-  min-height: 88px;
-  max-height: 320px;
-  resize: vertical;
+/* A prompt is markdown that keeps its markers. The box holds the text and takes the caret; a mirror
+   behind it draws the same characters styled, so `**bold**` is bold with its asterisks on show. The two
+   layers are one monospace at one fixed line height, and no token below may add padding: a line box that
+   sat elsewhere, or a glyph that pushed the rest of its line sideways, would leave the caret beside the
+   wrong character. */
+.cfg-editor {
+  position: relative;
   background: var(--bg);
   border: 1px solid var(--border-2);
   border-radius: 5px;
-  padding: 6px 8px;
-  font: 11.5px/1.45 var(--mono);
-  color: var(--text);
-  tab-size: 2;
 }
 
-.cfg-prompt:focus-visible {
+.cfg-editor:focus-within {
   outline: 2px solid var(--accent);
   outline-offset: 0;
   border-color: var(--accent);
 }
 
+.cfg-mark,
+.cfg-prompt {
+  margin: 0;
+  padding: 6px 8px;
+  font: 11.5px/17px var(--mono);
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.cfg-mark {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  color: var(--text);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cfg-prompt {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 88px;
+  /* The words are the mirror's; the box draws only its caret and its selection. */
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: transparent;
+  caret-color: var(--text);
+}
+
+.cfg-prompt::selection {
+  background: rgba(59, 130, 246, 0.3);
+}
+
 .cfg-prompt:disabled {
   cursor: not-allowed;
+}
+
+/* The tokens the mirror draws, in the board's own colours. Weight, colour and size only, never padding. */
+.md-mark {
+  color: #5b6673;
+}
+
+.md-fence {
   color: var(--muted);
+}
+
+.md-strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+.md-em {
+  color: #d2a8ff;
+}
+
+.md-code {
+  background: #21262d;
+  border-radius: 3px;
+  color: var(--text);
+}
+
+.md-key,
+.md-link {
+  color: #79c0ff;
+}
+
+.md-quote {
+  color: var(--muted);
+}
+
+/* A heading is bigger with its hashes still in front of it, and its advance is held at the base width by
+   the negative tracking: the glyphs grow inside the line box, the line does not move. */
+.md-h {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.md-h .md-mark {
+  color: var(--accent);
+}
+
+.md-h1 {
+  font-size: 13.5px;
+  letter-spacing: calc(6.9px - 0.6em);
+}
+
+.md-h2 {
+  font-size: 12.5px;
+  letter-spacing: calc(6.9px - 0.6em);
+}
+
+.md-h3 {
+  font-size: 12px;
+  letter-spacing: calc(6.9px - 0.6em);
 }
 
 .cfg-prompt-actions {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* A prompt is a file, so how big a file it is belongs on the line that saves it. */
+.cfg-prompt-size {
+  margin-left: auto;
+  font: 10.5px/1.2 var(--mono);
+  color: var(--muted);
 }
 
 .cfg-prompt-save {
@@ -984,7 +1107,7 @@ button, input, select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 270px;
+  max-width: 420px;
 }
 
 /* 1024x700 and compact height resilience */
@@ -1009,7 +1132,6 @@ button, input, select {
 
 @media (max-width: 720px) {
   body {
-    background-image: none;
     padding: 0 12px;
   }
   .foot-selected-path {
