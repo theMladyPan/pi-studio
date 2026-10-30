@@ -1216,6 +1216,9 @@ function queuedActs(entry, wrap, index) {
   edit.textContent = "edit";
   edit.title = "rewrite this message before the agent reads it";
   edit.setAttribute("aria-label", "rewrite this queued message");
+  // A press here must not take the caret out of the field next door: that blur would save the words being
+  // typed, shorten the turn under the pointer, and the press would land on the card instead of the button.
+  edit.addEventListener("pointerdown", (event) => event.preventDefault());
   edit.addEventListener("click", (event) => {
     event.stopPropagation();
     startEditingTurn(entry, wrap, index);
@@ -1225,8 +1228,12 @@ function queuedActs(entry, wrap, index) {
   drop.textContent = "×";
   drop.title = "take this message back before the agent reads it";
   drop.setAttribute("aria-label", "withdraw this queued message");
+  drop.addEventListener("pointerdown", (event) => event.preventDefault());
   drop.addEventListener("click", (event) => {
     event.stopPropagation();
+    // The words in the field are not a reason to keep a message the human is taking back: the field goes
+    // first, and what is withdrawn is the message the daemon holds.
+    entry.finishTurnEdit?.();
     void dropQueued(entry, index);
   });
   acts.append(edit, drop);
@@ -1242,6 +1249,8 @@ function startEditingTurn(entry, wrap, index) {
   if (wrap.dataset.editing) return;
   const turn = Array.isArray(entry.data?.turns) ? entry.data.turns[index] : null;
   if (!turn || turn.status !== "queued") return;
+  // One field at a time: a press on another waiting message keeps what the open one holds and closes it.
+  entry.finishTurnEdit?.(true);
   const bubble = wrap.querySelector(".turn-q");
   if (!bubble) return;
   wrap.dataset.editing = "1";
@@ -1263,6 +1272,7 @@ function startEditingTurn(entry, wrap, index) {
   const finish = (commit) => {
     if (!wrap.dataset.editing) return;
     delete wrap.dataset.editing;
+    entry.finishTurnEdit = null;
     const wanted = area.value.trim();
     // The field goes before anything is saved, and the words go back into the bubble as they now read.
     // A repaint here would take the node under the pointer with it, and the × beside an editor that was
@@ -1270,8 +1280,20 @@ function startEditingTurn(entry, wrap, index) {
     area.remove();
     bubble.title = "press twice to rewrite this message";
     bubble.textContent = commit && wanted ? wanted : turn.text || "";
-    if (commit && wanted && wanted !== turn.text) void saveTurnText(entry, index, wanted);
+    if (commit && wanted && wanted !== turn.text) {
+      void saveTurnText(entry, index, wanted);
+      return;
+    }
+    // Something was said on this card while the field was open and was held back rather than drawn over it.
+    // Nothing else will come along now, so the conversation is painted from what the daemon holds.
+    if (entry.threadHeldBack) {
+      entry.threadHeldBack = false;
+      entry.turnNodes = undefined;
+      paintCard(entry, entry.data);
+    }
   };
+  // The × beside the field closes it without keeping what was typed, so it can reach the same finish.
+  entry.finishTurnEdit = () => finish(false);
   area.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       // The editor takes Escape first: dropping an edit must not give up the selection either.
@@ -1303,7 +1325,9 @@ async function saveTurnText(entry, index, text) {
   } catch (error) {
     footNote(`could not rewrite the queued message: ${error.message || error}`, true);
     // Words that never reached the queue are not words the card stands behind, so it is drawn again from
-    // what the daemon actually holds.
+    // what the daemon actually holds. The conversation is forgotten first, because the field already put
+    // the words on screen and a paint that trusts what is drawn would rebuild nothing.
+    entry.turnNodes = undefined;
     paintCard(entry, entry.data);
   }
 }
@@ -1368,7 +1392,9 @@ function paintThread(entry, data) {
     }
   } else if (entry.thread.querySelector(".turn-edit")) {
     // Someone is rewriting a queued message. Rebuilding the conversation under the field would take
-    // the words being typed with it, and the next broadcast draws the turn once the edit is done.
+    // the words being typed with it, so the paint is held rather than dropped: the editor replays it when
+    // it closes, and the next broadcast draws the turn once the edit is done.
+    entry.threadHeldBack = true;
   } else {
     const nodes = turns.map((turn, at) => turnNode(entry, turn, at));
     entry.thread.replaceChildren(...nodes);
