@@ -3945,19 +3945,20 @@ function clearRailLog() {
 }
 
 /**
- * The card a thread draws on. A thread card IS its own card; a plain card belongs to the thread that
- * made it. The facts pass fills this map, so the scan behind it only runs for a row that arrives
- * before the board has been repainted with the card that would answer for it.
+ * The card a thread draws on: the card the daemon made with the thread's own id. A card the thread
+ * wrote carries `answersWith.thread` as well, and `threadFacts` keeps whichever of them was painted
+ * last, so that map must not be asked which card is the thread's own — a note the agent wrote is not
+ * where its run is read. Only a hidden thread, which has no card of its own, is read through the card
+ * it answers for.
  */
 function cardOfThread(threadId) {
   if (!threadId) return null;
-  const known = threadFacts.get(threadId);
-  const direct = known ? byId.get(known.cardId) : null;
-  if (direct?.live) return direct;
+  const own = byId.get(threadId);
+  if (own?.live) return own;
   for (const entry of byId.values()) {
     const data = entry.data || {};
-    const owner = data.type === "sticky" ? entry.id : data.answersWith?.thread;
-    if (owner === threadId && entry.live) return entry;
+    if (data.type === "sticky") continue;
+    if (data.answersWith?.thread === threadId && entry.live) return entry;
   }
   return null;
 }
