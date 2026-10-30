@@ -675,7 +675,9 @@
   }
 
   function fieldRow(field) {
-    const row = el("div", `cfg-field${field.disabled ? " is-disabled" : ""}`);
+    // A prompt is a file of text, so its row is shaped for one: label above, control across the group.
+    const wide = field.type === "prompt" ? " is-wide" : "";
+    const row = el("div", `cfg-field${field.disabled ? " is-disabled" : ""}${wide}`);
     row.dataset.fieldId = field.id;
 
     const meta = el("div", "cfg-field-meta");
