@@ -51,6 +51,9 @@
     cursor: grab;
   }
   #viewport.dragging { cursor: grabbing; }
+  /* Holding ctrl (or command) makes the board a document again: the cursor says text, and the press
+     handlers below start no drag, so the same gesture selects words inside a card. */
+  body.text-select #viewport { cursor: text; }
   /* With the stream down nothing on the board can change, so it dims to read as stale. Each card's
      contents dim rather than the viewport, so a docked composer stays readable while the agent is
      blocked on a question. */
@@ -123,6 +126,8 @@
     cursor: grab; user-select: none;
   }
   .card.dragging .head { cursor: grabbing; }
+  /* The head is a drag handle, so its text is not selectable; under the reading modifier it is. */
+  body.text-select .head { cursor: text; user-select: text; }
   /* One colour per kind, in the card head and the rail row alike. */
   .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
   .dot.note { background: var(--muted); }

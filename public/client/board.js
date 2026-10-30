@@ -1356,7 +1356,8 @@ function makeCard(data, quiet = false) {
   head.addEventListener("pointerdown", (event) => {
     // Buttons in the header are for clicking, not for dragging the card. The middle button pans
     // the canvas even here, so it belongs to the workspace rather than to the card.
-    if (event.button !== 0 || event.target.closest(INTERACTIVE)) return;
+    // Ctrl (or command) is the reading modifier: the press belongs to the text, not to the card.
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.target.closest(INTERACTIVE)) return;
     // Two presses on the name in quick succession rename the card, the way a file manager does.
     // The press that starts a rename belongs to the name, so the card does not begin to drag.
     const named = event.target.closest(".title");
@@ -2479,12 +2480,29 @@ function beginPan(event) {
 }
 
 // The left button pans the background. Over a card it belongs to the card, which drags, resizes
-// and selects with it, so this gesture never starts there.
+// and selects with it, so this gesture never starts there. Ctrl (or command) is the reading
+// modifier, and under it no gesture starts at all: the board is being read, not moved.
 viewport.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0 || event.target.closest(".card")) return;
+  if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
+  if (event.target.closest(".card")) return;
   selectCard(null);
   beginPan(event);
 });
+
+/**
+ * The reading modifier is held on the body, so the cursor says text while ctrl (or command) is
+ * down. It is watched on the window, since the key is usually pressed with the pointer already
+ * resting on a card, and the release is taken from a blur too: a window that loses focus never
+ * hears the keyup, and the board would keep the reading cursor for good.
+ */
+const heldModifier = (on) => document.body.classList.toggle("text-select", on);
+addEventListener("keydown", (event) => {
+  if (event.key === "Control" || event.key === "Meta") heldModifier(true);
+});
+addEventListener("keyup", (event) => {
+  if (event.key === "Control" || event.key === "Meta") heldModifier(false);
+});
+addEventListener("blur", () => heldModifier(false));
 
 // The middle button is the workspace grab, so it works over anything the canvas holds: a card, the
 // rail, the composer. The one exception is the detail panel, which is a dialog rather than part
