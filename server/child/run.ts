@@ -14,6 +14,7 @@ import { StringDecoder } from "node:string_decoder";
 import { lastLine } from "./describe.ts";
 import { NAME_MODEL, nameThread, titleFromRequest } from "../worktrees/name.ts";
 import { broadcast, card, update, updateCard } from "../bus.ts";
+import { compacted } from "../waiters.ts";
 import { randomUUID } from "node:crypto";
 import { randomToken } from "../paths.ts";
 import { join } from "node:path";
@@ -70,6 +71,9 @@ export function ensureChild(board, thread) {
 	child.on("close", (code, signal) => {
 		if (!mine()) return;
 		board.children.delete(thread.id);
+		// A compaction waits on this child's answer, and a child that exits first will never give one.
+		// Nobody waiting means nothing happens, so this is said for every exit rather than guessed at.
+		compacted(thread, { error: `the child exited before it answered (${signal ?? code})` });
 		// An exit after `agent_settled` is the orderly shutdown this daemon asked for. An exit while a
 		// run is live is the child dying mid-answer.
 		if (thread.status !== "running") return;

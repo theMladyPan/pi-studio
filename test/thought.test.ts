@@ -34,3 +34,39 @@ test("a line that is not JSON is reported and dropped", () => {
 	assert.doesNotThrow(() => handleChildLine(board, thread, "this is not json"));
 	assert.equal(thread.sessionId, undefined);
 });
+
+/** A child as the compaction branch touches it: a writable stdin and a record of what it was sent. */
+function fakeChild(sent: any[]) {
+	return {
+		stdin: {
+			writable: true,
+			write: (frame: string) => sent.push(JSON.parse(frame)),
+			end: () => sent.push({ type: "end" }),
+		},
+	};
+}
+
+const COMPACTED = JSON.stringify({ type: "response", command: "compact", success: true, data: { tokensBefore: 150000, estimatedTokensAfter: 32000 } });
+
+test("a compaction on an idle thread reads the figures before the child goes", () => {
+	const board = fakeBoard();
+	const thread = fakeThread();
+	thread.status = "idle";
+	const sent: any[] = [];
+	board.children.set(thread.id, fakeChild(sent));
+	handleChildLine(board, thread, COMPACTED);
+	// The numbers the button shows are asked for again, and the child is closed once they arrive.
+	assert.equal(thread.pendingClose, true);
+	assert.equal(sent[0]?.type, "get_session_stats");
+});
+
+test("a compaction that lands during a run leaves that run's child alone", () => {
+	const board = fakeBoard();
+	const thread = fakeThread();
+	// A message typed while the summary was being written: the turn owns the child now.
+	const sent: any[] = [];
+	board.children.set(thread.id, fakeChild(sent));
+	handleChildLine(board, thread, COMPACTED);
+	assert.deepEqual(sent, [], "a live run's child was written to or closed by the compaction");
+	assert.equal(thread.pendingClose, undefined);
+});

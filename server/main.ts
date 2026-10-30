@@ -23,7 +23,7 @@ import { extensionsDir } from "./child/argv.ts";
 import { onThread, onThreadSpawn } from "./routes/board/thread.ts";
 import { onAnswer, onAsk } from "./routes/board/answer.ts";
 import { onMessage } from "./routes/board/message.ts";
-import { onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
+import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
 import { onClean, onClose, onKill, onNew, onReopen, onStop } from "./routes/board/lifecycle.ts";
 
 
@@ -321,6 +321,7 @@ export const server = createServer((req, res) => {
 				"/thinking": onThinking,
 				"/kill": onKill,
 				"/config": onConfig,
+				"/compact": onCompact,
 				"/clean": onClean,
 				"/new": onNew,
 			};
@@ -337,8 +338,6 @@ export const server = createServer((req, res) => {
 				await onStop(req, res, board);
 				return;
 			}
-			// Everything the board had for a single session: kept honest by refusing rather than lying.
-			if (url.pathname === "/compact") return void fail(res, 409, "compaction belongs to the child, and no run is waiting on it");
 		}
 		fail(res, 404, "not found");
 	})().catch((error) => {

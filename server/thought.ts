@@ -16,7 +16,7 @@ import { describeTool, firstLine, headline, rowResult } from "./child/describe.t
 import { join } from "node:path";
 import { settleTreeBranch } from "./worktrees/name.ts";
 import { noteGit } from "./git/graph.ts";
-import { finished, statsArrived } from "./waiters.ts";
+import { finished, compacted, statsArrived } from "./waiters.ts";
 
 
 
@@ -226,12 +226,44 @@ export function handleChildLine(board, thread, line) {
 			};
 			if (thread.pendingClose) {
 				thread.pendingClose = false;
-				board.children.get(thread.id)?.stdin?.end();
+				// A run that started while these numbers were on their way owns the child now, so the
+				// close it was waiting for is its own settle's business and not this answer's.
+				if (thread.status !== "running") board.children.get(thread.id)?.stdin?.end();
 			}
 			update(board, thread);
 			scheduleSave(board);
 			// The numbers a spawn is waiting for have arrived.
 			statsArrived(thread);
+		} else if (event.command === "compact") {
+			// The one command the human presses that this child answers on its own account. The context the
+			// next request carries is smaller now, so the numbers are read again before it goes, and the
+			// route that asked for the compaction hears what came back.
+			const child = board.children.get(thread.id);
+			// A run can start between the press and this answer: the turn owns the child then, and closing
+			// its stdin would take the answer with it, so the close waits for that run's own settle.
+			const free = thread.status !== "running";
+			if (event.success === false) {
+				// A child started only to compact has nothing else to do, so it goes the way a settled run's does.
+				if (free && child?.stdin?.writable) child.stdin.end();
+				compacted(thread, { error: String(event.error ?? "the child refused the compaction") });
+			} else {
+				const data = event.data ?? {};
+				const before = Number(data.tokensBefore);
+				const after = Number(data.estimatedTokensAfter);
+				compacted(thread, {
+					...(Number.isFinite(before) ? { tokensBefore: before } : {}),
+					...(Number.isFinite(after) ? { estimatedTokensAfter: after } : {}),
+				});
+				if (free && child?.stdin?.writable) {
+					thread.pendingClose = true;
+					try {
+						child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "get_session_stats" })}\n`);
+					} catch {
+						thread.pendingClose = false;
+						child.stdin.end();
+					}
+				}
+			}
 		} else if (event.command === "get_state" && typeof event.data?.sessionId === "string") {
 			thread.sessionId = event.data.sessionId;
 			update(board, thread);

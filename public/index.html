@@ -348,6 +348,8 @@
   #footer .stat { font: 11px var(--mono); color: var(--muted); }
   #footer .stat:empty { display: none; }
   #footer .stat em { color: var(--text); font-style: normal; }
+  /* A note that reports a failure carries the same red the composer's own hint does. */
+  #footer .stat.bad { color: var(--red); }
   #footer .grow { flex: 1; }
   body.rail-off #footer { left: 0; }
   header .stat em { color: var(--text); font-style: normal; }
@@ -551,6 +553,33 @@
   #composer #send { font: 12px var(--mono); color: #0d1117; background: var(--green);
     border: 0; border-radius: 6px; padding: 7px 14px; cursor: pointer; }
   #composer #send:disabled { opacity: .5; cursor: default; }
+  /* The context figure is also the compact button, and the fill behind the words is how much of the
+     window that thread has spent. It wears its neighbours' box, so the row keeps one rhythm. */
+  #composer #ctxBtn { position: relative; overflow: hidden; appearance: none; cursor: pointer;
+    font: 11px var(--mono); color: var(--muted); background: #161b22;
+    border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; --fill: 0%; }
+  /* `display` on the id beats the user agent's [hidden] rule, so hiding is spelled out. */
+  #composer #ctxBtn[hidden] { display: none; }
+  /* One width is the whole meter: the fill is a wash over the button's own ground, so the label stays
+     readable at every percentage and no second element has to be kept in step. */
+  #composer #ctxBtn::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: var(--fill);
+    background: linear-gradient(180deg, rgba(88,166,255,.3), rgba(88,166,255,.14)); pointer-events: none; }
+  #composer #ctxBtn span { position: relative; }
+  #composer #ctxBtn:hover, #composer #ctxBtn:focus-visible { color: var(--text); border-color: var(--border-bright); }
+  /* Half the window gone is where the number stops being a statistic: the fill takes the amber the
+     board uses for work in flight, and a sheen crosses it the way heat crosses iron. */
+  #composer #ctxBtn.hot { color: #e3b341; border-color: rgba(210,153,34,.55); }
+  #composer #ctxBtn.hot::before { background: linear-gradient(180deg, rgba(210,153,34,.36), rgba(210,153,34,.16)); }
+  #composer #ctxBtn.hot::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(105deg, transparent 38%, rgba(255,255,255,.22) 50%, transparent 62%);
+    background-size: 200% 100%; animation: ironSheen 2.6s linear infinite; }
+  /* Near the window's edge the same heat goes red, because past this the next answer is the one at risk. */
+  #composer #ctxBtn.full { color: var(--red); border-color: rgba(248,81,73,.55); }
+  #composer #ctxBtn.full::before { background: linear-gradient(180deg, rgba(248,81,73,.36), rgba(248,81,73,.16)); }
+  @keyframes ironSheen { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+  /* Nothing to do while the child is busy: the press answers with the reason rather than looking stuck. */
+  #composer #ctxBtn.working { color: var(--text); cursor: progress; }
+  #composer #ctxBtn.working::after { animation: none; }
   #composer .hintline { color: var(--muted); font: 11px var(--mono); }
   /* A note that reports a failure, so it does not read as the usual quiet hint. */
   #composer .hintline.bad { color: var(--red); }
@@ -745,7 +774,7 @@
      loses nothing when the reader asks for less motion. Last, because it kills rules from the card
      states, the header and the rail alike. */
   @media (prefers-reduced-motion: reduce) {
-    .card.fresh, .card.flash, header .live.working b, .act.running .dot { animation: none; }
+    .card.fresh, .card.flash, header .live.working b, .act.running .dot, #composer #ctxBtn.hot::after { animation: none; }
   }
 </style>
 </head>
@@ -822,6 +851,7 @@
       <button id="forkMode" type="button" title="ask a new thread instead of the one that made this card">fork</button>
       <button id="modelPick" type="button" title="the model this card answers with">model</button>
       <button id="thinkPick" type="button" title="how hard the model thinks before answering">think</button>
+      <button id="ctxBtn" type="button" hidden><span id="ctxLabel"></span></button>
       <button id="pickFiles" title="attach files or folders from disk">files</button>
     </div>
     <span class="hintline" id="composerHint" role="status" aria-live="polite"></span>

@@ -15,6 +15,9 @@ const settleWaiters = new Map();
 /** Whoever waits for the child's own accounting, which arrives after the run settles. */
 const statsWaiters = new Map();
 
+/** Whoever waits for a compaction to come back: the button that asked for it reads it. */
+const compactWaiters = new Map();
+
 
 
 /** Wake whoever waits on this thread. Called where a run ends, never where one starts. */
@@ -55,5 +58,29 @@ export function whenStats(thread, ms = 2_000) {
 		statsWaiters.set(thread.id, waiting);
 		const give = setTimeout(() => statsArrived(thread), ms);
 		give.unref?.();
+	});
+}
+
+
+/** The child's answer about the compaction, or that it said nothing in time. */
+export function compacted(thread, result) {
+	const entry = compactWaiters.get(thread.id);
+	if (!entry) return;
+	compactWaiters.delete(thread.id);
+	// The ceiling outlives the answer it was set for, so it is cleared here: a timer left running would
+	// end a later compaction of the same thread the moment it started.
+	clearTimeout(entry.timer);
+	for (const wake of entry.waiting) wake(result);
+}
+
+
+export function whenCompacted(thread, ms = 0) {
+	return new Promise((resolve) => {
+		const entry = compactWaiters.get(thread.id) ?? { waiting: new Set(), timer: null };
+		entry.waiting.add(resolve);
+		compactWaiters.set(thread.id, entry);
+		if (ms <= 0 || entry.timer) return;
+		entry.timer = setTimeout(() => compacted(thread, { timedOut: true }), ms);
+		entry.timer.unref?.();
 	});
 }

@@ -4006,9 +4006,10 @@ function hintLine(text, bad = false) {
  * One line in the footer, which is on screen whatever the composer is doing. The composer's own hint
  * hides when the field is docked in a card, so a click that lands nowhere would otherwise be silent.
  */
-function footNote(text) {
+function footNote(text, bad = false) {
   if (!footHint) return;
   footHint.textContent = text;
+  footHint.classList.toggle("bad", bad);
   clearTimeout(footTimer);
   footTimer = setTimeout(() => {
     footHint.textContent = "";
@@ -4027,6 +4028,79 @@ statCtx.addEventListener("click", async () => {
     hintLine("could not reach the board server", true);
   } finally {
     statCtx.disabled = false;
+  }
+});
+
+// ---------- the context meter in the composer -----------------------------
+// The field answers for one thread, and that thread's context is the number a compaction changes,
+// so the button that presses it sits in the row of buttons beside the field rather than in the
+// header. See `answeringRuntime` for the two shapes a card reports a thread in.
+const ctxBtn = document.getElementById("ctxBtn");
+const ctxLabel = document.getElementById("ctxLabel");
+/** The thread whose compaction is in flight, so the meter says so until the figures come back. */
+let compacting = "";
+/** Half the window is where the number turns from a statistic into a warning. */
+const CTX_HOT = 50;
+/** Near the edge the same heat goes red: the next answer is the one at risk. */
+const CTX_FULL = 80;
+
+/** The context of the thread this field talks to, against the window it talks into. */
+function answeringCtx() {
+  const runtime = answeringRuntime();
+  if (!runtime || !replyTarget) return null;
+  const sticky = replyTarget.data.type === "sticky";
+  const threadId = sticky ? replyTarget.id : (runtime.thread ?? "");
+  const context = Number(runtime.stats?.context) || 0;
+  const max = Number(runtime.stats?.contextMax) || 0;
+  // No figures yet — a thread nobody has asked anything has none — so there is nothing to draw.
+  if (!threadId || !context || !max) return null;
+  return { threadId, context, max, percent: (context / max) * 100, running: sticky ? replyTarget.data.status === "sent" : runtime.running === true };
+}
+
+function paintCtx() {
+  const held = answeringCtx();
+  ctxBtn.hidden = !held;
+  if (!held) return;
+  const percent = Math.round(held.percent);
+  const busy = compacting === held.threadId;
+  const shown = Math.max(0, Math.min(100, percent));
+  ctxLabel.textContent = busy ? "compacting…" : `ctx ${percent}%`;
+  ctxBtn.style.setProperty("--fill", `${shown}%`);
+  ctxBtn.classList.toggle("hot", percent >= CTX_HOT && percent < CTX_FULL);
+  ctxBtn.classList.toggle("full", percent >= CTX_FULL);
+  ctxBtn.classList.toggle("working", busy);
+  ctxBtn.title = held.running
+    ? `ctx ${compact(held.context)}/${compact(held.max)} · compaction waits until this thread stops answering`
+    : `ctx ${compact(held.context)}/${compact(held.max)} · compact the context, the same as /compact`;
+  ctxBtn.setAttribute("aria-label", `context ${percent}% used, compact it`);
+}
+
+ctxBtn.addEventListener("click", async () => {
+  const held = answeringCtx();
+  // One thread at a time, and only the button that is waiting says so: a compaction in another card
+  // leaves this one working.
+  if (!held || compacting === held.threadId) return;
+  // The card is what the daemon resolves to a thread, the same way the model and thinking chips do.
+  const cardId = replyTarget.id;
+  compacting = held.threadId;
+  paintCtx();
+  footNote("compacting the context…");
+  try {
+    const response = await fetch(`/compact?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId }),
+    });
+    if (!response.ok) throw new Error((await response.text()).trim() || response.statusText);
+    const payload = await response.json();
+    const before = Number(payload.tokensBefore);
+    const after = Number(payload.estimatedTokensAfter);
+    footNote(Number.isFinite(after) && Number.isFinite(before) ? `compacted · ${compact(before)} → ${compact(after)} tokens` : "compacted");
+  } catch (error) {
+    footNote(`could not compact: ${error.message || error}`, true);
+  } finally {
+    compacting = "";
+    paintCtx();
   }
 });
 
@@ -4228,6 +4302,7 @@ function paintRuntime() {
   }
   paintSections();
   paintFooter();
+  paintCtx();
   modelChip.textContent = shortModel(runtime.model);
   thinkChip.textContent = runtime.thinking ? `think ${runtime.thinking}` : "think off";
   const where = answering ? "this card answers with" : "a new thread starts with";

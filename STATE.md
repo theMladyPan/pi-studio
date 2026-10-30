@@ -315,6 +315,15 @@ commit's own account rather than on a check run now, the section below says so.
   board's totals, summed, with the largest context, since contexts do not add up.
 - **The footer is not a header.** Those figures used to sit between the header's buttons as zeros;
   they moved to a 24 px strip that the `+` button and the cards keep clear of.
+- **Compaction is a button in the composer.** pi owns compaction, so the board asks the child and
+  waits for the answer: `POST /compact {cardId}` finds the thread behind a card, refuses while it is
+  answering (a summary would cut the answer in half), starts the child that a settled run left
+  closed, and writes `{"type":"compact"}`. Its reply carries `tokensBefore` and
+  `estimatedTokensAfter`, and the stats read that follows is the one a settled run already uses, so
+  the figure drops by itself. The button reads `ctx 42%` over a fill of the same width, sits with the
+  mode chips where the field's other buttons are, hides until a percentage is known, turns amber at
+  50% with a sheen crossing it, and red near the window's edge. The header chip `#statCtx` stays for
+  a board that reports `meta.contextPercent`, which a board of threads never does.
 - **The wheel has one target.** Ctrl/Cmd zooms at the pointer. Otherwise an open editor under the
   pointer scrolls its own text, and everything else is decided by the selection: a selected card
   scrolls its own body, nothing selected pans. A card with comments is scrollable, so it must not
