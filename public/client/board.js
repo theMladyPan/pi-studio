@@ -4247,7 +4247,7 @@ function paintHeat(level) {
   }
   const color = heatColor(at);
   thinkChip.style.setProperty("--heat-tint", `rgb(${color})`);
-  thinkChip.style.setProperty("--heat-haze", `rgba(${color}, .32)`);
+  thinkChip.style.setProperty("--heat-haze", `rgba(${color}, .5)`);
 }
 
 function paintRuntime() {
