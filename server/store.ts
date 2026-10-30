@@ -256,6 +256,9 @@ export function boardFor(workspace) {
 		children: new Map(),
 		clients: new Set(),
 		trees: [],
+		// What `ctrl+z` puts back: the last cards a close took off the board. It lives while the daemon
+		// does, because a card restored after a restart would come back to a board that never missed it.
+		trash: [],
 		saveTimer: null,
 	};
 	const saved = readJsonFile(boardFile(workspace), null);

@@ -24,7 +24,7 @@ import { onThread, onThreadSpawn } from "./routes/board/thread.ts";
 import { onAnswer, onAsk } from "./routes/board/answer.ts";
 import { onMessage } from "./routes/board/message.ts";
 import { onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
-import { onClean, onClose, onKill, onNew, onReopen, onStop } from "./routes/board/lifecycle.ts";
+import { onClean, onClose, onKill, onNew, onReopen, onStop, onUndo } from "./routes/board/lifecycle.ts";
 
 
 /** Opening a browser is what a desktop app does; a service run asks for `--no-open`. */
@@ -317,6 +317,7 @@ export const server = createServer((req, res) => {
 				"/layout": onLayout,
 				"/close": onClose,
 				"/reopen": onReopen,
+				"/undo": onUndo,
 				"/model": onModel,
 				"/thinking": onThinking,
 				"/kill": onKill,

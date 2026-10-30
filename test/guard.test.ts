@@ -17,7 +17,7 @@ test("a child may write on its own board, and may ask the human a question there
 
 test("a child may not reach the routes that belong to the human", () => {
 	// board_ask was refused here for the same reason /layout is, which is what made it dead for every thread.
-	const refused = ["/layout", "/close", "/kill", "/config", "/answer", "/message"];
+	const refused = ["/layout", "/close", "/undo", "/kill", "/config", "/answer", "/message"];
 	for (const path of refused) {
 		assert.equal(threadRefusal(child, "POST", path, "board-a"), "a thread may not use that", path);
 	}

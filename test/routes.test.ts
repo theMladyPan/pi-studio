@@ -202,6 +202,65 @@ test("a question that takes one answer is answered by one click, as before", asy
 	}
 });
 
+test("a closed note comes back on /undo, with its id and its key", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-undo-"));
+	const daemon = await boot(folder);
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		const board = JSON.parse(opened.body).board;
+		const made = await postTo(daemon, board.id, "/card/note", { key: "kept", title: "a note", markdown: "as written" });
+		assert.equal(made.status, 200);
+		const id = JSON.parse(made.body).cardId;
+
+		assert.equal((await postTo(daemon, board.id, "/close", { cardId: id })).status, 200);
+		const gone = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		assert.equal(gone.cards.some((card: any) => card.id === id), false, "the note was not closed");
+
+		const undone = await postTo(daemon, board.id, "/undo", {});
+		assert.equal(undone.status, 200);
+		assert.equal(JSON.parse(undone.body).restored, id);
+		const back = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		const restored = (back.cards as any[]).find((card) => card.id === id);
+		assert.ok(restored, "the note did not come back");
+		// The key is what a `[[key]]` resolves to, so a card back with a different one is a dead link.
+		assert.equal(restored.key, "kept");
+		assert.equal(restored.markdown, "as written");
+
+		// Nothing else was closed, so the second press has nothing to give and says so.
+		const empty = await postTo(daemon, board.id, "/undo", {});
+		assert.equal(empty.status, 409);
+		assert.equal(empty.body, "nothing to undo");
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a thread card closed with nothing behind it is put back by /undo", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-undo-thread-"));
+	const daemon = await boot(folder);
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		const board = JSON.parse(opened.body).board;
+		// A thread with no message never spawns a child, so this is a card and nothing else.
+		const made = await postTo(daemon, board.id, "/thread", { title: "a thread" });
+		const threadId = JSON.parse(made.body).threadId;
+		assert.equal((await postTo(daemon, board.id, "/close", { cardId: threadId })).status, 200);
+
+		const closed = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		assert.equal(closed.threads.some((thread: any) => thread.id === threadId), false, "the thread was not closed");
+
+		assert.equal((await postTo(daemon, board.id, "/undo", {})).status, 200);
+		const back = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		const restored = (back.cards as any[]).find((card) => card.id === threadId);
+		assert.ok(restored, "the thread card did not come back");
+		assert.equal(restored.title, "a thread");
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
 test("the event stream opens with a snapshot the client can draw from", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-events-"));
 	const daemon = await boot(folder);
