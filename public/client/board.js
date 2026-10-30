@@ -4285,6 +4285,60 @@ function shortModel(model) {
   return String(model ?? "").split("/").pop() || "model";
 }
 
+/**
+ * The heat the think chip wears, as an ironbow ramp that stops at yellow. The coldest level is the
+ * deep indigo a thermal image starts from and the hottest is yellow, so asking for the hardest
+ * think reads warm instead of white-hot and never looks like a warning. `off` is not on the ramp:
+ * the chip keeps the plain border every other button in the row has.
+ */
+const HEAT_RAMP = [
+  [0, [42, 15, 94]],
+  [0.2, [84, 26, 138]],
+  [0.35, [130, 24, 137]],
+  [0.5, [176, 26, 99]],
+  [0.65, [214, 52, 40]],
+  [0.82, [237, 122, 18]],
+  [1, [242, 197, 61]],
+];
+/** Where pi's seven levels sit on that ramp, coldest first. `off` is absent on purpose. */
+const HEAT_AT = new Map([
+  ["minimal", 0.2],
+  ["low", 0.35],
+  ["medium", 0.5],
+  ["high", 0.65],
+  ["xhigh", 0.82],
+  ["max", 1],
+]);
+
+/** The ramp's colour at `t`, as the three bytes a CSS colour wants. */
+function heatColor(t) {
+  let from = HEAT_RAMP[0];
+  let to = HEAT_RAMP[HEAT_RAMP.length - 1];
+  for (let index = 1; index < HEAT_RAMP.length; index += 1) {
+    if (t <= HEAT_RAMP[index][0]) {
+      from = HEAT_RAMP[index - 1];
+      to = HEAT_RAMP[index];
+      break;
+    }
+  }
+  const span = to[0] - from[0] || 1;
+  const at = Math.min(1, Math.max(0, (t - from[0]) / span));
+  return from[1].map((byte, channel) => Math.round(byte + (to[1][channel] - byte) * at)).join(", ");
+}
+
+/** Paints the chip for one level, or takes the paint off when nothing is thinking. */
+function paintHeat(level) {
+  const at = HEAT_AT.get(level);
+  if (at === undefined) {
+    thinkChip.style.removeProperty("--heat-tint");
+    thinkChip.style.removeProperty("--heat-haze");
+    return;
+  }
+  const color = heatColor(at);
+  thinkChip.style.setProperty("--heat-tint", `rgb(${color})`);
+  thinkChip.style.setProperty("--heat-haze", `rgba(${color}, .32)`);
+}
+
 function paintRuntime() {
   const answering = answeringRuntime();
   // With nothing to reply to, the chips speak for the board's default, which is whatever the
@@ -4320,6 +4374,7 @@ function paintRuntime() {
   paintCtx();
   modelChip.textContent = shortModel(runtime.model);
   thinkChip.textContent = runtime.thinking ? `think ${runtime.thinking}` : "think off";
+  paintHeat(runtime.thinking);
   const where = answering ? "this card answers with" : "a new thread starts with";
   modelChip.title = `${where} ${runtime.provider ?? ""}/${runtime.model ?? ""}`;
   thinkChip.title = `${answering ? "this card" : "a new thread"} thinks at ${runtime.thinking || "off"}`;
