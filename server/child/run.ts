@@ -106,25 +106,17 @@ export function prompt(board, thread, text, target = null) {
 		update(board, thread);
 		if (NAME_MODEL) void nameThread(board, thread, text);
 	}
-	// A question written on a card is answered on that card, and the run in flight remembers which
-	// one, so the reply lands where the human typed rather than on the thread's own card.
+	// The run in flight remembers which turn it is writing, so the reply lands under the words that
+	// asked for it. That is a card's turn when a hidden child answers for a card, and one of the
+	// thread's own turns otherwise — by index, because a queue can hold more than one message.
 	thread.answering = target;
-	if (target) {
-		const held = board.cards.get(target.cardId);
-		const turn = held?.turns?.[target.turn];
-		if (held && turn) {
-			turn.status = "sent";
-			// The caret says a run is writing this turn, from the moment it is asked: the first word
-			// can take seconds, and a card that looks idle until then is a card that looks stuck.
-			turn.streaming = true;
-			updateCard(board, held);
-		}
-	} else {
-		const turn = thread.turns[thread.turns.length - 1];
-		if (turn) {
-			turn.status = "sent";
-			turn.streaming = true;
-		}
+	const { turn, card: held } = liveTurn(board, thread);
+	if (turn) {
+		turn.status = "sent";
+		// The caret says a run is writing this turn, from the moment it is asked: the first word can
+		// take seconds, and a card that looks idle until then is a card that looks stuck.
+		turn.streaming = true;
+		if (held) updateCard(board, held);
 	}
 	thread.status = "running";
 	thread.runStartedAt = Date.now();
@@ -154,10 +146,18 @@ export const STREAM_MS = 100;
 
 
 
-/** The turn a running answer is written into, and the card that holds it when there is one. */
+/**
+ * The turn a running answer is written into, and the card that holds it when there is one.
+ *
+ * `thread.answering` names the turn the run was asked about: `{ cardId, turn }` for a card a hidden
+ * child answers for, and `{ turn }` for one of the thread's own. No target at all means the turn the
+ * run was started on, which is the thread's newest.
+ */
 export function liveTurn(board, thread) {
-	const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
-	const turn = thread.answering ? asked?.turns?.[thread.answering.turn] : thread.turns[thread.turns.length - 1];
+	const named = thread.answering;
+	if (named && !named.cardId) return { turn: thread.turns[named.turn], card: undefined };
+	const asked = named ? board.cards.get(named.cardId) : undefined;
+	const turn = named ? asked?.turns?.[named.turn] : thread.turns[thread.turns.length - 1];
 	return { turn, card: asked };
 }
 

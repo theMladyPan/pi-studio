@@ -8,7 +8,7 @@ import { answer } from "./http.ts";
 import { liveThoughts, settleThoughts } from "./thought.ts";
 import { port } from "./main.ts";
 import { retireWorktree } from "./worktrees/retire.ts";
-import { stopStream } from "./child/run.ts";
+import { stopStream, liveTurn } from "./child/run.ts";
 import { INSTANCE } from "./paths.ts";
 import { MODEL } from "./models.ts";
 import { activeConfig } from "./workspaces.ts";
@@ -238,7 +238,7 @@ export function threadError(board, thread, message) {
 	thread.status = "dead";
 	stopStream(thread);
 	settleThoughts(board, thread);
-	const last = thread.turns[thread.turns.length - 1];
+	const { turn: last, card: asked } = liveTurn(board, thread);
 	if (last) {
 		// What was being written stays as the child left it, but nothing is writing it now.
 		last.streaming = false;
@@ -249,14 +249,7 @@ export function threadError(board, thread, message) {
 		}
 	}
 	// A question that was written on a card is stuck in the same way the thread's own turn is.
-	const asked = thread.answering ? board.cards.get(thread.answering.cardId) : undefined;
-	const cardTurn = asked?.turns?.[thread.answering.turn];
-	if (cardTurn) {
-		cardTurn.streaming = false;
-		if (cardTurn.status !== "answered") {
-			cardTurn.status = "stopped";
-			cardTurn.error = message;
-		}
+	if (asked) {
 		// Unconditional: a caret cleared on the daemon and not on the browser blinks for ever.
 		updateCard(board, asked);
 	}
