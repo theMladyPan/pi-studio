@@ -87,6 +87,9 @@ export function plainCardFor(card, board = null) {
 						options: card.options,
 						allowFreeText: card.allowFreeText !== false,
 						multiple: card.multiple === true,
+						// A card that asks several questions carries them as a list of tabs; one question keeps the
+						// flat fields, which is what every reader of a question card already knows.
+						...(Array.isArray(card.questions) && card.questions.length ? { questions: card.questions } : {}),
 						status: card.status ?? "expired",
 						...(card.answer ? { answer: card.answer } : {}),
 						...(card.answers?.length ? { answers: card.answers } : {}),

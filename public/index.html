@@ -365,6 +365,23 @@
   .q-free input:focus { border-color: var(--accent-dim); }
   .q-done { color: var(--muted); font: 12px var(--mono); }
   .q-done.q-problem { color: var(--red); }
+  /* A card that asks several questions: numbered tabs above one panel at a time, and a foot that
+     sends them all at once. The tick on a tab is what says a question is already answered. */
+  .q-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+  .q-tab {
+    min-width: 26px; padding: 4px 7px; font: 12px var(--mono); color: var(--muted);
+    background: #161b22; border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+  }
+  .q-tab:hover { color: var(--text); border-color: var(--accent-dim); }
+  .q-tab.on { color: var(--text); border-color: var(--accent); background: rgba(88,166,255,.12); }
+  .q-tab.done { color: var(--accent); }
+  .q-tab.done::after { content: "✓"; margin-left: 4px; }
+  .q-panel { display: flex; flex-direction: column; gap: 10px; }
+  .q-panel[hidden] { display: none; }
+  .q-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .q-actions[hidden] { display: none; }
+  .q-count { color: var(--muted); font: 11px var(--mono); }
+  .q-send { padding: 6px 12px; }
 
   .resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
     background: linear-gradient(135deg, transparent 50%, var(--border-bright) 50%);

@@ -73,6 +73,31 @@ test("a plain card keeps its type, and one without a body is dropped", () => {
 	assert.equal(restoredPlainCard({ id: "c4" }), null);
 });
 
+test("a question card that asked several questions reloads with its tabs", () => {
+	const card = restoredPlainCard({
+		id: "c11",
+		type: "question",
+		title: "three things",
+		at: now,
+		status: "answered",
+		answer: "a; x, y",
+		answers: ["a", "x, y"],
+		questions: [
+			{ question: "one?", options: ["a", "b"] },
+			{ question: "two?", options: ["x", "y"], multiple: true, allowFreeText: false },
+		],
+	}) as any;
+	// A tabbed card carries no flat question, so the list is what keeps it a card at all.
+	assert.equal(card.type, "question");
+	assert.equal(card.questions.length, 2);
+	assert.equal(card.questions[1].multiple, true);
+	assert.equal(card.questions[1].allowFreeText, false);
+	assert.deepEqual(card.answers, ["a", "x, y"]);
+	// The agent that was waiting is gone after a restart, so the card is settled like every other one.
+	assert.equal(card.status, "expired");
+	assert.equal(restoredPlainCard({ id: "c12", type: "question", questions: [] }), null);
+});
+
 test("a file with no type is read as a note, which is what it was", () => {
 	const card = restoredPlainCard({ id: "c5", markdown: "old shape", title: "kept" }) as any;
 	assert.equal(card.type, "note");
