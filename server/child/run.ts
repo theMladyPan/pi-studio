@@ -123,8 +123,10 @@ export function prompt(board, thread, text, target = null) {
 	// A stop pressed before the child got going has nothing to abort yet; `onStop` remembers it and the
 	// first event of the run repeats it.
 	thread.abortWanted = false;
-	// A new run starts with nothing said yet, whatever the last one left behind.
-	thread.streamDone = "";
+	// A new run starts with nothing said yet, whatever the last one left behind: no narration, no
+	// answer, and no half-arrived block.
+	thread.streamInterim = [];
+	thread.streamLast = "";
 	thread.streamParts = new Map();
 	thinkingRuns.delete(thread);
 	update(board, thread);
@@ -163,10 +165,28 @@ export function liveTurn(board, thread) {
 
 
 
-/** The answer as it reads this instant: the messages that finished, then the one still arriving. */
+/** The run as it reads this instant: what it said on the way, and the answer being written now. */
 export function runText(thread) {
 	const arriving = [...(thread.streamParts?.values() ?? [])].join("");
-	return [thread.streamDone ?? "", arriving].filter((part) => part).join("\n\n");
+	return {
+		interim: thread.streamInterim ?? [],
+		reply: [thread.streamLast ?? "", arriving].filter((part) => part).join("\n\n"),
+	};
+}
+
+
+
+/**
+ * What one finished message leaves behind. A message that asked for a tool is the run saying what it is
+ * about to do, so its words join the narration and the answer starts again from nothing; the message
+ * that asked for nothing is the answer. Nothing carries from one message into the next, so an answer is
+ * never glued to the narration that led to it, and a message pi is about to retry is not kept at all —
+ * keeping it would make the retry's text read twice.
+ */
+export function afterMessage(thread, text, asked, failed = false) {
+	const said = String(text ?? "").trim();
+	if (asked && said && !failed) thread.streamInterim = [...(thread.streamInterim ?? []), said];
+	thread.streamLast = asked || failed ? "" : said;
 }
 
 
@@ -198,7 +218,9 @@ export function streamTick(board, thread) {
 	if (thread.status !== "running") return;
 	const { turn, card: held } = liveTurn(board, thread);
 	if (!turn) return;
-	turn.reply = runText(thread);
+	const { interim, reply } = runText(thread);
+	turn.reply = reply;
+	turn.interim = interim;
 	turn.streaming = true;
 	// The card that holds the turn is the one to repaint: a run answering a note writes the note's
 	// turn, and a run answering its own card writes the card. Falling back to `homeCard` while the

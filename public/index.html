@@ -228,6 +228,15 @@
   @keyframes caret-blink { 50% { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { .turn-a .caret { animation: none; } }
 
+  /* A run that talks, calls a tool and talks again says something on the way and something at the end.
+     The way is kept above the answer, one muted block per message with a hairline between, so the
+     answer underneath is read as the answer and not as the last paragraph of one long note. */
+  .turn-interim:empty { display: none; }
+  .turn-note { padding: 0; font-size: 13px; color: var(--muted); }
+  .turn-note strong { color: var(--text); }
+  .turn-note + .turn-note { border-top: 1px solid #21262d; margin-top: 7px; padding-top: 7px; }
+  .turn-interim + .turn-a { border-top: 1px solid #21262d; padding-top: 7px; }
+
   /* Markdown tables: a wide one scrolls sideways instead of bursting the card. */
   .table-wrap { overflow-x: auto; margin: 6px 0 10px; }
   .table-wrap table { border-collapse: collapse; font-size: 12.5px; }

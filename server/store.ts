@@ -29,6 +29,9 @@ export function savedTurn(turn) {
 		mode: turn.mode,
 		at: turn.at,
 		...(turn.reply ? { reply: turn.reply } : {}),
+		// What the run said on the way is kept with the answer: a card that reopens without it reads as
+		// a run that answered out of nowhere.
+		...(turn.interim?.length ? { interim: turn.interim } : {}),
 		...(turn.error ? { error: turn.error } : {}),
 	};
 }
@@ -135,6 +138,7 @@ export function restoredTurns(raw) {
 			mode: turn.mode === "steer" ? "steer" : "queue",
 			at: Number.isFinite(turn.at) ? turn.at : Date.now(),
 			...(typeof turn.reply === "string" ? { reply: turn.reply } : {}),
+			...(Array.isArray(turn.interim) && turn.interim.length ? { interim: turn.interim.map(String) } : {}),
 			...(typeof turn.error === "string" && turn.error ? { error: turn.error } : {}),
 		}));
 }

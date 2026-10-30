@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_ROW_CHARS } from "./limits.ts";
 import { scheduleSave } from "./store.ts";
 import { threadError } from "./cards.ts";
-import { STREAM_MS, liveTurn, prompt, stopStream, streamTick, streamTimers } from "./child/run.ts";
+import { STREAM_MS, afterMessage, liveTurn, prompt, stopStream, streamTick, streamTimers } from "./child/run.ts";
 import { keptArgs } from "./child/argv.ts";
 import { describeTool, firstLine, headline, rowResult } from "./child/describe.ts";
 import { join } from "node:path";
@@ -365,32 +365,32 @@ export function handleChildLine(board, thread, line) {
 		// A thought whose message ended without its end event stops where it stands.
 		settleThoughts(board, thread);
 		const message = event.message;
-		const text = (Array.isArray(message.content) ? message.content : [])
+		const blocks = Array.isArray(message.content) ? message.content : [];
+		const text = blocks
 			.filter((block) => block?.type === "text")
 			.map((block) => String(block.text ?? ""))
 			.join("")
 			.trim();
-		const thinking = (Array.isArray(message.content) ? message.content : [])
+		const thinking = blocks
 			.filter((block) => block?.type === "thinking")
 			.map((block) => String(block.thinking ?? ""))
 			.join("")
 			.trim();
+		// A message that asked for a tool is the run saying what it is about to do, and the message that
+		// asked for nothing is what the human is waiting for. Read apart here, they can be drawn apart:
+		// the answer stops being the tail of one long paragraph.
+		const wantedTool = blocks.some((block) => block?.type === "toolCall");
 		// When the run was answering for a card, only that card may receive the reply. Falling back to
 		// the thread's own turn would overwrite an older answer with a card's answer. A turn the thread
 		// keeps is named by its index, so the reply lands under the message that asked for it even when
 		// several were queued behind one run.
 		const { turn, card: asked } = liveTurn(board, thread);
-		// The answer is what the whole run said. A run that talks, calls a tool and talks again would
-		// otherwise drop its first half the moment its second arrived.
-		const said = [thread.streamDone ?? "", text].filter(Boolean).join("\n\n");
 		const aborted = message.stopReason === "aborted";
 		const failed = message.stopReason === "error";
 		// Why a run stopped belongs on the turn. A card that reads only "stopped" sends the human looking
 		// through session files for the reason, and a connection error is the common case.
 		const reason = failed ? headline(message.errorMessage) : undefined;
-		// A message pi is about to retry is not half an answer: keeping it would make the retry's full
-		// text read twice.
-		thread.streamDone = failed ? "" : said;
+		afterMessage(thread, text, wantedTool, failed);
 		thread.streamParts = new Map();
 		stopStream(thread);
 		if (!text) {
@@ -398,9 +398,11 @@ export function handleChildLine(board, thread, line) {
 			// the caret stays until a message has words in it. A failed one has no words coming, so it
 			// ends here, carrying the reason.
 			if (turn) {
+				// The words of the previous messages have moved into the narration, and the answer is empty
+				// until the next message speaks, so the card is told about both.
+				turn.interim = [...(thread.streamInterim ?? [])];
 				turn.error = reason;
 				if (reason) turn.status = "stopped";
-				if (turn.streaming) turn.reply = said;
 				if (reason || turn.streaming) {
 					if (asked) updateCard(board, asked);
 					else update(board, thread);
@@ -409,7 +411,10 @@ export function handleChildLine(board, thread, line) {
 			return;
 		}
 		if (turn) {
-			turn.reply = said;
+			// A failed message is shown as what arrived but not kept: pi may retry it, and the retry says
+			// the same thing again.
+			turn.reply = failed ? text : thread.streamLast;
+			turn.interim = [...(thread.streamInterim ?? [])];
 			// An aborted or failed message is not an answer, however much of it arrived before it was
 			// cut. Saying `answered` over half a sentence would be a card that lies.
 			turn.status = aborted || failed ? "stopped" : "answered";
