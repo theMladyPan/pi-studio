@@ -1,0 +1,2012 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pi-studio · settings</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #12151a;
+    --panel-2: #161b22;
+    --raised: #1a1f27;
+    --border: #1f242c;
+    --border-2: #2a303a;
+    --text: #e6edf3;
+    --dim: #c9d1d9;
+    --muted: #8b949e;
+    --accent: #3b82f6;
+    --ok: #3fb950;
+    --warn: #e3b341;
+    --bad: #f85149;
+    --mono: ui-monospace, SFMono-Regular, Menlo, "DejaVu Sans Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.5 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0 24px;
+    /* settled shelf structural grid hairlines at +/-320px */
+    background-image:
+      linear-gradient(to right, transparent calc(50% - 320px), var(--border) calc(50% - 320px), var(--border) calc(50% - 319px), transparent calc(50% - 319px)),
+      linear-gradient(to right, transparent calc(50% + 319px), var(--border) calc(50% + 319px), var(--border) calc(50% + 320px), transparent calc(50% + 320px));
+  }
+
+  button, input, select {
+    font: inherit;
+    color: inherit;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  /* Shelf wrapper: sits in the upper-middle optical zone */
+  .shelf-stage {
+    width: 100%;
+    max-width: 640px;
+    margin-top: min(11vh, 96px);
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - min(15vh, 136px));
+    min-height: 0;
+    position: relative;
+  }
+
+  /* Masthead above the shelf: brand on left, page switch on right */
+  .masthead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 0 2px 10px;
+    gap: 12px;
+    flex: none;
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .brand-title {
+    font: 600 13px/1 var(--mono);
+    color: var(--text);
+    letter-spacing: -0.2px;
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .brand-sep {
+    font: 11.5px/1 var(--mono);
+    color: var(--border-2);
+  }
+
+  .brand-summary {
+    font: 11.5px/1 var(--mono);
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .brand-summary .live-count {
+    color: var(--warn);
+  }
+
+  /* Masthead navigation trigger: enters settings from shelf, or returns to shelf from settings */
+  .masthead-nav-btn {
+    cursor: pointer;
+    font: 11.5px/1.2 var(--mono);
+    color: var(--muted);
+    background: transparent;
+    padding: 4px 8px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    user-select: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+  }
+
+  .masthead-nav-btn:hover {
+    color: var(--dim);
+    background: var(--panel);
+    border-color: var(--border);
+  }
+
+  .masthead-nav-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .masthead-nav-btn.is-back {
+    color: var(--dim);
+    background: var(--panel);
+    border-color: var(--border-2);
+  }
+
+  .masthead-nav-btn.is-back:hover {
+    color: var(--text);
+    background: var(--panel-2);
+  }
+
+  .masthead-nav-btn .sep {
+    color: var(--border-2);
+  }
+
+  .masthead-nav-btn .glyph {
+    color: var(--accent);
+  }
+
+  /* Main 640px surface container (shared by both Shelf and Settings page) */
+  .shelf-box {
+    background: var(--panel);
+    border: 1px solid var(--border-2);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* ==========================================================================
+     SETTINGS PAGE SURFACE
+     ========================================================================== */
+  .settings-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 11px 14px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+
+  .settings-head-left {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .settings-title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .settings-title {
+    margin: 0;
+    font: 600 13px/1.2 var(--mono);
+    color: var(--text);
+  }
+
+  .settings-schema-tag {
+    font: 10.5px/1 var(--mono);
+    color: var(--muted);
+  }
+
+  .settings-help {
+    margin: 0;
+    font-size: 11.5px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .settings-head-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+  }
+
+  .save-status {
+    font: 11px/1.2 var(--mono);
+    padding: 3px 7px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+
+  .save-status[data-state="saved"] {
+    color: var(--ok);
+    background: rgba(63, 185, 80, 0.08);
+    border-color: rgba(63, 185, 80, 0.25);
+  }
+
+  .save-status[data-state="dirty"] {
+    color: var(--warn);
+    background: rgba(227, 179, 65, 0.1);
+    border-color: rgba(227, 179, 65, 0.3);
+  }
+
+  .save-status[data-state="error"] {
+    color: var(--bad);
+    background: rgba(248, 81, 73, 0.1);
+    border-color: rgba(248, 81, 73, 0.35);
+  }
+
+  .fold-btn {
+    background: var(--raised);
+    border: 1px solid var(--border-2);
+    border-radius: 5px;
+    padding: 4px 8px;
+    font: 11px/1.2 var(--mono);
+    color: var(--dim);
+    cursor: pointer;
+  }
+
+  .fold-btn:hover {
+    color: var(--text);
+    border-color: #3a424e;
+  }
+
+  .fold-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  /* Refusal banner when daemon returns 409 or 400 */
+  .settings-error-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 14px;
+    background: #1c1214;
+    border-bottom: 1px solid #4b2324;
+    font: 11.5px/1.3 var(--mono);
+    color: var(--bad);
+    flex: none;
+  }
+
+  .settings-error-bar button {
+    background: transparent;
+    border: 1px solid rgba(248, 81, 73, 0.35);
+    border-radius: 4px;
+    padding: 2px 7px;
+    font: 10.5px/1.2 var(--mono);
+    color: var(--dim);
+    cursor: pointer;
+    flex: none;
+  }
+
+  .settings-error-bar button:hover {
+    color: var(--text);
+    border-color: var(--bad);
+  }
+
+  /* Scrollable settings tree region */
+  .settings-tree {
+    padding: 8px 10px;
+    overflow-y: auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  /* Collapsible group node at any depth */
+  .cfg-group {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    margin: 0;
+  }
+
+  /* Depth 0: top-level group card */
+  .cfg-group[data-depth="0"] {
+    background: var(--panel);
+    border-color: var(--border-2);
+  }
+
+  /* Depth >= 1: nested groups use a left guide rail instead of heavy boxes */
+  .cfg-group:not([data-depth="0"]) {
+    border: 0;
+    border-left: 1px solid var(--border-2);
+    border-radius: 0;
+    background: transparent;
+    margin: 2px 0 4px 11px;
+    padding-left: 10px;
+  }
+
+  .cfg-summary {
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 7px 10px;
+    border-radius: 5px;
+    min-width: 0;
+  }
+
+  .cfg-group:not([data-depth="0"]) > .cfg-summary {
+    padding: 5px 8px;
+  }
+
+  .cfg-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .cfg-summary:hover {
+    background: var(--panel-2);
+  }
+
+  .cfg-summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+    background: var(--raised);
+  }
+
+  .cfg-sum-left {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .cfg-caret {
+    font: 11px/1 var(--mono);
+    color: var(--muted);
+    width: 10px;
+    display: inline-block;
+    transition: transform 0.1s ease;
+    flex: none;
+  }
+
+  .cfg-group[open] > .cfg-summary .cfg-caret {
+    transform: rotate(90deg);
+    color: var(--dim);
+  }
+
+  .cfg-label {
+    font: 600 12px/1.3 var(--mono);
+    color: var(--text);
+    white-space: nowrap;
+    /* The group's own name never truncates: the badge and the help line give way first. */
+    flex: none;
+  }
+
+  .cfg-group:not([data-depth="0"]) > .cfg-summary .cfg-label {
+    font-weight: 500;
+    color: var(--dim);
+  }
+
+  .cfg-status-badge {
+    font: 10.5px/1 var(--mono);
+    color: var(--muted);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    padding: 2px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 0 1 auto;
+  }
+
+  .cfg-inline-help {
+    font-size: 11.5px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  /* When a group is closed, hide its inline help and show its live value summary on the right */
+  .cfg-sum-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    font: 11px/1.2 var(--mono);
+    color: var(--muted);
+    max-width: 52%;
+  }
+
+  .cfg-folded-preview {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--dim);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    padding: 2px 7px;
+    border-radius: 4px;
+  }
+
+  .cfg-group[open] > .cfg-summary .cfg-folded-preview {
+    display: none;
+  }
+
+  .cfg-group:not([open]) > .cfg-summary .cfg-inline-help {
+    display: none;
+  }
+
+  .cfg-body {
+    padding: 2px 10px 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .cfg-group:not([data-depth="0"]) > .cfg-body {
+    padding: 2px 4px 4px 2px;
+  }
+
+  /* Field rows inside a group */
+  .cfg-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .cfg-field {
+    display: grid;
+    grid-template-columns: minmax(110px, 148px) 1fr;
+    gap: 6px 12px;
+    align-items: center;
+    padding: 6px 8px;
+    border-radius: 5px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+  }
+
+  .cfg-field.is-disabled {
+    opacity: 0.62;
+  }
+
+  .cfg-field.has-error {
+    border-color: var(--bad);
+    background: #191215;
+  }
+
+  .cfg-field-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .cfg-field-label {
+    font: 500 11.5px/1.2 var(--mono);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .cfg-field-id {
+    font: 10px/1 var(--mono);
+    color: var(--muted);
+  }
+
+  .cfg-field-control {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .cfg-control-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .cfg-input,
+  .cfg-select {
+    width: 100%;
+    min-width: 0;
+    background: var(--bg);
+    border: 1px solid var(--border-2);
+    border-radius: 5px;
+    padding: 5px 8px;
+    font: 11.5px/1.2 var(--mono);
+    color: var(--text);
+  }
+
+  .cfg-input[type="number"] {
+    max-width: 140px;
+  }
+
+  .cfg-input:focus-visible,
+  .cfg-select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 0;
+    border-color: var(--accent);
+  }
+
+  .cfg-input:disabled,
+  .cfg-select:disabled {
+    cursor: not-allowed;
+    color: var(--muted);
+  }
+
+  .cfg-source-tag {
+    font: 10px/1 var(--mono);
+    color: var(--muted);
+    white-space: nowrap;
+    flex: none;
+  }
+
+  .cfg-field-help {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--muted);
+  }
+
+  .cfg-field-error {
+    margin: 0;
+    font: 11px/1.3 var(--mono);
+    color: var(--bad);
+  }
+
+  /* Segmented control used for select (<=6 options) and toggle */
+  .seg-row {
+    display: inline-flex;
+    flex-wrap: wrap;
+    background: var(--bg);
+    border: 1px solid var(--border-2);
+    border-radius: 5px;
+    padding: 2px;
+    gap: 2px;
+  }
+
+  .seg-row button {
+    background: transparent;
+    border: 0;
+    border-radius: 3px;
+    padding: 3px 9px;
+    font: 11px/1.2 var(--mono);
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .seg-row button[aria-pressed="true"] {
+    background: var(--raised);
+    color: var(--text);
+    box-shadow: inset 0 0 0 1px var(--border-2);
+  }
+
+  .seg-row button:hover:not(:disabled) {
+    color: var(--text);
+  }
+
+  .seg-row button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .seg-row button:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  /* ==========================================================================
+     UNCHANGED SHELF SURFACE (reachable via masthead back link)
+     ========================================================================== */
+  .omnibar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 14px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+
+  .omnibar:focus-within {
+    border-bottom-color: var(--accent);
+  }
+
+  .omni-prompt {
+    font: 600 13px/1 var(--mono);
+    color: var(--accent);
+    user-select: none;
+    flex: none;
+  }
+
+  .omni-input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 0;
+    padding: 2px 0;
+    font: 13px/1.4 var(--mono);
+    color: var(--text);
+  }
+
+  .omni-input::placeholder {
+    color: var(--muted);
+  }
+
+  .omni-input:focus {
+    outline: none;
+  }
+
+  .omni-mode {
+    font: 11px/1 var(--mono);
+    color: var(--accent);
+    background: #132238;
+    border: 1px solid #23416b;
+    padding: 3px 7px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  .omni-browse {
+    background: var(--raised);
+    border: 1px solid var(--border-2);
+    border-radius: 5px;
+    padding: 4px 9px;
+    font: 11.5px/1.2 var(--mono);
+    color: var(--dim);
+    cursor: pointer;
+    flex: none;
+  }
+
+  .omni-browse:hover {
+    border-color: #3a424e;
+    color: var(--text);
+  }
+
+  .omni-browse:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .path-action-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    background: #121c2b;
+    border-bottom: 1px solid var(--border);
+    font: 12px/1.4 var(--mono);
+  }
+
+  .path-action-target {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .path-action-target span {
+    color: var(--muted);
+  }
+
+  .path-action-hint {
+    color: var(--accent);
+    font-size: 11px;
+    white-space: nowrap;
+    flex: none;
+  }
+
+  .ws-list {
+    list-style: none;
+    margin: 0;
+    padding: 6px;
+    overflow-y: auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .ws-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 9px 10px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    text-decoration: none;
+    color: inherit;
+    min-width: 0;
+  }
+
+  .ws-row:hover {
+    background: var(--panel-2);
+  }
+
+  .ws-row[aria-selected="true"] {
+    background: var(--raised);
+    border-color: var(--border-2);
+  }
+
+  .ws-row:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+    background: var(--raised);
+  }
+
+  .ws-row.is-missing {
+    opacity: 0.72;
+    cursor: not-allowed;
+  }
+
+  .ws-row.is-missing[aria-selected="true"] {
+    border-color: #4b2324;
+    background: #181316;
+  }
+
+  .ws-left {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--border-2);
+    flex: none;
+    align-self: center;
+  }
+
+  .status-dot.running {
+    background: var(--warn);
+    box-shadow: 0 0 0 3px rgba(227, 179, 65, 0.16);
+  }
+
+  .status-dot.idle {
+    background: var(--ok);
+  }
+
+  .status-dot.missing {
+    background: var(--bad);
+  }
+
+  .ws-name {
+    font: 600 13px/1.3 var(--mono);
+    color: var(--text);
+    white-space: nowrap;
+    flex: none;
+  }
+
+  .ws-row.is-missing .ws-name {
+    color: var(--dim);
+    text-decoration: line-through;
+    text-decoration-color: var(--bad);
+  }
+
+  .ws-context {
+    font: 11.5px/1.3 var(--mono);
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .ws-row[aria-selected="true"] .ws-context,
+  .ws-row.is-running .ws-context {
+    color: var(--dim);
+  }
+
+  .ws-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: none;
+    font: 11.5px/1 var(--mono);
+  }
+
+  .sig-running {
+    color: var(--warn);
+    background: rgba(227, 179, 65, 0.1);
+    border: 1px solid rgba(227, 179, 65, 0.3);
+    padding: 3px 7px;
+    border-radius: 4px;
+  }
+
+  .sig-missing {
+    color: var(--bad);
+    background: rgba(248, 81, 73, 0.1);
+    border: 1px solid rgba(248, 81, 73, 0.3);
+    padding: 3px 7px;
+    border-radius: 4px;
+  }
+
+  .sig-quiet {
+    color: var(--muted);
+  }
+
+  .enter-glyph {
+    color: var(--muted);
+    font: 11px/1 var(--mono);
+    opacity: 0;
+    width: 14px;
+    text-align: right;
+  }
+
+  .ws-row[aria-selected="true"]:not(.is-missing) .enter-glyph {
+    opacity: 1;
+    color: var(--accent);
+  }
+
+  .empty-shelf {
+    padding: 22px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .empty-title {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .empty-copy {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
+    max-width: 52ch;
+  }
+
+  /* Bottom status & keybind ledger inside the shelf */
+  .shelf-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 14px;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    font: 11px/1.2 var(--mono);
+    color: var(--muted);
+    flex: none;
+  }
+
+  .foot-keys {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  .foot-keys kbd {
+    font: 10.5px/1 var(--mono);
+    color: var(--dim);
+    background: var(--panel-2);
+    border: 1px solid var(--border-2);
+    border-radius: 3px;
+    padding: 2px 5px;
+    margin-right: 4px;
+  }
+
+  .foot-selected-path {
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 270px;
+  }
+
+  /* Mockup inspection switch: lets the human preview states in file:// */
+  .mockup-lens {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 2px;
+    font: 11px/1 var(--mono);
+    color: var(--muted);
+    flex: none;
+  }
+
+  .lens-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .lens-pill {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 7px;
+    font: 10.5px/1.2 var(--mono);
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .lens-pill:hover {
+    color: var(--dim);
+    border-color: var(--border-2);
+  }
+
+  .lens-pill[aria-pressed="true"] {
+    background: var(--panel-2);
+    color: var(--text);
+    border-color: var(--border-2);
+  }
+
+  /* 1024x700 and compact height resilience */
+  @media (max-height: 760px) {
+    .shelf-stage {
+      margin-top: 24px;
+      max-height: calc(100vh - 40px);
+    }
+    .settings-head {
+      padding: 8px 12px;
+    }
+    .cfg-summary {
+      padding: 5px 8px;
+    }
+    .cfg-field {
+      padding: 5px 8px;
+    }
+    .ws-row {
+      padding: 7px 10px;
+    }
+  }
+
+  @media (max-width: 720px) {
+    body {
+      background-image: none;
+      padding: 0 12px;
+    }
+    .foot-selected-path {
+      display: none;
+    }
+    .cfg-field {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+</head>
+<body>
+
+<!--
+  Embedded JSON document: both the schema definition and the store.
+  Byte-identical to mockups/settings.defaults.json.
+-->
+<script type="application/json" id="settings">
+{
+  "version": 1,
+  "title": "New board defaults",
+  "help": "What every new workspace board is born with. An open board keeps its own copy.",
+  "groups": [
+    {
+      "id": "new-boards",
+      "label": "New boards",
+      "help": "Inherited once when a folder is first opened as a workspace.",
+      "collapsed": false,
+      "groups": [
+        {
+          "id": "agent",
+          "label": "Agent",
+          "help": "The pi child process that answers the first thread on a new board.",
+          "collapsed": false,
+          "groups": [
+            {
+              "id": "model-routing",
+              "label": "Model & reasoning",
+              "help": "Validated against GET /models; the daemon refuses a model this machine cannot run.",
+              "collapsed": false,
+              "fields": [
+                {
+                  "id": "model",
+                  "store": {
+                    "split": "/",
+                    "keys": [
+                      "provider",
+                      "model"
+                    ]
+                  },
+                  "label": "model",
+                  "type": "combo",
+                  "value": "klotilda/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+                  "source": "/models",
+                  "placeholder": "provider/model",
+                  "help": "Provider and model id separated by /. Scoped models from ~/.pi/agent/settings.json appear first.",
+                  "options": [
+                    "klotilda/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+                    "github-copilot/claude-opus-5.5",
+                    "github-copilot/claude-sonnet-5.5",
+                    "github-copilot/gpt-6.1-sol",
+                    "github-copilot/gemini-4-argon",
+                    "github-copilot/gemini-3.8-flash",
+                    "openrouter/deepseek/deepseek-v4.1-flash-1017",
+                    "openrouter/z-ai/glm-5.3",
+                    "openrouter/z-ai/glm-5.3-flash"
+                  ]
+                },
+                {
+                  "id": "thinking",
+                  "label": "thinking",
+                  "type": "select",
+                  "value": "medium",
+                  "source": "/defaults#levels",
+                  "help": "Reasoning budget passed to pi for new threads. Clamped if a model does not support it.",
+                  "levels": [
+                    "off",
+                    "low",
+                    "medium",
+                    "high"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "board",
+          "label": "Board",
+          "help": "Canvas behaviour on /w/<id>.",
+          "collapsed": false,
+          "groups": [
+            {
+              "id": "cards",
+              "label": "Cards",
+              "help": "How thread and note cards behave when one is focused.",
+              "collapsed": true,
+              "fields": [
+                {
+                  "id": "dimOthers",
+                  "label": "dim others",
+                  "type": "toggle",
+                  "value": true,
+                  "labels": [
+                    "off",
+                    "on"
+                  ],
+                  "help": "Dim other cards on the canvas while one thread is selected."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "per-board-overrides",
+      "label": "Per-board overrides",
+      "status": "not built on home yet — configured inside each board today",
+      "help": "Kept in boards/<id>.json via POST /config. Listed here to show how deeper groups and text/number controls fit the same document.",
+      "collapsed": true,
+      "groups": [
+        {
+          "id": "delegation",
+          "label": "Boss delegation",
+          "status": "not built yet",
+          "help": "Default flow and child limits when a thread spawns subagents.",
+          "collapsed": false,
+          "fields": [
+            {
+              "id": "path",
+              "label": "boss flow",
+              "type": "select",
+              "value": "auto",
+              "disabled": true,
+              "levels": [
+                "auto",
+                "simple",
+                "advanced",
+                "complex"
+              ],
+              "help": "Flow a boss thread starts on before choosing a path."
+            },
+            {
+              "id": "timeoutSeconds",
+              "label": "child timeout (s)",
+              "type": "number",
+              "value": 600,
+              "min": 60,
+              "max": 3600,
+              "step": 60,
+              "disabled": true,
+              "help": "Hard ceiling in seconds for a spawned child thread."
+            },
+            {
+              "id": "toolsOff",
+              "label": "disabled tools",
+              "type": "text",
+              "value": "",
+              "placeholder": "read, bash, edit, write",
+              "disabled": true,
+              "help": "Comma-separated built-in tools withheld from new threads on a board."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+</script>
+
+<main class="shelf-stage" aria-label="pi-studio home and settings">
+  <!-- Shared Masthead: swaps its right-hand control between "← back to workspaces" and "new boards: ... ⚙" -->
+  <header class="masthead">
+    <div class="brand">
+      <span class="brand-title">pi-studio</span>
+      <span class="brand-sep" id="mastheadSep">/</span>
+      <span class="brand-summary" id="mastheadContext">settings · <span style="color: var(--dim);">settings.defaults.json</span></span>
+    </div>
+
+    <!-- Shown when on the Settings page: one click or Esc returns to the Shelf -->
+    <button type="button" class="masthead-nav-btn is-back" id="backToShelfBtn" title="Return to workspaces shelf (Esc or Alt+M)">
+      <span class="glyph" aria-hidden="true">←</span>
+      <span>back to workspaces</span>
+    </button>
+
+    <!-- Shown when on the Shelf: the masthead defaults control is now the door to the Settings page.
+         It carries no values of its own any more: the model and level it would print live one click
+         away, and printing them here squeezed the brand line into two rows. -->
+    <button type="button" class="masthead-nav-btn" id="openSettingsBtn" hidden title="New board defaults (Alt+M)">
+      <span class="glyph">settings →</span>
+    </button>
+  </header>
+
+  <!-- ========================================================================
+       VIEW 1: SETTINGS PAGE (Default open view per assignment)
+       ======================================================================== -->
+  <section class="shelf-box" id="settingsView" aria-label="Default settings page">
+    <div class="settings-head">
+      <div class="settings-head-left">
+        <div class="settings-title-row">
+          <h1 class="settings-title" id="docTitle">New board defaults</h1>
+          <span class="settings-schema-tag" id="docVersion">v1 · json store + schema</span>
+        </div>
+        <p class="settings-help" id="docHelp">What every new workspace board is born with. An open board keeps its own copy.</p>
+      </div>
+      <div class="settings-head-right">
+        <span class="save-status" id="saveStatus" data-state="saved" role="status" aria-live="polite">saved</span>
+        <button type="button" class="fold-btn" id="toggleAllGroupsBtn" title="Collapse or expand all setting groups">
+          collapse all
+        </button>
+      </div>
+    </div>
+
+    <!-- Refusal / 409 banner (shown when a model is not runnable on this machine) -->
+    <div class="settings-error-bar" id="settingsErrorBar" hidden role="alert">
+      <span id="settingsErrorText">409 Conflict — POST /defaults: this machine cannot run that model</span>
+      <button type="button" id="revertErrorBtn">revert to last saved</button>
+    </div>
+
+    <!-- Generic JSON-rendered group & field tree (populated by walkGroup below; static fallback inside <noscript>) -->
+    <div class="settings-tree" id="settingsTree" role="region" aria-label="Settings groups">
+      <noscript>
+        <p style="padding: 12px; color: var(--muted); font-family: var(--mono);">
+          Settings are rendered from #settings JSON. Enable JavaScript to walk the group tree.
+        </p>
+      </noscript>
+    </div>
+
+    <footer class="shelf-foot">
+      <div class="foot-keys">
+        <span><kbd>Tab</kbd> navigate</span>
+        <span><kbd>Space</kbd><kbd>↵</kbd> fold group / toggle</span>
+        <span><kbd>Esc</kbd> back to shelf</span>
+      </div>
+      <span class="foot-selected-path" id="settingsFootReadout">POST /defaults · auto-saved on change</span>
+    </footer>
+  </section>
+
+  <!-- ========================================================================
+       VIEW 2: THE SHELF HOME SCREEN (Unchanged layout, reachable in 1 click)
+       ======================================================================== -->
+  <section class="shelf-box" id="shelfView" hidden aria-label="Workspaces shelf">
+    <div class="omnibar">
+      <span class="omni-prompt" aria-hidden="true">/</span>
+      <input
+        id="omniInput"
+        class="omni-input"
+        type="text"
+        spellcheck="false"
+        autocomplete="off"
+        placeholder="Filter workspaces, or type a folder path (~/projekty/…) and press Enter"
+        aria-label="Filter workspaces or enter a folder path to open"
+      />
+      <span id="omniModeBadge" class="omni-mode" hidden>open path ↵</span>
+      <button type="button" class="omni-browse" id="browseBtn" title="Pick a folder using the system dialog (POST /pick-folder)">
+        browse…
+      </button>
+    </div>
+
+    <div id="pathActionRow" class="path-action-row" hidden>
+      <div class="path-action-target">
+        <span>Open folder as workspace: </span><strong id="pathActionText">~/projekty/new-service</strong>
+      </div>
+      <span class="path-action-hint">↵ Enter creates &amp; opens board</span>
+    </div>
+
+    <ul class="ws-list" id="wsList" role="listbox" aria-label="Recent workspaces">
+      <li class="ws-row is-running" role="option" tabindex="0" aria-selected="true"
+          data-id="pi-studio"
+          data-name="pi-studio"
+          data-folder="/home/stanke/projekty/pi-studio"
+          data-missing="false">
+        <div class="ws-left">
+          <span class="status-dot running" title="2 threads running"></span>
+          <span class="ws-name">pi-studio</span>
+          <span class="ws-context">Home screen mockups — Hypothesis C Shelf</span>
+        </div>
+        <div class="ws-right">
+          <span class="sig-running">2 running</span>
+          <span class="enter-glyph" aria-hidden="true">↵</span>
+        </div>
+      </li>
+
+      <li class="ws-row is-running" role="option" tabindex="-1" aria-selected="false"
+          data-id="ytrack-tools"
+          data-name="ytrack-tools"
+          data-folder="/home/stanke/projekty/ytrack-tools"
+          data-missing="false">
+        <div class="ws-left">
+          <span class="status-dot running" title="1 thread running"></span>
+          <span class="ws-name">ytrack-tools</span>
+          <span class="ws-context">Audit aggregate Subtask of: TZ-511 pagination and retry backoff under rate limit</span>
+        </div>
+        <div class="ws-right">
+          <span class="sig-running">1 running</span>
+          <span class="enter-glyph" aria-hidden="true">↵</span>
+        </div>
+      </li>
+
+      <li class="ws-row" role="option" tabindex="-1" aria-selected="false"
+          data-id="dashboard"
+          data-name="dashboard"
+          data-folder="/home/stanke/projekty/dashboard"
+          data-missing="false">
+        <div class="ws-left">
+          <span class="status-dot idle" title="Idle · 4 threads"></span>
+          <span class="ws-name">dashboard</span>
+          <span class="ws-context">~/projekty/dashboard</span>
+        </div>
+        <div class="ws-right">
+          <span class="sig-quiet">22m ago</span>
+          <span class="enter-glyph" aria-hidden="true">↵</span>
+        </div>
+      </li>
+
+      <li class="ws-row" role="option" tabindex="-1" aria-selected="false"
+          data-id="rfc-notes"
+          data-name="rfc-notes"
+          data-folder="/home/stanke/notes/rfc-notes"
+          data-missing="false">
+        <div class="ws-left">
+          <span class="status-dot idle" title="Idle · 2 threads (plain folder, not a git repo)"></span>
+          <span class="ws-name">rfc-notes</span>
+          <span class="ws-context">~/notes/rfc-notes</span>
+        </div>
+        <div class="ws-right">
+          <span class="sig-quiet">3h ago</span>
+          <span class="enter-glyph" aria-hidden="true">↵</span>
+        </div>
+      </li>
+
+      <li class="ws-row" role="option" tabindex="-1" aria-selected="false"
+          data-id="agent-skills"
+          data-name="agent-skills"
+          data-folder="/home/stanke/.agents/skills"
+          data-missing="false">
+        <div class="ws-left">
+          <span class="status-dot" title="0 threads"></span>
+          <span class="ws-name">agent-skills</span>
+          <span class="ws-context">~/.agents/skills</span>
+        </div>
+        <div class="ws-right">
+          <span class="sig-quiet">2d ago</span>
+          <span class="enter-glyph" aria-hidden="true">↵</span>
+        </div>
+      </li>
+
+      <li class="ws-row is-missing" role="option" tabindex="-1" aria-selected="false" aria-disabled="true"
+          data-id="legacy-bridge"
+          data-name="legacy-bridge"
+          data-folder="/home/stanke/projekty/legacy-bridge"
+          data-missing="true">
+        <div class="ws-left">
+          <span class="status-dot missing" title="Folder missing from disk"></span>
+          <span class="ws-name">legacy-bridge</span>
+          <span class="ws-context">/home/stanke/projekty/legacy-bridge</span>
+        </div>
+        <div class="ws-right">
+          <span class="sig-missing">folder missing</span>
+          <span class="enter-glyph" aria-hidden="true">↵</span>
+        </div>
+      </li>
+    </ul>
+
+    <div class="empty-shelf" id="emptyShelf" hidden>
+      <p class="empty-title" id="emptyTitle">No existing workspace matches.</p>
+      <p class="empty-copy" id="emptyCopy">Press Enter to open that path as a new workspace, or press Escape to clear.</p>
+    </div>
+
+    <footer class="shelf-foot">
+      <div class="foot-keys">
+        <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+        <span><kbd>↵</kbd> open board</span>
+        <span><kbd>Esc</kbd> clear</span>
+        <span><kbd>Alt+M</kbd> settings</span>
+      </div>
+      <span class="foot-selected-path" id="selectedPathReadout">/home/stanke/projekty/pi-studio</span>
+    </footer>
+  </section>
+
+  <!-- Subtle state switcher at bottom of mockup so the human can inspect states in file:// -->
+  <nav class="mockup-lens" aria-label="Mockup state preview">
+    <span>mockup state:</span>
+    <div class="lens-pills">
+      <button type="button" class="lens-pill" data-lens="settings-default" aria-pressed="true">settings (open + closed mix)</button>
+      <button type="button" class="lens-pill" data-lens="settings-folded" aria-pressed="false">all groups closed</button>
+      <button type="button" class="lens-pill" data-lens="settings-open" aria-pressed="false">all groups open (depth 3)</button>
+      <button type="button" class="lens-pill" data-lens="settings-409" aria-pressed="false">409 model refused</button>
+      <button type="button" class="lens-pill" data-lens="shelf" aria-pressed="false">workspaces shelf</button>
+    </div>
+  </nav>
+</main>
+
+<script>
+(() => {
+  const COLLAPSE_STORAGE_KEY = "pi-studio.settings.collapsed.v1";
+
+  // 1. Parse the embedded JSON store + schema document
+  const rawJsonEl = document.getElementById("settings");
+  const settingsDoc = JSON.parse(rawJsonEl.textContent);
+
+  // Track last-known-good values so a 409 refusal can revert cleanly
+  const lastSavedValues = new Map();
+
+  // Read persisted collapse map from localStorage (falls back to each group's `collapsed` boolean in JSON)
+  function readCollapseMap() {
+    try {
+      return JSON.parse(localStorage.getItem(COLLAPSE_STORAGE_KEY) || "{}") || {};
+    } catch {
+      return {};
+    }
+  }
+
+  function writeCollapseState(pathKey, isCollapsed) {
+    try {
+      const map = readCollapseMap();
+      map[pathKey] = isCollapsed;
+      localStorage.setItem(COLLAPSE_STORAGE_KEY, JSON.stringify(map));
+    } catch {
+      // Ignore storage errors under strict file:// policies
+    }
+  }
+
+  let collapseMap = readCollapseMap();
+
+  const treeRoot = document.getElementById("settingsTree");
+  const saveStatus = document.getElementById("saveStatus");
+  const errorBar = document.getElementById("settingsErrorBar");
+  const errorText = document.getElementById("settingsErrorText");
+  const footReadout = document.getElementById("settingsFootReadout");
+  const openSettingsBtnTitle = document.getElementById("openSettingsBtn");
+
+  // Collect all leaf fields inside a group (at any depth) to compute its closed summary pill
+  function collectLeafFields(group) {
+    const out = [];
+    if (Array.isArray(group.fields)) out.push(...group.fields);
+    if (Array.isArray(group.groups)) {
+      for (const child of group.groups) out.push(...collectLeafFields(child));
+    }
+    return out;
+  }
+
+  function formatFieldPreview(field) {
+    if (field.type === "toggle") {
+      const [offLabel, onLabel] = Array.isArray(field.labels) ? field.labels : ["off", "on"];
+      return `${field.label}: ${field.value ? onLabel : offLabel}`;
+    }
+    const val = String(field.value ?? "");
+    if (!val) return `${field.label}: none`;
+    const parts = val.split("/");
+    const compact = parts.length > 2 ? `${parts[0]}/${parts[parts.length - 1]}` : val;
+    return `${field.label}: ${compact}`;
+  }
+
+  function groupPreviewText(group) {
+    const fields = collectLeafFields(group);
+    if (!fields.length) return "";
+    return fields.map(formatFieldPreview).join(" · ");
+  }
+
+  // Build the payload patch for POST /defaults from a generic field definition
+  function buildStorePatch(field, nextValue) {
+    if (field.store && typeof field.store.split === "string" && Array.isArray(field.store.keys)) {
+      const sep = field.store.split;
+      const str = String(nextValue ?? "").trim();
+      const cut = str.indexOf(sep);
+      const [firstKey, secondKey] = field.store.keys;
+      if (cut <= 0 || cut === str.length - 1) {
+        return { [firstKey]: "", [secondKey]: str };
+      }
+      return {
+        [firstKey]: str.slice(0, cut),
+        [secondKey]: str.slice(cut + sep.length),
+      };
+    }
+    return { [field.id]: nextValue };
+  }
+
+  // Generic validation & simulated daemon write (auto-save per field)
+  function commitFieldChange(field, nextValue, fieldNode) {
+    const previousValue = lastSavedValues.get(field.id);
+    field.value = nextValue;
+    const patch = buildStorePatch(field, nextValue);
+
+    // If the field declares an options catalogue from a daemon route (e.g. /models), check membership
+    const catalog = field.options || field.levels;
+    if (field.type === "combo" && Array.isArray(catalog)) {
+      const trimmed = String(nextValue ?? "").trim();
+      const valid = catalog.includes(trimmed);
+      if (!valid) {
+        fieldNode.classList.add("has-error");
+        const errEl = fieldNode.querySelector(".cfg-field-error");
+        if (errEl) {
+          errEl.hidden = false;
+          errEl.textContent = `409 from POST /defaults: "${trimmed || "(empty)"}" is not a model this machine can run`;
+        }
+        saveStatus.dataset.state = "error";
+        saveStatus.textContent = "409 refused";
+        errorBar.hidden = false;
+        errorText.textContent = `POST /defaults ${JSON.stringify(patch)} → 409 Conflict: this machine cannot run that model`;
+        footReadout.textContent = `not saved · ${field.id} refused by daemon`;
+        refreshAllGroupPreviews();
+        return;
+      }
+    }
+
+    // Valid change: clear any error, update the embedded JSON script tag in place, and report saved
+    fieldNode.classList.remove("has-error");
+    const errEl = fieldNode.querySelector(".cfg-field-error");
+    if (errEl) errEl.hidden = true;
+    errorBar.hidden = true;
+
+    lastSavedValues.set(field.id, nextValue);
+    rawJsonEl.textContent = JSON.stringify(settingsDoc, null, 2);
+
+    saveStatus.dataset.state = "saved";
+    saveStatus.textContent = `saved · ${field.label}`;
+    footReadout.textContent = `POST /defaults ${JSON.stringify(patch)} → 200 OK`;
+
+    refreshAllGroupPreviews();
+    syncMastheadSummary();
+  }
+
+  // Generic control factory: dispatches strictly on `field.type` and properties in JSON
+  function renderFieldControl(field, fieldNode) {
+    const wrap = document.createElement("div");
+    wrap.className = "cfg-control-line";
+
+    const options = field.options || field.levels || [];
+
+    if (field.type === "combo") {
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "cfg-input";
+      input.id = `field-${field.id}`;
+      input.value = String(field.value ?? "");
+      input.placeholder = field.placeholder || "";
+      input.spellcheck = false;
+      input.autocomplete = "off";
+      input.disabled = Boolean(field.disabled);
+
+      const listId = `datalist-${field.id}`;
+      input.setAttribute("list", listId);
+      const datalist = document.createElement("datalist");
+      datalist.id = listId;
+      for (const opt of options) {
+        const o = document.createElement("option");
+        o.value = String(opt);
+        datalist.append(o);
+      }
+
+      input.addEventListener("change", () => commitFieldChange(field, input.value.trim(), fieldNode));
+      wrap.append(input, datalist);
+    } else if (field.type === "select") {
+      if (options.length > 0 && options.length <= 6) {
+        const seg = document.createElement("div");
+        seg.className = "seg-row";
+        seg.setAttribute("role", "group");
+        seg.setAttribute("aria-label", field.label);
+        for (const opt of options) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = String(opt);
+          btn.disabled = Boolean(field.disabled);
+          btn.setAttribute("aria-pressed", String(field.value === opt));
+          btn.addEventListener("click", () => {
+            for (const b of seg.querySelectorAll("button")) {
+              b.setAttribute("aria-pressed", String(b === btn));
+            }
+            commitFieldChange(field, opt, fieldNode);
+          });
+          seg.append(btn);
+        }
+        wrap.append(seg);
+      } else {
+        const select = document.createElement("select");
+        select.className = "cfg-select";
+        select.id = `field-${field.id}`;
+        select.disabled = Boolean(field.disabled);
+        for (const opt of options) {
+          const o = document.createElement("option");
+          o.value = String(opt);
+          o.textContent = String(opt);
+          o.selected = field.value === opt;
+          select.append(o);
+        }
+        select.addEventListener("change", () => commitFieldChange(field, select.value, fieldNode));
+        wrap.append(select);
+      }
+    } else if (field.type === "toggle") {
+      const [offLabel, onLabel] = Array.isArray(field.labels) ? field.labels : ["off", "on"];
+      const seg = document.createElement("div");
+      seg.className = "seg-row";
+      seg.setAttribute("role", "group");
+      seg.setAttribute("aria-label", field.label);
+
+      for (const [boolVal, text] of [[true, onLabel], [false, offLabel]]) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = text;
+        btn.disabled = Boolean(field.disabled);
+        btn.setAttribute("aria-pressed", String(Boolean(field.value) === boolVal));
+        btn.addEventListener("click", () => {
+          for (const b of seg.querySelectorAll("button")) {
+            b.setAttribute("aria-pressed", String(b === btn));
+          }
+          commitFieldChange(field, boolVal, fieldNode);
+        });
+        seg.append(btn);
+      }
+      wrap.append(seg);
+    } else if (field.type === "number" || field.type === "text") {
+      const input = document.createElement("input");
+      input.type = field.type;
+      input.className = "cfg-input";
+      input.id = `field-${field.id}`;
+      input.value = String(field.value ?? "");
+      if (field.placeholder) input.placeholder = field.placeholder;
+      if (field.min !== undefined) input.min = String(field.min);
+      if (field.max !== undefined) input.max = String(field.max);
+      if (field.step !== undefined) input.step = String(field.step);
+      input.disabled = Boolean(field.disabled);
+      input.addEventListener("change", () => {
+        const val = field.type === "number" ? Number(input.value) : input.value;
+        commitFieldChange(field, val, fieldNode);
+      });
+      wrap.append(input);
+    }
+
+    if (field.source) {
+      const src = document.createElement("span");
+      src.className = "cfg-source-tag";
+      src.textContent = field.source;
+      src.title = `Options populated from daemon route ${field.source}`;
+      wrap.append(src);
+    }
+
+    return wrap;
+  }
+
+  // Single recursive tree walk that turns any group depth + field list into DOM
+  function walkGroup(group, depth = 0, parentPath = "") {
+    const pathKey = parentPath ? `${parentPath}.${group.id}` : group.id;
+    const details = document.createElement("details");
+    details.className = "cfg-group";
+    details.dataset.depth = String(depth);
+    details.dataset.path = pathKey;
+
+    const isCollapsed = pathKey in collapseMap ? Boolean(collapseMap[pathKey]) : Boolean(group.collapsed);
+    details.open = !isCollapsed;
+
+    const summary = document.createElement("summary");
+    summary.className = "cfg-summary";
+
+    const left = document.createElement("div");
+    left.className = "cfg-sum-left";
+
+    const caret = document.createElement("span");
+    caret.className = "cfg-caret";
+    caret.setAttribute("aria-hidden", "true");
+    caret.textContent = "▸";
+
+    const label = document.createElement("span");
+    label.className = "cfg-label";
+    label.textContent = group.label;
+
+    left.append(caret, label);
+
+    if (group.status) {
+      const status = document.createElement("span");
+      status.className = "cfg-status-badge";
+      status.textContent = group.status;
+      left.append(status);
+    }
+
+    if (group.help) {
+      const help = document.createElement("span");
+      help.className = "cfg-inline-help";
+      help.textContent = group.help;
+      left.append(help);
+    }
+
+    const right = document.createElement("div");
+    right.className = "cfg-sum-right";
+    const preview = document.createElement("span");
+    preview.className = "cfg-folded-preview";
+    preview.textContent = groupPreviewText(group);
+    right.append(preview);
+
+    summary.append(left, right);
+    details.append(summary);
+
+    details.addEventListener("toggle", () => {
+      writeCollapseState(pathKey, !details.open);
+      updateToggleAllLabel();
+    });
+
+    const body = document.createElement("div");
+    body.className = "cfg-body";
+
+    if (Array.isArray(group.fields) && group.fields.length) {
+      const fieldsWrap = document.createElement("div");
+      fieldsWrap.className = "cfg-fields";
+
+      for (const field of group.fields) {
+        if (!lastSavedValues.has(field.id)) {
+          lastSavedValues.set(field.id, field.value);
+        }
+        const row = document.createElement("div");
+        row.className = `cfg-field${field.disabled ? " is-disabled" : ""}`;
+        row.dataset.fieldId = field.id;
+
+        const meta = document.createElement("div");
+        meta.className = "cfg-field-meta";
+
+        const lbl = document.createElement("label");
+        lbl.className = "cfg-field-label";
+        lbl.htmlFor = `field-${field.id}`;
+        lbl.textContent = field.label;
+
+        const keyHint = document.createElement("span");
+        keyHint.className = "cfg-field-id";
+        keyHint.textContent = field.store?.keys ? field.store.keys.join(" + ") : field.id;
+
+        meta.append(lbl, keyHint);
+
+        const ctrlCol = document.createElement("div");
+        ctrlCol.className = "cfg-field-control";
+        ctrlCol.append(renderFieldControl(field, row));
+
+        if (field.help) {
+          const h = document.createElement("p");
+          h.className = "cfg-field-help";
+          h.textContent = field.help;
+          ctrlCol.append(h);
+        }
+
+        const err = document.createElement("p");
+        err.className = "cfg-field-error";
+        err.hidden = true;
+        ctrlCol.append(err);
+
+        row.append(meta, ctrlCol);
+        fieldsWrap.append(row);
+      }
+      body.append(fieldsWrap);
+    }
+
+    if (Array.isArray(group.groups) && group.groups.length) {
+      for (const sub of group.groups) {
+        body.append(walkGroup(sub, depth + 1, pathKey));
+      }
+    }
+
+    details.append(body);
+    return details;
+  }
+
+  function findGroupByPath(groups, pathKey, prefix = "") {
+    for (const g of groups) {
+      const cur = prefix ? `${prefix}.${g.id}` : g.id;
+      if (cur === pathKey) return g;
+      if (Array.isArray(g.groups)) {
+        const found = findGroupByPath(g.groups, pathKey, cur);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  function refreshAllGroupPreviews() {
+    for (const details of treeRoot.querySelectorAll(".cfg-group")) {
+      const group = findGroupByPath(settingsDoc.groups, details.dataset.path);
+      const preview = details.querySelector(":scope > .cfg-summary .cfg-folded-preview");
+      if (group && preview) {
+        preview.textContent = groupPreviewText(group);
+      }
+    }
+  }
+
+  function syncMastheadSummary() {
+    const allFields = settingsDoc.groups.flatMap(collectLeafFields);
+    const modelField = allFields.find((f) => f.id === "model");
+    const thinkingField = allFields.find((f) => f.id === "thinking");
+    // The door stays one word wide; the values it used to print are its tooltip.
+    const model = modelField ? String(modelField.value || "") : "";
+    const parts = model.split("/");
+    const shortModel = parts.length > 1 ? `${parts[0]}/${parts[parts.length - 1]}` : model;
+    const level = thinkingField ? String(thinkingField.value || "off") : "off";
+    if (openSettingsBtnTitle) {
+      openSettingsBtnTitle.title = `New board defaults: ${shortModel} · ${level} (Alt+M)`;
+    }
+  }
+
+  function renderSettingsDocument() {
+    document.getElementById("docTitle").textContent = settingsDoc.title || "Settings";
+    document.getElementById("docVersion").textContent = `v${settingsDoc.version ?? 1} · json store + schema`;
+    document.getElementById("docHelp").textContent = settingsDoc.help || "";
+
+    treeRoot.replaceChildren(
+      ...(settingsDoc.groups || []).map((g) => walkGroup(g, 0, ""))
+    );
+    syncMastheadSummary();
+    updateToggleAllLabel();
+  }
+
+  const toggleAllBtn = document.getElementById("toggleAllGroupsBtn");
+  function updateToggleAllLabel() {
+    const all = Array.from(treeRoot.querySelectorAll(".cfg-group"));
+    const anyOpen = all.some((d) => d.open);
+    toggleAllBtn.textContent = anyOpen ? "collapse all" : "expand all";
+  }
+
+  toggleAllBtn.addEventListener("click", () => {
+    const all = Array.from(treeRoot.querySelectorAll(".cfg-group"));
+    const anyOpen = all.some((d) => d.open);
+    for (const d of all) {
+      d.open = !anyOpen;
+      writeCollapseState(d.dataset.path, !d.open);
+    }
+    updateToggleAllLabel();
+  });
+
+  document.getElementById("revertErrorBtn").addEventListener("click", () => {
+    const allFields = settingsDoc.groups.flatMap(collectLeafFields);
+    for (const f of allFields) {
+      if (lastSavedValues.has(f.id)) f.value = lastSavedValues.get(f.id);
+    }
+    errorBar.hidden = true;
+    saveStatus.dataset.state = "saved";
+    saveStatus.textContent = "saved";
+    footReadout.textContent = "reverted to last saved model";
+    renderSettingsDocument();
+  });
+
+  // 2. Navigation between Settings Page and Shelf Home Screen
+  const settingsView = document.getElementById("settingsView");
+  const shelfView = document.getElementById("shelfView");
+  const backToShelfBtn = document.getElementById("backToShelfBtn");
+  const openSettingsBtn = document.getElementById("openSettingsBtn");
+  const mastheadContext = document.getElementById("mastheadContext");
+  const mastheadSep = document.getElementById("mastheadSep");
+  const omniInput = document.getElementById("omniInput");
+
+  function showPage(page) {
+    const onSettings = page === "settings";
+    settingsView.hidden = !onSettings;
+    shelfView.hidden = onSettings;
+    backToShelfBtn.hidden = !onSettings;
+    openSettingsBtn.hidden = onSettings;
+    document.title = onSettings ? "pi-studio · settings" : "pi-studio";
+
+    if (onSettings) {
+      mastheadSep.textContent = "/";
+      mastheadContext.innerHTML = `settings · <span style="color: var(--dim);">settings.defaults.json</span>`;
+    } else {
+      mastheadSep.textContent = "·";
+      mastheadContext.innerHTML = `6 workspaces · <span class="live-count">2 running</span>`;
+      omniInput.focus();
+    }
+  }
+
+  backToShelfBtn.addEventListener("click", () => showPage("shelf"));
+  openSettingsBtn.addEventListener("click", () => showPage("settings"));
+
+  // 3. Shelf keyboard & filter behavior (preserved from home-shelf.html)
+  const wsList = document.getElementById("wsList");
+  const emptyShelf = document.getElementById("emptyShelf");
+  const pathRow = document.getElementById("pathActionRow");
+  const pathText = document.getElementById("pathActionText");
+  const modeBadge = document.getElementById("omniModeBadge");
+  const pathReadout = document.getElementById("selectedPathReadout");
+
+  function visibleRows() {
+    return Array.from(wsList.querySelectorAll(".ws-row:not([hidden])"));
+  }
+
+  function selectRow(targetRow) {
+    for (const r of visibleRows()) {
+      const active = r === targetRow;
+      r.setAttribute("aria-selected", String(active));
+      r.tabIndex = active ? 0 : -1;
+    }
+    if (targetRow) {
+      const folder = targetRow.dataset.folder || "";
+      const missing = targetRow.dataset.missing === "true";
+      pathReadout.textContent = missing ? `${folder} (missing on disk)` : folder;
+      pathReadout.style.color = missing ? "var(--bad)" : "var(--muted)";
+    }
+  }
+
+  function looksLikePath(val) {
+    return val.startsWith("/") || val.startsWith("~/") || val.startsWith("./") || val.includes("/");
+  }
+
+  omniInput.addEventListener("input", () => {
+    const raw = omniInput.value.trim();
+    const q = raw.toLowerCase();
+    let matchCount = 0;
+    for (const row of wsList.querySelectorAll(".ws-row")) {
+      const match =
+        !q ||
+        (row.dataset.name || "").toLowerCase().includes(q) ||
+        (row.dataset.folder || "").toLowerCase().includes(q) ||
+        (row.querySelector(".ws-context")?.textContent || "").toLowerCase().includes(q);
+      row.hidden = !match;
+      if (match) matchCount++;
+    }
+    const isPath = looksLikePath(raw);
+    modeBadge.hidden = !isPath;
+    pathRow.hidden = !(raw && (isPath || matchCount === 0));
+    if (!pathRow.hidden) pathText.textContent = raw;
+    wsList.hidden = matchCount === 0;
+    emptyShelf.hidden = matchCount > 0;
+    const vis = visibleRows();
+    selectRow(vis[0] || null);
+  });
+
+  wsList.addEventListener("click", (e) => {
+    const row = e.target.closest(".ws-row");
+    if (!row) return;
+    selectRow(row);
+    if (row.dataset.missing === "true") {
+      pathReadout.textContent = `cannot open: ${row.dataset.folder} no longer exists on disk`;
+      pathReadout.style.color = "var(--bad)";
+    } else {
+      pathReadout.textContent = `→ opening /w/${row.dataset.id} in named tab…`;
+      pathReadout.style.color = "var(--ok)";
+    }
+  });
+
+  // Global keyboard shortcuts across both views
+  document.addEventListener("keydown", (e) => {
+    if (e.altKey && e.key.toLowerCase() === "m") {
+      e.preventDefault();
+      showPage(settingsView.hidden ? "settings" : "shelf");
+      return;
+    }
+
+    if (e.key === "Escape") {
+      if (!settingsView.hidden) {
+        e.preventDefault();
+        showPage("shelf");
+        return;
+      }
+      if (omniInput.value) {
+        e.preventDefault();
+        omniInput.value = "";
+        omniInput.dispatchEvent(new Event("input"));
+      }
+      return;
+    }
+
+    if (!shelfView.hidden) {
+      const vis = visibleRows();
+      const idx = vis.findIndex((r) => r.getAttribute("aria-selected") === "true");
+      if (e.key === "ArrowDown" && vis.length) {
+        e.preventDefault();
+        selectRow(vis[Math.min(idx + 1, vis.length - 1)] || vis[0]);
+      } else if (e.key === "ArrowUp" && vis.length) {
+        e.preventDefault();
+        selectRow(vis[Math.max(idx - 1, 0)] || vis[0]);
+      }
+    }
+  });
+
+  // 4. Mockup inspection lenses for testing states in file://
+  document.querySelectorAll(".lens-pill").forEach((pill) => {
+    pill.addEventListener("click", () => {
+      for (const p of document.querySelectorAll(".lens-pill")) {
+        p.setAttribute("aria-pressed", String(p === pill));
+      }
+      const mode = pill.dataset.lens;
+
+      if (mode === "shelf") {
+        showPage("shelf");
+        return;
+      }
+
+      showPage("settings");
+      errorBar.hidden = true;
+      saveStatus.dataset.state = "saved";
+      saveStatus.textContent = "saved";
+
+      if (mode === "settings-default") {
+        collapseMap = {};
+        try { localStorage.removeItem(COLLAPSE_STORAGE_KEY); } catch {}
+        renderSettingsDocument();
+      } else if (mode === "settings-folded") {
+        for (const d of treeRoot.querySelectorAll(".cfg-group")) {
+          d.open = false;
+          writeCollapseState(d.dataset.path, true);
+        }
+        updateToggleAllLabel();
+      } else if (mode === "settings-open") {
+        for (const d of treeRoot.querySelectorAll(".cfg-group")) {
+          d.open = true;
+          writeCollapseState(d.dataset.path, false);
+        }
+        updateToggleAllLabel();
+      } else if (mode === "settings-409") {
+        for (const d of treeRoot.querySelectorAll(".cfg-group")) {
+          if (d.dataset.path.startsWith("new-boards.agent")) d.open = true;
+        }
+        const modelInput = document.getElementById("field-model");
+        const modelRow = treeRoot.querySelector('[data-field-id="model"]');
+        const allFields = settingsDoc.groups.flatMap(collectLeafFields);
+        const modelField = allFields.find((f) => f.id === "model");
+        if (modelInput && modelRow && modelField) {
+          modelInput.value = "klotilda/nonexistent/ghost-70b";
+          commitFieldChange(modelField, modelInput.value, modelRow);
+        }
+      }
+    });
+  });
+
+  // Initial render
+  renderSettingsDocument();
+})();
+</script>
+</body>
+</html>

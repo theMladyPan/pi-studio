@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "title": "New board defaults",
+  "help": "What every new workspace board is born with. An open board keeps its own copy.",
+  "groups": [
+    {
+      "id": "new-boards",
+      "label": "New boards",
+      "help": "Inherited once when a folder is first opened as a workspace.",
+      "collapsed": false,
+      "groups": [
+        {
+          "id": "agent",
+          "label": "Agent",
+          "help": "The pi child process that answers the first thread on a new board.",
+          "collapsed": false,
+          "groups": [
+            {
+              "id": "model-routing",
+              "label": "Model & reasoning",
+              "help": "Validated against GET /models; the daemon refuses a model this machine cannot run.",
+              "collapsed": false,
+              "fields": [
+                {
+                  "id": "model",
+                  "store": {
+                    "split": "/",
+                    "keys": [
+                      "provider",
+                      "model"
+                    ]
+                  },
+                  "label": "model",
+                  "type": "combo",
+                  "value": "klotilda/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+                  "source": "/models",
+                  "placeholder": "provider/model",
+                  "help": "Provider and model id separated by /. Scoped models from ~/.pi/agent/settings.json appear first.",
+                  "options": [
+                    "klotilda/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+                    "github-copilot/claude-opus-5.5",
+                    "github-copilot/claude-sonnet-5.5",
+                    "github-copilot/gpt-6.1-sol",
+                    "github-copilot/gemini-4-argon",
+                    "github-copilot/gemini-3.8-flash",
+                    "openrouter/deepseek/deepseek-v4.1-flash-1017",
+                    "openrouter/z-ai/glm-5.3",
+                    "openrouter/z-ai/glm-5.3-flash"
+                  ]
+                },
+                {
+                  "id": "thinking",
+                  "label": "thinking",
+                  "type": "select",
+                  "value": "medium",
+                  "source": "/defaults#levels",
+                  "help": "Reasoning budget passed to pi for new threads. Clamped if a model does not support it.",
+                  "levels": [
+                    "off",
+                    "low",
+                    "medium",
+                    "high"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "board",
+          "label": "Board",
+          "help": "Canvas behaviour on /w/<id>.",
+          "collapsed": false,
+          "groups": [
+            {
+              "id": "cards",
+              "label": "Cards",
+              "help": "How thread and note cards behave when one is focused.",
+              "collapsed": true,
+              "fields": [
+                {
+                  "id": "dimOthers",
+                  "label": "dim others",
+                  "type": "toggle",
+                  "value": true,
+                  "labels": [
+                    "off",
+                    "on"
+                  ],
+                  "help": "Dim other cards on the canvas while one thread is selected."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "per-board-overrides",
+      "label": "Per-board overrides",
+      "status": "not built on home yet — configured inside each board today",
+      "help": "Kept in boards/<id>.json via POST /config. Listed here to show how deeper groups and text/number controls fit the same document.",
+      "collapsed": true,
+      "groups": [
+        {
+          "id": "delegation",
+          "label": "Boss delegation",
+          "status": "not built yet",
+          "help": "Default flow and child limits when a thread spawns subagents.",
+          "collapsed": false,
+          "fields": [
+            {
+              "id": "path",
+              "label": "boss flow",
+              "type": "select",
+              "value": "auto",
+              "disabled": true,
+              "levels": [
+                "auto",
+                "simple",
+                "advanced",
+                "complex"
+              ],
+              "help": "Flow a boss thread starts on before choosing a path."
+            },
+            {
+              "id": "timeoutSeconds",
+              "label": "child timeout (s)",
+              "type": "number",
+              "value": 600,
+              "min": 60,
+              "max": 3600,
+              "step": 60,
+              "disabled": true,
+              "help": "Hard ceiling in seconds for a spawned child thread."
+            },
+            {
+              "id": "toolsOff",
+              "label": "disabled tools",
+              "type": "text",
+              "value": "",
+              "placeholder": "read, bash, edit, write",
+              "disabled": true,
+              "help": "Comma-separated built-in tools withheld from new threads on a board."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
