@@ -362,7 +362,18 @@
   }
 
   function previewText(group) {
-    return leavesOf(group).map(lineOf).join(" · ");
+    const leaves = leavesOf(group);
+    // A group whose every leaf is a prompt counts them: ten file names in a line that is clipped anyway say
+    // less than "10 prompts". A group of settings keeps the `label: value` preview its leaves give. Both
+    // rules read the leaves, so a group added to the document tomorrow is summarised without a line here.
+    if (leaves.length && leaves.every((field) => field.type === "prompt")) return countLine(leaves.length, group.label);
+    return leaves.map(lineOf).join(" · ");
+  }
+
+  /** "10 prompts", "1 prompt": the noun is the group's own label, and only a plural one loses its `s`. */
+  function countLine(count, label) {
+    const noun = String(label || "item").toLowerCase();
+    return count === 1 && noun.endsWith("s") ? `1 ${noun.slice(0, -1)}` : `${count} ${noun}`;
   }
 
   function refreshPreviews() {
