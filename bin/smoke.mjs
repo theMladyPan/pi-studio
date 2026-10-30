@@ -200,6 +200,16 @@ async function main() {
 		`depth ${childRow?.depth} role ${childRow?.role}`,
 	);
 	said(!afterState.threads?.some((thread) => "token" in thread), "and /state does not spread a child's token");
+	// A child the caller did not hang off anything is still drawn under the thread that spawned it: the
+	// arrow comes from the parent rather than from a list the spawner had to remember to write.
+	const bare = JSON.parse((await post(one, `/thread${board}`, { title: "bare", parentThread: parent.threadId })).body || "{}");
+	said(
+		bare.card?.after?.length === 1 && bare.card.after[0] === parent.threadId,
+		"a child with no named predecessor still follows from its master",
+		`after ${JSON.stringify(bare.card?.after ?? [])}`,
+	);
+	const alone = JSON.parse((await post(one, `/thread${board}`, { title: "alone" })).body || "{}");
+	said(!alone.card?.after?.length, "and a thread the human made follows from nothing", `after ${JSON.stringify(alone.card?.after ?? [])}`);
 
 	// The point of the whole exercise: a second daemon answering at the same time, told where to put
 	// its state by the flag, on the same workspace folder.
