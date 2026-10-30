@@ -473,6 +473,10 @@
   #railCards .rail-card:hover, #railClosed .rail-card:hover { background: #0f141b; border-color: #1c2128; }
   #railCards .rail-card:focus-visible, #railClosed .rail-card:focus-visible { outline: none; border-color: var(--accent-dim); }
   #railCards .rail-card .dot, #railClosed .rail-card .dot { width: 6px; height: 6px; }
+  /* A card sits under the card it follows from: indented one step per level, with a rule down its left
+     edge so a fan of children reads as one thing and a child of a child is still legible as such. */
+  #railCards .rail-card.child { padding-left: calc(6px + var(--rail-depth, 1) * 9px);
+    border-left: 1px solid #1c2128; border-radius: 0 6px 6px 0; }
   #railClosed .rail-card .dot { opacity: .55; }
   #railCards .rail-title, #railClosed .rail-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; color: var(--text); }
