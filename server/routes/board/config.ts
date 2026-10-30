@@ -11,6 +11,9 @@ import { scheduleSave } from "../../store.ts";
 import { broadcast, card, update } from "../../bus.ts";
 import { activeConfig } from "../../workspaces.ts";
 import { randomUUID } from "node:crypto";
+import { COMPACT_TIMEOUT_MS } from "../../limits.ts";
+import { ensureChild } from "../../child/run.ts";
+import { whenCompacted, whenStats } from "../../waiters.ts";
 import { homeCard, refreshOwned } from "./message.ts";
 import { cardFor, plainCardFor } from "../../cards.ts";
 import { join } from "node:path";
@@ -78,6 +81,50 @@ export async function onThinking(req, res, board) {
 	refreshOwned(board, thread);
 	const home = thread.hidden ? homeCard(board, thread) : undefined;
 	answer(res, 200, { card: home ? plainCardFor(home, board) : cardFor(thread, board) });
+}
+
+
+
+/**
+ * The one piece of housekeeping a human presses: squeeze the thread's context before it fills the
+ * window. pi owns compaction, so the board asks the child and reads the answer back; the figures the
+ * button is about come from the stats read that follows, which is the same path a settled run uses.
+ */
+export async function onCompact(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const thread = threadForRuntime(board, body.cardId);
+	if (!thread) return void fail(res, 409, "no thread answers this card");
+	if (thread.status === "dead") return void fail(res, 409, "this thread has ended");
+	// Compaction while the agent is writing would cut the answer in half, so the button waits for idle.
+	if (thread.status === "running") return void fail(res, 409, "this thread is answering: compact when it is idle");
+	// A thread nobody has asked anything has no session, and therefore no context to squeeze.
+	if (!thread.sessionId) return void fail(res, 409, "this thread has not run yet, so there is nothing to compact");
+	// The child between two runs is gone, so a compaction starts one for the same session: nothing is
+	// asked of a model but the summary itself.
+	const ask = () => {
+		const child = ensureChild(board, thread);
+		child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "compact" })}\n`);
+	};
+	const heard = whenCompacted(thread, COMPACT_TIMEOUT_MS);
+	try {
+		ask();
+	} catch {
+		// The child from the run that just ended is still this thread's voice, and its stdin is closing.
+		// A fresh child resumes the same session, and that is the one the compaction belongs to.
+		board.children.delete(thread.id);
+		try {
+			ask();
+		} catch (error) {
+			return void fail(res, 409, `could not send the compaction: ${error.message}`);
+		}
+	}
+	const result = await heard;
+	if (result?.timedOut) return void fail(res, 504, "the child has not answered the compaction yet");
+	if (result?.error) return void fail(res, 409, result.error);
+	// The context figure is read before the answer goes out, so the button repaints cooler at once.
+	await whenStats(thread, 2_000);
+	answer(res, 200, { threadId: thread.id, ...result });
 }
 
 

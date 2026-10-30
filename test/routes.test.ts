@@ -245,7 +245,7 @@ test("the event stream opens with a snapshot the client can draw from", async ()
  * that never ends.
  */
 const STUB_PI = String.raw`
-const { writeFileSync } = require("node:fs");
+const { appendFileSync, existsSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 
 // A naming run is the other shape of invocation and carries no thread token, so it has nothing to say
@@ -259,6 +259,11 @@ writeFileSync(join(__dirname, "child-env.json"), JSON.stringify({
 }));
 
 const say = (frame) => process.stdout.write(JSON.stringify(frame) + "\n");
+// Every frame this child was sent, so a test can say what reached it rather than what the answer was.
+const wrote = (frame) => appendFileSync(join(__dirname, "frames.jsonl"), JSON.stringify(frame) + "\n");
+// A file in the stub's own folder stands in for the state a real child keeps: compaction writes it,
+// and the stats answer reads it, which is how the smaller context reaches the board.
+const flag = (name) => join(__dirname, name);
 let buffer = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -268,11 +273,24 @@ process.stdin.on("data", (chunk) => {
 	for (const line of lines) {
 		if (!line.trim()) continue;
 		const frame = JSON.parse(line);
+		wrote(frame);
 		// The session id is the one thing the daemon cannot do without: it resumes the thread with it.
 		if (frame.type === "get_state") say({ type: "response", command: "get_state", success: true, data: { sessionId: "stub-session" } });
 		// Asked after the run settles, and the child is closed once it answers.
-		if (frame.type === "get_session_stats") say({ type: "response", command: "get_session_stats", success: true, data: { tokens: { input: 1, output: 1, total: 2 }, totalMessages: 1 } });
+		if (frame.type === "get_session_stats") {
+			const tokens = existsSync(flag("compacted")) ? 32000 : 150000;
+			say({ type: "response", command: "get_session_stats", success: true, data: { tokens: { input: 1, output: 1, total: 2 }, totalMessages: 1, contextUsage: { tokens, maxTokens: 200000 } } });
+		}
+		// Compaction: the summary a real child writes, and the flag the next stats answer reads.
+		if (frame.type === "compact") {
+			// A "die" file is a child that exits without answering, which the board must not wait out.
+			if (existsSync(flag("die"))) process.exit(0);
+			writeFileSync(flag("compacted"), "1");
+			say({ type: "response", command: "compact", success: true, data: { summary: "a shorter conversation", tokensBefore: 150000, estimatedTokensAfter: 32000 } });
+		}
 		if (frame.type === "prompt") {
+			// A "hold" file keeps the run open, which is the state a compaction has to refuse.
+			if (existsSync(flag("hold"))) continue;
 			say({ type: "turn_end", message: { role: "assistant", content: [{ type: "text", text: "the stub answered" }] } });
 			say({ type: "agent_settled" });
 		}
@@ -361,6 +379,136 @@ test("a thread's own token reaches /card/ask over http and is refused the human'
 		const reply = await held;
 		assert.equal(reply.status, 200);
 		assert.equal(JSON.parse(reply.body).answer, "right");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+/** One thread as `/state` reports it, which is where its numbers are read. */
+async function threadState(daemon: Daemon, board: string, id: string) {
+	const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board}`)).body);
+	return (state.threads as any[]).find((one) => one.id === id) ?? null;
+}
+
+/** The frames the stub child was sent, in order. A child that was never started has written nothing. */
+function framesOf(stub: { root: string; envFile: string }) {
+	const file = join(dirname(stub.envFile), "frames.jsonl");
+	if (!existsSync(file)) return [];
+	return readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+}
+
+test("a compaction reaches the thread's child, and the context comes back smaller", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-compact-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-compact-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" })).status, 200);
+		// The run has to be over and its child gone: a compaction starts a child rather than interrupting one.
+		for (let tries = 0; tries < 100; tries++) {
+			const thread = await threadState(daemon, board.id, threadId);
+			if (thread && thread.status === "idle" && thread.live === false) break;
+			await new Promise((done) => setTimeout(done, 50));
+		}
+		const before = await threadState(daemon, board.id, threadId);
+		assert.equal(before?.stats?.context, 150000, "the stub's first context never reached the board");
+
+		// A card no thread answers has nothing to compact, and says so rather than starting a child.
+		const nowhere = await postTo(daemon, board.id, "/compact", { cardId: "no-such-card" });
+		assert.equal(nowhere.status, 409);
+		assert.equal(nowhere.body, "no thread answers this card");
+
+		const compacted = await postTo(daemon, board.id, "/compact", { cardId: threadId });
+		assert.equal(compacted.status, 200, compacted.body);
+		const said = JSON.parse(compacted.body);
+		assert.equal(said.threadId, threadId);
+		assert.equal(said.tokensBefore, 150000);
+		assert.equal(said.estimatedTokensAfter, 32000);
+		assert.ok(framesOf(stub).some((frame: any) => frame.type === "compact"), "no compact frame reached the child");
+
+		// The figures are read again after the summary, so the button has a smaller number to show.
+		let after = await threadState(daemon, board.id, threadId);
+		for (let tries = 0; tries < 100 && after?.stats?.context !== 32000; tries++) {
+			await new Promise((done) => setTimeout(done, 50));
+			after = await threadState(daemon, board.id, threadId);
+		}
+		assert.equal(after?.stats?.context, 32000);
+		assert.equal(after?.stats?.contextMax, 200000);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a compaction is refused while the thread is answering, and nothing reaches the child", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-compact-busy-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-compact-busy-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	// The stub holds the run open, which is the one state a compaction may not cut into.
+	writeFileSync(join(dirname(stub.envFile), "hold"), "1");
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "keep working" })).status, 200);
+		for (let tries = 0; tries < 100; tries++) {
+			const thread = await threadState(daemon, board.id, threadId);
+			if (thread?.status === "running") break;
+			await new Promise((done) => setTimeout(done, 50));
+		}
+		const refused = await postTo(daemon, board.id, "/compact", { cardId: threadId });
+		assert.equal(refused.status, 409);
+		assert.equal(refused.body, "this thread is answering: compact when it is idle");
+		assert.ok(!framesOf(stub).some((frame: any) => frame.type === "compact"), "a compaction reached a busy child");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a compaction is refused before a thread has run, because there is no context yet", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-compact-fresh-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-compact-fresh-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		const refused = await postTo(daemon, board.id, "/compact", { cardId: threadId });
+		assert.equal(refused.status, 409);
+		assert.equal(refused.body, "this thread has not run yet, so there is nothing to compact");
+		assert.deepEqual(framesOf(stub), [], "a child was started for a thread with no session");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a child that dies before it answers is reported, not waited out", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-compact-die-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-compact-die-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" })).status, 200);
+		for (let tries = 0; tries < 100; tries++) {
+			const thread = await threadState(daemon, board.id, threadId);
+			if (thread && thread.status === "idle" && thread.live === false && thread.sessionId) break;
+			await new Promise((done) => setTimeout(done, 50));
+		}
+		writeFileSync(join(dirname(stub.envFile), "die"), "1");
+		// The next child exits without answering the compaction, and the press hears about it at once
+		// rather than sitting on the route until the ceiling gives up on it.
+		const started = Date.now();
+		const gone = await postTo(daemon, board.id, "/compact", { cardId: threadId });
+		assert.equal(gone.status, 409);
+		assert.match(gone.body, /the child exited before it answered/);
+		assert.ok(Date.now() - started < 20_000, "the press waited on a child that was already gone");
 	} finally {
 		daemon.child.kill();
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });

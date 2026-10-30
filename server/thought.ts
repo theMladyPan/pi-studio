@@ -16,7 +16,7 @@ import { describeTool, firstLine, headline, rowResult } from "./child/describe.t
 import { join } from "node:path";
 import { settleTreeBranch } from "./worktrees/name.ts";
 import { noteGit } from "./git/graph.ts";
-import { finished, statsArrived } from "./waiters.ts";
+import { finished, compacted, statsArrived } from "./waiters.ts";
 
 
 
@@ -232,6 +232,33 @@ export function handleChildLine(board, thread, line) {
 			scheduleSave(board);
 			// The numbers a spawn is waiting for have arrived.
 			statsArrived(thread);
+		} else if (event.command === "compact") {
+			// The one command the human presses that this child answers on its own account. The context the
+			// next request carries is smaller now, so the numbers are read again before it goes, and the
+			// route that asked for the compaction hears what came back.
+			const child = board.children.get(thread.id);
+			if (event.success === false) {
+				// A child started only to compact has nothing else to do, so it goes the way a settled run's does.
+				if (child?.stdin?.writable) child.stdin.end();
+				compacted(thread, { error: String(event.error ?? "the child refused the compaction") });
+			} else {
+				const data = event.data ?? {};
+				const before = Number(data.tokensBefore);
+				const after = Number(data.estimatedTokensAfter);
+				compacted(thread, {
+					...(Number.isFinite(before) ? { tokensBefore: before } : {}),
+					...(Number.isFinite(after) ? { estimatedTokensAfter: after } : {}),
+				});
+				if (child?.stdin?.writable) {
+					thread.pendingClose = true;
+					try {
+						child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "get_session_stats" })}\n`);
+					} catch {
+						thread.pendingClose = false;
+						child.stdin.end();
+					}
+				}
+			}
 		} else if (event.command === "get_state" && typeof event.data?.sessionId === "string") {
 			thread.sessionId = event.data.sessionId;
 			update(board, thread);

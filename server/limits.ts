@@ -38,6 +38,10 @@ export const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 export const SPAWN_TIMEOUT_MS = 10 * 60_000;
 
 
+/** Compaction is one summarising call in the child, and the button waits on the child's answer. */
+export const COMPACT_TIMEOUT_MS = 2 * 60_000;
+
+
 /** A child asked to stop still reports what it had, so the kill waits a moment for that. */
 export const SPAWN_ABORT_GRACE_MS = 5_000;
 
