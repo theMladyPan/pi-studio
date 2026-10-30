@@ -6,7 +6,7 @@ import { answer, fail, readJson } from "../http.ts";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
-import { activeHomeDefaults, describeWorkspace, homeDefaults, rememberWorkspace, saveWorkspaces } from "../workspaces.ts";
+import { activeHomeDefaults, describeWorkspace, homeDefaults, rememberWorkspace, saveWorkspaces, setHomeDefaults } from "../workspaces.ts";
 import { boardFor } from "../store.ts";
 import { nudgeWelcome } from "../bus.ts";
 import { cardFor } from "../cards.ts";
@@ -57,7 +57,7 @@ export async function onDefaults(req, res) {
 		next.provider = body.provider;
 		next.model = body.model;
 	}
-	homeDefaults = next;
+	setHomeDefaults(next);
 	saveWorkspaces();
 	answer(res, 200, { defaults: activeHomeDefaults() });
 }

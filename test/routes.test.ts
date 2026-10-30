@@ -117,6 +117,38 @@ test("the daemon boots, opens a workspace, and answers for its board", async () 
 	}
 });
 
+test("the crossroads defaults can be changed and are read back", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-"));
+	const daemon = await boot(folder);
+	try {
+		const before = await get(daemon, `/defaults?token=${daemon.token}`);
+		assert.equal(before.status, 200);
+		const levels = JSON.parse(before.body).levels;
+		assert.ok(Array.isArray(levels) && levels.length > 0, "no thinking levels came back");
+
+		const saved = await post(daemon, "/defaults", { thinking: levels[0], dimOthers: false });
+		assert.equal(saved.status, 200, saved.body.slice(0, 200));
+		const answered = JSON.parse(saved.body).defaults;
+		assert.equal(answered.thinking, levels[0]);
+		assert.equal(answered.dimOthers, false);
+
+		// Written to the state folder, so the next daemon on this folder starts with them.
+		const written = JSON.parse(readFileSync(join(folder, "workspaces.json"), "utf8"));
+		assert.equal(written.defaults.thinking, levels[0]);
+		assert.equal(written.defaults.dimOthers, false);
+
+		const after = JSON.parse((await get(daemon, `/defaults?token=${daemon.token}`)).body).defaults;
+		assert.equal(after.thinking, levels[0]);
+		assert.equal(after.dimOthers, false);
+
+		const refused = await post(daemon, "/defaults", { thinking: "shouting" });
+		assert.equal(refused.status, 400);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
 test("a route without the token is refused, and the page is not", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-"));
 	const daemon = await boot(folder);
