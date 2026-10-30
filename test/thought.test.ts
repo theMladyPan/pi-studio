@@ -12,6 +12,8 @@ function fakeBoard() {
 		name: "board",
 		folder: "/tmp/board",
 		children: new Map(),
+		// Nothing to broadcast to, but the reader still walks the set.
+		clients: new Set(),
 		trees: [],
 		cards: [],
 		config: { model: "m", provider: "p", thinking: "off" },
@@ -69,4 +71,32 @@ test("a compaction that lands during a run leaves that run's child alone", () =>
 	handleChildLine(board, thread, COMPACTED);
 	assert.deepEqual(sent, [], "a live run's child was written to or closed by the compaction");
 	assert.equal(thread.pendingClose, undefined);
+});
+
+/** The stats answer as pi really writes it, which is the shape the meter divides by. */
+const STATS = (usage: unknown) =>
+	JSON.stringify({ type: "response", command: "get_session_stats", success: true, data: { tokens: { input: 1, output: 1, total: 2 }, contextUsage: usage } });
+
+test("the window pi reports is kept as the denominator of the meter", () => {
+	const board = fakeBoard();
+	const thread = fakeThread();
+	thread.status = "idle";
+	board.children.set(thread.id, fakeChild([]));
+	handleChildLine(board, thread, STATS({ tokens: 60000, contextWindow: 200000, percent: 30 }));
+	assert.equal(thread.stats.context, 60000);
+	assert.equal(thread.stats.contextMax, 200000);
+	assert.equal(thread.stats.contextPercent, 30);
+});
+
+test("a context pi cannot measure yet keeps the estimate the compaction gave", () => {
+	const board = fakeBoard();
+	const thread = fakeThread();
+	thread.status = "idle";
+	board.children.set(thread.id, fakeChild([]));
+	// After a compaction pi reports null until an answer is measured, and the button that was just
+	// pressed would otherwise go blank.
+	handleChildLine(board, thread, COMPACTED.replace("32000", "32000"));
+	handleChildLine(board, thread, STATS({ tokens: null, contextWindow: 200000, percent: null }));
+	assert.equal(thread.stats.context, 32000);
+	assert.equal(thread.stats.contextPercent, 16);
 });
