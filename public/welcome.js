@@ -14,6 +14,8 @@
   const COLLAPSE_KEY = "pi-studio.settings.collapsed.v1";
   /** Unsaved prompt text, one entry per field id: the page is reloaded far more often than it is closed. */
   const DRAFTS_KEY = "pi-studio.welcome.drafts.v1";
+  /** How long a keystroke's draft waits before the store is written; a human types next faster than this. */
+  const DRAFT_WRITE_MS = 400;
 
   const nodes = {
     brand: document.getElementById("mastheadContext"),
@@ -325,6 +327,8 @@
    * store reads it back, so a reload is no different from a switch to the shelf and back.
    */
   const drafts = new Map(Object.entries(readDraftStore()));
+  /** The pending write of the store, if a keystroke has not been followed by silence yet. */
+  let draftWriteTimer = 0;
   /** details element -> { group, preview }, so a closed group's summary follows a change. */
   const previews = new Map();
 
@@ -344,6 +348,10 @@
    * keeps it, because the text is still the human's.
    */
   function saveDrafts() {
+    // The timer and a save or a revert write the same thing, so a write made now leaves a pending one nothing
+    // to say.
+    clearTimeout(draftWriteTimer);
+    draftWriteTimer = 0;
     try {
       if (!drafts.size) localStorage.removeItem(DRAFTS_KEY);
       else localStorage.setItem(DRAFTS_KEY, JSON.stringify(Object.fromEntries(drafts)));
@@ -351,6 +359,20 @@
       // A browser that refuses storage still keeps the draft in memory, which is what it did before.
     }
   }
+
+  /**
+   * The store, one pause after the keystroke. `input` fires on every character typed or deleted, and each of
+   * those used to serialise every dirty prompt into localStorage with nothing reading it in between. Quiet
+   * for a moment is what makes the text a draft worth writing; a page that goes away writes what is pending.
+   */
+  function saveDraftsSoon() {
+    clearTimeout(draftWriteTimer);
+    draftWriteTimer = setTimeout(saveDrafts, DRAFT_WRITE_MS);
+  }
+
+  window.addEventListener("pagehide", () => {
+    if (draftWriteTimer) saveDrafts();
+  });
 
   function readCollapseMap() {
     try {
@@ -397,10 +419,21 @@
     return leaves.map(lineOf).join(" · ");
   }
 
-  /** "10 prompts", "1 prompt": the noun is the group's own label, and only a plural one loses its `s`. */
+  /**
+   * "10 prompts", "1 prompt": the noun is the group's own label, and a label whose singular is not its
+   * plural minus an `s` is spelled out below. A label nobody spelled out stays as it is, because slicing
+   * `-ies` or `-es` produces a word nobody wrote.
+   */
+  const SINGULARS = { prompts: "prompt" };
   function countLine(count, label) {
     const noun = String(label || "item").toLowerCase();
-    return count === 1 && noun.endsWith("s") ? `1 ${noun.slice(0, -1)}` : `${count} ${noun}`;
+    return count === 1 ? `1 ${SINGULARS[noun] ?? noun}` : `${count} ${noun}`;
+  }
+
+  /** The footer's readout: how many prompts are waiting to be saved, or what the page does when none are. */
+  function readoutText(fallback) {
+    if (!drafts.size) return fallback;
+    return `unsaved · ${drafts.size} prompt${drafts.size === 1 ? "" : "s"} kept`;
   }
 
   function refreshPreviews() {
@@ -548,6 +581,13 @@
     }
   }
 
+  /** The route a field's values come from, as one muted tag; `wording` says what the route holds. */
+  function sourceTag(field, wording) {
+    const tag = el("span", "cfg-source-tag", field.source);
+    tag.title = `${wording} ${field.source}`;
+    return tag;
+  }
+
   /**
    * The control a field draws, decided by its `type` and by the lists in the document. Nothing here
    * knows a field's id: a fourth field, or a fifth level, arrives with the document alone.
@@ -656,7 +696,7 @@
         const dirty = area.value !== String(entry.lastGood ?? "");
         if (dirty) drafts.set(field.id, area.value);
         else drafts.delete(field.id);
-        saveDrafts();
+        saveDraftsSoon();
         paint(dirty ? "unsaved" : "saved", dirty ? "dirty" : "saved");
       });
       // Text typed before the tree was last rebuilt is still the human's, and comes back unsaved. A draft
@@ -683,14 +723,19 @@
         saveDrafts();
         clearFieldError(entry);
         paint("reverted", "saved");
-        // A revert answers a refusal, so the header badge and the footer stop saying "not saved" as well.
-        setSaved("saved", `reverted · ${field.label}`);
-        nodes.settingsReadout.textContent = lineOf(field);
+        // A revert answers a refusal, so the header badge and the footer stop saying "not saved" — unless
+        // another prompt is still dirty, and then they keep saying how many are.
+        const [state, text] = draftBadge();
+        setSaved(state || "saved", text || `reverted · ${field.label}`);
+        nodes.settingsReadout.textContent = readoutText(lineOf(field));
       });
       entry.set = (value) => {
         area.value = String(value ?? "");
       };
       actions.append(save, back, state);
+      // A prompt's source is the file its text is read from, so the tag rides the line its save and revert
+      // sit on rather than taking a row of its own under them.
+      if (field.source) actions.append(sourceTag(field, "this text is read from and written to"));
       line.append(area, actions);
     } else {
       // `text` and `number`, and any type a later document adds: an input is the honest fallback.
@@ -712,11 +757,9 @@
       line.append(input);
     }
 
-    if (field.source) {
-      const source = el("span", "cfg-source-tag", field.source);
-      source.title = `options filled in by the daemon from ${field.source}`;
-      line.append(source);
-    }
+    // A field the page writes to a route reads its text from that route; every other source is the list the
+    // daemon fills the options from. The prompt case is answered above, on its own actions line.
+    if (field.source && !field.write) line.append(sourceTag(field, "options filled in by the daemon from"));
     return line;
   }
 
@@ -837,9 +880,7 @@
       // The tree opens as the daemon just read it, so no badge: a badge reports an action somebody took,
       // and nobody has taken one yet. Unsaved text that came back with the tree is the one exception.
       setSaved(...draftBadge());
-      nodes.settingsReadout.textContent = drafts.size
-        ? `unsaved · ${drafts.size} prompt${drafts.size === 1 ? "" : "s"} kept`
-        : "defaults save on change · prompts when you press save";
+      nodes.settingsReadout.textContent = readoutText("defaults save on change · prompts when you press save");
     } catch (error) {
       doc = null;
       entries.clear();
