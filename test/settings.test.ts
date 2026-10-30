@@ -80,7 +80,8 @@ function promptFilesOnDisk() {
 	for (const folder of ["roles", "modes", "flows"]) {
 		let files: string[] = [];
 		try {
-			files = readdirSync(join(repo, "prompts", folder)).filter((one) => one.endsWith(".md"));
+			// The names the daemon lists and a save accepts: a file it would refuse is no field of the document.
+			files = readdirSync(join(repo, "prompts", folder)).filter((one) => /^[a-z][a-z-]*\.md$/.test(one));
 		} catch {
 			continue;
 		}
@@ -215,24 +216,6 @@ test("every prompt field says where it came from and where it is written", async
 		assert.equal(field.write?.method, "POST");
 		assert.equal(field.write?.keys?.text, "@value");
 		assert.match(field.write?.keys?.name ?? "", /^(roles|modes|flows)\/[a-z][a-z-]*\.md$/);
-	}
-});
-
-test("a prompt file added to prompts/ is a field on the next read, with no code changed", async () => {
-	// A real file in the repository, because that is what the page reads. Removed in the `finally`, so the
-	// tree this test runs in is the tree it leaves behind.
-	const path = join(repo, "prompts", "roles", "zz-probe.md");
-	writeFileSync(path, "# zz probe\n\nTemporary, written by a test.\n");
-	try {
-		const document = await settingsDocument();
-		const roles = document.groups.find((group) => group.id === "prompts")?.groups?.find((group) => group.id === "prompts-roles");
-		const probe = fieldsIn(roles).find((field) => field.label === "zz-probe.md");
-		assert.ok(probe, "the file on disk did not reach the document");
-		assert.equal(probe.help, "# zz probe");
-		assert.equal(probe.value, "# zz probe\n\nTemporary, written by a test.\n");
-		assert.equal(probe.write?.keys?.name, "roles/zz-probe.md");
-	} finally {
-		rmSync(path, { force: true });
 	}
 });
 

@@ -316,6 +316,12 @@
   let doc = null;
   /** field id -> { field, row, error, message, lastGood, set }, so a value can be painted back. */
   const entries = new Map();
+  /**
+   * field id -> text somebody typed into a prompt textarea and has not saved. The tree is rebuilt from the
+   * daemon's document on every visit, so text that only lived in a textarea would be gone after `Esc` and
+   * back; it is kept here instead and put back, still marked unsaved, when the view is drawn again.
+   */
+  const drafts = new Map();
   /** details element -> { group, preview }, so a closed group's summary follows a change. */
   const previews = new Map();
 
@@ -366,6 +372,14 @@
   function setSaved(state, text) {
     nodes.saveStatus.dataset.state = state;
     nodes.saveStatus.textContent = text;
+  }
+
+  /** The badge for text somebody typed and did not save, which came back with it across a view switch. */
+  function draftBadge() {
+    if (!drafts.size) return ["", ""];
+    if (drafts.size > 1) return ["dirty", `not saved · ${drafts.size} prompts`];
+    const entry = entries.get(drafts.keys().next().value);
+    return ["dirty", `not saved · ${entry?.field.label ?? "a prompt"}`];
   }
 
   function showFieldError(entry, message) {
@@ -598,12 +612,34 @@
         state.textContent = text;
         state.dataset.state = tone || "";
       };
-      area.addEventListener("input", () => paint("unsaved", "dirty"));
-      save.addEventListener("click", () => void commitWrite(entry, area.value, paint));
+      area.addEventListener("input", () => {
+        // Only text that differs from the file on disk is a draft; typing a character and deleting it again
+        // puts the field back where it was, and says so.
+        const dirty = area.value !== String(entry.lastGood ?? "");
+        if (dirty) drafts.set(field.id, area.value);
+        else drafts.delete(field.id);
+        paint(dirty ? "unsaved" : "saved", dirty ? "dirty" : "saved");
+      });
+      // Text typed before the tree was last rebuilt is still the human's, and comes back unsaved.
+      const draft = drafts.get(field.id);
+      if (draft !== undefined) {
+        area.value = draft;
+        paint("unsaved", "dirty");
+      }
+      save.addEventListener("click", () => {
+        void commitWrite(entry, area.value, paint).then(() => {
+          // What the daemon accepted is no longer a draft; a refusal keeps the text, so nothing is lost.
+          if (entry.field.value === area.value) drafts.delete(field.id);
+        });
+      });
       back.addEventListener("click", () => {
         area.value = String(entry.lastGood ?? "");
+        drafts.delete(field.id);
         clearFieldError(entry);
         paint("reverted", "saved");
+        // A revert answers a refusal, so the header badge and the footer stop saying "not saved" as well.
+        setSaved("saved", `reverted · ${field.label}`);
+        nodes.settingsReadout.textContent = lineOf(field);
       });
       entry.set = (value) => {
         area.value = String(value ?? "");
@@ -731,10 +767,14 @@
     entries.clear();
     previews.clear();
     nodes.docTitle.textContent = doc.title || "Settings";
-    nodes.docVersion.textContent = `v${doc.version ?? 1} · ${leavesOf(doc).length} settings`;
+    // The head counts settings: a prompt is a file the page also carries, and is not one of them.
+    const settings = leavesOf(doc).filter((field) => field.type !== "prompt").length;
+    nodes.docVersion.textContent = `v${doc.version ?? 1} · ${settings} settings`;
     nodes.docHelp.textContent = doc.help || "";
     const collapseMap = readCollapseMap();
     nodes.tree.replaceChildren(...(doc.groups || []).map((group) => walkGroup(group, 0, "", collapseMap)));
+    // A prompt file that left the disk takes its draft with it; the rest were just put back into the tree.
+    for (const id of [...drafts.keys()]) if (!entries.has(id)) drafts.delete(id);
     paintFoldAll();
   }
 
@@ -745,9 +785,11 @@
       doc = await response.json();
       renderDocument();
       // The tree opens as the daemon just read it, so no badge: a badge reports an action somebody took,
-      // and nobody has taken one yet.
-      setSaved("", "");
-      nodes.settingsReadout.textContent = "defaults save on change · prompts when you press save";
+      // and nobody has taken one yet. Unsaved text that came back with the tree is the one exception.
+      setSaved(...draftBadge());
+      nodes.settingsReadout.textContent = drafts.size
+        ? `unsaved · ${drafts.size} prompt${drafts.size === 1 ? "" : "s"} kept`
+        : "defaults save on change · prompts when you press save";
     } catch (error) {
       doc = null;
       entries.clear();
