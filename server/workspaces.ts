@@ -20,7 +20,8 @@ import { spawnSync } from "node:child_process";
  * @property {"queued"|"sent"|"answered"|"stopped"} status
  * @property {"queue"|"steer"} mode
  * @property {number} at
- * @property {string} [reply]
+ * @property {string} [reply] the answer: the last message of the run, and nothing else
+ * @property {string[]} [interim] what the run said before it called a tool, one paragraph a message
  */
 
 /**

@@ -885,11 +885,35 @@ async function submitAnswer(entry, answer, buttons, freeRow) {
 }
 
 /**
+ * What a run said on the way, drawn again from the text as it now reads: one muted block per message
+ * it wrote before calling a tool. The blocks are only rebuilt when one has been added, so the tick that
+ * grows the answer leaves a selection in the narration alone.
+ */
+function paintInterim(wrap, turn) {
+  const interim = wrap.querySelector(".turn-interim");
+  if (!interim) return;
+  const notes = Array.isArray(turn.interim) ? turn.interim : [];
+  const drawn = notes.join("\u0000");
+  if (interim.dataset.drawn === drawn) return;
+  interim.dataset.drawn = drawn;
+  interim.replaceChildren(
+    ...notes.map((text) => {
+      // The note body is what every other markdown on the board is drawn with, so a paragraph of
+      // narration keeps its lists, links and code; only its size and colour are the card's own.
+      const block = el("div", "turn-note note-body");
+      block.appendChild(renderMarkdown(text));
+      return block;
+    }),
+  );
+}
+
+/**
  * The answer of one turn, drawn again from the text as it now reads. A run writes into this
  * element about ten times a second, so it is the one node that gets repainted on its own instead
  * of the card being rebuilt around it.
  */
 function paintAnswer(wrap, turn) {
+  paintInterim(wrap, turn);
   const answer = wrap.querySelector(".turn-a");
   if (!answer) return;
   answer.replaceChildren();
@@ -938,6 +962,9 @@ function turnNode(turn) {
     shot.textContent = `${turn.images} image${turn.images > 1 ? "s" : ""} attached`;
     wrap.appendChild(shot);
   }
+  // What the run said on the way, above the answer: one block each, ruled apart, muted. It draws
+  // nothing at all on a run that answered in one message.
+  wrap.appendChild(el("div", "turn-interim"));
   // Always there, even before the answer has a word: an empty one draws nothing, and having it
   // from the start means a growing answer is one element to fill, not a node to add.
   wrap.appendChild(el("div", "turn-a note-body"));
@@ -947,7 +974,8 @@ function turnNode(turn) {
 
 /** What a turn draws besides its answer. A turn that changes here has to be redrawn whole. */
 function turnShape(turn) {
-  return [turn.text, turn.status, turn.mode, turn.images, turn.error].join("\u0000");
+  const notes = Array.isArray(turn.interim) ? turn.interim : [];
+  return [turn.text, turn.status, turn.mode, turn.images, turn.error, notes.length, notes.join("\u0000")].join("\u0000");
 }
 
 /**
@@ -976,7 +1004,10 @@ function paintThread(entry, data) {
     const at = turns.length - 1;
     const before = at >= 0 ? drawn[at].turn : null;
     const moved =
-      before && (turns[at].reply !== before.reply || Boolean(turns[at].streaming) !== Boolean(before.streaming));
+      before &&
+      (turns[at].reply !== before.reply ||
+        (turns[at].interim ?? []).join("\u0000") !== (before.interim ?? []).join("\u0000") ||
+        Boolean(turns[at].streaming) !== Boolean(before.streaming));
     if (moved) {
       paintAnswer(drawn[at].node, turns[at]);
       drawn[at].turn = { ...turns[at] };
@@ -1792,7 +1823,13 @@ function cardChanged(before, after) {
   if (was.length !== now.length) return true;
   return now.some((turn, at) => {
     const old = was[at] || {};
-    return old.text !== turn.text || old.status !== turn.status || old.reply !== turn.reply || old.images !== turn.images;
+    return (
+      old.text !== turn.text ||
+      old.status !== turn.status ||
+      old.reply !== turn.reply ||
+      old.images !== turn.images ||
+      (old.interim ?? []).join("\u0000") !== (turn.interim ?? []).join("\u0000")
+    );
   });
 }
 
