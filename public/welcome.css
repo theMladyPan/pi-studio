@@ -460,6 +460,21 @@ button, input, select {
   background: #191215;
 }
 
+/* A prompt is a whole file rather than a short value: its label sits on one line above the control and the
+   text runs the width of the group, because 1.5 kB of markdown beside a 148px label column is unreadable.
+   The row shape follows the field's type, so the three defaults keep the two-column row they have. */
+.cfg-field.is-wide {
+  grid-template-columns: 1fr;
+  align-items: start;
+  gap: 4px 0;
+}
+
+.cfg-field.is-wide .cfg-field-meta {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+}
+
 .cfg-field-meta {
   display: flex;
   flex-direction: column;

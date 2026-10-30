@@ -12,6 +12,8 @@
 
   /** Where the human left the settings tree, one entry per dotted group path. */
   const COLLAPSE_KEY = "pi-studio.settings.collapsed.v1";
+  /** Unsaved prompt text, one entry per field id: the page is reloaded far more often than it is closed. */
+  const DRAFTS_KEY = "pi-studio.welcome.drafts.v1";
 
   const nodes = {
     brand: document.getElementById("mastheadContext"),
@@ -319,11 +321,36 @@
   /**
    * field id -> text somebody typed into a prompt textarea and has not saved. The tree is rebuilt from the
    * daemon's document on every visit, so text that only lived in a textarea would be gone after `Esc` and
-   * back; it is kept here instead and put back, still marked unsaved, when the view is drawn again.
+   * back; it is kept here instead and put back, still marked unsaved, when the view is drawn again. The
+   * store reads it back, so a reload is no different from a switch to the shelf and back.
    */
-  const drafts = new Map();
+  const drafts = new Map(Object.entries(readDraftStore()));
   /** details element -> { group, preview }, so a closed group's summary follows a change. */
   const previews = new Map();
+
+  /** The drafts a previous visit left behind, as field id -> text. */
+  function readDraftStore() {
+    try {
+      const kept = JSON.parse(localStorage.getItem(DRAFTS_KEY) || "{}");
+      return kept && typeof kept === "object" && !Array.isArray(kept) ? kept : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * The drafts as they stand: an empty map removes the key, so nothing is left behind for a prompt nobody
+   * is editing. A field's draft goes when its save is accepted and when `revert` is pressed; a refusal
+   * keeps it, because the text is still the human's.
+   */
+  function saveDrafts() {
+    try {
+      if (!drafts.size) localStorage.removeItem(DRAFTS_KEY);
+      else localStorage.setItem(DRAFTS_KEY, JSON.stringify(Object.fromEntries(drafts)));
+    } catch {
+      // A browser that refuses storage still keeps the draft in memory, which is what it did before.
+    }
+  }
 
   function readCollapseMap() {
     try {
@@ -362,7 +389,18 @@
   }
 
   function previewText(group) {
-    return leavesOf(group).map(lineOf).join(" · ");
+    const leaves = leavesOf(group);
+    // A group whose every leaf is a prompt counts them: ten file names in a line that is clipped anyway say
+    // less than "10 prompts". A group of settings keeps the `label: value` preview its leaves give. Both
+    // rules read the leaves, so a group added to the document tomorrow is summarised without a line here.
+    if (leaves.length && leaves.every((field) => field.type === "prompt")) return countLine(leaves.length, group.label);
+    return leaves.map(lineOf).join(" · ");
+  }
+
+  /** "10 prompts", "1 prompt": the noun is the group's own label, and only a plural one loses its `s`. */
+  function countLine(count, label) {
+    const noun = String(label || "item").toLowerCase();
+    return count === 1 && noun.endsWith("s") ? `1 ${noun.slice(0, -1)}` : `${count} ${noun}`;
   }
 
   function refreshPreviews() {
@@ -618,23 +656,31 @@
         const dirty = area.value !== String(entry.lastGood ?? "");
         if (dirty) drafts.set(field.id, area.value);
         else drafts.delete(field.id);
+        saveDrafts();
         paint(dirty ? "unsaved" : "saved", dirty ? "dirty" : "saved");
       });
-      // Text typed before the tree was last rebuilt is still the human's, and comes back unsaved.
+      // Text typed before the tree was last rebuilt is still the human's, and comes back unsaved. A draft
+      // that now matches the file was saved from another tab, so it is not a draft any more; the store is
+      // written once the whole tree is drawn, not once per field.
       const draft = drafts.get(field.id);
-      if (draft !== undefined) {
+      if (draft !== undefined && draft === String(field.value ?? "")) drafts.delete(field.id);
+      else if (draft !== undefined) {
         area.value = draft;
         paint("unsaved", "dirty");
       }
       save.addEventListener("click", () => {
         void commitWrite(entry, area.value, paint).then(() => {
           // What the daemon accepted is no longer a draft; a refusal keeps the text, so nothing is lost.
-          if (entry.field.value === area.value) drafts.delete(field.id);
+          if (entry.field.value === area.value) {
+            drafts.delete(field.id);
+            saveDrafts();
+          }
         });
       });
       back.addEventListener("click", () => {
         area.value = String(entry.lastGood ?? "");
         drafts.delete(field.id);
+        saveDrafts();
         clearFieldError(entry);
         paint("reverted", "saved");
         // A revert answers a refusal, so the header badge and the footer stop saying "not saved" as well.
@@ -675,7 +721,9 @@
   }
 
   function fieldRow(field) {
-    const row = el("div", `cfg-field${field.disabled ? " is-disabled" : ""}`);
+    // A prompt is a file of text, so its row is shaped for one: label above, control across the group.
+    const wide = field.type === "prompt" ? " is-wide" : "";
+    const row = el("div", `cfg-field${field.disabled ? " is-disabled" : ""}${wide}`);
     row.dataset.fieldId = field.id;
 
     const meta = el("div", "cfg-field-meta");
@@ -774,7 +822,9 @@
     const collapseMap = readCollapseMap();
     nodes.tree.replaceChildren(...(doc.groups || []).map((group) => walkGroup(group, 0, "", collapseMap)));
     // A prompt file that left the disk takes its draft with it; the rest were just put back into the tree.
+    // The store is written here, once, for every draft the drawing itself dropped.
     for (const id of [...drafts.keys()]) if (!entries.has(id)) drafts.delete(id);
+    saveDrafts();
     paintFoldAll();
   }
 
