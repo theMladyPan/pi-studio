@@ -94,7 +94,31 @@ test("a scope pi wrote puts its models first, and adds none that are not in the 
 	writeFileSync(join(piHome, "settings.json"), JSON.stringify({ enabledModels: ["openrouter/z-ai/glm-5.3", "nobody/nothing"] }));
 	const document = await settingsDocument();
 	const model = leavesOf(document).find((field) => field.id === "model");
-	assert.deepEqual(model.options, ["openrouter/z-ai/glm-5.3"]);
+	// The scope comes first. The default this daemon holds is a model the machine can run, so it stays in
+	// the list behind the scope: a picker that cannot show the value it is displaying is a lying picker.
+	assert.deepEqual(model.options, ["openrouter/z-ai/glm-5.3", `${seeded.provider}/${seeded.model}`]);
+	// A pattern that names nothing adds nothing, and neither does a model the machine cannot run.
+	assert.ok(!model.options.includes("nobody/nothing"));
+});
+
+test("a chosen model the scope no longer names is still offered, spelled whole", async () => {
+	// The scope narrowed since the choice was made, which `/scoped-models` does whenever a human edits it.
+	writeFileSync(join(piHome, "settings.json"), JSON.stringify({ enabledModels: ["openrouter/*"] }));
+	const document = await settingsDocument();
+	const model = leavesOf(document).find((field) => field.id === "model");
+	assert.equal(model.options[0], "openrouter/z-ai/glm-5.3");
+	assert.ok(model.options.includes(`${seeded.provider}/${seeded.model}`), `chosen model dropped: ${model.options.join(", ")}`);
+	assert.equal(model.value, `${seeded.provider}/${seeded.model}`);
+});
+
+test("a chosen model this machine cannot run is not added to the picker", async () => {
+	setHomeDefaults({ ...seeded, provider: "nobody", model: "no-such-model" });
+	const document = await settingsDocument();
+	const model = leavesOf(document).find((field) => field.id === "model");
+	assert.ok(!model.options.includes("nobody/no-such-model"), `unrunnable model offered: ${model.options.join(", ")}`);
+	// The value is still the whole choice, so the box says what the daemon would try to run.
+	assert.equal(model.value, "nobody/no-such-model");
+	setHomeDefaults(seeded);
 });
 
 test("a choice already on disk is the value the document shows", async () => {

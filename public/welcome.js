@@ -113,7 +113,13 @@
     const right = el("div", "ws-right");
     if (workspace.missing) right.append(el("span", "sig-missing", "folder missing"));
     else if (workspace.running) right.append(el("span", "sig-running", `${workspace.running} running`));
-    else if (workspace.lastActivity?.at) right.append(el("span", "sig-quiet", age(workspace.lastActivity.at)));
+    else {
+      // An idle row says when it was last touched. A workspace nothing has happened in yet was touched
+      // when its folder was opened, which is the only age it has; a row with nothing there reads as a
+      // row that failed to load.
+      const at = workspace.lastActivity?.at ?? workspace.openedAt;
+      if (at) right.append(el("span", "sig-quiet", age(at)));
+    }
     const glyph = el("span", "enter-glyph", "↵");
     glyph.setAttribute("aria-hidden", "true");
     right.append(glyph);
@@ -384,6 +390,24 @@
     return { [field.id]: value };
   }
 
+  /**
+   * What the daemon says it now holds for a field. The answer to a write is the only account of what was
+   * saved, so the readout is painted from it: a value that did not reach the store is never reported as
+   * the value on disk.
+   */
+  function savedValueOf(field, defaults, fallback) {
+    if (!defaults || typeof defaults !== "object") return fallback;
+    const keys = field.store?.keys;
+    if (Array.isArray(keys)) {
+      const parts = keys.map((key) => defaults[key]);
+      if (parts.length && parts.every((one) => one !== undefined && one !== null && one !== "")) {
+        return parts.join(field.store?.split ?? "/");
+      }
+      return fallback;
+    }
+    return Object.hasOwn(defaults, field.id) ? defaults[field.id] : fallback;
+  }
+
   async function commit(entry, value) {
     const field = entry.field;
     const patch = patchOf(field, value);
@@ -399,11 +423,12 @@
         showFieldError(entry, `${response.status} ${reason}`);
         setSaved("error", `not saved · ${field.label}`);
         nodes.settingsReadout.textContent = `POST /defaults ${JSON.stringify(patch)} → ${response.status}`;
+        refreshPreviews();
         return;
       }
-      await response.json();
-      entry.lastGood = value;
-      field.value = value;
+      const answer = await response.json();
+      field.value = savedValueOf(field, answer?.defaults, value);
+      entry.lastGood = field.value;
       clearFieldError(entry);
       setSaved("saved", `saved · ${field.label}`);
       nodes.settingsReadout.textContent = lineOf(field);
@@ -411,6 +436,10 @@
     } catch (error) {
       showFieldError(entry, `${error.message || error}`);
       setSaved("error", `not saved · ${field.label}`);
+      // A request that never got an answer leaves the store where it was, so the readout says that
+      // rather than keeping the last value standing.
+      nodes.settingsReadout.textContent = `not saved · ${field.label}`;
+      refreshPreviews();
     }
   }
 
@@ -623,8 +652,9 @@
       if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
       doc = await response.json();
       renderDocument();
-      // The tree on screen is the store as the daemon just read it, so it opens on `saved`.
-      setSaved("saved", "saved");
+      // The tree opens as the daemon just read it, so no badge: a badge reports an action somebody took,
+      // and nobody has taken one yet.
+      setSaved("", "");
       nodes.settingsReadout.textContent = "saved as you change it · POST /defaults";
     } catch (error) {
       doc = null;

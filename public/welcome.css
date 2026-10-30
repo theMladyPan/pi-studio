@@ -225,6 +225,11 @@ button, input, select {
   white-space: nowrap;
 }
 
+/* Nothing has been saved yet, so there is no chip to draw. */
+.save-status:empty {
+  display: none;
+}
+
 .save-status[data-state="saved"] {
   color: var(--ok);
   background: rgba(63, 185, 80, 0.08);
@@ -261,8 +266,6 @@ button, input, select {
 .fold-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-}
-
 }
 
 /* Scrollable settings tree region */

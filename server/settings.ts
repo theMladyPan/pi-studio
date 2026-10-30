@@ -58,10 +58,17 @@ type CatalogModel = { provider: string; model: string };
 /**
  * The models the combo offers: pi's own scope first, in the order pi wrote it, which is the order the
  * board's picker shows. A machine with no scope offers the whole catalogue in the order pi printed it.
+ *
+ * The model this daemon already holds is appended when the scope does not name it: `/scoped-models`
+ * narrows the scope whenever a human edits it, and a picker that has forgotten the choice it is showing
+ * cannot show it. A model this machine cannot run is never added, whatever the defaults say.
  */
-function modelOptions(scoped: CatalogModel[], models: CatalogModel[]) {
+function modelOptions(scoped: CatalogModel[], models: CatalogModel[], chosen: string) {
 	const named = (scoped.length ? scoped : models).map((one) => `${one.provider}/${one.model}`);
-	return [...new Set(named)];
+	const options = [...new Set(named)];
+	const runnable = models.some((one) => `${one.provider}/${one.model}` === chosen);
+	if (runnable && chosen && !options.includes(chosen)) options.push(chosen);
+	return options;
 }
 
 /** What a field stands for right now: the chosen default when there is one, else the template's own. */
@@ -81,15 +88,16 @@ function valueOf(field: SettingsField, values: Record<string, unknown>) {
 	return Object.hasOwn(values, field.id) ? values[field.id] : field.value;
 }
 
-function hydrate(group: SettingsGroup, values: Record<string, unknown>, options: string[]) {
+function hydrate(group: SettingsGroup, values: Record<string, unknown>, catalogue: { scoped: CatalogModel[]; models: CatalogModel[] }) {
 	for (const field of group.fields ?? []) {
 		field.value = valueOf(field, values);
 		// A field whose `source` is a live list takes that list rather than a copy of one: a catalogue
-		// written down in the template would be wrong the day a model is added.
-		if (field.source === "/models") field.options = [...options];
+		// written down in the template would be wrong the day a model is added. The value is read first,
+		// because the picker keeps the model this daemon holds even when the scope no longer names it.
+		if (field.source === "/models") field.options = modelOptions(catalogue.scoped, catalogue.models, String(field.value ?? ""));
 		if (field.source === "/defaults#levels") field.levels = [...THINKING_LEVELS];
 	}
-	for (const child of group.groups ?? []) hydrate(child, values, options);
+	for (const child of group.groups ?? []) hydrate(child, values, catalogue);
 }
 
 /**
@@ -102,9 +110,9 @@ export async function settingsDocument(): Promise<SettingsDocument> {
 	// `modelCatalog` lives in a file that is not typed yet, so what it answers is named here rather than
 	// read from its `null` initialiser.
 	const { models } = (await modelCatalog()) as unknown as { models: CatalogModel[] };
-	const options = modelOptions(resolveScope(readScope(), models).scoped, models);
+	const catalogue = { scoped: resolveScope(readScope(), models).scoped, models };
 	const values = activeHomeDefaults() as Record<string, unknown>;
 	const document = structuredClone(template);
-	for (const group of document.groups) hydrate(group, values, options);
+	for (const group of document.groups) hydrate(group, values, catalogue);
 	return document;
 }
