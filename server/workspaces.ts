@@ -147,6 +147,16 @@ export function saveWorkspaces() {
 
 
 
+/**
+ * Replace the defaults a new board is born with. An imported `let` is read-only in the module that
+ * imports it, so the crossroads writes through this door instead of assigning the binding.
+ */
+export function setHomeDefaults(next) {
+	homeDefaults = next;
+}
+
+
+
 /** The crossroads' defaults with the daemon's own model filled in, so the page can show them. */
 export function activeHomeDefaults() {
 	return {
