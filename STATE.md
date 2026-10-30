@@ -219,6 +219,12 @@ commit's own account rather than on a check run now, the section below says so.
   rename belongs to the name, so the card does not also drag, and one press still drags it.
 - **A card draws only what it has.** A thread card's `text` is empty by design — the turns are the
   conversation — so an empty text draws no bubble and no state line.
+- **A card in the rail sits under the card it follows from.** The list is still newest first, but a
+  card that names a parent — `parentThread`, or the `threadRoot` its own note was written for — is
+  drawn one indent per level below that card's row, with a rule down its left edge. A row whose parent
+  is not on the rail is a top row of its own, so closing a parent hands its children back instead of
+  hiding them under nothing. Only a row whose parent changed asks the list to be reordered, and a pass
+  that finds every row where it belongs moves no node.
 - **The rail is a stack of threads.** A settled row is filed in the thread that wrote it, in that
   thread's foldable section: title, count, newest thread on top. A folded section is remembered for the
   session only. The rail is what has already happened, so its log no longer moves while a run is live.

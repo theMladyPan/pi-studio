@@ -3342,6 +3342,8 @@ document.getElementById("railOpen").onclick = () => railShown(true);
 const railCards = document.getElementById("railCards");
 const railCardCount = document.getElementById("railCardCount");
 const railRows = new Map();
+/** Arrival order of the rows, so a list that nests can still put the newest thread on top. */
+let cardSeq = 0;
 
 /** An age short enough to share a row with a title. */
 function agoText(ms) {
@@ -3386,17 +3388,29 @@ function paintRailState(entry) {
 }
 
 /**
+ * Where a card follows from: the thread that spawned it, or the card its own note was written for.
+ * Both are kept, in that order, because a spawned thread whose card the board does not draw leaves
+ * only the card it was written on to hang from.
+ */
+const railParentsOf = (entry) => {
+  const data = entry.data || {};
+  return [data.parentThread || "", data.threadRoot || ""].filter((id) => id && id !== entry.id);
+};
+
+/**
  * One row per card, built once and patched in place: this runs on every card repaint, so it
- * must not rebuild the list or touch any other card's DOM. Arrival order is the order the
- * cards array keeps, so a new card is only ever prepended.
+ * must not rebuild the list or touch any other card's DOM. A new card is prepended where it
+ * arrived, and only a card whose parent changed asks the list to be put in order again.
  */
 function syncRailCard(entry) {
   if (!entry) return;
   let row = railRows.get(entry.id);
+  const parents = railParentsOf(entry).join(" ");
   if (!row) {
     row = el("button", "rail-card");
     row.type = "button";
     row.dataset.id = entry.id;
+    row.dataset.seq = String(++cardSeq);
     row.append(el("span", "dot"), el("span", "rail-title"), el("span", "rail-state"));
     row.addEventListener("click", () => {
       const record = byId.get(row.dataset.id);
@@ -3409,6 +3423,10 @@ function syncRailCard(entry) {
   row.children[1].textContent = entry.titleEl.textContent;
   paintRailState(entry);
   paintRailCount();
+  // A newborn row may be the child of one that is already here, and a card can be told where it
+  // follows from after it landed, so the order is recomputed for both. It costs nothing while the
+  // list already reads right: every row is where it is wanted, so no node moves.
+  if (row.dataset.parent !== parents) orderRailCards();
 }
 
 function dropRailCard(id) {
@@ -3417,11 +3435,54 @@ function dropRailCard(id) {
   row.remove();
   railRows.delete(id);
   paintRailCount();
+  // The rows that were indented under this one are top rows again, not children of nothing.
+  orderRailCards();
+}
+
+/**
+ * Where the card rows sit: the newest arrival on top, and a card directly under the card it follows
+ * from, one indent per level. A row whose parent is not on the rail is a top row of its own, so
+ * closing a parent hands its children back instead of hiding them under a head that is gone.
+ */
+function orderRailCards() {
+  const ranked = [...railRows.values()].sort((a, b) => Number(b.dataset.seq || 0) - Number(a.dataset.seq || 0));
+  // Every row says where it follows from, so one pass both learns the shape of the list and places
+  // what it found there.
+  for (const [id, row] of railRows) {
+    const entry = byId.get(id);
+    row.dataset.parent = entry ? railParentsOf(entry).join(" ") : "";
+  }
+  // The first of a row's parents that the rail still holds, so closing a parent hands its children
+  // back to the next one it names, or makes them top rows of their own.
+  const parentOf = (row) =>
+    (row.dataset.parent || "").split(" ").find((id) => id && id !== row.dataset.id && railRows.has(id)) || "";
+  const wanted = [];
+  const placed = new Set();
+  const place = (row, depth) => {
+    if (placed.has(row)) return;
+    placed.add(row);
+    row.classList.toggle("child", depth > 0);
+    row.style.setProperty("--rail-depth", String(depth));
+    wanted.push(row);
+    for (const kid of ranked) if (parentOf(kid) === row.dataset.id) place(kid, depth + 1);
+  };
+  for (const row of ranked) if (!parentOf(row)) place(row, 0);
+  // A chain that loops has no top to hang from, so those rows keep the places they already have and
+  // the pass moves on: the guard against a card that somehow follows from itself.
+  let cursor = railCards.firstElementChild;
+  for (const row of wanted) {
+    if (row === cursor) {
+      cursor = cursor.nextElementSibling;
+      continue;
+    }
+    railCards.insertBefore(row, cursor);
+  }
 }
 
 function clearRailCards() {
   railCards.replaceChildren();
   railRows.clear();
+  cardSeq = 0;
   paintRailCount();
 }
 
