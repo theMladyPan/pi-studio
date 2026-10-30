@@ -1,0 +1,1133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pi-studio — resume</title>
+<style>
+:root {
+  --bg: #0b0d10;
+  --panel: #12151a;
+  --panel-2: #161b22;
+  --raised: #1a1f27;
+  --border: #1f242c;
+  --border-2: #2a303a;
+  --text: #e6edf3;
+  --dim: #c9d1d9;
+  --muted: #8b949e;
+  --accent: #3b82f6;
+  --ok: #3fb950;
+  --warn: #e3b341;
+  --bad: #f85149;
+  --mono: ui-monospace, SFMono-Regular, Menlo, "DejaVu Sans Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a, button, input, select, summary {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  text-decoration: none;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Spine layout: single centered column, full viewport height, zero page scroll */
+.shell {
+  max-width: 840px;
+  height: 100vh;
+  margin: 0 auto;
+  padding: 20px 28px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Top utility bar: quiet identity on left, small actions on right */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 12px/1 var(--mono);
+  color: var(--muted);
+}
+
+.brand-mark {
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: -0.2px;
+}
+
+.brand-sep {
+  color: var(--border-2);
+}
+
+.live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+
+.dot.running {
+  background: var(--warn);
+}
+
+.dot.idle {
+  background: var(--ok);
+}
+
+.dot.missing {
+  background: var(--bad);
+}
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+
+/* Native <details> popover so it works with JS off and closes cleanly with JS on */
+details.popover {
+  position: relative;
+}
+
+details.popover > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font: 12px/1.2 system-ui, -apple-system, sans-serif;
+  color: var(--dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+details.popover > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.popover > summary:hover {
+  background: var(--panel-2);
+  border-color: var(--border-2);
+  color: var(--text);
+}
+
+details.popover[open] > summary {
+  background: var(--raised);
+  border-color: var(--border-2);
+  color: var(--text);
+}
+
+.summary-mono {
+  font: 11px/1 var(--mono);
+  color: var(--muted);
+}
+
+.popover-card {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: 340px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  padding: 12px 14px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55);
+}
+
+.popover-card.wide {
+  width: 380px;
+}
+
+.pop-head {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font: 10px/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+}
+
+.pop-head:not(:first-child) {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: 78px 1fr;
+  gap: 6px 10px;
+  align-items: center;
+  margin: 0;
+}
+
+.field-grid dt {
+  color: var(--muted);
+  font: 11px/1.2 var(--mono);
+}
+
+.field-grid dd {
+  margin: 0;
+  min-width: 0;
+  font: 11.5px/1.3 var(--mono);
+  color: var(--dim);
+}
+
+.input, .select, .btn {
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: 11.5px/1.2 var(--mono);
+  color: var(--text);
+}
+
+.input {
+  width: 100%;
+}
+
+.select {
+  width: 100%;
+}
+
+.btn {
+  background: var(--raised);
+  cursor: pointer;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+}
+
+.btn:hover {
+  border-color: #3a424e;
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #06101f;
+  font-weight: 600;
+}
+
+.btn.toggle {
+  width: 100%;
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  background: var(--bg);
+}
+
+.new-ws-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.new-ws-row .input {
+  flex: 1;
+}
+
+/* Dominant Continue Hero */
+.resume-hero {
+  flex: none;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  padding: 18px 20px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hero-eyebrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font: 11px/1 var(--mono);
+  color: var(--muted);
+}
+
+.eyebrow-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.eyebrow-tag {
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  font-size: 10px;
+  color: var(--dim);
+}
+
+.eyebrow-shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+kbd {
+  font: 10.5px/1 var(--mono);
+  padding: 2px 5px;
+  background: var(--raised);
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  color: var(--dim);
+}
+
+/* The primary one-click target */
+.continue-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 16px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.continue-card:hover {
+  background: var(--raised);
+  border-color: #3a424e;
+  border-left-color: var(--accent);
+}
+
+.continue-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.continue-ws-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.continue-ws-name {
+  font: 600 18px/1.2 var(--mono);
+  color: var(--text);
+  letter-spacing: -0.3px;
+  flex: none;
+}
+
+.continue-ws-path {
+  font: 11.5px/1.2 var(--mono);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.continue-thread-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.continue-thread-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.continue-thread-meta {
+  font: 11px/1 var(--mono);
+  color: var(--muted);
+  flex: none;
+}
+
+.continue-cta {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--accent);
+  color: #06101f;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 10px 16px;
+  border-radius: 7px;
+  white-space: nowrap;
+}
+
+.continue-card:hover .continue-cta {
+  filter: brightness(1.08);
+}
+
+/* Secondary quick-jump pills inside the active workspace */
+.hero-subbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.other-threads {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.sub-label {
+  font: 10px/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  flex: none;
+  margin-right: 2px;
+}
+
+.thread-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 240px;
+  padding: 4px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.thread-pill:hover {
+  background: var(--raised);
+  border-color: var(--border-2);
+  color: var(--text);
+}
+
+.thread-pill-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-only-link {
+  flex: none;
+  font: 11.5px/1 var(--mono);
+  color: var(--muted);
+  padding: 4px 8px;
+  border-radius: 5px;
+}
+
+.board-only-link:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+/* Recent workspaces section */
+.recent-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.section-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+}
+
+.section-title {
+  margin: 0;
+  font: 10px/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+}
+
+.filter-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter-input {
+  width: 190px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font: 11.5px/1.2 var(--mono);
+  color: var(--text);
+}
+
+.filter-input::placeholder {
+  color: var(--muted);
+}
+
+.filter-input:focus {
+  border-color: var(--accent);
+}
+
+/* Quiet direct-open list */
+.ws-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  divide-y: 1px solid var(--border);
+}
+
+.ws-row + .ws-row {
+  border-top: 1px solid var(--border);
+}
+
+.ws-link {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.ws-link:hover {
+  background: var(--panel-2);
+}
+
+.ws-ident {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ws-name-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.ws-name {
+  font: 600 12.5px/1.2 var(--mono);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-path {
+  font: 11px/1.2 var(--mono);
+  color: var(--muted);
+  padding-left: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-latest {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dim);
+  font-size: 12.5px;
+}
+
+.ws-latest-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-latest-empty {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 12px;
+}
+
+.ws-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 11px/1 var(--mono);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.badge-run {
+  color: var(--warn);
+}
+
+.badge-missing {
+  color: var(--bad);
+}
+
+.ws-open-arrow {
+  color: var(--muted);
+  font: 11px/1 var(--mono);
+  opacity: 0.55;
+}
+
+.ws-link:hover .ws-open-arrow {
+  opacity: 1;
+  color: var(--text);
+}
+
+/* Missing folder row: disabled direct open, clear diagnostic */
+.ws-row.is-missing .ws-link {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.ws-row.is-missing .ws-link:hover {
+  background: transparent;
+}
+
+.ws-row.is-missing .ws-name {
+  color: var(--dim);
+  text-decoration: line-through;
+  text-decoration-color: var(--bad);
+}
+
+.empty-filter {
+  padding: 18px;
+  text-align: center;
+  color: var(--muted);
+  font: 12px/1.4 var(--mono);
+}
+
+/* Footer keyboard bar */
+.footbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font: 11px/1 var(--mono);
+}
+
+.foot-keys {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* Compact adjustments for 1024x700 and tight viewports */
+@media (max-height: 740px) {
+  .shell {
+    padding: 12px 22px 10px;
+    gap: 10px;
+  }
+  .resume-hero {
+    padding: 12px 14px 10px;
+    gap: 8px;
+  }
+  .continue-card {
+    padding: 10px 14px;
+  }
+  .continue-ws-name {
+    font-size: 16px;
+  }
+  .ws-link {
+    padding: 8px 12px;
+  }
+}
+
+@media (max-width: 760px) {
+  .ws-link {
+    grid-template-columns: 160px minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+  .continue-ws-path {
+    display: none;
+  }
+}
+</style>
+</head>
+<body>
+<main class="shell">
+  <!-- Quiet header: daemon identity + active running indicator on left; New workspace & Defaults on right -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">pi-studio</span>
+      <span class="brand-sep">/</span>
+      <span class="live-pill" title="2 agent threads currently running across workspaces">
+        <span class="dot running"></span>
+        <span>2 running</span>
+      </span>
+    </div>
+
+    <div class="top-actions">
+      <!-- Small always-visible entry point for opening a folder not in the list yet -->
+      <details class="popover" id="newWsPopover">
+        <summary title="Open a folder that is not in the list yet (N)">+ New workspace</summary>
+        <div class="popover-card wide">
+          <p class="pop-head">Open folder as workspace</p>
+          <form action="/w/new" method="get" onsubmit="return false;">
+            <div class="new-ws-row">
+              <input
+                id="folderInput"
+                class="input"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="/home/stanke/projekty/..."
+                aria-label="Workspace folder path"
+              />
+              <button class="btn" type="button" title="Pick a folder using system dialog">browse…</button>
+            </div>
+            <div class="new-ws-row" style="justify-content: flex-end; margin-top: 8px;">
+              <button class="btn primary" type="submit">Open board</button>
+            </div>
+          </form>
+        </div>
+      </details>
+
+      <!-- Closed-by-default disclosure for new board defaults and low-value workspace/session metadata -->
+      <details class="popover" id="detailsPopover">
+        <summary title="New board defaults and workspace inspect">
+          <span>Defaults &amp; inspect</span>
+          <span class="summary-mono">DeepSeek-V4.1 · med</span>
+        </summary>
+        <div class="popover-card">
+          <p class="pop-head">New boards start with</p>
+          <dl class="field-grid">
+            <dt><label for="defModel">model</label></dt>
+            <dd>
+              <input
+                id="defModel"
+                class="input"
+                list="modelCatalog"
+                value="klotilda/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+                spellcheck="false"
+              />
+              <datalist id="modelCatalog">
+                <option value="klotilda/deepseek-ai/DeepSeek-V4.1-Flash-1017"></option>
+                <option value="github-copilot/claude-opus-5.5"></option>
+                <option value="github-copilot/claude-sonnet-5.5"></option>
+                <option value="github-copilot/gpt-6.1-sol"></option>
+                <option value="openrouter/deepseek/deepseek-v4.1-flash-1017"></option>
+              </datalist>
+            </dd>
+            <dt><label for="defThinking">thinking</label></dt>
+            <dd>
+              <select id="defThinking" class="select">
+                <option value="off">off</option>
+                <option value="low">low</option>
+                <option value="medium" selected>medium</option>
+                <option value="high">high</option>
+              </select>
+            </dd>
+            <dt>dim others</dt>
+            <dd>
+              <button type="button" class="btn toggle" id="dimToggle">on</button>
+            </dd>
+          </dl>
+
+          <p class="pop-head">Last workspace inspect (pi-studio)</p>
+          <dl class="field-grid">
+            <dt>git</dt>
+            <dd>feat/home-screen-mockups · <span style="color: var(--warn);">3 modified</span></dd>
+            <dt>sessions</dt>
+            <dd>14 files · 4.8 MB</dd>
+            <dt>opened</dt>
+            <dd>4 min ago · folder ok</dd>
+          </dl>
+        </div>
+      </details>
+    </div>
+  </header>
+
+  <!-- Dominant Continue Hero: puts the human back where he stopped in one click or Enter -->
+  <section class="resume-hero" aria-labelledby="resumeHeading">
+    <div class="hero-eyebrow">
+      <div class="eyebrow-left">
+        <span class="dot running"></span>
+        <span class="eyebrow-tag" id="resumeHeading">Continue where you stopped</span>
+        <span>·</span>
+        <span>turn 4 min ago</span>
+      </div>
+      <div class="eyebrow-shortcut">
+        <span>press</span>
+        <kbd>Enter</kbd>
+        <span>to resume</span>
+      </div>
+    </div>
+
+    <a
+      id="primaryContinue"
+      class="continue-card"
+      href="/w/pi-studio?thread=th-home-mockups"
+      target="pi-studio-pi-studio"
+      autofocus
+    >
+      <div class="continue-main">
+        <div class="continue-ws-line">
+          <span class="continue-ws-name">pi-studio</span>
+          <span class="continue-ws-path">/home/stanke/projekty/pi-studio</span>
+        </div>
+        <div class="continue-thread-line">
+          <span class="dot running" title="Thread is currently running"></span>
+          <span class="continue-thread-title">
+            Home screen mockups — compare Resume, Shelf, and Switchboard layouts against brief constraints
+          </span>
+          <span class="continue-thread-meta">running · 11 turns</span>
+        </div>
+      </div>
+      <span class="continue-cta">Continue thread →</span>
+    </a>
+
+    <div class="hero-subbar">
+      <div class="other-threads" aria-label="Other recent threads in pi-studio">
+        <span class="sub-label">Also in pi-studio:</span>
+        <a
+          class="thread-pill"
+          href="/w/pi-studio?thread=th-store-refactor"
+          target="pi-studio-pi-studio"
+          title="Refactor the workspace session store to avoid redundant fs.stat calls on welcome SSE broadcasts"
+        >
+          <span class="dot idle"></span>
+          <span class="thread-pill-text">Refactor the workspace session store to avoid redundant fs.stat calls on welcome SSE broadcasts</span>
+        </a>
+        <a
+          class="thread-pill"
+          href="/w/pi-studio?thread=th-retry-loop"
+          target="pi-studio-pi-studio"
+          title="Fix retry loop backoff when netbird matus-vm endpoint times out"
+        >
+          <span class="dot idle"></span>
+          <span class="thread-pill-text">Fix retry loop backoff when netbird matus-vm endpoint times out</span>
+        </a>
+      </div>
+      <a
+        class="board-only-link"
+        href="/w/pi-studio"
+        target="pi-studio-pi-studio"
+        title="Open the full pi-studio board without focusing a single thread"
+      >
+        Open board (3 threads) →
+      </a>
+    </div>
+  </section>
+
+  <!-- Quiet Recent Workspaces list: clicking any row opens its board directly -->
+  <section class="recent-section" aria-labelledby="recentHeading">
+    <div class="section-bar">
+      <h2 class="section-title" id="recentHeading">Recent workspaces — click row to open board</h2>
+      <div class="filter-wrap">
+        <input
+          id="wsFilter"
+          class="filter-input"
+          type="search"
+          placeholder="Filter workspaces… (/)"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Filter recent workspaces"
+        />
+      </div>
+    </div>
+
+    <ul class="ws-list" id="wsList" role="list">
+      <!-- 1. Workspace with a running agent and a very long thread title -->
+      <li class="ws-row" data-filter="ytrack-tools /home/stanke/projekty/ytrack-tools audit tz-511">
+        <a class="ws-link" href="/w/ytrack-tools" target="pi-studio-ytrack-tools">
+          <div class="ws-ident">
+            <div class="ws-name-row">
+              <span class="dot running" title="1 agent running"></span>
+              <span class="ws-name">ytrack-tools</span>
+            </div>
+            <span class="ws-path">~/projekty/ytrack-tools</span>
+          </div>
+          <div class="ws-latest">
+            <span class="ws-latest-title">
+              Audit aggregate Subtask of: TZ-511 saved filter pagination and verify all 44 descendant issues return cleanly
+            </span>
+          </div>
+          <div class="ws-meta">
+            <span class="badge-run">1 running</span>
+            <span>·</span>
+            <span>4 threads</span>
+            <span>·</span>
+            <span>18 min ago</span>
+            <span class="ws-open-arrow">→</span>
+          </div>
+        </a>
+      </li>
+
+      <!-- 2. Normal idle git workspace -->
+      <li class="ws-row" data-filter="dashboard /home/stanke/projekty/dashboard canvas zoom">
+        <a class="ws-link" href="/w/dashboard" target="pi-studio-dashboard">
+          <div class="ws-ident">
+            <div class="ws-name-row">
+              <span class="dot idle" title="2 idle threads"></span>
+              <span class="ws-name">dashboard</span>
+            </div>
+            <span class="ws-path">~/projekty/dashboard</span>
+          </div>
+          <div class="ws-latest">
+            <span class="ws-latest-title">
+              Preserve canvas pan and zoom coordinates across SSE reconnects
+            </span>
+          </div>
+          <div class="ws-meta">
+            <span>2 threads</span>
+            <span>·</span>
+            <span>2 h ago</span>
+            <span class="ws-open-arrow">→</span>
+          </div>
+        </a>
+      </li>
+
+      <!-- 3. Workspace that is NOT a git repository (git: null) -->
+      <li class="ws-row" data-filter="incident-scratch /home/stanke/tmp/incident-scratch-2025-05 logfire spans">
+        <a class="ws-link" href="/w/incident-scratch" target="pi-studio-incident-scratch">
+          <div class="ws-ident">
+            <div class="ws-name-row">
+              <span class="dot idle" title="1 idle thread"></span>
+              <span class="ws-name">incident-scratch</span>
+            </div>
+            <span class="ws-path">~/tmp/incident-scratch-2025-05</span>
+          </div>
+          <div class="ws-latest">
+            <span class="ws-latest-title">
+              Parse raw gateway timeout dumps and correlate 502 spikes by upstream worker
+            </span>
+          </div>
+          <div class="ws-meta">
+            <span>no git</span>
+            <span>·</span>
+            <span>1 thread</span>
+            <span>·</span>
+            <span>yesterday</span>
+            <span class="ws-open-arrow">→</span>
+          </div>
+        </a>
+      </li>
+
+      <!-- 4. Workspace with 0 threads -->
+      <li class="ws-row" data-filter="agent-skills /home/stanke/.agents/skills">
+        <a class="ws-link" href="/w/agent-skills" target="pi-studio-agent-skills">
+          <div class="ws-ident">
+            <div class="ws-name-row">
+              <span class="dot" title="0 threads"></span>
+              <span class="ws-name">agent-skills</span>
+            </div>
+            <span class="ws-path">~/.agents/skills</span>
+          </div>
+          <div class="ws-latest">
+            <span class="ws-latest-empty">no threads yet — opens empty board</span>
+          </div>
+          <div class="ws-meta">
+            <span>0 threads</span>
+            <span>·</span>
+            <span>3 d ago</span>
+            <span class="ws-open-arrow">→</span>
+          </div>
+        </a>
+      </li>
+
+      <!-- 5. Workspace whose folder is missing from disk (missing: true) -->
+      <li class="ws-row is-missing" data-filter="legacy-bridge-poc /home/stanke/projekty/legacy-bridge-poc missing">
+        <div
+          class="ws-link"
+          tabindex="0"
+          role="link"
+          aria-disabled="true"
+          title="Cannot open board: /home/stanke/projekty/legacy-bridge-poc no longer exists on disk"
+        >
+          <div class="ws-ident">
+            <div class="ws-name-row">
+              <span class="dot missing" title="Folder missing from disk"></span>
+              <span class="ws-name">legacy-bridge-poc</span>
+            </div>
+            <span class="ws-path">~/projekty/legacy-bridge-poc</span>
+          </div>
+          <div class="ws-latest">
+            <span class="badge-missing">folder missing on disk — restore directory to reopen (2 saved threads)</span>
+          </div>
+          <div class="ws-meta">
+            <span class="badge-missing">missing</span>
+            <span>·</span>
+            <span>5 d ago</span>
+          </div>
+        </div>
+      </li>
+    </ul>
+    <div id="emptyFilter" class="empty-filter" hidden>No matching workspaces.</div>
+  </section>
+
+  <!-- Minimal keyboard legend -->
+  <footer class="footbar">
+    <div class="foot-keys">
+      <span><kbd>Enter</kbd> continue latest</span>
+      <span><kbd>↑</kbd><kbd>↓</kbd> navigate list</span>
+      <span><kbd>/</kbd> filter</span>
+      <span><kbd>N</kbd> new workspace</span>
+    </div>
+    <span>loopback · 6 workspaces</span>
+  </footer>
+</main>
+
+<script>
+(() => {
+  const primary = document.getElementById("primaryContinue");
+  const filter = document.getElementById("wsFilter");
+  const rows = Array.from(document.querySelectorAll(".ws-row"));
+  const emptyFilter = document.getElementById("emptyFilter");
+  const newPopover = document.getElementById("newWsPopover");
+  const detailsPopover = document.getElementById("detailsPopover");
+  const folderInput = document.getElementById("folderInput");
+  const dimToggle = document.getElementById("dimToggle");
+
+  // Keep only one popover open at a time and close on outside click or Escape
+  const popovers = [newPopover, detailsPopover];
+  popovers.forEach((pop) => {
+    pop.addEventListener("toggle", () => {
+      if (pop.open) {
+        popovers.forEach((other) => {
+          if (other !== pop) other.open = false;
+        });
+        if (pop === newPopover) folderInput.focus();
+      }
+    });
+  });
+
+  document.addEventListener("click", (e) => {
+    popovers.forEach((pop) => {
+      if (pop.open && !pop.contains(e.target)) pop.open = false;
+    });
+  });
+
+  dimToggle.addEventListener("click", () => {
+    dimToggle.textContent = dimToggle.textContent.trim() === "on" ? "off" : "on";
+  });
+
+  // Live filter for scaling cleanly to a 30-workspace list
+  filter.addEventListener("input", () => {
+    const q = filter.value.trim().toLowerCase();
+    let visible = 0;
+    rows.forEach((row) => {
+      const hay = (row.dataset.filter || "").toLowerCase();
+      const match = !q || hay.includes(q);
+      row.hidden = !match;
+      if (match) visible++;
+    });
+    emptyFilter.hidden = visible > 0;
+  });
+
+  // Keyboard navigation: Enter resumes immediately, / focuses filter, ↑/↓ walks focusable targets
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      popovers.forEach((p) => (p.open = false));
+      if (document.activeElement === filter && filter.value) {
+        filter.value = "";
+        filter.dispatchEvent(new Event("input"));
+      }
+      primary.focus();
+      return;
+    }
+
+    const inInput = ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName);
+    if (!inInput && e.key === "/") {
+      e.preventDefault();
+      filter.focus();
+      filter.select();
+      return;
+    }
+
+    if (!inInput && (e.key === "n" || e.key === "N")) {
+      e.preventDefault();
+      newPopover.open = !newPopover.open;
+      return;
+    }
+
+    if (!inInput && e.key === "Enter" && document.activeElement === document.body) {
+      primary.click();
+      return;
+    }
+
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const targets = [
+        primary,
+        ...rows.filter((r) => !r.hidden).map((r) => r.querySelector(".ws-link")),
+      ].filter(Boolean);
+      const idx = targets.indexOf(document.activeElement);
+      if (idx !== -1) {
+        e.preventDefault();
+        const next = targets[idx + (e.key === "ArrowDown" ? 1 : -1)];
+        if (next) next.focus();
+      } else if (!inInput && e.key === "ArrowDown") {
+        e.preventDefault();
+        targets[0]?.focus();
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>
