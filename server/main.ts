@@ -9,9 +9,9 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { INSTANCE, STATE_DIR, STATE_FILE, buildHash, randomToken, readJsonFile, writeJsonFile } from "./paths.ts";
 import { answer, fail, send, serveStatic } from "./http.ts";
-import { activeHomeDefaults, describeWorkspace, welcomeClients, workspaces } from "./workspaces.ts";
+import { activeConfig, activeHomeDefaults, describeWorkspace, welcomeClients, workspaces } from "./workspaces.ts";
 import { boardFrom, boards, flushBoard } from "./store.ts";
-import { boardSettingsDocument } from "./board-settings.ts";
+import { settingsDocument } from "./settings-document.ts";
 import { boardMeta, cardsFor } from "./cards.ts";
 import { closedCards } from "./bus.ts";
 import { gitPicture, refreshGit, unwatchGit, watchGit } from "./git/graph.ts";
@@ -339,7 +339,17 @@ export const server = createServer((req, res) => {
 		if (req.method === "GET" && url.pathname === "/settings/board") {
 			const board = boardFrom(url, res);
 			if (!board) return;
-			answer(res, 200, boardSettingsDocument(board));
+			answer(
+				res,
+				200,
+				settingsDocument({
+					scope: "board",
+					values: activeConfig(board),
+					title: "this board",
+					subtitle: `${board.name} · ${board.folder}`,
+					foot: "new threads only · a run in flight is untouched",
+				}),
+			);
 			return;
 		}
 		if (req.method === "POST") {
