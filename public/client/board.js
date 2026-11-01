@@ -40,11 +40,9 @@ try {
 } catch {}
 const occupied = [];
 let sawFirstCard = false;
-/** The card the composer is currently replying into, or null for a fresh message. */
-let replyTarget = null;
 /**
- * What the field is carrying, keyed by the card it is written for, `""` being the board itself.
- * A draft belongs to one card, so moving the reading position never carries text across.
+ * What a field was carrying, keyed by the card it is written for, `""` being the board itself. A draft
+ * belongs to one card, so a card that leaves the board and comes back keeps its words.
  */
 const drafts = new Map();
 // A snapshot is what is already on the board, so nothing in it is new to the reader.
@@ -1600,9 +1598,11 @@ function makeCard(data, quiet = false) {
   const kind = data.type;
   const isNote = data.type === "note";
   const width = data.rect ? data.rect.w : defaultWidth(kind);
-  // A delegate card opens small and grows as the run reports; a normal note wants the room.
+  // A delegate card opens small and grows as the run reports; a normal note wants the room. A thread's
+  // card is taller than a note because the field at its foot takes a share of the height, and the
+  // conversation above it still has to be readable.
   const delegate = isDelegate(data);
-  const defaultHeight = isSource ? 430 : isQuestion ? 300 : isNote ? (delegate ? 220 : 420) : 300;
+  const defaultHeight = isSource ? 430 : isQuestion ? 300 : isNote ? (delegate ? 220 : 420) : 440;
   const height = data.rect ? data.rect.h : defaultHeight;
 
   // The server remembers where a card was put, so a refresh and other tabs agree. A card
@@ -1694,6 +1694,15 @@ function makeCard(data, quiet = false) {
     data,
   };
   byId.set(data.id, entry);
+  // A thread's card is where its conversation is written and read, so it carries the field. A note, a
+  // source and a question are read through the thread above them and never grow one.
+  if (kind === "sticky") {
+    const inst = makeComposer(entry);
+    entry.composer = inst;
+    card.insertBefore(inst.root, grip);
+    restoreDraft(inst);
+    paintRuntime(inst);
+  }
   entry.askPill.addEventListener("click", (event) => {
     event.stopPropagation();
     centreQuestion(entry);
@@ -1719,22 +1728,15 @@ function makeCard(data, quiet = false) {
     (event) => {
       if (event.button === 1) return;
       card.style.zIndex = z++;
-      // A press in the field the card already holds is typing, not a change of reading position: taking it
-      // as one would retarget the message to the thread and park the words under the card it is about.
-      if (!event.target.closest("#composer")) selectCard(card);
+      selectCard(card);
     },
     true,
   );
 
-  // The keyboard and the mouse agree on which card is current: focus landing inside a card marks
-  // it, so the outline, `r` and the digit keys follow the keyboard rather than the last click. A press
-  // in the field the card already holds is not a change of reading position, so it leaves the card the
-  // message is about alone: taking it as one would turn every reply into a reply to the thread itself.
+  // The keyboard and the mouse agree on which card is current: focus landing inside a card marks it,
+  // so the outline, `r` and the digit keys follow the keyboard rather than the last click. A press in
+  // the card's own field selects the card as well: the field is written in that card, not about it.
   card.addEventListener("focusin", (event) => {
-    if (event.target.closest("#composer")) {
-      reveal(event.target);
-      return;
-    }
     selectCard(card);
     reveal(event.target);
   });
@@ -1743,21 +1745,13 @@ function makeCard(data, quiet = false) {
     event.stopPropagation();
     const mini = !card.classList.contains("mini");
     setMini(card, mini);
-    // A folded card has no room for a field, so folding puts the draft away and unfolding brings it
-    // back when the card has one.
-    if (mini) {
-      // Folding the window takes the field with it, whichever card the message is about.
-      if (replyTarget && windowOf(replyTarget)?.id === entry.id) setReplyTarget(null);
-    } else if (!replyTarget && drafts.has(entry.id)) {
-      setReplyTarget(entry, { focus: false });
-    }
     const rect = JSON.parse(card.dataset.rect || "{}");
     void saveLayout(entry.id, rect, mini);
   });
 
   head.querySelector(".reply").addEventListener("click", (event) => {
     event.stopPropagation();
-    setReplyTarget(entry);
+    replyToCard(entry);
   });
 
   // The pencil toggles. A press while the editor is open closes it, and it has to happen on
@@ -1973,20 +1967,18 @@ function paintFocus() {
 }
 
 /**
- * One place marks which card the board is reading. Reading a card is not asking to answer it: the
- * field opens with the `↩` in its head or with `r`, so a click that only selects a card cannot land the
- * caret in a textarea. A field already in the card the click selects stays where it is.
+ * One place marks which card the board is reading. Reading a card is not typing into it: the field sits
+ * in every thread card already, and the caret goes there with the `↩` in the head or with `r`.
  */
 function selectCard(card) {
   for (const other of cards) other.classList.toggle("active", other === card);
+  // Reading another card gives the keyboard back to the board. A field left with the caret in a card
+  // nobody is reading would take `r` and the digit keys as letters, which is exactly the key that names
+  // the card just clicked.
+  const typing = focusedComposer();
+  const was = cardOf(typing);
+  if (typing && was !== (card ? byId.get(card.dataset.id) : null)) document.activeElement.blur();
   paintFocus();
-  const entry = card ? byId.get(card.dataset.id) : null;
-  // A folded card has no room for a field, so it can never keep one.
-  const holds = Boolean(entry) && !entry.card.classList.contains("mini");
-  const keep = holds && replyTarget === entry;
-  // Selection gives a field up rather than moving it: one left in a card nobody is reading is a reply
-  // to a card left behind.
-  setReplyTarget(keep ? entry : null, { focus: false });
 }
 
 /**
@@ -1997,11 +1989,11 @@ function selectCard(card) {
 const stopping = new Set();
 
 /**
- * What a pointer down on a card may not grab: the controls in its head, the composer docked inside
- * it, a link or a checkbox, the resize corner. Everything else is surface, which drags the card.
+ * What a pointer down on a card may not grab: the controls in its head, the field inside it, a link or a
+ * checkbox, the resize corner. Everything else is surface, which drags the card.
  */
 const INTERACTIVE =
-  ".close, .edit, .reply, .min, .ask-pill, .resize, input, textarea, button, a, [contenteditable], .xref, .tick, .q-options, #composer";
+  ".close, .edit, .reply, .min, .ask-pill, .resize, input, textarea, button, a, [contenteditable], .xref, .tick, .q-options, .composer";
 
 /** Move a card by dragging it, in board units, so the card keeps up at any zoom. */
 function startCardDrag(card, entry, event) {
@@ -2327,9 +2319,11 @@ function applyMessage(data, quiet = false) {
 }
 
 function clearBoard() {
-  // The composer may be docked inside a card, so it comes home first: removing the cards
-  // would take the field with them and leave nothing to type into.
-  setReplyTarget(null);
+  // Every field lives inside a card, so they go with the cards. A field's words are kept under its card
+  // so a snapshot that rebuilds the board puts the same draft back.
+  for (const inst of composers.values()) parkDraft(inst);
+  composers.clear();
+  activeComposer = null;
   for (const card of cards) card.remove();
   cards.length = 0;
   byId.clear();
@@ -2365,9 +2359,14 @@ function closeCard(entry) {
 function dropCard(entry) {
   const record = byId.get(entry.id);
   if (!record) return;
-  // Compared by id: a remote remove arrives as a bare { id } and would never match the entry. The window
-  // the field is docked in counts as well, or removing it would take the field off the page with it.
-  if (replyTarget && (replyTarget.id === record.id || windowOf(replyTarget)?.id === record.id)) setReplyTarget(null);
+  // Compared by id: a remote remove arrives as a bare { id } and would never match the entry. A card
+  // with a field takes its words with it, so they are put aside under its id for a card put back later.
+  const held = record.composer;
+  if (held) {
+    parkDraft(held);
+    composers.delete(held.key);
+    if (activeComposer === held) activeComposer = null;
+  }
   record.card.remove();
   forgetSeen(record.card);
   inView.delete(record.card);
@@ -2378,7 +2377,6 @@ function dropCard(entry) {
   // A closed card is a thread the board no longer draws, so it stops being a child its master waits on.
   threadMeta.delete(record.id);
   foldState.delete(record.id);
-  drafts.delete(record.id);
   // Links pointing at the card that just went have to stop looking live.
   refreshXrefs();
   dropRailCard(record.id);
@@ -4790,70 +4788,196 @@ function applyActivity(row) {
 }
 
 // ---------- composer -----------------------------------------------------
-const msgBox = document.getElementById("msg");
-const sendBtn = document.getElementById("send");
-const forkBtn = document.getElementById("forkMode");
-const composerHint = document.getElementById("composerHint");
+// Every thread card carries a field, so a message is written where its answer will be read and the
+// field is always there rather than moving to whichever card was clicked last. A card that is only
+// named in a message never grows one: it joins a neighbouring field as a reference, and one message
+// can name several.
+const composerTpl = document.getElementById("composerTpl");
+const composerHome = document.getElementById("composerHome");
 const footHint = document.getElementById("footHint");
 let footTimer = 0;
 const statCtx = document.getElementById("statCtx");
 const statCtxValue = document.getElementById("statCtxValue");
-const replyChip = document.getElementById("replyChip");
-const replyChipText = document.getElementById("replyChipText");
-let sendMode = "queue";
-const modeToggle = document.getElementById("modeToggle");
-/**
- * A comment on a card without a child goes to the thread that made it. Fork asks a new thread
- * instead, which is what a clone of the card is for: same question, its own conversation.
- */
-let forkNext = false;
+/** Every field on the board, by the card it belongs to. `""` is the bottom bar of a one-session board. */
+const composers = new Map();
+/** The field the keyboard was last in: where a hint lands, and where a reference is added. */
+let activeComposer = null;
 /** A note that outranks the usual hint until it has been read. */
 let hintTimer = null;
 
+/** The card a field belongs to, or null for the bottom bar. */
+const cardOf = (inst) => (inst ? inst.entry : null);
+
+/** The field built for a card, if that card has one. */
+const composerOf = (entry) => (entry ? composers.get(entry.id) ?? null : null);
+
+/** The field that holds the caret, if one does. `activeComposer` is the last one used, which is not the same. */
+function focusedComposer() {
+  const caret = document.activeElement;
+  return caret && activeComposer && activeComposer.root.contains(caret) ? activeComposer : null;
+}
+
 /**
- * The mode buttons choose between steering the run and queueing behind it, so they say nothing
- * while the agent is idle. Hidden then, and the hint says the message leaves now instead of
- * claiming it waits for a run that is not happening. A stream that is down leaves the composer
- * readable on purpose, so it is the hint that has to stop promising a send.
+ * One field, built once per thread card and once for the bottom bar a one-session board keeps. Its
+ * whole state lives here, so two cards never share a draft, an attachment or a reference.
  */
+function makeComposer(entry) {
+  const key = entry ? entry.id : "";
+  if (composers.has(key)) return composers.get(key);
+  const root = composerTpl.content.firstElementChild.cloneNode(true);
+  const inst = {
+    key,
+    entry: entry ?? null,
+    root,
+    msg: root.querySelector(".msg"),
+    send: root.querySelector(".send"),
+    hintEl: root.querySelector(".hintline"),
+    refRow: root.querySelector(".refs"),
+    paths: root.querySelector(".paths"),
+    shots: root.querySelector(".shots"),
+    modeBtn: root.querySelector(".mode-toggle"),
+    forkBtn: root.querySelector(".fork"),
+    pickModeBtn: root.querySelector(".mode-pick"),
+    pickPathBtn: root.querySelector(".path-pick"),
+    modelBtn: root.querySelector(".model-pick"),
+    thinkBtn: root.querySelector(".think-pick"),
+    ctxBtn: root.querySelector(".ctx-btn"),
+    ctxLabel: root.querySelector(".ctx-label"),
+    filesBtn: root.querySelector(".files"),
+    // Steering cuts a run short, so it is a choice about this message rather than about the board.
+    sendMode: "queue",
+    // A fork asks a new thread instead of the one that answers the card, and is one send's choice.
+    forkNext: false,
+    // The thread whose compaction is in flight, so the meter says so until the figures come back.
+    compacting: "",
+    /** The cards this message names beside the one it is written in. */
+    named: [],
+    /** Images pasted into this field and paths picked for it: both travel with the message. */
+    images: [],
+    picked: new Map(),
+  };
+  wireComposer(inst);
+  composers.set(key, inst);
+  return inst;
+}
+
+/** Everything the field does: typing, sending, the chips that choose how it answers, and the pickers. */
+function wireComposer(inst) {
+  // The keyboard and the board agree on which card is current: a focus landing in the field makes its
+  // card the one being read.
+  inst.root.addEventListener("focusin", () => {
+    activeComposer = inst;
+    if (inst.entry) selectCard(inst.entry.card);
+    paintReferenceRings();
+  });
+  inst.root.addEventListener("focusout", (event) => {
+    // A press on one of the field's own buttons is not a leaving: the chips it names stay ringed.
+    if (event.relatedTarget && inst.root.contains(event.relatedTarget)) return;
+    paintReferenceRings();
+  });
+  inst.msg.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      // The field keeps what was written: Escape gives the keyboard back to the board, and the ×
+      // on a reference is what drops it.
+      event.preventDefault();
+      event.stopPropagation();
+      inst.msg.blur();
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void sendMessage(inst);
+    }
+  });
+  inst.msg.addEventListener("paste", (event) => {
+    const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
+    if (files.length === 0) return;
+    event.preventDefault();
+    for (const file of files.slice(0, 4)) {
+      const reader = new FileReader();
+      reader.addEventListener("load", async () => {
+        const shot = await shrinkImage(String(reader.result), file.type);
+        inst.images.push(shot);
+        drawAttachments(inst);
+      });
+      reader.readAsDataURL(file);
+    }
+  });
+  inst.send.addEventListener("click", () => void sendMessage(inst));
+  inst.modeBtn.addEventListener("click", () => {
+    inst.sendMode = inst.sendMode === "steer" ? "queue" : "steer";
+    paintHint(inst);
+  });
+  inst.forkBtn.addEventListener("click", () => {
+    inst.forkNext = !inst.forkNext;
+    paintFork(inst);
+    paintHint(inst);
+  });
+  inst.pickModeBtn.addEventListener("click", () => void openPick("mode", inst.pickModeBtn, false, inst));
+  inst.pickPathBtn.addEventListener("click", () => void openPick("path", inst.pickPathBtn, false, inst));
+  inst.modelBtn.addEventListener("click", () => void openPick("model", inst.modelBtn, false, inst));
+  inst.thinkBtn.addEventListener("click", () => void openPick("thinking", inst.thinkBtn, false, inst));
+  inst.ctxBtn.addEventListener("click", () => void compactField(inst));
+  inst.filesBtn.addEventListener("click", () => {
+    // Attaching files is a question the picker asks of one field, so it becomes the current one.
+    activeComposer = inst;
+    if (!picker.hidden) closePicker();
+    else void browse(pickerAt);
+  });
+}
+
+// A board with a single session behind it keeps one field in the bottom bar. A board of threads hides
+// the bar: every thread card carries its own field, built where the card is.
+composerHome.appendChild(makeComposer(null).root);
+
+// ---------- hints ---------------------------------------------------------
 /**
- * The one button that chooses where the next message goes. It flips between the two, and it is offered
- * whether or not a run is live: the choice is worth making before there is anything to interrupt, and a
- * control that comes and goes is a control nobody finds.
+ * What the field says under its buttons: whether the message leaves now, waits behind a run, or cuts
+ * it short. A stream that is down leaves the field readable on purpose, so it is the hint that has to
+ * stop promising a send.
  */
-function paintComposer() {
+function paintHint(inst) {
   const running = metaRunning === true;
-  modeToggle.textContent = sendMode;
-  modeToggle.classList.toggle("steer", sendMode === "steer");
-  modeToggle.title = running
-    ? sendMode === "steer"
+  const forkable = forkTarget(inst);
+  inst.modeBtn.textContent = inst.sendMode;
+  inst.modeBtn.classList.toggle("steer", inst.sendMode === "steer");
+  inst.modeBtn.title = running
+    ? inst.sendMode === "steer"
       ? "steer: this message interrupts the run in flight — click for queue"
       : "queue: this message waits for the run in flight — click for steer"
     : "nothing is running, so this message goes now — click to choose steer next time";
-  composerHint.classList.remove("bad");
-  composerHint.textContent = !linkUp
+  inst.hintEl.classList.remove("bad");
+  inst.hintEl.textContent = !linkUp
     ? "offline"
     : !running
       ? "sends now"
-      : sendMode === "steer"
+      : inst.sendMode === "steer"
         ? "interrupts the run"
-        : forkNext && replyTarget
+        : forkable && inst.forkNext
           ? "asks a new thread"
           : "waits for this run to finish";
 }
 
-/** Something the board did rather than the composer: say it, then go back to the usual hint. */
-function hintLine(text, bad = false) {
-  composerHint.textContent = text;
-  composerHint.classList.toggle("bad", bad);
-  clearTimeout(hintTimer);
-  hintTimer = setTimeout(() => paintComposer(), 6000);
+/** Every field on the board, because a run boundary changes what all of them would do. */
+function paintComposer() {
+  for (const inst of composers.values()) paintHint(inst);
 }
 
 /**
- * One line in the footer, which is on screen whatever the composer is doing. The composer's own hint
- * hides when the field is docked in a card, so a click that lands nowhere would otherwise be silent.
+ * Something the board did rather than the field: say it, then go back to the usual hint. Nothing to
+ * say it in — a board with no thread card on it — and the footer says it instead, because that is on
+ * screen whatever the board is doing.
  */
+function hintLine(text, bad = false, inst = activeComposer) {
+  const into = inst && composers.has(inst.key) ? inst : activeComposer;
+  if (!into) return footNote(text, bad);
+  into.hintEl.textContent = text;
+  into.hintEl.classList.toggle("bad", bad);
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(paintComposer, 6000);
+}
+
+/** One line in the footer, which is on screen whatever the fields are doing. */
 function footNote(text, bad = false) {
   if (!footHint) return;
   footHint.textContent = text;
@@ -4900,73 +5024,74 @@ statCtx.addEventListener("click", async () => {
   }
 });
 
-// ---------- the context meter in the composer -----------------------------
-// The field answers for one thread, and that thread's context is the number a compaction changes,
-// so the button that presses it sits in the row of buttons beside the field rather than in the
-// header. See `answeringRuntime` for the two shapes a card reports a thread in.
-const ctxBtn = document.getElementById("ctxBtn");
-const ctxLabel = document.getElementById("ctxLabel");
-/** The thread whose compaction is in flight, so the meter says so until the figures come back. */
-let compacting = "";
+// ---------- the context meter in a field ----------------------------------
+// A field answers for the thread whose card holds it, and that thread's context is the number a
+// compaction changes, so the button that presses it sits in the row of buttons beside the field
+// rather than in the header. See `answeringRuntime` for what answers a field.
 /** Half the window is where the number turns from a statistic into a warning. */
 const CTX_HOT = 50;
 /** Near the edge the same heat goes red: the next answer is the one at risk. */
 const CTX_FULL = 80;
 
-/** The context of the thread this field talks to, against the window it talks into. */
-function answeringCtx() {
-  const runtime = answeringRuntime();
-  if (!runtime || !replyTarget) return null;
-  const sticky = replyTarget.data.type === "sticky";
-  const threadId = sticky ? replyTarget.id : (runtime.thread ?? "");
-  const context = Number(runtime.stats?.context) || 0;
-  const max = Number(runtime.stats?.contextMax) || 0;
-  // The daemon divides for the same reason the footer does; the ratio is the fallback for a board
-  // written before it worked out the percentage itself.
-  const said = Number(runtime.stats?.contextPercent);
-  const percent = Number.isFinite(said) ? said : context && max ? (context / max) * 100 : NaN;
-  // A thread nobody has asked anything has no figure at all, and then there is nothing to draw. A thread
-  // whose window pi has not reported is different: it has a size, and pressing the button is still the
-  // thing to do, so it says the size and leaves the fill out.
-  if (!threadId || !context) return null;
-  return { threadId, context, max, percent, running: sticky ? replyTarget.data.status === "sent" : runtime.running === true };
+/**
+ * What answers this field. A thread card carries its own runtime; the bottom bar of a one-session
+ * board has nothing under it, and its chips speak for the board's defaults instead.
+ */
+function answeringRuntime(inst = activeComposer) {
+  return cardOf(inst)?.data ?? null;
 }
 
-function paintCtx() {
-  const held = answeringCtx();
-  ctxBtn.hidden = !held;
+/** The context of the thread this field talks to, against the window it talks into. */
+function answeringCtx(inst) {
+  const held = cardOf(inst);
+  if (!held) return null;
+  const stats = held.data.stats ?? {};
+  const context = Number(stats.context) || 0;
+  const max = Number(stats.contextMax) || 0;
+  // The daemon divides for the same reason the footer does; the ratio is the fallback for a board
+  // written before it worked out the percentage itself.
+  const said = Number(stats.contextPercent);
+  const percent = Number.isFinite(said) ? said : context && max ? (context / max) * 100 : NaN;
+  // A thread nobody has asked anything has no figure at all, and then there is nothing to draw. A
+  // thread whose window pi has not reported is different: it has a size, and pressing the button is
+  // still the thing to do, so it says the size and leaves the fill out.
+  if (!context) return null;
+  return { threadId: held.id, context, max, percent, running: held.data.status === "sent" };
+}
+
+function paintCtx(inst) {
+  const held = answeringCtx(inst);
+  inst.ctxBtn.hidden = !held;
   if (!held) return;
   const known = Number.isFinite(held.percent);
   const percent = known ? Math.round(held.percent) : 0;
-  const busy = compacting === held.threadId;
+  const busy = inst.compacting === held.threadId;
   const shown = Math.max(0, Math.min(100, percent));
-  ctxLabel.textContent = busy ? "compacting…" : known ? `ctx ${percent}%` : `ctx ${compact(held.context)}`;
-  ctxBtn.style.setProperty("--fill", `${known ? shown : 0}%`);
-  ctxBtn.classList.toggle("hot", known && percent >= CTX_HOT && percent < CTX_FULL);
-  ctxBtn.classList.toggle("full", known && percent >= CTX_FULL);
-  ctxBtn.classList.toggle("working", busy);
+  inst.ctxLabel.textContent = busy ? "compacting…" : known ? `ctx ${percent}%` : `ctx ${compact(held.context)}`;
+  inst.ctxBtn.style.setProperty("--fill", `${known ? shown : 0}%`);
+  inst.ctxBtn.classList.toggle("hot", known && percent >= CTX_HOT && percent < CTX_FULL);
+  inst.ctxBtn.classList.toggle("full", known && percent >= CTX_FULL);
+  inst.ctxBtn.classList.toggle("working", busy);
   const size = held.context && held.max ? `ctx ${compact(held.context)}/${compact(held.max)}` : `${compact(held.context)} tokens in this thread, window not reported yet`;
-  ctxBtn.title = held.running
+  inst.ctxBtn.title = held.running
     ? `${size} · compaction waits until this thread stops answering`
     : `${size} · compact the context, the same as /compact`;
-  ctxBtn.setAttribute("aria-label", known ? `context ${percent}% used, compact it` : `compact the context, ${compact(held.context)} tokens`);
+  inst.ctxBtn.setAttribute("aria-label", known ? `context ${percent}% used, compact it` : `compact the context, ${compact(held.context)} tokens`);
 }
 
-ctxBtn.addEventListener("click", async () => {
-  const held = answeringCtx();
+async function compactField(inst) {
+  const held = answeringCtx(inst);
   // One thread at a time, and only the button that is waiting says so: a compaction in another card
   // leaves this one working.
-  if (!held || compacting === held.threadId) return;
-  // The card is what the daemon resolves to a thread, the same way the model and thinking chips do.
-  const cardId = replyTarget.id;
-  compacting = held.threadId;
-  paintCtx();
+  if (!held || inst.compacting === held.threadId) return;
+  inst.compacting = held.threadId;
+  paintCtx(inst);
   footNote("compacting the context…");
   try {
     const response = await fetch(`/compact?${auth}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cardId }),
+      body: JSON.stringify({ cardId: held.threadId }),
     });
     if (!response.ok) throw new Error((await response.text()).trim() || response.statusText);
     const payload = await response.json();
@@ -4976,34 +5101,37 @@ ctxBtn.addEventListener("click", async () => {
   } catch (error) {
     footNote(`could not compact: ${error.message || error}`, true);
   } finally {
-    compacting = "";
-    paintCtx();
+    inst.compacting = "";
+    paintCtx(inst);
   }
-});
-
-/** What the field is carrying, keyed by the card it is written for: `""` is the board itself. */
-const draftKey = () => (replyTarget ? replyTarget.id : "");
-
-/**
- * Put the field aside under the card it was written for, so a change of aim parks a draft instead
- * of carrying its text to whichever card is clicked next.
- */
-function parkDraft() {
-  const draft = { text: msgBox.value, images: [...pendingImages], picked: [...picked] };
-  const used = draft.text.trim() !== "" || draft.images.length > 0 || draft.picked.length > 0;
-  if (used) drafts.set(draftKey(), draft);
-  else drafts.delete(draftKey());
 }
 
-/** The draft that belongs where the field now points, or an empty field when nothing is there. */
-function restoreDraft() {
-  const draft = drafts.get(draftKey());
-  msgBox.value = draft?.text ?? "";
-  pendingImages.splice(0, pendingImages.length, ...(draft?.images ?? []));
-  picked.clear();
-  for (const [path, meta] of draft?.picked ?? []) picked.set(path, meta);
-  drawAttachments();
-  drawChips();
+// ---------- what a field is carrying --------------------------------------
+/**
+ * Put a field's work aside under its card. Nothing moves a field from card to card any more, so this
+ * is only for a card that leaves the board: a closed card put back with ctrl+z keeps its words, its
+ * attachments and the cards it was about.
+ */
+function parkDraft(inst) {
+  if (!inst) return;
+  const held = { text: inst.msg.value, images: [...inst.images], picked: [...inst.picked], named: [...inst.named] };
+  const used = held.text.trim() !== "" || held.images.length > 0 || held.picked.length > 0 || held.named.length > 0;
+  if (used) drafts.set(inst.key, held);
+  else drafts.delete(inst.key);
+}
+
+/** What was put aside for this card, back in the field the card was rebuilt with. */
+function restoreDraft(inst) {
+  const held = drafts.get(inst.key);
+  if (!held) return;
+  inst.msg.value = held.text ?? "";
+  inst.images.splice(0, inst.images.length, ...(held.images ?? []));
+  inst.picked.clear();
+  for (const [path, meta] of held.picked ?? []) inst.picked.set(path, meta);
+  inst.named.splice(0, inst.named.length, ...(held.named ?? []));
+  drawAttachments(inst);
+  drawChips(inst);
+  paintRefs(inst);
 }
 
 /**
@@ -5011,7 +5139,7 @@ function restoreDraft() {
  * source or question is read on the window of the thread that wrote it. The thread that answers comes first,
  * because that is the thread the server sends the message to; a thread with no card of its own is read
  * through the card it answers, so the walk carries on from there. A card with no thread card above it at
- * all — one whose thread was closed — stays its own window, which is where the field went before.
+ * all — one whose thread was closed — stays its own window.
  */
 function windowOf(entry) {
   if (!entry) return null;
@@ -5025,128 +5153,174 @@ function windowOf(entry) {
   return entry;
 }
 
+// ---------- what a message names ------------------------------------------
+/** What a card is called in a reference chip: a thread by its title, anything else by its own name. */
+function cardName(entry) {
+  const data = entry?.data ?? {};
+  const words = data.type === "sticky" ? data.title || "this thread" : entry?.titleEl?.textContent || data.type || "card";
+  return words.replace(/\s+/g, " ").trim().slice(0, 32) || "card";
+}
+
 /**
- * A reply is aimed at one card, so the composer shows which until it is sent or cleared.
- * Without this the follow-up would arrive as a new sticky and the thread would be lost. A bind
- * driven by a click passes `focus: false`: the reader is reading cards, not typing.
+ * Names one card in a field's message, once. A message can name several cards, and each one travels to
+ * the agent as the card it is about, so the answer lands beside the artifact the human is reading.
  */
+function addReference(inst, entry) {
+  if (!inst || !entry) return false;
+  // The card the field is written in is what the message answers; naming it again would be noise.
+  if (inst.key === entry.id || inst.named.includes(entry.id)) return false;
+  inst.named.push(entry.id);
+  paintRefs(inst);
+  paintReferenceRings();
+  return true;
+}
+
+/** One chip per card the message names, each droppable on its own. */
+function paintRefs(inst) {
+  // A card that left the board is not a reference any more, so the row drops it rather than naming
+  // something a click would miss.
+  inst.named = inst.named.filter((id) => byId.has(id));
+  inst.refRow.hidden = inst.named.length === 0;
+  inst.refRow.replaceChildren(
+    ...inst.named.map((id) => {
+      const entry = byId.get(id);
+      const chip = el("div", "ref");
+      const name = el("span");
+      name.textContent = `about “${cardName(entry)}”`;
+      name.title = `this message names ${entry.data.path || id}`;
+      const drop = el("button");
+      drop.type = "button";
+      drop.textContent = "×";
+      drop.title = "drop this reference";
+      drop.addEventListener("click", () => {
+        inst.named = inst.named.filter((one) => one !== id);
+        paintRefs(inst);
+        paintReferenceRings();
+        inst.msg.focus();
+      });
+      chip.append(name, drop);
+      return chip;
+    }),
+  );
+  paintFork(inst);
+  paintHint(inst);
+}
+
+/** The cards the message being written names, ringed so the board says what the field is about. */
+function paintReferenceRings() {
+  const typing = focusedComposer();
+  const named = new Set(typing ? typing.named : []);
+  for (const record of byId.values()) record.card.classList.toggle("referenced", named.has(record.id));
+}
+
+/** The keyboard goes into one field, and the cards it names light up with it. */
+function focusComposer(inst) {
+  if (!inst) return;
+  activeComposer = inst;
+  paintReferenceRings();
+  inst.msg.focus();
+  reveal(inst.msg);
+}
+
+/**
+ * What `r` and the `↩` in a card's head do: name that card in a field. A thread card has a field of its
+ * own, so the caret goes there; a note, source or question joins the message being written, or the
+ * message of the thread that answers it when nothing is being written.
+ */
+function replyToCard(entry) {
+  if (!entry) return;
+  const own = entry.data.type === "sticky" ? entry : null;
+  const house = composerOf(own ?? windowOf(entry));
+  if (!house) {
+    footNote("this card has no thread card to answer it", true);
+    return;
+  }
+  if (own) return focusComposer(house);
+  // A field with the keyboard is the message being written, and a card picked while writing is what
+  // the message is about.
+  const into = focusedComposer() ?? house;
+  const added = addReference(into, entry);
+  focusComposer(into);
+  footNote(
+    added
+      ? `named “${cardName(entry)}” in the message${cardOf(into) ? ` in “${cardName(cardOf(into))}”` : " on the board"}`
+      : `“${cardName(entry)}” is already named in that message`,
+  );
+}
+
 // ---------- what a thread is for -------------------------------------------
-const modePick = document.getElementById("modePick");
-const pathPick = document.getElementById("pathPick");
 // What a new thread is born with. `pathNext` empty means the board's own flow, so a board that always
 // works the same way is not overridden by a picker nobody touched.
 let modeNext = "agent";
 let pathNext = "";
 
-/** The thread card the composer is aimed at, if it is aimed at one. */
-function aimedThread() {
-  return replyTarget && replyTarget.data?.type === "sticky" ? replyTarget : null;
-}
+/** The three names a thread's mode can have. A card's `mode` is also the queue mode of its last turn. */
+const THREAD_MODES = ["agent", "plan", "boss"];
 
 /** What the two buttons say: this card's mode, or the one a new thread would be born with. */
-function modeShown() {
-  const aimed = aimedThread();
+function modeShown(inst = pickInst ?? activeComposer) {
+  const held = cardOf(inst);
+  const mode = held ? (THREAD_MODES.includes(held.data.mode) ? held.data.mode : "agent") : modeNext;
   return {
-    mode: aimed ? aimed.data.mode || "agent" : modeNext,
-    path: aimed ? aimed.data.path || "auto" : pathNext || boardConfig.path || "auto",
+    mode,
+    path: held ? held.data.path || "auto" : pathNext || boardConfig.path || "auto",
   };
 }
 
 /**
  * A mode decides whether the thread works, plans, or spawns; a boss also runs a flow. Both are the
- * human's choice, so they live in the composer beside the model and the thinking level rather than on
- * the board, where a press that spawns work would read like a press that does work.
+ * human's choice, so they live in the field beside the model and the thinking level rather than on
+ * the board, where a press that spawns work would read like a press that does work. No argument paints
+ * every field.
  */
-function paintMode() {
-  const { mode, path } = modeShown();
-  modePick.textContent = mode;
-  modePick.classList.toggle("on", mode !== "agent");
-  modePick.title =
+function paintMode(inst) {
+  if (!inst) {
+    for (const one of composers.values()) paintMode(one);
+    return;
+  }
+  const { mode, path } = modeShown(inst);
+  inst.pickModeBtn.textContent = mode;
+  inst.pickModeBtn.classList.toggle("on", mode !== "agent");
+  inst.pickModeBtn.title =
     mode === "boss"
       ? "a boss: it spawns children with roles and does no work itself"
       : mode === "plan"
         ? "a planner: a plan and throwaway checks under /tmp, no edits"
         : "an agent: it does the work itself";
-  pathPick.hidden = mode !== "boss";
-  pathPick.textContent = path;
-  pathPick.title =
+  inst.pickPathBtn.hidden = mode !== "boss";
+  inst.pickPathBtn.textContent = path;
+  inst.pickPathBtn.title =
     path === "auto"
       ? "the boss picks the flow at its first turn and says which one"
       : `the ${path} flow, read from prompts/flows/${path}.md`;
 }
 
-function setReplyTarget(entry, { focus = true } = {}) {
-  const next = entry && byId.has(entry.id) ? entry : null;
-  if (next !== replyTarget) {
-    parkDraft();
-    replyTarget = next;
-    restoreDraft();
+/**
+ * The card a fork would ask, if the message names one: a fork differs only when something already
+ * answers a named card, and `answersWith` is how a card reports having a thread behind it.
+ */
+function forkTarget(inst) {
+  for (const id of inst.named) {
+    const held = byId.get(id);
+    if (held && held.data.type !== "sticky" && held.data.answersWith) return held;
   }
-  // The field lives in the thread's own window and never in a card the message is merely about: the
-  // card is named in the chip and travels as the cardId the server quotes to the agent.
-  const pane = windowOf(replyTarget);
-  for (const record of byId.values()) {
-    record.card.classList.toggle("replying", record === pane);
-    record.card.classList.toggle("referenced", Boolean(replyTarget) && record === replyTarget && record !== pane);
-  }
-  dockComposer(pane);
-  replyChip.hidden = !replyTarget;
-  // Forking only differs when there is a thread that would otherwise answer, so the button says
-  // nothing on a thread card or on a card nobody has asked about yet.
-  paintFork();
-  // The model and thinking chips name the thread that answers this card.
-  paintRuntime();
-  // What the thread is for belongs to that same card: modes are chosen here, never on the board.
-  paintMode();
-  if (replyTarget) {
-    // A thread card is named by its title, and one the human typed into by its own words: a card that
-    // has neither is called what it is.
-    const name =
-      replyTarget.data.type === "sticky"
-        ? (replyTarget.data.title || replyTarget.data.text || "message").replace(/\s+/g, " ").trim().slice(0, 40)
-        : replyTarget.titleEl.textContent;
-    // A card is answered by a thread that has no card of its own, so there is no name to show: the
-    // chip names the card, and says when a fork is the thing that will answer.
-    const owned = replyTarget.data.type !== "thread" && Boolean(replyTarget.data.answersWith);
-    // `in` when the field is in that very card, `about` when the card is elsewhere on the board.
-    const where = pane === replyTarget ? "in" : "about";
-    replyChipText.textContent = forkNext && owned ? `${where} “${name}” · a new thread answers` : `${where} “${name}”`;
-    replyChip.title = where === "about" ? "asked in this thread's window, about that card" : "";
-    msgBox.placeholder = "ask a follow-up about this card…  (esc to send to the board instead)";
-    if (focus) msgBox.focus();
-  } else {
-    msgBox.placeholder = "message the agent…  (enter sends, shift+enter for a new line, paste an image or pick files)";
-  }
-  paintComposer();
+  return null;
 }
 
-document.getElementById("replyChipClear").addEventListener("click", () => setReplyTarget(null));
-
-function paintFork() {
-  // Forking only differs when something already answers the card, and that something is the thread
-  // behind it: `answersWith` is how the card reports having one.
-  const owned = Boolean(replyTarget && replyTarget.data.type !== "thread" && replyTarget.data.answersWith);
-  forkBtn.hidden = !owned;
-  forkBtn.disabled = !owned;
-  forkBtn.classList.toggle("on", owned && forkNext);
-  forkBtn.title = forkNext
+function paintFork(inst) {
+  const owned = Boolean(forkTarget(inst));
+  inst.forkBtn.hidden = !owned;
+  inst.forkBtn.disabled = !owned;
+  inst.forkBtn.classList.toggle("on", owned && inst.forkNext);
+  inst.forkBtn.title = inst.forkNext
     ? "a new thread will answer in its own conversation"
-    : "ask a new thread instead of the one that made this card";
+    : "ask a new thread instead of the one that made that card";
 }
-
-forkBtn.addEventListener("click", () => {
-  forkNext = !forkNext;
-  paintFork();
-  if (replyTarget) setReplyTarget(replyTarget);
-  paintComposer();
-});
 
 // ---------- what answers ---------------------------------------------------
-// A card answers with the model and thinking level of the thread behind it, so the two chips
-// follow the card being replied to and edit that thread. With no card chosen they edit what the
-// next thread starts with.
-const modelChip = document.getElementById("modelPick");
-const thinkChip = document.getElementById("thinkPick");
+// A field answers with the model and thinking level of the thread behind its card, so the two chips
+// name that thread and edit it. The bottom bar of a one-session board has no card, so its chips edit
+// what the next thread starts with.
 const runtimePick = document.getElementById("runtimePick");
 const runtimeSearch = document.getElementById("runtimeSearch");
 const runtimeList = document.getElementById("runtimeList");
@@ -5164,10 +5338,12 @@ let catalogStale = "";
 let picking = "";
 /** The board's own settings: what a new thread starts with, and which features are on. */
 let boardConfig = {};
-/** Where the panel hangs off, when something other than the composer's chips opened it. */
+/** Where the panel hangs off, when something other than a field's chip opened it. */
 let pickAnchor = null;
 /** True when the picker is editing the board's defaults rather than one card's thread. */
 let pickBoard = false;
+/** The field whose chip opened the picker, when it was one: the board's settings are nobody's. */
+let pickInst = null;
 
 function pickNote(text) {
   const node = el("div", "pick-note");
@@ -5175,20 +5351,9 @@ function pickNote(text) {
   return node;
 }
 
-/**
- * What the message will be answered with. A thread card carries its own runtime; a card that has a
- * thread behind it carries that thread's, because the thread itself is never drawn.
- */
-function answeringRuntime() {
-  if (!replyTarget) return null;
-  // A thread card is its own runtime; a plain card carries the runtime of the child that answers it.
-  if (replyTarget.data.type === "sticky") return replyTarget.data;
-  return replyTarget.data.answersWith ?? null;
-}
-
 /** What the picker is editing: one card's thread, or the board's defaults. */
 function pickRuntime() {
-  return pickBoard ? boardConfig : (answeringRuntime() ?? boardConfig);
+  return pickBoard ? boardConfig : (answeringRuntime(pickInst) ?? boardConfig);
 }
 
 function shortModel(model) {
@@ -5237,23 +5402,48 @@ function heatColor(t) {
 }
 
 /** Paints the chip for one level, or takes the paint off when nothing is thinking. */
-function paintHeat(level) {
+function paintHeat(inst, level) {
   const at = HEAT_AT.get(level);
   if (at === undefined) {
-    thinkChip.style.removeProperty("--heat-tint");
-    thinkChip.style.removeProperty("--heat-haze");
+    inst.thinkBtn.style.removeProperty("--heat-tint");
+    inst.thinkBtn.style.removeProperty("--heat-haze");
     return;
   }
   const color = heatColor(at);
-  thinkChip.style.setProperty("--heat-tint", `rgb(${color})`);
-  thinkChip.style.setProperty("--heat-haze", `rgba(${color}, .5)`);
+  inst.thinkBtn.style.setProperty("--heat-tint", `rgb(${color})`);
+  inst.thinkBtn.style.setProperty("--heat-haze", `rgba(${color}, .5)`);
 }
 
-function paintRuntime() {
-  const answering = answeringRuntime();
-  // With nothing to reply to, the chips speak for the board's default, which is whatever the
-  // newest thread was started with until a new choice is made.
-  if (!answering && !boardConfig.model) {
+/**
+ * What answers what. A chip names the thread behind its own card, so each field paints itself; the
+ * board-wide part — what every thread is doing and what it has spent — is one pass over the cards, and
+ * it is done once however many fields are open. No argument paints every field.
+ */
+function paintRuntime(inst) {
+  if (!inst) {
+    for (const one of composers.values()) paintRuntime(one);
+    paintBoardFacts();
+    return;
+  }
+  const held = cardOf(inst);
+  const runtime = (held ? held.data : boardConfig) ?? {};
+  inst.modelBtn.textContent = shortModel(runtime.model);
+  inst.thinkBtn.textContent = runtime.thinking ? `think ${runtime.thinking}` : "think off";
+  paintHeat(inst, runtime.thinking);
+  const where = held ? `“${cardName(held)}” answers with` : "a new thread starts with";
+  inst.modelBtn.title = `${where} ${runtime.provider ?? ""}/${runtime.model ?? ""}`;
+  inst.thinkBtn.title = `${held ? "this card" : "a new thread"} thinks at ${runtime.thinking || "off"}`;
+  paintCtx(inst);
+  paintMode(inst);
+  paintHint(inst);
+}
+
+/** What the board itself says: each thread's cost, the live rows, the footer and the tool switches. */
+function paintBoardFacts() {
+  // The bottom bar of a one-session board has no card of its own, so its chips speak for the board's
+  // default, which is whatever the newest thread was started with until a new choice is made.
+  const bar = composers.get("");
+  if (bar && !boardConfig.model) {
     const newest = [...byId.values()]
       .filter((entry) => entry.data.type === "sticky")
       .sort((left, right) => (right.data.at ?? 0) - (left.data.at ?? 0))[0];
@@ -5261,7 +5451,6 @@ function paintRuntime() {
       boardConfig = { ...boardConfig, provider: newest.data.provider, model: newest.data.model, thinking: newest.data.thinking };
     }
   }
-  const runtime = answering ?? boardConfig;
   paintConfig();
   // One pass over the cards says what every thread is doing and what it has spent, because a card is
   // where a thread is read — its own card, or the card a hidden child answers for.
@@ -5282,25 +5471,22 @@ function paintRuntime() {
   paintSections();
   homeLiveRows();
   paintFooter();
-  paintCtx();
-  modelChip.textContent = shortModel(runtime.model);
-  thinkChip.textContent = runtime.thinking ? `think ${runtime.thinking}` : "think off";
-  paintHeat(runtime.thinking);
-  const where = answering ? "this card answers with" : "a new thread starts with";
-  modelChip.title = `${where} ${runtime.provider ?? ""}/${runtime.model ?? ""}`;
-  thinkChip.title = `${answering ? "this card" : "a new thread"} thinks at ${runtime.thinking || "off"}`;
 }
 
 function closePick() {
   picking = "";
   pickAnchor = null;
   pickBoard = false;
+  pickInst = null;
   runtimePick.hidden = true;
   runtimeSearch.value = "";
 }
 
 function placeRuntimePick() {
-  const chip = (pickAnchor ?? (picking === "thinking" ? thinkChip : modelChip)).getBoundingClientRect();
+  // The panel hangs off the chip that opened it, which the open call names: a field's own chip, or a
+  // row in the board's settings.
+  const anchor = pickAnchor ?? (picking === "thinking" ? pickInst?.thinkBtn : pickInst?.modelBtn);
+  const chip = anchor ? anchor.getBoundingClientRect() : { left: 12, top: 12, bottom: 30 };
   const width = runtimePick.offsetWidth;
   const height = runtimePick.offsetHeight;
   runtimePick.style.left = `${Math.max(10, Math.min(window.innerWidth - width - 10, chip.left))}px`;
@@ -5513,14 +5699,17 @@ function stopThread(threadId) {
   });
 }
 
-async function openPick(which, anchor = null, forBoard = false) {
-  if (picking === which && pickBoard === forBoard) {
+async function openPick(which, anchor = null, forBoard = false, inst = null) {
+  if (picking === which && pickBoard === forBoard && pickInst === inst) {
     closePick();
     return;
   }
   picking = which;
   pickAnchor = anchor;
   pickBoard = forBoard;
+  // A list opened from a field edits that field's thread; one opened from the settings panel edits the
+  // board's defaults, and belongs to nobody's card.
+  pickInst = forBoard ? null : inst;
   runtimePick.hidden = false;
   // The mode and the flow are two short lists this page already holds, so they open at once and the
   // search box has nothing to search: no request, no waiting.
@@ -5575,12 +5764,13 @@ async function openPick(which, anchor = null, forBoard = false) {
   placeRuntimePick();
 }
 
-/** Hand the choice to the daemon: this card's thread, or the default for a new one. */
+/** Hand the choice to the daemon: the thread behind one card, or the default for a new one. */
 async function chooseRuntime(kind, value) {
   const body = kind === "model" ? { provider: value.provider, model: value.model } : { level: value };
-  // A plain card's id is enough: the daemon finds the thread behind it, which the board never draws.
-  // Editing the board's defaults sends no card, which is what makes it the default.
-  if (replyTarget && !pickBoard) body.cardId = replyTarget.id;
+  // A field's own card is what the daemon resolves to a thread. Editing the board's defaults from the
+  // settings panel sends no card, which is what makes it the default.
+  const target = pickBoard ? null : cardOf(pickInst);
+  if (target) body.cardId = target.id;
   try {
     const response = await fetch(`/${kind === "model" ? "model" : "thinking"}?${auth}`, {
       method: "POST",
@@ -5590,7 +5780,7 @@ async function chooseRuntime(kind, value) {
     if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
     const payload = await response.json();
     if (payload.config) boardConfig = { ...boardConfig, ...payload.config };
-    hintLine(kind === "model" ? `model: ${shortModel(value.model)}` : `thinking: ${value}`);
+    hintLine(kind === "model" ? `model: ${shortModel(value.model)}` : `thinking: ${value}`, false, pickInst);
     closePick();
     paintRuntime();
   } catch (error) {
@@ -5646,11 +5836,12 @@ function drawPathPick() {
 }
 
 /**
- * A mode or a flow chosen from the list. Aimed at a thread it is written on that thread; with nothing
- * aimed it is what the next thread is born with, which is what the composer is for.
+ * A mode or a flow chosen from the list. Opened from a field it is written on that field's thread; with
+ * no card behind the field it is what the next thread is born with, which is what the bottom bar is for.
  */
 async function pickMode(mode) {
-  if (aimedThread()) await chooseMode(mode);
+  const target = cardOf(pickInst);
+  if (target) await chooseMode(mode, target.id);
   else modeNext = mode;
   if (mode !== "boss") pathNext = "";
   closePick();
@@ -5659,25 +5850,24 @@ async function pickMode(mode) {
 }
 
 async function pickPath(path) {
+  const target = cardOf(pickInst);
   if (pickBoard) await setBoardPath(path);
-  else if (aimedThread()) await choosePath(path);
+  else if (target) await choosePath(path, target.id);
   else pathNext = path === "auto" ? "" : path;
   closePick();
   paintMode();
   hintLine(`path: ${path}`);
 }
 
-/** Writes the mode on the thread the composer is aimed at, or leaves it as the next thread's. */
-async function chooseMode(mode) {
-  const target = aimedThread();
-  if (!target) return;
-  await postThreadField("/mode", { cardId: target.id, mode });
+/** Writes the mode on one thread, or leaves it as the next thread's. */
+async function chooseMode(mode, cardId) {
+  if (!cardId) return;
+  await postThreadField("/mode", { cardId, mode });
 }
 
-async function choosePath(path) {
-  const target = aimedThread();
-  if (!target) return;
-  await postThreadField("/thread/path", { cardId: target.id, path });
+async function choosePath(path, cardId) {
+  if (!cardId) return;
+  await postThreadField("/thread/path", { cardId, path });
 }
 
 async function postThreadField(route, body) {
@@ -5694,12 +5884,6 @@ async function postThreadField(route, body) {
     hintLine(`could not set it: ${error.message || error}`, true);
   }
 }
-
-modePick.addEventListener("click", () => void openPick("mode", modePick));
-pathPick.addEventListener("click", () => void openPick("path", pathPick));
-
-modelChip.addEventListener("click", () => void openPick("model"));
-thinkChip.addEventListener("click", () => void openPick("thinking"));
 
 // ---------- this board's settings ------------------------------------------
 const configBtn = document.getElementById("configBtn");
@@ -5931,7 +6115,7 @@ document.addEventListener(
   (event) => {
     // The prompt editor is opened from this panel and is part of it: a press inside it is not a press
     // outside the settings, which would otherwise shut the panel the editor was opened from.
-    if (event.target.closest("#runtimePick, #modelPick, #thinkPick, #modePick, #pathPick, #boardConfig, #configBtn, #promptEditor")) return;
+    if (event.target.closest("#runtimePick, .composer, #boardConfig, #configBtn, #promptEditor")) return;
     if (!runtimePick.hidden) closePick();
     if (!configPanel.hidden) shownConfig(false);
   },
@@ -5961,21 +6145,12 @@ document.getElementById("sess").addEventListener("click", () => {
   window.open(`/?token=${encodeURIComponent(token)}`, "pi-studio-crossroads");
 });
 
-// One button, two states: queue waits for the run in flight, steer interrupts it. The label is the
-// state the next message will use, and its tone says whether that is the interrupting one.
-modeToggle.addEventListener("click", () => {
-  sendMode = sendMode === "steer" ? "queue" : "steer";
-  paintComposer();
-});
-
-// Images pasted into the composer travel with the message, so a screenshot reaches the
-// agent without leaving the board for the terminal.
-const attachments = document.getElementById("attachments");
-const pendingImages = [];
-
-function drawAttachments() {
-  attachments.replaceChildren();
-  for (const [index, image] of pendingImages.entries()) {
+// Images pasted into a field travel with its message, so a screenshot reaches the agent without
+// leaving the board for the terminal.
+function drawAttachments(inst = activeComposer) {
+  if (!inst) return;
+  inst.shots.replaceChildren();
+  for (const [index, image] of inst.images.entries()) {
     const holder = el("div", "shot");
     const thumb = document.createElement("img");
     thumb.src = image.dataUrl;
@@ -5984,11 +6159,11 @@ function drawAttachments() {
     remove.textContent = "×";
     remove.title = "remove";
     remove.addEventListener("click", () => {
-      pendingImages.splice(index, 1);
-      drawAttachments();
+      inst.images.splice(index, 1);
+      drawAttachments(inst);
     });
     holder.append(thumb, remove);
-    attachments.appendChild(holder);
+    inst.shots.appendChild(holder);
   }
 }
 
@@ -6020,20 +6195,6 @@ function shrinkImage(dataUrl, mimeType) {
   });
 }
 
-msgBox.addEventListener("paste", (event) => {
-  const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
-  if (files.length === 0) return;
-  event.preventDefault();
-  for (const file of files.slice(0, 4)) {
-    const reader = new FileReader();
-    reader.addEventListener("load", async () => {
-      pendingImages.push(await shrinkImage(String(reader.result), file.type));
-      drawAttachments();
-    });
-    reader.readAsDataURL(file);
-  }
-});
-
 // ---------- file picker --------------------------------------------------
 // The agent works on paths, so the picker attaches paths: it lists a folder's names and never
 // pulls file contents through the browser. Picking starts at the session folder and walks
@@ -6046,9 +6207,11 @@ const pickHidden = document.getElementById("pickHidden");
 const pickUp = document.getElementById("pickUp");
 const pickCount = document.getElementById("pickCount");
 const pickError = document.getElementById("pickError");
-const pathChips = document.getElementById("pathChips");
-/** Picked paths survive navigation, so one message can name files from several folders. */
-const picked = new Map();
+/**
+ * The paths the open picker is attaching. They belong to the field it was opened from, and survive
+ * walking to another folder, so one message can name files from several places.
+ */
+const pickPaths = () => activeComposer?.picked ?? new Map();
 let pickerAt = "";
 let listed = [];
 let listedTotal = 0;
@@ -6068,9 +6231,11 @@ function shortenPath(path) {
   return home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
 }
 
-function drawChips() {
-  pathChips.replaceChildren();
-  for (const [path, meta] of picked) {
+function drawChips(inst = activeComposer) {
+  if (!inst) return;
+  const held = inst.picked;
+  inst.paths.replaceChildren();
+  for (const [path, meta] of held) {
     const chip = el("div", meta.dir ? "chip folder" : "chip");
     chip.title = path;
     const label = el("span", "");
@@ -6079,14 +6244,14 @@ function drawChips() {
     remove.textContent = "×";
     remove.title = "remove";
     remove.addEventListener("click", () => {
-      picked.delete(path);
-      drawChips();
+      held.delete(path);
+      drawChips(inst);
       drawList();
     });
     chip.append(label, remove);
-    pathChips.appendChild(chip);
+    inst.paths.appendChild(chip);
   }
-  const count = picked.size;
+  const count = held.size;
   pickCount.textContent = count === 0 ? "nothing picked" : count === 1 ? "1 path" : `${count} paths`;
 }
 
@@ -6098,8 +6263,9 @@ function drawList() {
     pickList.appendChild(hint);
     return;
   }
+  const held = pickPaths();
   for (const entry of listed) {
-    const isPicked = picked.has(entry.path);
+    const isPicked = held.has(entry.path);
     // A real button, so the list can be walked with the keyboard: Enter or Space is a pick.
     const row = el("button", `p-item${entry.dir ? " dir" : ""}${isPicked ? " on" : ""}`);
     row.type = "button";
@@ -6116,8 +6282,8 @@ function drawList() {
     // A button cannot hold another button, so the chevron is decoration the row listens for.
     row.addEventListener("click", (event) => {
       if (event.target.classList.contains("p-open")) return void browse(entry.path);
-      if (isPicked) picked.delete(entry.path);
-      else picked.set(entry.path, { dir: entry.dir });
+      if (isPicked) held.delete(entry.path);
+      else held.set(entry.path, { dir: entry.dir });
       drawList();
       drawChips();
     });
@@ -6147,7 +6313,8 @@ function markHighlight() {
 
 /** The list hangs off the composer's top edge, which is where the field is however the page moves. */
 function placePicker() {
-  const box = document.getElementById("composer").getBoundingClientRect();
+  // The list hangs off the field it was opened from, so a pick made in one card's field lands there.
+  const box = (activeComposer?.root ?? composerHome).getBoundingClientRect();
   const width = Math.min(430, window.innerWidth - 28);
   picker.style.width = `${width}px`;
   const left = Math.min(Math.max(14, box.left + 14), window.innerWidth - width - 14);
@@ -6208,20 +6375,19 @@ const closePicker = () => {
   browseSeq += 1;
   clearTimeout(filterTimer);
   // Picking files is rarely the end of the message, so a draft in hand takes the keyboard back.
-  if (inside && msgBox.value.trim()) msgBox.focus();
-  else if (inside) document.getElementById("pickFiles").focus();
+  const back = activeComposer;
+  if (!inside) return;
+  if (back && back.msg.value.trim()) back.msg.focus();
+  else if (back) back.filesBtn.focus();
 };
 
-document.getElementById("pickFiles").addEventListener("click", () => {
-  if (!picker.hidden) closePicker();
-  else void browse(pickerAt);
-});
 document.getElementById("pickDone").addEventListener("click", closePicker);
 document.getElementById("pickClose").addEventListener("click", closePicker);
 document.getElementById("pickHere").addEventListener("click", () => {
   if (!pickerAt) return;
-  if (picked.has(pickerAt)) picked.delete(pickerAt);
-  else picked.set(pickerAt, { dir: true });
+  const held = pickPaths();
+  if (held.has(pickerAt)) held.delete(pickerAt);
+  else held.set(pickerAt, { dir: true });
   drawList();
   drawChips();
 });
@@ -6291,7 +6457,7 @@ window.addEventListener("resize", () => {
 document.addEventListener(
   "pointerdown",
   (event) => {
-    if (picker.hidden || event.target.closest("#picker, #pickFiles, #pathChips")) return;
+    if (picker.hidden || event.target.closest("#picker, .composer")) return;
     closePicker();
   },
   true,
@@ -6299,32 +6465,37 @@ document.addEventListener(
 
 /** Paths travel as text, which the agent's own file tools read directly. */
 function pickedPathsText() {
-  const lines = [...picked].map(([path, meta]) => `${path}${meta.dir ? "/" : ""}`);
+  const lines = [...pickPaths()].map(([path, meta]) => `${path}${meta.dir ? "/" : ""}`);
   return `Files and folders:\n${lines.join("\n")}`;
 }
 
-async function sendMessage() {
+async function sendMessage(inst = activeComposer) {
+  if (!inst || inst.send.disabled) return;
   // Enter fires again while the first send is in flight; a second body would carry a new id,
   // slip past the server's duplicate guard and deliver the message twice.
-  if (sendBtn.disabled) return;
-  const draft = msgBox.value;
+  const draft = inst.msg.value;
   const typed = draft.trim();
-  if (!typed && pendingImages.length === 0 && picked.size === 0) return;
-  const text = picked.size === 0 ? typed : `${typed}${typed ? "\n\n" : ""}${pickedPathsText()}`;
+  if (!typed && inst.images.length === 0 && inst.picked.size === 0) return;
+  const text = inst.picked.size === 0 ? typed : `${typed}${typed ? "\n\n" : ""}${pickedPathsText()}`;
   // What this message carries, so a pick or a keystroke made while it travels is still there.
-  const sentPaths = [...picked.keys()];
-  const sentImages = [...pendingImages];
-  const sentTarget = replyTarget;
-  // A fork is answered in a card the board has not drawn yet, so the field has to move once it does.
-  const sentFork = Boolean(forkNext && replyTarget);
-  sendBtn.disabled = true;
+  const sentPaths = [...inst.picked.keys()];
+  const sentImages = [...inst.images];
+  const sentNamed = [...inst.named];
+  // A fork is the human's choice for this one send, and is asked on behalf of a card the message names:
+  // it is answered in a card the board has not drawn yet, so the caret follows the new card when it arrives.
+  const sentFork = inst.forkNext ? forkTarget(inst) : null;
+  const card = cardOf(inst);
+  inst.send.disabled = true;
   // Both attempts carry the same id, so a retry after a reset cannot deliver twice.
   const body = JSON.stringify({
     id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
-    cardId: replyTarget ? replyTarget.id : undefined,
-    fork: sentFork || undefined,
+    // A fork is asked about the card it is forked from; anything else answers the field's own thread.
+    cardId: sentFork ? sentFork.id : card?.id,
+    // The cards the message names travel beside the one it answers, so the agent is told about each.
+    refs: sentFork ? sentNamed.filter((id) => id !== sentFork.id) : sentNamed,
+    fork: Boolean(sentFork) || undefined,
     text,
-    mode: sendMode,
+    mode: inst.sendMode,
     images: sentImages.map((image) => ({ data: image.data, mimeType: image.mimeType })),
   });
   try {
@@ -6346,46 +6517,41 @@ async function sendMessage() {
     if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
     // Which thread answered: a fork is a new one, drawn as a card of its own, and the answer is read there.
     const made = sentFork ? await response.json().catch(() => null) : null;
-    if (msgBox.value === draft) msgBox.value = "";
-    // The draft that just left is spent, so the slot it came from starts empty next time.
-    drafts.delete(sentTarget ? sentTarget.id : "");
+    // Only what was sent leaves the field: a keystroke or a pick made while it travelled stays.
+    if (inst.msg.value === draft) inst.msg.value = "";
     for (const image of sentImages) {
-      const at = pendingImages.indexOf(image);
-      if (at >= 0) pendingImages.splice(at, 1);
+      const at = inst.images.indexOf(image);
+      if (at >= 0) inst.images.splice(at, 1);
     }
-    drawAttachments();
-    for (const path of sentPaths) picked.delete(path);
-    drawChips();
+    drawAttachments(inst);
+    for (const path of sentPaths) inst.picked.delete(path);
+    drawChips(inst);
+    // The cards the message named were for that message, and the thread now holds what they said.
+    inst.named = inst.named.filter((id) => !sentNamed.includes(id));
+    paintRefs(inst);
+    paintReferenceRings();
     closePicker();
-    // A thread is a conversation: the field stays in the card it just answered, so the next
-    // message does not need the card clicked again. Escape puts it away.
-    // A fork is one send's choice, so the next comment goes to the owner again.
-    forkNext = false;
+    // A fork is one send's choice, so the next comment goes to the thread of the card again.
+    inst.forkNext = false;
     if (made?.id) {
-      // A fork answers in its own card, so the field follows the answer instead of staying behind.
+      // A fork answers in its own card, so the caret follows the answer instead of staying behind.
       focusThread(made.id);
-    } else if (replyTarget === sentTarget && sentTarget && byId.has(sentTarget.id)) setReplyTarget(sentTarget);
-    else setReplyTarget(null);
-    // With no run in flight the message is being sent, not queued behind one.
-    composerHint.textContent = metaRunning !== true ? "sent" : sendMode === "steer" ? "steered" : "queued";
-    // The exchange is drawn on the card the message was about, which may be elsewhere on the board, so
-    // the footer says where it went. The composer's own hint is hidden while the field is docked.
-    if (sentTarget && made?.id) {
-      footNote(`a new thread answers ↳ ${sentTarget.titleEl.textContent || sentTarget.data.path || "that card"}`);
-    } else if (sentTarget && windowOf(sentTarget) !== sentTarget) {
-      footNote(`asked in this thread, about ↳ ${sentTarget.titleEl.textContent || sentTarget.data.path || "that card"}`);
     }
+    // With no run in flight the message is being sent, not queued behind one.
+    inst.hintEl.textContent = metaRunning !== true ? "sent" : inst.sendMode === "steer" ? "steered" : "queued";
+    // The footer says where the message went when that is not simply this card: a fork is answered in a
+    // new card, and a message about another card is worth naming.
+    if (sentFork && made?.id) footNote(`a new thread answers ↳ ${cardName(sentFork)}`);
+    else if (sentNamed.length === 1) footNote(`asked about ↳ ${cardName(byId.get(sentNamed[0]))}`);
   } catch (error) {
     const gone = error instanceof TypeError; // fetch rejects like this when nothing answers
-    composerHint.textContent = gone
+    inst.hintEl.textContent = gone
       ? "board connection lost — reload the page"
       : `failed: ${error.message || error}`;
   } finally {
-    sendBtn.disabled = false;
+    inst.send.disabled = false;
   }
 }
-
-sendBtn.addEventListener("click", () => void sendMessage());
 
 // ---------- threads -------------------------------------------------------
 // A thread is a card with an agent behind it. The server creates it, and it arrives on the
@@ -6403,8 +6569,9 @@ function focusThread(id) {
       return;
     }
     centerOn(entry);
-    setReplyTarget(entry);
-    msgBox.focus();
+    // A new thread arrives with an empty field at its foot, so the caret goes there and the first
+    // message is one keystroke away.
+    focusComposer(composerOf(entry));
   };
   wait();
 }
@@ -6448,34 +6615,6 @@ stopBtn.addEventListener("click", async () => {
     stopBtn.textContent = "stop";
   }
 });
-const composer = document.getElementById("composer");
-const composerHome = composer.parentElement;
-let composerAt = composer.nextElementSibling;
-
-/**
- * The composer is a view of one piece of state, so it moves rather than being copied: while a
- * card is the reply target the field sits at the bottom of that card, and `esc` puts it back.
- */
-function dockComposer(entry) {
-  // The field is about to move, so a list hanging off it is closed rather than left behind.
-  closePicker();
-  if (entry) {
-    // A folded card has no room for a field, so replying unfolds it.
-    if (entry.card.classList.contains("mini")) setMini(entry.card, false);
-    composer.classList.add("docked");
-    // Already docked here: moving the field would detach it between a press and its release, and
-    // the click on the button that was pressed — send, a chip, a picker — would never arrive.
-    if (composer.parentElement !== entry.card) {
-      entry.card.insertBefore(composer, entry.card.querySelector(".resize"));
-    }
-    return;
-  }
-  if (composer.parentElement !== composerHome) {
-    composer.classList.remove("docked");
-    composerHome.insertBefore(composer, composerAt);
-  }
-}
-
 // The selection is a reading position, so Escape gives it up: the board stops dimming and the wheel
 // goes back to moving the board. A panel or an editor takes Escape first and stops it there.
 document.addEventListener("keydown", (event) => {
@@ -6484,8 +6623,8 @@ document.addEventListener("keydown", (event) => {
   selectCard(null);
 });
 
-// `r` opens a thread on the card you last clicked and `q` closes it. The composer keeps its
-// own keys, so a message being typed is never cut short.
+// `r` names the card you last clicked in a field and `q` closes it. A field keeps its own keys, so a
+// message being typed is never cut short.
 document.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
   if ((key !== "r" && key !== "q") || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -6512,7 +6651,7 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   event.preventDefault();
-  setReplyTarget(record);
+  replyToCard(record);
 });
 
 // `ctrl+z` is the undo a close needs: the daemon holds the last cards a close removed, so one key puts
@@ -6569,18 +6708,6 @@ document.addEventListener("keydown", (event) => {
     if (!document.body.classList.contains("threads") || document.querySelector(".card.active")) return;
     event.preventDefault();
     void startThread();
-  }
-});
-
-msgBox.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && replyTarget) {
-    event.preventDefault();
-    setReplyTarget(null);
-    return;
-  }
-  if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    void sendMessage();
   }
 });
 
@@ -6838,9 +6965,8 @@ function connect() {
     } else if (payload.type === "snapshot") {
       applyMeta(payload.meta);
       applyGit(payload.git);
-      // A reconnect replays what is already on the board, and the draft survives it. The thread
-      // the draft is aimed at has to survive too, or a reply loses its card mid-conversation.
-      const keptTarget = replyTarget ? replyTarget.id : null;
+      // A reconnect replays what is already on the board, and a draft survives it: every field puts its
+      // words aside under its card before the cards go, and the rebuilt card picks them up again.
       clearBoard();
       replaying = true;
       // A card that throws mid-replay must not leave the flag set: the tab would then never
@@ -6854,7 +6980,6 @@ function connect() {
       }
       // A snapshot is the whole board, so a draft whose card is not in it has nowhere to go.
       for (const id of [...drafts.keys()]) if (id && !byId.has(id)) drafts.delete(id);
-      if (keptTarget && byId.has(keptTarget)) setReplyTarget(byId.get(keptTarget));
       // Every thread comes back in the order the human chose, not the order the server lists.
       applyAllThreadOrder();
       sawFirstCard = (payload.cards || []).length > 0;
