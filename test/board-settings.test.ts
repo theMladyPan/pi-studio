@@ -1,41 +1,47 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { boardSettingsDocument } from "../server/board-settings.ts";
+import { settingsDocument } from "../server/settings-document.ts";
 import { PATH_NAMES, PROMPT_FOLDERS, promptFiles } from "../server/child/modes.ts";
 import { CARD_AUDIENCE, CARD_LEVELS, CARD_VERBOSITY } from "../server/card-settings.ts";
 import { CHILD_INTEGRATION } from "../server/integration.ts";
 import { THINKING_LEVELS } from "../server/models.ts";
 
 /**
- * The board's settings document is a view of `board.config`, so it is read here from a board built by
- * hand: no daemon, no state folder, no child. The prompt leaves are the one thing read off the disk,
- * because a prompt file that exists is a leaf the panel has to offer, and counting them from
- * `promptFiles()` keeps this test from knowing how many there are.
+ * The board's settings document is a view of what `activeConfig(board)` answers, so it is read here from
+ * that shape of object: no daemon, no state folder, no child. The prompt leaves are the one thing read
+ * off the disk, because a prompt file that exists is a leaf the panel has to offer, and counting them
+ * from `promptFiles()` keeps this test from knowing how many there are.
  */
 
 /** The model this board answers with: the id holds a slash of its own, which is what `split` is about. */
 const CHOSEN = { provider: "klotilda", model: "deepseek-ai/DeepSeek-V4.1-Flash-1017" };
 
-/** A board somebody has set up already: the choices this test asserts, and the rest at their defaults. */
-const board = {
-	id: "ws-9cf6338b",
-	name: "pi-studio",
-	folder: "/home/stanke/projekty/pi-studio",
-	config: {
-		...CHOSEN,
-		thinking: "high",
-		path: "simple",
-		dimOthers: false,
-		toolsOff: ["bash"],
-		extensionsOff: [],
-		// Two of the six card settings changed, so a default leaking into every leaf would show.
-		cardsVerbosity: "verbose",
-		showCharts: "many",
-	},
+/** What `activeConfig` says about a board somebody has set up already, with the rest at their defaults. */
+const config = {
+	...CHOSEN,
+	thinking: "high",
+	path: "simple",
+	childIntegration: "merge",
+	dimOthers: false,
+	toolsOff: ["bash"],
+	extensionsOff: [],
+	// Two of the six card settings changed, so a default leaking into every leaf would show.
+	cardsVerbosity: "verbose",
+	cardsAudience: "programmer",
+	showCodeFragments: "some",
+	showMathFormulas: "some",
+	showCharts: "many",
+	showReferences: "some",
 };
 
-const document = boardSettingsDocument(board);
+const document = settingsDocument({
+	scope: "board",
+	values: config,
+	title: "this board",
+	subtitle: "pi-studio · /home/stanke/projekty/pi-studio",
+	foot: "new threads only · a run in flight is untouched",
+});
 
 /** Every leaf of the tree, at any depth, which is how the panel finds the controls it draws. */
 function leavesOf(groups: any[]): any[] {
@@ -55,6 +61,7 @@ const byId = Object.fromEntries(leavesOf(document.groups).map((field) => [field.
 
 test("the document is five groups in the order the panel draws them", () => {
 	assert.equal(document.version, 1);
+	assert.equal(document.scope, "board");
 	assert.equal(document.title, "this board");
 	// A subtitle saying which board this is, so a tab on two of them can tell them apart.
 	assert.equal(document.subtitle, "pi-studio · /home/stanke/projekty/pi-studio");
@@ -106,6 +113,9 @@ test("the tree holds thirteen setting leaves and each one is a control a human c
 		settingLeaves.map((field) => field.type),
 		["combo", "select", "select", "select", "list", "list", "select", "select", "select", "select", "select", "select", "toggle"],
 	);
+	// A setting a later build dropped is not quietly back, and neither is a group nobody draws.
+	const whole = JSON.stringify(document);
+	for (const gone of ["timeoutSeconds", "per-board-overrides"]) assert.ok(!whole.includes(gone), `${gone} is back`);
 });
 
 test("every setting names its picker and the route a change goes back through", () => {
@@ -115,7 +125,9 @@ test("every setting names its picker and the route a change goes back through", 
 		// A toggle is flipped where it stands, so it names no picker; everything else opens a list.
 		if (field.type === "toggle") continue;
 		assert.ok(
-			["model", "thinking", "path", "childIntegration", "tools", "verbosity", "audience", "code", "math", "charts", "refs"].includes(field.pick),
+			["model", "thinking", "path", "childIntegration", "tools", "verbosity", "audience", "code", "math", "charts", "refs"].includes(
+				field.pick,
+			),
 			`${field.id} opens no picker`,
 		);
 	}
@@ -123,6 +135,9 @@ test("every setting names its picker and the route a change goes back through", 
 	assert.equal(byId.toolsOff.source, "/tools");
 	assert.equal(byId.extensionsOff.source, "/tools");
 	assert.equal(byId.model.source, "/models");
+	// `dim others` sits under the canvas, because the canvas is where it is drawn.
+	const canvas = document.groups.find((group) => group.id === "canvas");
+	assert.deepEqual((canvas?.fields ?? []).map((field) => field.id), ["dimOthers"]);
 });
 
 test("a one-key body carries the control's value, and the model leaf splits at the first slash", () => {
@@ -133,6 +148,8 @@ test("a one-key body carries the control's value, and the model leaf splits at t
 	assert.equal(head, "klotilda");
 	assert.equal(rest.join("/"), "deepseek-ai/DeepSeek-V4.1-Flash-1017");
 	assert.deepEqual(byId.model.write.body, { provider: "@head", model: "@rest" });
+	// A board's `/thinking` reads `level`, which is the key its own route takes.
+	assert.deepEqual(byId.thinking.write.body, { level: "@value" });
 	for (const field of settingLeaves) {
 		const keys = Object.keys(field.write.body);
 		if (keys.length !== 1) continue;
@@ -145,7 +162,7 @@ test("a one-key body carries the control's value, and the model leaf splits at t
 	);
 });
 
-test("the prompts group is one subgroup per folder, one leaf per file, and no route", () => {
+test("the prompts group is one subgroup per folder, one leaf per file, each posting to /prompt", () => {
 	const prompts = document.groups.find((group) => group.id === "prompts");
 	assert.ok(prompts);
 	assert.deepEqual(
@@ -157,14 +174,14 @@ test("the prompts group is one subgroup per folder, one leaf per file, and no ro
 		assert.ok((folder.fields ?? []).length > 0, `no prompt leaf in prompts/${folder.id}`);
 		for (const leaf of folder.fields ?? []) {
 			assert.equal(leaf.type, "prompt");
-			// The prompt editor writes a file, so a leaf carries the path and no body template.
-			assert.equal(leaf.write, undefined, `${leaf.id} has a write`);
-			assert.equal(leaf.pick, undefined, `${leaf.id} opens a picker`);
+			// A prompt is a file, so the leaf names it and the editor writes it; it carries no value.
 			assert.equal(leaf.value, "");
+			assert.equal(leaf.pick, undefined, `${leaf.id} opens a picker`);
 			const name = `${folder.id}/${leaf.id.slice(`prompt-${folder.id}-`.length)}.md`;
 			assert.equal(leaf.file, name);
 			assert.equal(leaf.label, leaf.file.slice(folder.id.length + 1));
 			assert.ok(typeof leaf.help === "string" && leaf.help.length > 0, `${leaf.id} has no help`);
+			assert.deepEqual(leaf.write, { route: "/prompt", body: { name, text: "@value" } });
 			seen.push(leaf.file);
 		}
 	}
@@ -203,6 +220,20 @@ test("every leaf carries a value, and the board's own choices are the ones the p
 	// The label is the UI text a human reads, and the id is what a write sends.
 	assert.deepEqual(
 		settingLeaves.map((field) => field.label),
-		["model", "thinking", "boss flow", "a child's work comes back by", "built-in", "extensions", "how often", "written for", "code", "math", "charts", "references", "dim others"],
+		[
+			"model",
+			"thinking",
+			"boss flow",
+			"a child's work comes back by",
+			"built-in",
+			"extensions",
+			"how often",
+			"written for",
+			"code",
+			"math",
+			"charts",
+			"references",
+			"dim others",
+		],
 	);
 });
