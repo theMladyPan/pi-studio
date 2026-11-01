@@ -102,6 +102,11 @@ export function plainCardFor(card, board = null) {
 	if (card.key) shown.key = card.key;
 	if (card.rect) shown.rect = card.rect;
 	if (card.mini) shown.mini = true;
+	// What this card builds on, the form it was asked for, and whether the human keeps it in sight: the
+	// client draws one arrow per predecessor and the shape the size names.
+	if (Array.isArray(card.after) && card.after.length) shown.after = card.after;
+	if (typeof card.size === "string") shown.size = card.size;
+	if (card.pinned) shown.pinned = true;
 	if (card.threadRoot) shown.threadRoot = card.threadRoot;
 	if (card.ownerThread) shown.ownerThread = card.ownerThread;
 	// The card carries the runtime of whoever answers it, so the composer's pickers can name and change

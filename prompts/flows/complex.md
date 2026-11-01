@@ -10,10 +10,11 @@ Work that is too big for one plan, or too risky for one reviewer.
 5. `chore` — the isolated tests for the slices that changed.
 6. `chore` — the full suite.
 7. `chore` — the end-to-end tests, the ones that would notice the slices disagreeing with each other.
-8. `review` and `chore` in parallel: the review reads the plan and the slices, the chore runs the static
-   checks the project has. Both report before anything is repaired.
+8. `review` and `chore` in parallel: the review reads the plan and the assembled branch, the trunk
+   against your own, every slice applied, and the chore runs the static checks the project has. Both
+   report before anything is repaired.
 9. `implement` — one targeted repair carrying every blocker from both reports, quoted.
-10. `review` again on the repair alone, not on the whole change.
+10. `review` again on the assembled branch carrying the repair, not on the slice that was fixed.
 11. Final verify: the checks that failed, run once more. Then done, or a named blocker.
 
 Every gate that refuses to go green sends the work back to the step that broke it, once. The second

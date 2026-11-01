@@ -210,6 +210,56 @@ test("a board's card settings are written by /config and read back out of it", a
 	}
 });
 
+test("how a child's work comes back is a default a new board is born with", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-integration-"));
+	const daemon = await boot(folder);
+	try {
+		const saved = await post(daemon, "/defaults", { childIntegration: "cherry-pick" });
+		assert.equal(saved.status, 200, saved.body.slice(0, 200));
+		const answered = JSON.parse(saved.body).defaults;
+		assert.equal(answered.childIntegration, "cherry-pick");
+
+		// Written where the daemon reloads its defaults from, so the next board on this folder inherits it.
+		const written = JSON.parse(readFileSync(join(folder, "workspaces.json"), "utf8"));
+		assert.equal(written.defaults.childIntegration, "cherry-pick");
+
+		const refused = await post(daemon, "/defaults", { childIntegration: "squash" });
+		assert.equal(refused.status, 400);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a board's integration setting is written by /config and read back out of it", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-integration-config-"));
+	const work = mkdtempSync(join(tmpdir(), "pi-studio-routes-integration-config-work-"));
+	const daemon = await boot(folder);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder: work })).body).board;
+		// A board that has never been configured merges, which is what the boss is told to do.
+		const fresh = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body).meta.config;
+		assert.equal(fresh.childIntegration, "merge");
+
+		const saved = await postTo(daemon, board.id, "/config", { childIntegration: "rebase", dimOthers: false });
+		assert.equal(saved.status, 200, saved.body.slice(0, 200));
+		const after = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body).meta.config;
+		assert.equal(after.childIntegration, "rebase");
+
+		// A body carries one switch and never has to repeat the rest.
+		assert.equal((await postTo(daemon, board.id, "/config", { childIntegration: "merge" })).status, 200);
+		const partial = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body).meta.config;
+		assert.equal(partial.childIntegration, "merge");
+		assert.equal(partial.dimOthers, false, "a switch nobody touched changed with the one that was");
+
+		assert.equal((await postTo(daemon, board.id, "/config", { childIntegration: "squash" })).status, 400);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+		rmSync(work, { recursive: true, force: true });
+	}
+});
+
 test("a route without the token is refused, and the page is not", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-"));
 	const daemon = await boot(folder);
@@ -401,7 +451,14 @@ test("a closed note comes back on /undo, with its id and its key", async () => {
 	try {
 		const opened = await post(daemon, "/workspace", { folder });
 		const board = JSON.parse(opened.body).board;
-		const made = await postTo(daemon, board.id, "/card/note", { key: "kept", title: "a note", markdown: "as written" });
+		const base = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "base", markdown: "what it builds on" })).body).cardId;
+		const made = await postTo(daemon, board.id, "/card/note", {
+			key: "kept",
+			title: "a note",
+			markdown: "as written",
+			size: "wide",
+			after: ["base"],
+		});
 		assert.equal(made.status, 200);
 		const id = JSON.parse(made.body).cardId;
 
@@ -418,11 +475,81 @@ test("a closed note comes back on /undo, with its id and its key", async () => {
 		// The key is what a `[[key]]` resolves to, so a card back with a different one is a dead link.
 		assert.equal(restored.key, "kept");
 		assert.equal(restored.markdown, "as written");
+		// The shape and the arrows are part of the card: a note back in a different shape or with its
+		// predecessors gone is a card the human has to put together again.
+		assert.equal(restored.size, "wide");
+		assert.deepEqual(restored.after, [base]);
 
 		// Nothing else was closed, so the second press has nothing to give and says so.
 		const empty = await postTo(daemon, board.id, "/undo", {});
 		assert.equal(empty.status, 409);
 		assert.equal(empty.body, "nothing to undo");
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a pinned card makes room by evicting the second-oldest note", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-pinned-"));
+	const daemon = await boot(folder);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const kept = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "pinned", markdown: "the one the human keeps" })).body).cardId;
+		// Eviction is by age, and two cards made in one breath would tie on `at`.
+		await new Promise((done) => setTimeout(done, 5));
+		const second = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "second", markdown: "the oldest unpinned" })).body).cardId;
+		for (let made = 2; made < 200; made++) {
+			const filler = await postTo(daemon, board.id, "/card/note", { key: `filler-${made}`, markdown: "filler" });
+			assert.equal(filler.status, 200);
+		}
+		// The oldest card is pinned, so a new card has to take the one after it instead.
+		const pin = await postTo(daemon, board.id, "/layout", { cardId: kept, rect: { x: 0, y: 0, w: 300, h: 200 }, pinned: true });
+		assert.equal(pin.status, 200);
+		assert.equal((await postTo(daemon, board.id, "/card/note", { key: "newest", markdown: "the newcomer" })).status, 200);
+
+		const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		const cards = state.cards as any[];
+		const pinned = cards.find((card) => card.id === kept);
+		assert.ok(pinned, "the pinned card was evicted");
+		assert.equal(pinned.pinned, true);
+		assert.equal(cards.some((card) => card.id === second), false, "the second-oldest card was not the one evicted");
+		assert.equal(cards.length, 200);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a note whose chart fence is not JSON answers with a report naming the fault", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-note-report-"));
+	const daemon = await boot(folder);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		// Bare keys are the failure a chart fence makes most: the model writes JavaScript, not JSON.
+		const markdown = ["the shape of it", "```chart", '{ type: "bar", data: { labels: ["a"] } }', "```"].join("\n");
+		const made = await postTo(daemon, board.id, "/card/note", { key: "a-chart", markdown });
+		assert.equal(made.status, 200);
+		// The model cannot see the card, so a fence it cannot read has to be said back to it.
+		const report = JSON.parse(made.body).report;
+		assert.equal(typeof report, "string", `a chart the board cannot read went unreported, got ${made.body.slice(0, 200)}`);
+		assert.match(report, /not JSON/);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a note with no chart carries no report on the wire", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-note-quiet-"));
+	const daemon = await boot(folder);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const made = await postTo(daemon, board.id, "/card/note", { key: "plain", markdown: "# a heading\n\nand a sentence about it." });
+		assert.equal(made.status, 200);
+		// Nothing to say about a card the board draws as written, so the key is not there at all.
+		const answered = JSON.parse(made.body);
+		assert.equal(Object.hasOwn(answered, "report"), false, `a note with no chart has nothing to report, got ${JSON.stringify(answered)}`);
 	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });
@@ -641,6 +768,80 @@ test("a thread's own token reaches /card/ask over http and is refused the human'
 		const reply = await held;
 		assert.equal(reply.status, 200);
 		assert.equal(JSON.parse(reply.body).answer, "right");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a thread closes a spent card, and a pin stops it", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-thread-close-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-thread-close-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		// A message is what starts the child, and the child is what a token is minted for.
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" })).status, 200);
+		const child = await childEnvOf(daemon, stub.envFile);
+		const spent = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "spent", markdown: "done with", threadRoot: threadId })).body).cardId;
+		const kept = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "kept", markdown: "in sight", threadRoot: threadId })).body).cardId;
+		const pin = await postTo(daemon, board.id, "/layout", { cardId: kept, rect: { x: 0, y: 0, w: 300, h: 200 }, pinned: true });
+		assert.equal(pin.status, 200);
+
+		// A spent card is the thread's to tidy, and the key it read off its own board is enough to name it.
+		const closed = await postAs(daemon, child.token, board.id, "/close", { cardId: "spent" });
+		assert.equal(closed.status, 200);
+		assert.equal(JSON.parse(closed.body).closed, spent);
+
+		// A pin is the human's, so the same caller is refused the card they keep in sight.
+		const refused = await postAs(daemon, child.token, board.id, "/close", { cardId: kept });
+		assert.equal(refused.status, 409);
+		assert.equal(refused.body, "that card is pinned");
+
+		// The person who pinned it closes it as before: the pin protects the card from a thread alone.
+		assert.equal((await postTo(daemon, board.id, "/close", { cardId: kept })).status, 200);
+
+		// The card a thread answers on is the one card it may not close: the close would run `closeThread`
+		// on the caller itself, and the SIGKILL would land before the answer did.
+		const self = await postAs(daemon, child.token, board.id, "/close", { cardId: threadId });
+		assert.equal(self.status, 409);
+		assert.equal(self.body, "a thread cannot close its own card");
+
+		// A card that belongs to no thread is the human's, and an agent does not tidy the board for them.
+		const loose = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "loose", markdown: "the human's own" })).body).cardId;
+		const unowned = await postAs(daemon, child.token, board.id, "/close", { cardId: loose });
+		assert.equal(unowned.status, 409);
+		assert.equal(unowned.body, "a thread closes only the cards it wrote");
+
+		// Another thread's card is that thread's, so the same caller is refused it by id and by key.
+		const otherThread = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "someone else" })).body).threadId;
+		const theirs = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "theirs", markdown: "not yours", threadRoot: otherThread })).body).cardId;
+		const notMine = await postAs(daemon, child.token, board.id, "/close", { cardId: theirs });
+		assert.equal(notMine.status, 409);
+		assert.equal(notMine.body, "a thread closes only the cards it wrote");
+
+		// A child a thread spawned is a row that thread retires when it is done: closing it is the one thread
+		// card a caller may close, and the rest of the board stays where it is.
+		const spawnedThread = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "a child", parentThread: threadId })).body).threadId;
+		assert.equal((await postAs(daemon, child.token, board.id, "/close", { cardId: spawnedThread })).status, 200);
+
+		// Another root thread was not spawned by this one, so its card is refused like any other stranger's.
+		const stranger = await postAs(daemon, child.token, board.id, "/close", { cardId: otherThread });
+		assert.equal(stranger.status, 409);
+		assert.equal(stranger.body, "a thread closes only a thread it spawned");
+
+		// Two threads hold a card keyed `plan`, and the key resolves to the caller's own: a board-wide match
+		// would hand back whichever card was inserted first, which is how one thread closed another's.
+		writeFileSync(join(folder, "plan.ts"), "export const plan = 1;\n");
+		const theirPlan = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "plan", markdown: "their plan", threadRoot: otherThread })).body).cardId;
+		const myPlan = JSON.parse((await postTo(daemon, board.id, "/card/source", { path: "plan.ts", key: "plan", threadRoot: threadId })).body).cardId;
+		const plan = await postAs(daemon, child.token, board.id, "/close", { cardId: "plan" });
+		assert.equal(plan.status, 200);
+		assert.equal(JSON.parse(plan.body).closed, myPlan, "the key resolved to another thread's card");
+		const after = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		assert.ok(after.cards.some((card: any) => card.id === theirPlan), "the other thread's plan was closed");
 	} finally {
 		daemon.child.kill();
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });

@@ -292,6 +292,10 @@
   .note-body .svg-wrap { margin: 8px 0; background: #0d1117; border: 1px solid var(--border);
     border-radius: 6px; padding: 8px; }
   .note-body .svg-wrap svg { max-width: 100%; height: auto; display: block; }
+  /* A chart is drawn at the card's own width, so it shrinks to that width instead of keeping a size
+     the reader would have to scroll to; a chart wider than the card still scrolls sideways. */
+  .note-body .chart-wrap { overflow-x: auto; }
+  .note-body .chart-wrap img { max-width: 100%; height: auto; display: block; }
   /* A mermaid diagram arrives at the width its layout needs, so a wide graph keeps its text size
      and scrolls sideways rather than shrinking to nothing inside a narrow card. */
   .note-body .diagram-wrap { overflow-x: auto; }
@@ -309,6 +313,16 @@
   .card .edit, .card .copy-id { border: 0; background: transparent; color: var(--muted); font-size: 14px;
     line-height: 1; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
   .card .edit:hover, .card .copy-id:hover { background: #21262d; color: var(--text); }
+  /* A pin is the human's: the card is kept when the board has to make room, and no thread may close it.
+     The glyph is drawn rather than typed so the pinned state can colour it amber, and it stays an
+     outline until the card is pinned. */
+  .card .pin { border: 0; background: transparent; color: var(--muted); cursor: pointer;
+    padding: 2px 4px; border-radius: 4px; display: flex; align-items: center; }
+  .card .pin:hover { background: #21262d; color: var(--text); }
+  .card .pin.on { color: var(--amber); background: rgba(210,153,34,.12); }
+  .card .pin svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
+    stroke-width: 1.2; stroke-linejoin: round; }
+  .card .pin.on svg { fill: currentColor; }
   /* A floor, because a textarea has no height of its own: without one the card would collapse to its
      minimum and the editor be a slit. */
   .note-edit { width: 100%; height: 100%; min-height: 200px; resize: none; border: 0; outline: none;
@@ -979,6 +993,7 @@
   <button type="button" class="cfg-row" id="cfgThinking"><span>default thinking</span><b id="cfgThinkingValue"></b></button>
   <button type="button" class="cfg-row" id="cfgTools"><span>tools in a new thread</span><b id="cfgToolsValue"></b></button>
   <button type="button" class="cfg-row" id="cfgPath"><span>flow for a new boss</span><b id="cfgPathValue">auto</b></button>
+  <button type="button" class="cfg-row" id="cfgChildIntegration"><span>a child's work comes back by</span><b id="cfgChildIntegrationValue">merge</b></button>
   <button type="button" class="cfg-row" id="cfgPrompts"><span>prompts</span><b id="cfgPromptsValue">roles · modes · flows</b></button>
   <p class="cfg-head">cards</p>
   <button type="button" class="cfg-row" id="cfgVerbosity"><span>how often</span><b id="cfgVerbosityValue">normal</b></button>
