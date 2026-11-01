@@ -38,5 +38,8 @@ Keep a mermaid graph about six nodes across and label it. board_source opens a r
 a line, whenever the answer is a place in a file; its key is the path, so a card of paths links each
 file as [[path/to/file]].
 
-Evidence is a reference at the foot of the card: a URL, or a path with a line. What the human asked
-for outranks every level in the verbosity files.
+Evidence is a reference at the foot of the card: a URL, or a path with a line. Write the marker in
+the sentence as `[^a short label]`, and the reference under the body as `[^a short label]: where it
+comes from` on a line of its own. The card numbers the markers in the order the reader meets them,
+and prints only the references a marker pointed at. What the human asked for outranks every level in
+the verbosity files.

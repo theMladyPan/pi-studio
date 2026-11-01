@@ -391,19 +391,36 @@ function highlight(raw) {
 }
 
 // ---------- markdown -----------------------------------------------------
-function inlineMd(text) {
+/**
+ * The footnote state of one body: the notes its definitions carried, and the labels a marker has
+ * pointed at, in the order the reader meets them. Numbering lives here rather than in the text, so a
+ * marker can be written as `[^why]` and still read as `1`.
+ */
+function footnoteState(defs) {
+  return { defs, order: [] };
+}
+
+function inlineMd(text, notes = null) {
   let out = escapeHtml(text);
   // Cross-references jump to another card, but a key inside inline code stays literal.
   out = out
     .split(/(`[^`]+`)/)
-    .map((piece) =>
-      piece.startsWith("`")
-        ? piece
-        : piece.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, key, label) => {
-            const name = key.trim();
-            return `<a class="xref" href="#" data-key="${name}" title="jump to ${name}">${(label || name).trim()}</a>`;
-          }),
-    )
+    .map((piece) => {
+      if (piece.startsWith("`")) return piece;
+      const linked = piece.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, key, label) => {
+        const name = key.trim();
+        return `<a class="xref" href="#" data-key="${name}" title="jump to ${name}">${(label || name).trim()}</a>`;
+      });
+      // A marker is numbered by the order it is met, so the same note referred to twice keeps one
+      // number. A label with no definition stays as written: a typo reads better than a lost marker.
+      if (!notes) return linked;
+      return linked.replace(/\[\^([^\]\s]+)\]/g, (whole, label) => {
+        if (!notes.defs.has(label)) return whole;
+        let index = notes.order.indexOf(label);
+        if (index < 0) index = notes.order.push(label) - 1;
+        return `<sup class="fn">${index + 1}</sup>`;
+      });
+    })
     .join("");
   out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
@@ -819,7 +836,7 @@ function tableCells(line) {
     .map((cell) => cell.trim());
 }
 
-function renderTable(headerLine, ruleLine, bodyLines) {
+function renderTable(headerLine, ruleLine, bodyLines, notes = null) {
   const wrap = el("div", "table-wrap");
   const table = el("table");
   const align = tableCells(ruleLine).map((spec) =>
@@ -829,7 +846,7 @@ function renderTable(headerLine, ruleLine, bodyLines) {
   const headRow = el("tr");
   tableCells(headerLine).forEach((cell, column) => {
     const th = el("th");
-    th.innerHTML = inlineMd(cell);
+    th.innerHTML = inlineMd(cell, notes);
     if (align[column]) th.style.textAlign = align[column];
     headRow.appendChild(th);
   });
@@ -842,7 +859,7 @@ function renderTable(headerLine, ruleLine, bodyLines) {
     const width = Math.max(cells.length, headRow.childElementCount);
     for (let column = 0; column < width; column += 1) {
       const td = el("td");
-      td.innerHTML = inlineMd(cells[column] ?? "");
+      td.innerHTML = inlineMd(cells[column] ?? "", notes);
       if (align[column]) td.style.textAlign = align[column];
       row.appendChild(td);
     }
@@ -866,7 +883,27 @@ function renderMarkdown(markdown) {
 
   // A fence may follow text on the next single newline, so give every marker its own block.
   const spaced = stripped.replace(/(\u0000FENCE\d+\u0000)/g, "\n\n$1\n\n");
-  for (const block of spaced.split(/\n{2,}/)) {
+  // Footnotes: a definition is `[^label]: text` at the start of a line, and the lines indented under
+  // it belong to it. Definitions are lifted out of the body before any block is drawn, so the notes
+  // end up at the foot of the card and the body only carries the markers.
+  const notes = footnoteState(new Map());
+  const body = [];
+  let openNote = null;
+  for (const line of spaced.split("\n")) {
+    const definition = line.match(/^\[\^([^\]\s]+)\]:[ \t]*(.*)$/);
+    if (definition) {
+      openNote = { text: definition[2] };
+      notes.defs.set(definition[1], openNote);
+      continue;
+    }
+    if (openNote && /^(?: {2,}|\t)\S/.test(line)) {
+      openNote.text += ` ${line.trim()}`;
+      continue;
+    }
+    openNote = null;
+    body.push(line);
+  }
+  for (const block of body.join("\n").split(/\n{2,}/)) {
     const fenceTag = block.match(/^\u0000FENCE(\d+)\u0000$/);
     if (fenceTag) {
       const { lang, body } = fences[Number(fenceTag[1])];
@@ -894,7 +931,7 @@ function renderMarkdown(markdown) {
     // Lines are walked one by one, so a list can be followed by a paragraph with no blank
     // line between them, which is what typing under a list produces.
     const lines = block.split("\n");
-    let ul = null;
+    let list = null;
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
       // A table is a header row, a separator row, then body rows until something else.
@@ -909,33 +946,38 @@ function renderMarkdown(markdown) {
         const rows = [];
         let cursor = index + 2;
         while (cursor < lines.length && /\|/.test(lines[cursor])) rows.push(lines[cursor++]);
-        holder.appendChild(renderTable(line, lines[index + 1], rows));
-        ul = null;
+        holder.appendChild(renderTable(line, lines[index + 1], rows, notes));
+        list = null;
         index = cursor - 1;
         continue;
       }
       const item = line.match(/^\s*[-*+]\s+(.*)$/);
-      if (item) {
-        if (!ul) {
-          ul = el("ul");
-          holder.appendChild(ul);
+      // A number and a dot (or a bracket) is an ordered item. The number the reader types is the one
+      // the list starts at, so a card can continue a count the body began in prose.
+      const numbered = item ? null : line.match(/^\s*(\d{1,3})[.)]\s+(.*)$/);
+      if (item || numbered) {
+        const tag = item ? "ul" : "ol";
+        if (!list || list.tagName.toLowerCase() !== tag) {
+          list = el(tag);
+          if (numbered && numbered[1] !== "1") list.start = Number(numbered[1]);
+          holder.appendChild(list);
         }
         const li = el("li");
-        const box = item[1].match(/^\[([ xX])\]\s*(.*)$/);
+        const box = item ? item[1].match(/^\[([ xX])\]\s*(.*)$/) : null;
         li.innerHTML = box
-          ? `<span class="tick" title="tick it">${box[1].trim() ? "☑" : "☐"}</span> ${inlineMd(box[2])}`
-          : inlineMd(item[1]);
+          ? `<span class="tick" title="tick it">${box[1].trim() ? "☑" : "☐"}</span> ${inlineMd(box[2], notes)}`
+          : inlineMd(item ? item[1] : numbered[2], notes);
         if (box) li.dataset.tick = String(tickIndex++);
-        ul.appendChild(li);
+        list.appendChild(li);
         continue;
       }
-      ul = null;
+      list = null;
       if (!line.trim()) continue;
       const heading = line.match(/^(#{1,6})\s+(.*)$/);
       if (heading) {
         // The level is kept up to h3: a deeper heading is as small as a card can show it.
         const h = el(`h${Math.min(heading[1].length, 3)}`);
-        h.innerHTML = inlineMd(heading[2]);
+        h.innerHTML = inlineMd(heading[2], notes);
         holder.appendChild(h);
         continue;
       }
@@ -959,7 +1001,7 @@ function renderMarkdown(markdown) {
         const flush = () => {
           if (!para.length) return;
           const p = el("p");
-          p.innerHTML = inlineMd(para.join(" "));
+          p.innerHTML = inlineMd(para.join(" "), notes);
           quote.appendChild(p);
           para.length = 0;
         };
@@ -969,14 +1011,26 @@ function renderMarkdown(markdown) {
         }
         flush();
         holder.appendChild(quote);
-        ul = null;
+        list = null;
         index = cursor - 1;
         continue;
       }
       const p = el("p");
-      p.innerHTML = inlineMd(line);
+      p.innerHTML = inlineMd(line, notes);
       holder.appendChild(p);
     }
+  }
+  // The notes the body pointed at, numbered the way the markers were numbered. A definition nothing
+  // referred to is dropped with the label it was written under, because an unmarked note is text the
+  // reader has no reason to go looking for.
+  if (notes.order.length) {
+    const list = el("ol", "fn-list");
+    for (const label of notes.order) {
+      const li = el("li");
+      li.innerHTML = inlineMd(notes.defs.get(label).text);
+      list.appendChild(li);
+    }
+    holder.appendChild(list);
   }
   return holder;
 }
