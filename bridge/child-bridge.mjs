@@ -354,6 +354,29 @@ const skillTool = defineTool({
 });
 
 
+const closeTool = defineTool({
+	name: "board_close",
+	label: "Close a card",
+	description:
+		"Close a card that is spent, to keep the board readable. A finished child's card, a superseded option, a question that no longer matters. Only close a card you are certain no other card refers to and that plays no part in the work still going: this cannot be undone from here. A pinned card cannot be closed. When several cards have gone stale, say so and offer to clean the board rather than closing them unasked.",
+	parameters: Type.Object({
+		card: Type.String({ description: "The card's key, or its id." }),
+	}),
+	async execute(_id, params) {
+		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
+		try {
+			const result = await call("/close", { cardId: params.card });
+			return {
+				content: [{ type: "text", text: `Closed ${params.card}.` }],
+				details: { cardId: result.closed ?? params.card },
+			};
+		} catch (error) {
+			return failure(error);
+		}
+	},
+});
+
+
 export default function boardBridge(pi) {
 	if (!attached()) return;
 	pi.registerTool(noteTool);
@@ -362,4 +385,5 @@ export default function boardBridge(pi) {
 	pi.registerTool(threadTool);
 	pi.registerTool(pathTool);
 	pi.registerTool(skillTool);
+	pi.registerTool(closeTool);
 }

@@ -689,6 +689,43 @@ test("a thread's own token reaches /card/ask over http and is refused the human'
 	}
 });
 
+test("a thread closes a spent card, and a pin stops it", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-thread-close-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-thread-close-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		// A message is what starts the child, and the child is what a token is minted for.
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" })).status, 200);
+		const child = await childEnvOf(daemon, stub.envFile);
+		const spent = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "spent", markdown: "done with" })).body).cardId;
+		const kept = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "kept", markdown: "in sight" })).body).cardId;
+		const pin = await postTo(daemon, board.id, "/layout", { cardId: kept, rect: { x: 0, y: 0, w: 300, h: 200 }, pinned: true });
+		assert.equal(pin.status, 200);
+
+		// A spent card is the thread's to tidy, and the key it read off its own board is enough to name it.
+		const closed = await postAs(daemon, child.token, board.id, "/close", { cardId: "spent" });
+		assert.equal(closed.status, 200);
+		assert.equal(JSON.parse(closed.body).closed, spent);
+
+		// A pin is the human's, so the same caller is refused the card they keep in sight.
+		const refused = await postAs(daemon, child.token, board.id, "/close", { cardId: kept });
+		assert.equal(refused.status, 409);
+		assert.equal(refused.body, "that card is pinned");
+
+		// The person who pinned it closes it as before: the pin protects the card from a thread alone.
+		assert.equal((await postTo(daemon, board.id, "/close", { cardId: kept })).status, 200);
+
+		// The card a thread answered is a card like any other, so its own closes the same way.
+		assert.equal((await postAs(daemon, child.token, board.id, "/close", { cardId: threadId })).status, 200);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
 /** One thread as `/state` reports it, which is where its numbers are read. */
 async function threadState(daemon: Daemon, board: string, id: string) {
 	const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board}`)).body);

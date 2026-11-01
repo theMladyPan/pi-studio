@@ -18,6 +18,12 @@ Look at the board before you write. A card that already covers the subject is re
 key again; a card that builds on another names it with [[key]] in its first line and passes it in
 `after`.
 
+A card that is spent is closed with board_close, offered to the human rather than done behind their
+back.
+
+Do not narrate what you are about to do, and do not add a summary under the pointer. "I will read both
+files first" and "short version: ..." are both the report the cards were meant to replace.
+
 A chart with numbers on an axis is a ```chart block. Call board_skill with name "chart" once in a
 session before your first one, and never hand-write svg for a chart. A table is a table: when the
 reader needs the numbers, write them.
