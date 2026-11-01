@@ -108,8 +108,8 @@ the words: the page lists what is on disk, so both folders appear under Prompts 
 editable there. The valid ids stay in code, beside `ROLE_NAMES`, because a file dropped in by accident
 must not become a choice.
 
-The four switches need no files. What each one says to the model is one line built in
-`cardsBlock()`, in the same place as the two settings that do read files.
+The four switches need no files. What each one says to the model is one line in
+`server/card-settings.ts`, the module that holds both lists and builds `cardsBlock()`.
 
 ## What a thread is told
 
@@ -155,7 +155,8 @@ the work is on a card, the answer itself in the chat when nothing is.
 
 | file | change |
 | --- | --- |
-| `server/workspaces.ts` | `homeDefaults` parses all six keys, `activeHomeDefaults()` and `activeConfig()` fill in the defaults, and the valid ids live here once (`CARDS_VERBOSITY`, `CARDS_AUDIENCE`) beside `THINKING_LEVELS`. |
+| `server/card-settings.ts` | new. The two lists of ids, the four switch names, the defaults, `cardSettings(config)` — the one place a stored value is checked — and `cardsBlock()`, the prompt block built from them. |
+| `server/workspaces.ts` | `homeDefaults` parses all six keys; `activeHomeDefaults()` and `activeConfig()` fill in the defaults through `cardSettings()`. |
 | `server/routes/board/config.ts` | `onConfig` accepts the two ids and the four booleans, `400` on an id neither list names or a switch that is not a boolean, and names them in its "nothing to change" answer. |
 | `server/routes/crossroads.ts` | `onDefaults` accepts the same six with the same checks. |
 | `server/settings.defaults.json` | the new group `new-boards.board.writing`, "Cards written by agents", with two `select` fields and four `toggle` fields. Six options still draw as a segmented row on the page. |
@@ -167,11 +168,11 @@ the work is on a card, the answer itself in the chat when nothing is.
 | file | change |
 | --- | --- |
 | `prompts/verbosity/*.md`, `prompts/audiences/*.md` | the nine files, three to six lines each, one idea per paragraph. |
-| `server/child/modes.ts` | `PROMPT_FOLDERS` gains `verbosity` and `audiences`; `cardsBlock()` builds the block above from `promptText()` and the four switches. |
+| `server/child/modes.ts` | `PROMPT_FOLDERS` gains `verbosity` and `audiences`, which is what puts them on the settings page. |
 | `server/child/prompts.ts` | the block goes into `boardPrompt()`, after the card mechanics and before the worktree text. |
 | `server/routes/board/prompts.ts` | the name guard accepts the two new folders, so a save from the settings page reaches them. |
-| `bridge/child-bridge.mjs` | one sentence appended to the `board_note` description from `PI_STUDIO_CARDS`: verbosity, and which of the four may be on a card. `board_source` says it is for a file the human asked to see, never for evidence. |
-| `server/child/run.ts` | passes `PI_STUDIO_CARDS` in the child's environment, built from `activeConfig(board)`. |
+| `bridge/child-bridge.mjs` | one sentence appended to both card tool descriptions, from `PI_STUDIO_CARDS_VERBOSITY` and `PI_STUDIO_CARDS_OFF`: how often this board wants a card, and what it has switched off. `board_source` says it is for a file the human asked to see, never for evidence. |
+| `server/child/run.ts` | passes both in the child's environment, built from `cardSettings(board.config)`. |
 | `prompts/README.md` | the two folders, and that a spawned child reads no board prompt. |
 
 ### Slice 4 — the board's own panel (`feat(board): card settings in the panel`)
@@ -217,3 +218,25 @@ This file, and a bullet under "Works" in `STATE.md`.
 - A daemon-side cap on how many cards a thread may write.
 - Rewriting the role prompts beyond the section that says a child draws nothing.
 - Footnote syntax in the card renderer: the convention above draws with what the board already has.
+
+## What shipped
+
+Branch `feat/card-verbosity-audience-switches-7a243f6f`, four commits: `feat(config)`, `feat(prompts)`,
+`feat(board)`, `docs(state)`.
+
+`npm run check` green on the whole tree (syntax, import graph, `tsc`, `node --test`, smoke). The four
+touched test files green on their own: `guard`, `child`, `settings`, `routes`.
+
+`/tmp/gate/cards.mjs` against a real daemon, 16 of 16: a board with nothing stored reads `normal` /
+`programmer` with four switches on; `POST /config` writes and `/state` reads back; a switch nobody
+touched keeps its value; an unknown audience and a non-boolean are `400`; `POST /defaults` writes and
+a folder opened afterwards is born with it; the settings document carries the six leaves and the two
+new prompt folders; `POST /prompt` saves `verbosity/quiet.md` and the file is byte-identical after.
+
+The bridge was loaded with pi's own packages and a recording `pi` object, and its two descriptions
+were read back: on `quiet` with code and references off, `board_note` and `board_source` carry
+"This board is on quiet: write a card only when the human asked for one in so many words. Off for this
+board, say it in words instead: code fragments, references."; on `normal`, the first sentence only;
+on `verbose`, neither.
+
+Not verified by a real run: a model's own obedience to the block. That is the risk named above.
