@@ -126,15 +126,27 @@ test("the board's card settings reach the prompt, and a default board reads as n
 	const plain = boardPrompt(board, thread);
 	assert.match(plain, /Cards on this board: normal\./);
 	assert.match(plain, /Cards are written for: programmer\./);
-	for (const line of [/code fragments: yes/, /math formulas: yes/, /charts: yes/, /references: yes/]) assert.match(plain, line);
+	for (const line of [/code fragments: some/, /math formulas: some/, /charts: some/, /references: some/]) assert.match(plain, line);
+	// A mermaid diagram is not one of the four things a switch limits: it shows structure, and it says so.
+	assert.match(plain, /mermaid block is fine at every level/);
+	// A level is a default: the human asking for the thing by name outranks it, and the prompt says which
+	// words do that, because a model told "none" and nothing else will refuse a direct request.
+	assert.match(plain, /a default, not a refusal/);
+	for (const ask of ["show me the function", "show me the formula", "show me the chart", "show me the source"]) {
+		assert.ok(plain.includes(ask), `the prompt does not name the ask "${ask}"`);
+	}
 	const quiet = boardPrompt(
-		{ ...board, config: { cardsVerbosity: "quiet", cardsAudience: "vibecoder", showCodeFragments: false, showReferences: false } },
+		{ ...board, config: { cardsVerbosity: "quiet", cardsAudience: "vibecoder", showCodeFragments: "none", showReferences: "none" } },
 		thread,
 	);
 	assert.match(quiet, /Cards on this board: quiet\./);
 	assert.match(quiet, /Cards are written for: vibecoder\./);
-	assert.match(quiet, /code fragments: no/);
-	assert.match(quiet, /references: no/);
+	assert.match(quiet, /code fragments: none/);
+	assert.match(quiet, /references: none/);
+	// A level is read rather than thrown away when the board file is older than three levels.
+	const legacy = boardPrompt({ ...board, config: { showCodeFragments: false, showCharts: true } }, thread);
+	assert.match(legacy, /code fragments: none/);
+	assert.match(legacy, /charts: some/);
 	// A board on the defaults says the same thing as a board that stored nothing, so an old board file is
 	// the same prompt as a new one.
 	assert.equal(boardPrompt({ ...board, config: {} }, thread), plain);

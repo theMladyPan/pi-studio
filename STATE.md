@@ -71,8 +71,9 @@ commit's own account rather than on a check run now, the section below says so.
 - **How many cards, for whom, and out of what.** Six more settings on the same board and on the
   crossroads as the new-board default: `cardsVerbosity` (`quiet`, `normal`, `verbose`),
   `cardsAudience` (`programmer`, `data-analyst`, `designer`, `vibecoder`, `junior`, `mathematician`),
-  and four switches — `showCodeFragments`, `showMathFormulas`, `showCharts`, `showReferences` — on
-  unless somebody turns one off. The two choices pick a prompt file, `prompts/verbosity/<id>.md` and
+  and four switches — `showCodeFragments`, `showMathFormulas`, `showCharts`, `showReferences` — each
+  holding a level, `none` / `some` / `many`, and `some` until somebody picks another. The two choices
+  pick a prompt file, `prompts/verbosity/<id>.md` and
   `prompts/audiences/<id>.md`, so the words are edited on the settings page like every other prompt;
   the four switches are one line each in `server/card-settings.ts`, because a file per boolean is a
   file too many. `cardSettings()` is the only place an id is checked, and an older board file reads as
@@ -80,7 +81,11 @@ commit's own account rather than on a check run now, the section below says so.
   and `PI_STUDIO_CARDS_OFF`, so the description of `board_note` says how often this board wants a card
   at the moment the model decides whether to call it. `board_source` is now for a file the human asked
   to see, and never evidence: evidence is a reference at the foot of a card, which is what
-  `showReferences` is for.
+  `showReferences` is for. A level is a default rather than a refusal: the prompt names the words that
+  overrule it — "show me the function", "show me the formula", "show me the chart", "where does that
+  come from" — so a board set to `none` still answers the human who asks for the thing by name. All of
+  it is one `Cards` group on both surfaces, and the settings page widens to 1120px while it is open
+  (`body[data-view="settings"]`), because an 880px shelf turned every value into a scroll.
 - **What a thread is told**: `--append-system-prompt` says it is one thread on a board, in which
   folder, that the human reads cards rather than a chat log, and that a card must carry the very key
   its `[[key]]` pointer names. The rest is taste and is a file: `prompts/board/conventions.md` says

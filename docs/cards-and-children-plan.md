@@ -27,10 +27,10 @@ files, like every other set of words this app sends to a model.
 | --- | --- | --- | --- | --- |
 | card verbosity | `cardsVerbosity` | `quiet`, `normal`, `verbose` | `normal` | how often a thread opens a card |
 | card audience | `cardsAudience` | `programmer`, `data-analyst`, `designer`, `vibecoder`, `junior`, `mathematician` | `programmer` | vocabulary, and how much is explained |
-| show code fragments | `showCodeFragments` | on / off | on | a function name, a path, a two-line snippet |
-| show math formulas | `showMathFormulas` | on / off | on | a formula, a symbol, a notation |
-| show charts | `showCharts` | on / off | on | a chart, and a table of numbers |
-| show references | `showReferences` | on / off | on | a footnote at the foot of the card for every claim that is not the agent's own reasoning |
+| code fragments | `showCodeFragments` | `none`, `some`, `many` | `some` | a function name, a path, a two-line snippet, or a whole block |
+| math formulas | `showMathFormulas` | `none`, `some`, `many` | `some` | a symbol, notation, or the derivation |
+| charts | `showCharts` | `none`, `some`, `many` | `some` | a chart, a table of numbers, one or several |
+| references | `showReferences` | `none`, `some`, `many` | `some` | a source at the foot of the card, for claims that need one or for every fact |
 
 `quiet` means a card only when the human asks for one, or when the flow the thread runs asks for one.
 `normal` means a card for something that has to be seen — a diagram, a plan, the result a question
@@ -46,23 +46,27 @@ a rule that will disagree with itself.
 ## What the four switches mean
 
 Three are permissions and one is a duty, which is why `showReferences` is not a fourth line of the same
-shape.
+shape. Each holds a level rather than a yes, because "where it carries the point" is the answer a model
+needs and a switch cannot give it.
 
-- **Code fragments.** On, a card carries an identifier, a path or a short snippet where the exact text
-  matters: `retryFetch`, `server/child/run.ts`, three lines of the loop. Off, the same card says what
-  the code does in words. It does not go silent: a card that says nothing because it may not show code
-  is worse than one that shows three lines.
-- **Math formulas.** On, notation and symbols are fine — `O(n log n)`, `Σ`, a probability. Off, the
-  same claim in plain words and numbers, with no symbol left undefined.
-- **Charts.** On, a chart of real numbers is a fenced `svg`, and a table of numbers is a table. A
-  fenced `mermaid` block is not covered by this switch: a flow, a sequence, a state machine and a tree
-  show structure rather than data, and they stay available at every setting, because a diagram is the
-  cheapest thing a card can hold. A table of words is prose and stays too.
-- **References.** On, a claim that is not the agent's own reasoning — a version, a behaviour, a number,
-  what a library does — carries a marker and a line at the foot of the card that resolves to a URL or a
-  file path. A reference that resolves to neither is not a reference; a claim the agent could not
-  ground says so instead of inventing a citation. Off, no reference block, and the card is shorter by
-  exactly what it can no longer prove.
+- **Code fragments.** `none`: say what the code does in words. `some`: an identifier, a path or a short
+  snippet where the exact text matters. `many`: a block whenever the code is the answer — the diff, the
+  query, the function as it now stands.
+- **Math formulas.** `none`: plain words and numbers. `some`: notation inline, every symbol defined
+  where it first appears. `many`: the derivation, not only the result.
+- **Charts.** `none`: no chart, no table of numbers. `some`: one chart or one table where it carries the
+  point. `many`: a chart per series, a table per comparison. A fenced `mermaid` block is never covered by
+  this level: a flow, a sequence, a state machine and a tree show structure rather than data, and a
+  diagram is the cheapest thing a card can hold.
+- **References.** `none`: no source block, and a claim that will not stand without one is left out.
+  `some`: a marker and a source for every claim that is not the agent's own reasoning. `many`: a source
+  for every factual statement. A reference that resolves to neither a URL nor a file path is not a
+  reference, and "I could not ground this" is the honest answer.
+
+**A level is a default, not a refusal.** A human who says "show me the function", "show me the formula",
+"show me the chart" or "where does that come from" gets it at full strength on the card the ask is
+about, whatever the level holds. The prompt names those words, because a model told `none` and nothing
+else will refuse a direct request; the bridge's own sentence says the same about a switch that is off.
 
 The card renderer draws links, tables, fenced code, `mermaid`, `svg` and tick lists. It has no footnote
 syntax, so `[^1]` would arrive as literal text. The convention the prompt asks for is one that already
@@ -78,8 +82,8 @@ The retry loop gives up after three tries [1], which is the number the vendor's 
 The `[1]` in the prose is a marker and nothing clickable, which is fine: the foot of the card is where
 the answer is.
 
-With references on, a `board_source` card is no longer how a thread shows its evidence — the path in
-the reference is. `board_source` goes back to what it says on the tin: opening a file because the human
+With references on, a `board_source` card is no longer how a thread shows its evidence — the path in the
+reference is. `board_source` goes back to what it says on the tin: opening a file because the human
 asked to see it. That is the second half of the "code cards popping up" fix, and it needs no setting.
 
 ## Where the values live
@@ -159,7 +163,7 @@ the work is on a card, the answer itself in the chat when nothing is.
 | `server/workspaces.ts` | `homeDefaults` parses all six keys; `activeHomeDefaults()` and `activeConfig()` fill in the defaults through `cardSettings()`. |
 | `server/routes/board/config.ts` | `onConfig` accepts the two ids and the four booleans, `400` on an id neither list names or a switch that is not a boolean, and names them in its "nothing to change" answer. |
 | `server/routes/crossroads.ts` | `onDefaults` accepts the same six with the same checks. |
-| `server/settings.defaults.json` | the new group `new-boards.board.writing`, "Cards written by agents", with two `select` fields and four `toggle` fields. Six options still draw as a segmented row on the page. |
+| `server/settings.defaults.json` | one `new-boards.board.cards` group holding all seven: verbosity, audience, the four levels and `dim others`. Six options still draw as a segmented row on the page. |
 | `test/settings.test.ts` | all six leaves exist, with the right types, the exact ids above, and the seeded value. |
 | `test/routes.test.ts` | `POST /config` saves and `GET /state` reads back, an unknown id and a non-boolean are `400`; `POST /defaults` the same, read back through `GET /settings/defaults`. |
 
@@ -177,9 +181,14 @@ the work is on a card, the answer itself in the chat when nothing is.
 
 ### Slice 4 — the board's own panel (`feat(board): card settings in the panel`)
 
-`public/index.html` and `public/client/board.js` only: two `cfg-row` buttons that open a pick list the
-way the flow row does, and four toggle rows that flip on click the way `dim other threads` does. Both
-read and write through `POST /config`, and `paintConfig()` prints all six.
+`public/index.html` and `public/client/board.js` only: a `cards` head over six rows — two that open a
+pick list the way the flow row does, four that open a list of the three levels — and `dim others` under
+them. All of it reads and writes through `POST /config`, and `paintConfig()` prints the six.
+
+The same change makes both settings surfaces readable, which is the other half of the request: the
+panel was a 232px column of 9px labels and is now 352px with the label left and the value right, in
+two groups; the pick list grew to 390px; and the crossroads settings page takes 1120px instead of the
+shelf's 880px, with larger labels and a wider label column, keyed on `body[data-view="settings"]`.
 
 ### Slice 5 — the record (`docs(plan): card settings, and no board tools for children`)
 
@@ -221,8 +230,9 @@ This file, and a bullet under "Works" in `STATE.md`.
 
 ## What shipped
 
-Branch `feat/card-verbosity-audience-switches-7a243f6f`, four commits: `feat(config)`, `feat(prompts)`,
-`feat(board)`, `docs(state)`.
+Branch `feat/card-verbosity-audience-switches-7a243f6f`: `feat(config)`, `feat(prompts)`, `feat(board)`,
+`docs(state)`, then `feat(cards)` for the three levels, the one group, the ask that overrides a level,
+and the two settings surfaces at a size a human can read.
 
 `npm run check` green on the whole tree (syntax, import graph, `tsc`, `node --test`, smoke). The four
 touched test files green on their own: `guard`, `child`, `settings`, `routes`.

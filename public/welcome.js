@@ -1067,6 +1067,9 @@
   function showView(next) {
     view = next;
     const settings = next === "settings";
+    // The two surfaces are different widths: the shelf is an 880px column, the settings tree takes the
+    // window. The stylesheet keys on this attribute rather than on which section is showing.
+    document.body.dataset.view = next;
     nodes.settingsView.hidden = !settings;
     nodes.shelfView.hidden = settings;
     nodes.back.hidden = !settings;

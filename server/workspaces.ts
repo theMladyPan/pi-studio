@@ -8,7 +8,7 @@ import { boards } from "./store.ts";
 import { sessionFacts } from "./session.ts";
 import { basename } from "node:path";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, MODEL, PROVIDER, THINKING_LEVELS, run } from "./models.ts";
-import { CARD_AUDIENCE, CARD_DEFAULTS, CARD_SHOWS, CARD_VERBOSITY, cardSettings } from "./card-settings.ts";
+import { CARD_AUDIENCE, CARD_LEVELS, CARD_SHOWS, CARD_VERBOSITY, cardSettings } from "./card-settings.ts";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { PATH_NAMES } from "./child/modes.ts";
 import { spawnSync } from "node:child_process";
@@ -137,11 +137,15 @@ export let homeDefaults = (() => {
 	if (typeof held.model === "string" && held.model) known.model = held.model;
 	if (THINKING_LEVELS.includes(held.thinking)) known.thinking = held.thinking;
 	if (typeof held.dimOthers === "boolean") known.dimOthers = held.dimOthers;
-	// The card settings: two ids checked against the list they belong to, and four switches that are only
-	// read when they are booleans. A board file written before these existed simply has none of them.
+	// The card settings: two ids checked against the list they belong to, and four levels. A file written
+	// before these existed has none of them, and one from the first build holds booleans, which
+	// `cardSettings()` still reads.
 	if (CARD_VERBOSITY.includes(held.cardsVerbosity)) known.cardsVerbosity = held.cardsVerbosity;
 	if (CARD_AUDIENCE.includes(held.cardsAudience)) known.cardsAudience = held.cardsAudience;
-	for (const key of CARD_SHOWS) if (typeof held[key] === "boolean") known[key] = held[key];
+	for (const key of CARD_SHOWS) {
+		const value = held[key];
+		if (CARD_LEVELS.includes(value) || typeof value === "boolean") known[key] = value;
+	}
 	return known;
 })();
 

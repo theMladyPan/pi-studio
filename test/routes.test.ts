@@ -154,23 +154,26 @@ test("the six card defaults are saved, read back and refused when nobody names t
 	const daemon = await boot(folder);
 	try {
 		// A folder opened as a workspace is born with whatever /defaults held at that moment.
-		const choice = { cardsVerbosity: "quiet", cardsAudience: "designer", showCodeFragments: false, showReferences: false, showCharts: true };
+		const choice = { cardsVerbosity: "quiet", cardsAudience: "designer", showCodeFragments: "none", showReferences: "none", showCharts: "many" };
 		const saved = await post(daemon, "/defaults", choice);
 		assert.equal(saved.status, 200, saved.body.slice(0, 200));
 		const answered = JSON.parse(saved.body).defaults;
 		assert.equal(answered.cardsVerbosity, "quiet");
 		assert.equal(answered.cardsAudience, "designer");
-		assert.equal(answered.showCodeFragments, false);
-		assert.equal(answered.showMathFormulas, true, "a switch nobody chose lost its default");
+		assert.equal(answered.showCodeFragments, "none");
+		assert.equal(answered.showCharts, "many");
+		assert.equal(answered.showMathFormulas, "some", "a switch nobody chose lost its default");
 
 		// Written where the daemon reloads its defaults from, so the next board on this folder inherits them.
 		const written = JSON.parse(readFileSync(join(folder, "workspaces.json"), "utf8"));
 		assert.equal(written.defaults.cardsVerbosity, "quiet");
-		assert.equal(written.defaults.showCodeFragments, false);
+		assert.equal(written.defaults.showCodeFragments, "none");
 
 		assert.equal((await post(daemon, "/defaults", { cardsVerbosity: "shouting" })).status, 400);
 		assert.equal((await post(daemon, "/defaults", { cardsAudience: "shaman" })).status, 400);
 		assert.equal((await post(daemon, "/defaults", { showCharts: "yes" })).status, 400);
+		// The first build stored yes/no, and a yes is not a level: the panel cannot write one any more.
+		assert.equal((await post(daemon, "/defaults", { showCharts: true })).status, 400);
 	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });
@@ -187,17 +190,18 @@ test("a board's card settings are written by /config and read back out of it", a
 		const fresh = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body).meta.config;
 		assert.equal(fresh.cardsVerbosity, "normal");
 		assert.equal(fresh.cardsAudience, "programmer");
-		assert.equal(fresh.showCodeFragments, true);
+		assert.equal(fresh.showCodeFragments, "some");
 
-		const saved = await postTo(daemon, board.id, "/config", { cardsVerbosity: "quiet", showReferences: false });
+		const saved = await postTo(daemon, board.id, "/config", { cardsVerbosity: "quiet", showReferences: "many" });
 		assert.equal(saved.status, 200, saved.body.slice(0, 200));
 		const after = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body).meta.config;
 		assert.equal(after.cardsVerbosity, "quiet");
-		assert.equal(after.showReferences, false);
-		assert.equal(after.showCharts, true, "a switch nobody touched changed with the one that was");
+		assert.equal(after.showReferences, "many");
+		assert.equal(after.showCharts, "some", "a switch nobody touched changed with the one that was");
 
 		assert.equal((await postTo(daemon, board.id, "/config", { cardsAudience: "shaman" })).status, 400);
 		assert.equal((await postTo(daemon, board.id, "/config", { showCharts: "yes" })).status, 400);
+		assert.equal((await postTo(daemon, board.id, "/config", { showCharts: false })).status, 400);
 		assert.equal((await postTo(daemon, board.id, "/config", {})).status, 400);
 	} finally {
 		daemon.child.kill();

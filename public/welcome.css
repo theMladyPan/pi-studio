@@ -77,7 +77,9 @@ button, input, select {
   display: none !important;
 }
 
-/* Shelf wrapper: sits in the upper-middle optical zone */
+/* Shelf wrapper: sits in the upper-middle optical zone. The settings view holds a tree of groups and
+   fields rather than a list of folders, so it takes the width the window has: the shelf's 880px column
+   turned every field's value into a scroll. */
 .shelf-stage {
   width: 100%;
   max-width: 880px;
@@ -175,6 +177,13 @@ button, input, select {
 
 .masthead-nav-btn .glyph {
   color: var(--accent);
+}
+
+/* The settings page is the wider surface: 880px is a shelf, and a settings tree reads better in 1120. */
+body[data-view="settings"] .shelf-stage {
+  max-width: 1120px;
+  /* A settings page is read from the top, so it starts higher than the shelf does. */
+  margin-top: min(5vh, 44px);
 }
 
 /* Main 880px surface container (shared by both Shelf and Settings page) */
@@ -1180,4 +1189,68 @@ button, input, select {
   padding: 12px 6px;
   font: 11.5px/1.4 var(--mono);
   color: var(--bad);
+}
+
+/* ==========================================================================
+   THE SETTINGS PAGE, A SIZE UP
+   --------------------------------------------------------------------------
+   The tree is read rather than scanned: a human comes here to change one value and wants to know
+   which one. Larger labels, a wider label column and taller rows cost nothing and save a squint.
+   ========================================================================== */
+body[data-view="settings"] .settings-title {
+  font-size: 15px;
+}
+
+body[data-view="settings"] .settings-help {
+  font-size: 12.5px;
+}
+
+body[data-view="settings"] .settings-tree {
+  padding: 10px 14px 14px;
+  gap: 9px;
+}
+
+body[data-view="settings"] .cfg-summary {
+  padding: 9px 12px;
+}
+
+body[data-view="settings"] .cfg-group:not([data-depth="0"]) > .cfg-summary {
+  padding: 7px 10px;
+}
+
+body[data-view="settings"] .cfg-label {
+  font-size: 13px;
+}
+
+body[data-view="settings"] .cfg-group:not([data-depth="0"]) > .cfg-summary .cfg-label {
+  font-size: 12.5px;
+}
+
+body[data-view="settings"] .cfg-inline-help {
+  font-size: 12px;
+}
+
+body[data-view="settings"] .cfg-field {
+  grid-template-columns: minmax(130px, 210px) 1fr;
+  gap: 8px 18px;
+  padding: 8px 12px;
+}
+
+body[data-view="settings"] .cfg-field-label {
+  font-size: 12.5px;
+}
+
+body[data-view="settings"] .cfg-field-id {
+  font-size: 11px;
+}
+
+body[data-view="settings"] .cfg-input,
+body[data-view="settings"] .cfg-select {
+  padding: 6px 10px;
+  font-size: 12.5px;
+}
+
+body[data-view="settings"] .seg-row button {
+  padding: 4px 10px;
+  font-size: 12px;
 }

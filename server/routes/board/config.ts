@@ -6,7 +6,7 @@
 import { answer, fail, readJson } from "../../http.ts";
 import { field } from "./thread.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog } from "../../models.ts";
-import { CARD_AUDIENCE, CARD_SHOWS, CARD_VERBOSITY } from "../../card-settings.ts";
+import { CARD_AUDIENCE, CARD_LEVELS, CARD_SHOWS, CARD_VERBOSITY } from "../../card-settings.ts";
 import { PATH_NAMES } from "../../child/modes.ts";
 import { threadForRuntime } from "./lifecycle.ts";
 import { scheduleSave } from "../../store.ts";
@@ -225,7 +225,7 @@ export async function onConfig(req, res, board) {
 	}
 	for (const key of CARD_SHOWS) {
 		if (body[key] === undefined) continue;
-		if (typeof body[key] !== "boolean") return void fail(res, 400, `${key} is on or off`);
+		if (!CARD_LEVELS.includes(body[key])) return void fail(res, 400, `${key} is one of ${CARD_LEVELS.join(", ")}`);
 		next[key] = body[key];
 		changed = true;
 	}
