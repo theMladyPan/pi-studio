@@ -89,13 +89,19 @@ type BoardConfig = {
 	showReferences: string;
 };
 
-/** The four content switches of a card: the board's key, what a human calls it, and its picker. */
-const CARD_CONTENT: { id: keyof BoardConfig & string; label: string; pick: BoardPick }[] = [
+/**
+ * The four content switches of a card: the board's key, what a human calls it, and its picker.
+ *
+ * Each `id` stays the key it names rather than widening to every key of `BoardConfig`, because these
+ * four are the ones `activeConfig` always answers with a level: `cardSettings` fills them in from
+ * `CARD_DEFAULTS` where the board's file names none, so a leaf here always carries a defined value.
+ */
+const CARD_CONTENT = [
 	{ id: "showCodeFragments", label: "code", pick: "code" },
 	{ id: "showMathFormulas", label: "math", pick: "math" },
 	{ id: "showCharts", label: "charts", pick: "charts" },
 	{ id: "showReferences", label: "references", pick: "refs" },
-];
+] as const satisfies readonly { id: keyof BoardConfig & string; label: string; pick: BoardPick }[];
 
 /**
  * The prompt files, one subgroup per folder and one leaf per file. Read per call, because a prompt a
