@@ -149,6 +149,63 @@ test("the crossroads defaults can be changed and are read back", async () => {
 	}
 });
 
+test("the six card defaults are saved, read back and refused when nobody names them", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-cards-"));
+	const daemon = await boot(folder);
+	try {
+		// A folder opened as a workspace is born with whatever /defaults held at that moment.
+		const choice = { cardsVerbosity: "quiet", cardsAudience: "designer", showCodeFragments: false, showReferences: false, showCharts: true };
+		const saved = await post(daemon, "/defaults", choice);
+		assert.equal(saved.status, 200, saved.body.slice(0, 200));
+		const answered = JSON.parse(saved.body).defaults;
+		assert.equal(answered.cardsVerbosity, "quiet");
+		assert.equal(answered.cardsAudience, "designer");
+		assert.equal(answered.showCodeFragments, false);
+		assert.equal(answered.showMathFormulas, true, "a switch nobody chose lost its default");
+
+		// Written where the daemon reloads its defaults from, so the next board on this folder inherits them.
+		const written = JSON.parse(readFileSync(join(folder, "workspaces.json"), "utf8"));
+		assert.equal(written.defaults.cardsVerbosity, "quiet");
+		assert.equal(written.defaults.showCodeFragments, false);
+
+		assert.equal((await post(daemon, "/defaults", { cardsVerbosity: "shouting" })).status, 400);
+		assert.equal((await post(daemon, "/defaults", { cardsAudience: "shaman" })).status, 400);
+		assert.equal((await post(daemon, "/defaults", { showCharts: "yes" })).status, 400);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a board's card settings are written by /config and read back out of it", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-config-"));
+	const work = mkdtempSync(join(tmpdir(), "pi-studio-routes-config-work-"));
+	const daemon = await boot(folder);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder: work })).body).board;
+		// A board file with nothing stored reads as the six defaults, which is what the panel draws.
+		const fresh = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body).meta.config;
+		assert.equal(fresh.cardsVerbosity, "normal");
+		assert.equal(fresh.cardsAudience, "programmer");
+		assert.equal(fresh.showCodeFragments, true);
+
+		const saved = await postTo(daemon, board.id, "/config", { cardsVerbosity: "quiet", showReferences: false });
+		assert.equal(saved.status, 200, saved.body.slice(0, 200));
+		const after = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body).meta.config;
+		assert.equal(after.cardsVerbosity, "quiet");
+		assert.equal(after.showReferences, false);
+		assert.equal(after.showCharts, true, "a switch nobody touched changed with the one that was");
+
+		assert.equal((await postTo(daemon, board.id, "/config", { cardsAudience: "shaman" })).status, 400);
+		assert.equal((await postTo(daemon, board.id, "/config", { showCharts: "yes" })).status, 400);
+		assert.equal((await postTo(daemon, board.id, "/config", {})).status, 400);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+		rmSync(work, { recursive: true, force: true });
+	}
+});
+
 test("a route without the token is refused, and the page is not", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-"));
 	const daemon = await boot(folder);

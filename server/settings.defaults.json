@@ -73,6 +73,85 @@
                   "help": "Dim other cards on the canvas while one thread is selected."
                 }
               ]
+            },
+            {
+              "id": "writing",
+              "label": "Cards written by agents",
+              "help": "What a new board's threads put on a card, how often, and for whom. The words behind each id are under Prompts below.",
+              "collapsed": false,
+              "fields": [
+                {
+                  "id": "cardsVerbosity",
+                  "label": "card verbosity",
+                  "type": "select",
+                  "value": "normal",
+                  "options": [
+                    "quiet",
+                    "normal",
+                    "verbose"
+                  ],
+                  "help": "quiet: a card only when asked. normal: a card for something that has to be seen. verbose: a card for every finding."
+                },
+                {
+                  "id": "cardsAudience",
+                  "label": "cards written for",
+                  "type": "select",
+                  "value": "programmer",
+                  "options": [
+                    "programmer",
+                    "data-analyst",
+                    "designer",
+                    "vibecoder",
+                    "junior",
+                    "mathematician"
+                  ],
+                  "help": "The register of a card: what is explained, and in which words. The words live in prompts/audiences/."
+                },
+                {
+                  "id": "showCodeFragments",
+                  "label": "code fragments",
+                  "type": "toggle",
+                  "value": true,
+                  "labels": [
+                    "off",
+                    "on"
+                  ],
+                  "help": "An identifier, a path, or a short snippet where the exact text matters."
+                },
+                {
+                  "id": "showMathFormulas",
+                  "label": "math formulas",
+                  "type": "toggle",
+                  "value": true,
+                  "labels": [
+                    "off",
+                    "on"
+                  ],
+                  "help": "Notation and symbols, defined where they are first used."
+                },
+                {
+                  "id": "showCharts",
+                  "label": "charts",
+                  "type": "toggle",
+                  "value": true,
+                  "labels": [
+                    "off",
+                    "on"
+                  ],
+                  "help": "A chart of real numbers, and a table of numbers. A mermaid diagram is always allowed: it shows structure."
+                },
+                {
+                  "id": "showReferences",
+                  "label": "references",
+                  "type": "toggle",
+                  "value": true,
+                  "labels": [
+                    "off",
+                    "on"
+                  ],
+                  "help": "A marker in the line and a source at the foot of the card: a URL, or a file path with a line."
+                }
+              ]
             }
           ]
         }

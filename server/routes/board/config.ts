@@ -6,6 +6,7 @@
 import { answer, fail, readJson } from "../../http.ts";
 import { field } from "./thread.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog } from "../../models.ts";
+import { CARD_AUDIENCE, CARD_SHOWS, CARD_VERBOSITY } from "../../card-settings.ts";
 import { PATH_NAMES } from "../../child/modes.ts";
 import { threadForRuntime } from "./lifecycle.ts";
 import { scheduleSave } from "../../store.ts";
@@ -209,7 +210,31 @@ export async function onConfig(req, res, board) {
 		next.path = body.path;
 		changed = true;
 	}
-	if (!changed) return void fail(res, 400, "nothing to change: dimOthers, toolsOff, extensionsOff or path");
+	// How often a thread here writes a card, who it is written for, and what may be inside one. An id no
+	// list names is a mistake rather than a preference, so it is refused the way an unknown extension is.
+	if (body.cardsVerbosity !== undefined) {
+		if (!CARD_VERBOSITY.includes(body.cardsVerbosity))
+			return void fail(res, 400, `a verbosity is one of ${CARD_VERBOSITY.join(", ")}`);
+		next.cardsVerbosity = body.cardsVerbosity;
+		changed = true;
+	}
+	if (body.cardsAudience !== undefined) {
+		if (!CARD_AUDIENCE.includes(body.cardsAudience)) return void fail(res, 400, `an audience is one of ${CARD_AUDIENCE.join(", ")}`);
+		next.cardsAudience = body.cardsAudience;
+		changed = true;
+	}
+	for (const key of CARD_SHOWS) {
+		if (body[key] === undefined) continue;
+		if (typeof body[key] !== "boolean") return void fail(res, 400, `${key} is on or off`);
+		next[key] = body[key];
+		changed = true;
+	}
+	if (!changed)
+		return void fail(
+			res,
+			400,
+			"nothing to change: dimOthers, toolsOff, extensionsOff, path, cardsVerbosity, cardsAudience or a card switch",
+		);
 	board.config = next;
 	scheduleSave(board);
 	broadcast(board, { type: "config", config: activeConfig(board) });

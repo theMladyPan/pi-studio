@@ -74,10 +74,12 @@ function fieldsIn(group: any): any[] {
 }
 
 /** The prompt files that are on disk right now, which is what the page has to carry, read here so that a
- * new file is a new field and this test does not have to know how many there are. */
-function promptFilesOnDisk() {
+ * new file is a new field and this test does not have to know how many there are. The folders come from
+ * the daemon, so a folder it reads is a folder this test walks. */
+async function promptFilesOnDisk() {
+	const { PROMPT_FOLDERS } = await import("../server/child/modes.ts");
 	const found: string[] = [];
-	for (const folder of ["roles", "modes", "flows"]) {
+	for (const folder of PROMPT_FOLDERS) {
 		let files: string[] = [];
 		try {
 			// The names the daemon lists and a save accepts: a file it would refuse is no field of the document.
@@ -103,6 +105,36 @@ test("the document carries a version, a title and the three settings", async () 
 	assert.equal(byId.dimOthers.type, "toggle");
 	// Groups nest, and the page's collapsing is per path, so the depth is part of the shape.
 	assert.ok(depthOf(document) >= 3, `the tree is only ${depthOf(document)} deep`);
+});
+
+test("the six card settings are drawn from the document, and an old defaults file reads as their defaults", async () => {
+	const document = await settingsDocument();
+	const byId = Object.fromEntries(leavesOf(document).map((field) => [field.id, field]));
+	// Two choices and four switches: the page draws a segmented row for each, so the ids are the store keys.
+	assert.deepEqual(byId.cardsVerbosity?.options, ["quiet", "normal", "verbose"]);
+	assert.equal(byId.cardsVerbosity?.type, "select");
+	assert.deepEqual(byId.cardsAudience?.options, ["programmer", "data-analyst", "designer", "vibecoder", "junior", "mathematician"]);
+	assert.equal(byId.cardsAudience?.type, "select");
+	for (const id of ["showCodeFragments", "showMathFormulas", "showCharts", "showReferences"]) {
+		assert.equal(byId[id]?.type, "toggle", `${id} is a ${byId[id]?.type}`);
+	}
+	// The seeded file above was written before these settings existed, which is what an old board looks like:
+	// every leaf still carries a value, because a control with nothing in it is a control that lies.
+	assert.equal(byId.cardsVerbosity.value, "normal");
+	assert.equal(byId.cardsAudience.value, "programmer");
+	assert.equal(byId.showReferences.value, true);
+});
+
+test("a card setting saved through the setter is the value the document reads next", async () => {
+	setHomeDefaults({ ...seeded, cardsVerbosity: "quiet", cardsAudience: "designer", showCodeFragments: false });
+	const document = await settingsDocument();
+	const byId = Object.fromEntries(leavesOf(document).map((field) => [field.id, field]));
+	assert.equal(byId.cardsVerbosity.value, "quiet");
+	assert.equal(byId.cardsAudience.value, "designer");
+	assert.equal(byId.showCodeFragments.value, false);
+	// The switch nobody chose keeps its default rather than going missing.
+	assert.equal(byId.showCharts.value, true);
+	setHomeDefaults(seeded);
 });
 
 test("the catalogue and the levels are the daemon's, not a copy written in the template", async () => {
@@ -170,7 +202,7 @@ test("the document carries one field per prompt file on disk, whole", async () =
 	const document = await settingsDocument();
 	const prompts = document.groups.find((group) => group.id === "prompts");
 	assert.ok(prompts, "no prompts group in the document");
-	const onDisk = promptFilesOnDisk();
+	const onDisk = await promptFilesOnDisk();
 	// Counted off the disk above rather than written down here, because the list is the point: a file
 	// added to prompts/ is a field on the next read, and this test must not go red when it is not.
 	assert.ok(onDisk.length > 0, "no prompt files on disk to check against");
@@ -185,15 +217,18 @@ test("the document carries one field per prompt file on disk, whole", async () =
 	assert.deepEqual(scout.write, { route: "/prompt", method: "POST", keys: { name: "roles/scout.md", text: "@value" } });
 });
 
-test("the prompt groups are roles, modes and flows, collapsed, after the settings", async () => {
+test("the prompt groups are every folder the daemon reads, collapsed, after the settings", async () => {
 	const document = await settingsDocument();
 	assert.equal(document.groups[0].id, "new-boards");
 	const prompts = document.groups[document.groups.length - 1];
 	assert.equal(prompts.id, "prompts");
-	// Collapsed, because ten whole files are not what a human came to the page for.
+	// Collapsed, because nineteen whole files are not what a human came to the page for.
 	assert.equal(prompts.collapsed, true);
-	assert.deepEqual(prompts.groups?.map((group) => group.id), ["prompts-roles", "prompts-modes", "prompts-flows"]);
-	assert.deepEqual(prompts.groups?.map((group) => group.label), ["Roles", "Modes", "Flows"]);
+	const { PROMPT_FOLDERS } = await import("../server/child/modes.ts");
+	assert.deepEqual(
+		prompts.groups?.map((group) => group.id),
+		PROMPT_FOLDERS.map((folder) => `prompts-${folder}`),
+	);
 	// Each folder's files in name order, so the page does not reshuffle itself between reads.
 	for (const group of prompts.groups ?? []) {
 		const labels = (group.fields ?? []).map((field) => field.label);
@@ -204,7 +239,7 @@ test("the prompt groups are roles, modes and flows, collapsed, after the setting
 test("every prompt field says where it came from and where it is written", async () => {
 	const document = await settingsDocument();
 	const fields = fieldsIn(document.groups.find((group) => group.id === "prompts"));
-	assert.equal(fields.length, promptFilesOnDisk().length);
+	assert.equal(fields.length, (await promptFilesOnDisk()).length);
 	for (const field of fields) {
 		assert.equal(field.type, "prompt", `${field.id} is a ${field.type}`);
 		assert.equal(typeof field.value, "string");
@@ -215,7 +250,7 @@ test("every prompt field says where it came from and where it is written", async
 		assert.equal(field.write?.route, "/prompt", `${field.id} has no write route`);
 		assert.equal(field.write?.method, "POST");
 		assert.equal(field.write?.keys?.text, "@value");
-		assert.match(field.write?.keys?.name ?? "", /^(roles|modes|flows)\/[a-z][a-z-]*\.md$/);
+		assert.match(field.write?.keys?.name ?? "", /^(roles|modes|flows|verbosity|audiences)\/[a-z][a-z-]*\.md$/);
 	}
 });
 
