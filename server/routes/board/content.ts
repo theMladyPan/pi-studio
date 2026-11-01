@@ -3,6 +3,7 @@
  * What a card is made of: a note, a source, an edited body, a rename, and the folder browser that
  * attaches paths to a message.
  */
+import { auditMarkdown } from "../../chart-audit.ts";
 import { answer, fail, readJson } from "../../http.ts";
 import { BROWSE_LIMIT, CONTROL_CHARS, MAX_NOTE_CHARS, MAX_SOURCE_CHARS, MAX_TITLE_CHARS } from "../../limits.ts";
 import { anchorOf, cardByKey, field, placedRect, rootOf } from "./thread.ts";
@@ -21,6 +22,9 @@ import { homedir } from "node:os";
 
 /** The sizes a card may be drawn in. Anything else in a body is ignored, not refused. */
 const CARD_SIZES = ["compact", "normal", "wide", "tall"];
+
+/** How wide a `wide` card is drawn, which is what decides whether its labels are elided. */
+const WIDE_CARD = 700;
 
 /** How many cards one card may name as what it builds on: the board draws an arrow from each. */
 const MAX_PREDECESSORS = 8;
@@ -56,6 +60,17 @@ export function predecessors(board, list) {
 
 
 
+/**
+ * How the card will read, in one line: the shape of each chart, then what to change about it. Empty
+ * when the note holds no chart, so a note the board draws as written says nothing extra on the wire.
+ */
+function noteReport(markdown, width) {
+	const { warnings, summary } = auditMarkdown(markdown, width);
+	return [summary, ...warnings].filter(Boolean).join(" · ");
+}
+
+
+
 export async function onNote(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
@@ -69,6 +84,9 @@ export async function onNote(req, res, board) {
 	const size = CARD_SIZES.includes(body.size) ? body.size : "";
 	const after = predecessors(board, body.after);
 	const root = rootOf(board, body);
+	// A wide card holds more labels than a narrow one, so the audit is told the width the card is drawn
+	// at: telling a model to go wide when it already did is a warning it cannot act on.
+	const report = noteReport(markdown, size === "wide" ? WIDE_CARD : undefined);
 	// A key makes the card stable: saying the same thing twice revises one note instead of stacking
 	// a second copy of it on the board, which is what a running agent stepping through a job does.
 	const held = cardByKey(board, key, "note");
@@ -86,7 +104,7 @@ export async function onNote(req, res, board) {
 		if (rect) held.rect = rect;
 		broadcast(board, { type: "update", card: plainCardFor(held, board) });
 		scheduleSave(board);
-		answer(res, 200, { cardId: held.id, card: plainCardFor(held, board), updated: true });
+		answer(res, 200, { cardId: held.id, card: plainCardFor(held, board), updated: true, ...(report ? { report } : {}) });
 		return;
 	}
 	makeRoom(board);
@@ -106,7 +124,7 @@ export async function onNote(req, res, board) {
 	board.cards.set(note.id, note);
 	broadcast(board, { type: "card", card: plainCardFor(note, board) });
 	scheduleSave(board);
-	answer(res, 200, { cardId: note.id, card: plainCardFor(note, board) });
+	answer(res, 200, { cardId: note.id, card: plainCardFor(note, board), ...(report ? { report } : {}) });
 }
 
 

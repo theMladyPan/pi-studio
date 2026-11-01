@@ -471,6 +471,41 @@ test("a pinned card makes room by evicting the second-oldest note", async () => 
 	}
 });
 
+test("a note whose chart fence is not JSON answers with a report naming the fault", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-note-report-"));
+	const daemon = await boot(folder);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		// Bare keys are the failure a chart fence makes most: the model writes JavaScript, not JSON.
+		const markdown = ["the shape of it", "```chart", '{ type: "bar", data: { labels: ["a"] } }', "```"].join("\n");
+		const made = await postTo(daemon, board.id, "/card/note", { key: "a-chart", markdown });
+		assert.equal(made.status, 200);
+		// The model cannot see the card, so a fence it cannot read has to be said back to it.
+		const report = JSON.parse(made.body).report;
+		assert.equal(typeof report, "string", `a chart the board cannot read went unreported, got ${made.body.slice(0, 200)}`);
+		assert.match(report, /not JSON/);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a note with no chart carries no report on the wire", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-note-quiet-"));
+	const daemon = await boot(folder);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const made = await postTo(daemon, board.id, "/card/note", { key: "plain", markdown: "# a heading\n\nand a sentence about it." });
+		assert.equal(made.status, 200);
+		// Nothing to say about a card the board draws as written, so the key is not there at all.
+		const answered = JSON.parse(made.body);
+		assert.equal(Object.hasOwn(answered, "report"), false, `a note with no chart has nothing to report, got ${JSON.stringify(answered)}`);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
 test("a thread card closed with nothing behind it is put back by /undo", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-undo-thread-"));
 	const daemon = await boot(folder);

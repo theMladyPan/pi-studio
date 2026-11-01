@@ -13,6 +13,8 @@ const MAX_LABELS = 10;
 const MAX_DATASETS = 6;
 /** `options` itself counts as one, so four is `options.scales.y.ticks` and no deeper. */
 const MAX_OPTION_DEPTH = 4;
+/** A report is read by a model that cannot see the card, so it has to fit in a glance: four lines, then a count. */
+const MAX_WARNINGS = 4;
 /** The types Chart.js registers in the bundle the board ships. */
 const TYPES = ["bar", "line", "pie", "doughnut", "polarArea", "radar", "bubble", "scatter"];
 
@@ -33,6 +35,11 @@ export function auditMarkdown(markdown: string, width = 406): { warnings: string
 	} catch {
 		// A note is never worth failing a tool call over: the worst case is a fence nobody described.
 	}
+	if (warnings.length > MAX_WARNINGS) {
+		const more = warnings.length - MAX_WARNINGS;
+		warnings.length = MAX_WARNINGS;
+		warnings.push(`and ${more} more`);
+	}
 	return { warnings, summary: summaries.join(" · ") };
 }
 
@@ -47,9 +54,9 @@ function auditFence(body: string, width: number): { warnings: string[]; summary:
 	}
 	const warnings: string[] = [];
 	// A config is data. A callback written into one is either a string that does nothing or a body that
-	// does not parse, and both are worth saying out loud.
-	if (/\bfunction\b|=>|\bnew\s/.test(body)) {
-		warnings.push("chart block holds code: JSON carries data only, so a function or `new` here never runs");
+	// does not parse, and both are worth saying out loud. A bare `new` is not: it is a word a label uses.
+	if (/\bfunction\b|=>/.test(body)) {
+		warnings.push("chart block holds code: JSON carries data only, so a function here never runs");
 	}
 	const chart = asObject(config);
 	const type = typeof chart.type === "string" ? chart.type : "";

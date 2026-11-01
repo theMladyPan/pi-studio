@@ -43,6 +43,35 @@ test("a config carrying a function says so, because JSON cannot carry one", () =
 	);
 });
 
+test("a label that says `new users` is a label, and not code", () => {
+	// `new` reads like the operator, and a warning here would send a model off to rewrite a label
+	// that was already right. Only `function` and `=>` are the failures that actually occur.
+	const fresh = JSON.stringify({
+		type: "line",
+		data: {
+			labels: ["new users", "returning users"],
+			datasets: [{ label: "signups", data: [12, 8] }],
+		},
+	});
+	const { warnings } = auditMarkdown(fence(fresh));
+	assert.deepEqual(warnings, []);
+});
+
+test("a card with more than four warnings keeps four and counts the rest", () => {
+	// A report the model skims is a report it ignores, so the tail is counted rather than listed.
+	const mess = JSON.stringify({
+		data: {
+			labels: Array.from({ length: 12 }, (_, index) => `0${Math.min(index + 1, 9)}:00`),
+			datasets: Array.from({ length: 7 }, (_, index) => ({ label: `series ${index + 1}`, data: [] })),
+		},
+		options: { a: { b: { c: { d: { e: 1 } } } } },
+	});
+	const { warnings } = auditMarkdown(fence(mess), 400);
+	assert.deepEqual(warnings.slice(0, 4).length, 4);
+	assert.equal(warnings.length, 5, `the report has to stop somewhere, got ${JSON.stringify(warnings)}`);
+	assert.match(warnings[4], /^and \d+ more$/);
+});
+
 test("a body that is not JSON names the parser's complaint and says nothing else", () => {
 	const { warnings, summary } = auditMarkdown(
 		fence(`{
