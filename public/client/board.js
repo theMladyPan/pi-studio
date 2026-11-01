@@ -6185,16 +6185,23 @@ function leafShown(field) {
   return text ? shortModel(text) : "";
 }
 
+/**
+ * What one leaf says in a folded group: its label and then its value, because a value alone — an `on`, a
+ * `some` — says nothing about what it is the value of. A leaf with nothing to show is its label alone.
+ */
+function leafLine(leaf) {
+  const label = leaf.field.label ?? leaf.field.id;
+  const shown = leafShown(leaf.field);
+  return shown ? `${label} ${shown}` : label;
+}
+
 /** What a folded group says: its leaves in order, or how many files when they are all prompt files. */
 function groupPreview(leaves) {
   if (!leaves.length) return "";
   if (leaves.every((leaf) => leaf.field.type === "prompt")) {
     return `${leaves.length} file${leaves.length === 1 ? "" : "s"}`;
   }
-  return leaves
-    .map((leaf) => leafShown(leaf.field))
-    .filter(Boolean)
-    .join(" · ");
+  return leaves.map(leafLine).join(" · ");
 }
 
 /**
