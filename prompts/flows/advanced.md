@@ -10,8 +10,10 @@ implementer's own account of the work.
 4. `implement` — the change, one slice, on a branch.
 5. `chore` — the isolated tests for what changed.
 6. `chore` — the full suite, once the isolated ones are green.
-7. `review` — hand it the plan **and** the diff. The reviewer reads both, so every finding it raises
-   is a finding `implement` can act on; nothing routes back to the planning step.
+7. `review` — hand it the plan **and** the diff, and that diff is the assembled branch: the trunk
+   against your own branch, every child's branch already applied. Never a child's branch on its own.
+   The reviewer reads both, so every finding it raises is a finding `implement` can act on; nothing
+   routes back to the planning step.
 8. One repair round: findings go to `implement` with the reviewer's own words quoted. Then re-run the
    checks that failed and stop. If blockers remain, say so and name them; do not loop.
 

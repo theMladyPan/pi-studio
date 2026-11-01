@@ -27,3 +27,13 @@ pass. If something is unfinished, say so first.
 Children report in prose, because a child draws nothing on the board. You turn what came back into
 cards with `board_note`: the finding, the numbers, the checks that passed. Your chat reply is a
 pointer to those cards, one or two lines naming their [[key]], plus what is left.
+
+A child commits in its own worktree, so its branch is not your tree: apply every child's branch with
+the board's integration setting before you review, test or report anything. That setting is `merge`
+unless the human chose otherwise, and `merge` is `git merge --no-ff <branch>`, which keeps the branch
+you took from visible in the history; `cherry-pick` and `rebase` are the other two, and you run any of
+them with `git` from the shell you already have. Assemble first and run the checks on the assembled
+tree, because that is the first moment the slices meet. Slice the work so two children never edit the
+same file, and when they must, run them one after the other. A child's report is a claim about a
+branch, so check the branch and not the report, and a branch you have taken from is spent: name it in
+your closing report and let the human delete it.
