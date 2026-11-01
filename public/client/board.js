@@ -5485,12 +5485,17 @@ function paintBoardFacts() {
 }
 
 function closePick() {
+  const wasOpen = !runtimePick.hidden;
   picking = "";
   pickAnchor = null;
   pickBoard = false;
   pickInst = null;
   runtimePick.hidden = true;
   runtimeSearch.value = "";
+  // A picker opened from the board's settings has written the daemon's copy by now, through a route of
+  // its own. The panel is drawn from the document, so it is reread instead of guessed at from that
+  // answer, which names a setting its own way.
+  if (wasOpen) refreshSettings();
 }
 
 function placeRuntimePick() {
@@ -5974,32 +5979,16 @@ async function postThreadField(route, body) {
 }
 
 // ---------- this board's settings ------------------------------------------
+// The panel has no rows of its own any more: it is a tree drawn from the document `/settings/board`
+// serves, so a setting the daemon gains is a setting this panel shows.
 const configBtn = document.getElementById("configBtn");
 const configPanel = document.getElementById("boardConfig");
-const cfgDim = document.getElementById("cfgDim");
-const cfgDimValue = document.getElementById("cfgDimValue");
-const cfgModel = document.getElementById("cfgModel");
-const cfgModelValue = document.getElementById("cfgModelValue");
-const cfgThinking = document.getElementById("cfgThinking");
-const cfgThinkingValue = document.getElementById("cfgThinkingValue");
-const cfgTools = document.getElementById("cfgTools");
-const cfgToolsValue = document.getElementById("cfgToolsValue");
-const cfgPath = document.getElementById("cfgPath");
-const cfgPathValue = document.getElementById("cfgPathValue");
-const cfgVerbosity = document.getElementById("cfgVerbosity");
-const cfgVerbosityValue = document.getElementById("cfgVerbosityValue");
-const cfgAudience = document.getElementById("cfgAudience");
-const cfgAudienceValue = document.getElementById("cfgAudienceValue");
-// The four content switches of a card, and the key of the board's configuration each one writes. Each
-// holds a level rather than a yes: "where it carries the point" is the answer a model needs and a switch
-// cannot give it.
-const CARD_SWITCHES = [
-  ["cfgCode", "cfgCodeValue", "showCodeFragments"],
-  ["cfgMath", "cfgMathValue", "showMathFormulas"],
-  ["cfgCharts", "cfgChartsValue", "showCharts"],
-  ["cfgRefs", "cfgRefsValue", "showReferences"],
-];
-const cfgPrompts = document.getElementById("cfgPrompts");
+const cfgTree = document.getElementById("cfgTree");
+// The document the panel is drawn from, and what was drawn from it: every leaf in document order, and
+// every group with the leaves under it, so a config that arrives repaints all of them.
+let boardDoc = null;
+let treeLeaves = [];
+let treeGroups = [];
 const pePanel = document.getElementById("promptEditor");
 const pePick = document.getElementById("pePick");
 const peText = document.getElementById("peText");
@@ -6026,12 +6015,6 @@ async function loadTools() {
   return toolCatalogue;
 }
 
-/** How much of the default a new thread still gets, in the row that opens the list. */
-function toolsSummary() {
-  const off = (boardConfig.toolsOff ?? []).length + (boardConfig.extensionsOff ?? []).length;
-  return off ? `${off} off` : "everything";
-}
-
 /** The daemon's copy of the configuration is the truth; whatever arrives is what the panel shows. */
 function applyConfig(config) {
   if (!config || !config.model) return;
@@ -6040,17 +6023,17 @@ function applyConfig(config) {
   paintFocus();
 }
 
+/**
+ * Every leaf and every folded sum, from the settings the board holds. A setting whose config key is the
+ * one its write template fills is read off the config; anything else keeps what the document said, so a
+ * config that arrives repaints the tree without a request.
+ */
 function paintConfig() {
-  cfgDimValue.textContent = boardConfig.dimOthers === false ? "off" : "on";
-  cfgModelValue.textContent = shortModel(boardConfig.model);
-  cfgThinkingValue.textContent = boardConfig.thinking || "off";
-  cfgToolsValue.textContent = toolsSummary();
-  cfgPathValue.textContent = boardConfig.path || "auto";
-  cfgVerbosityValue.textContent = boardConfig.cardsVerbosity || "normal";
-  cfgAudienceValue.textContent = boardConfig.cardsAudience || "programmer";
-  for (const [, value, key] of CARD_SWITCHES) {
-    document.getElementById(value).textContent = boardConfig[key] || "some";
+  for (const leaf of treeLeaves) {
+    const shown = configValue(leaf.field);
+    if (shown !== undefined) leaf.field.value = shown;
   }
+  paintTree();
 }
 
 function shownConfig(on) {
@@ -6058,6 +6041,254 @@ function shownConfig(on) {
   configBtn.setAttribute("aria-expanded", on ? "true" : "false");
   // The prompt editor was opened from this panel and belongs to it, so it leaves when the panel does.
   if (!on) pePanel.hidden = true;
+}
+
+// ---------- the settings tree ---------------------------------------------
+// One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
+// holds, a `prompt` opens the file, and anything with a `pick` opens the picker of that name, which
+// posts the choice itself. Nothing here knows a setting by name.
+
+/** Where this board keeps which groups it has folded. Two boards keep two shapes. */
+function foldKey() {
+  return `pi-studio.board.collapsed.v1.${workspace}`;
+}
+
+/** The folded shape the human left, by dotted group path; a group nobody has touched is absent. */
+function foldsRead() {
+  try {
+    const held = JSON.parse(localStorage.getItem(foldKey()) || "{}");
+    return held && typeof held === "object" && !Array.isArray(held) ? held : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Whether a group opens: the shape the human left, else the document's own default. */
+function foldOpen(path, group) {
+  const held = foldsRead()[path];
+  return typeof held === "boolean" ? held : group.open !== false;
+}
+
+/** One group folded or unfolded, remembered for this board alone. */
+function foldRemember(path, open) {
+  const held = foldsRead();
+  held[path] = open;
+  try {
+    localStorage.setItem(foldKey(), JSON.stringify(held));
+  } catch {}
+}
+
+/**
+ * The panel is drawn from the daemon's document, so it is read on every open: the same page serves every
+ * board, and a setting added to the daemon shows up here without a reload.
+ */
+async function loadBoardSettings() {
+  try {
+    const response = await fetch(`/settings/board?${auth}`);
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    boardDoc = await response.json();
+    renderTree(boardDoc);
+  } catch (error) {
+    boardDoc = null;
+    treeLeaves = [];
+    treeGroups = [];
+    const line = el("p", "cfg-failure");
+    line.textContent = `could not read this board's settings: ${error.message || error}`;
+    cfgTree.replaceChildren(line);
+  }
+}
+
+/** A write has landed and the panel is on screen, so the document behind it is read again. */
+function refreshSettings() {
+  if (configPanel.hidden) return;
+  void loadBoardSettings();
+}
+
+/** The whole panel: what the board is, the groups, and the one line under them. */
+function renderTree(doc) {
+  treeLeaves = [];
+  treeGroups = [];
+  const nodes = [];
+  if (doc.title) {
+    const head = el("p", "cfg-head");
+    head.textContent = doc.title;
+    nodes.push(head);
+  }
+  if (doc.subtitle) {
+    const sub = el("p", "cfg-sub");
+    sub.textContent = doc.subtitle;
+    nodes.push(sub);
+  }
+  for (const group of doc.groups ?? []) nodes.push(renderGroup(group, ""));
+  if (doc.foot) {
+    const foot = el("p", "cfg-note");
+    foot.textContent = doc.foot;
+    nodes.push(foot);
+  }
+  cfgTree.replaceChildren(...nodes);
+  paintConfig();
+}
+
+/** One group: a `<details>` whose leaves come first and whose own groups follow, to any depth. */
+function renderGroup(group, parentPath) {
+  const path = parentPath ? `${parentPath}.${group.id}` : group.id;
+  const fold = el("details", "cfg-group");
+  fold.open = foldOpen(path, group);
+  fold.title = group.help ?? "";
+  const summary = document.createElement("summary");
+  const label = el("span");
+  label.textContent = group.label ?? group.id;
+  const preview = el("span", "cfg-preview");
+  summary.append(label, preview);
+  const kids = el("div", "cfg-kids");
+  const mine = [];
+  for (const field of group.fields ?? []) {
+    const leaf = renderLeaf(field);
+    kids.append(leaf.row);
+    mine.push(leaf);
+  }
+  for (const child of group.groups ?? []) {
+    const drawn = renderGroup(child, path);
+    kids.append(drawn.fold);
+    mine.push(...drawn.leaves);
+  }
+  fold.append(summary, kids);
+  fold.addEventListener("toggle", () => foldRemember(path, fold.open));
+  treeGroups.push({ preview, leaves: mine });
+  return { fold, leaves: mine };
+}
+
+/** One leaf: a label, its value, and the click that changes it. */
+function renderLeaf(field) {
+  const row = el("button", "cfg-row");
+  row.type = "button";
+  row.title = field.help ?? "";
+  const label = el("span");
+  label.textContent = field.label ?? field.id;
+  const value = el("b");
+  row.append(label, value);
+  row.addEventListener("click", () => void openLeaf(field, row));
+  const leaf = { field, row, value };
+  treeLeaves.push(leaf);
+  return leaf;
+}
+
+/** What a leaf says on its right: a yes or a no, how much is off, or the value itself. */
+function leafShown(field) {
+  if (field.type === "toggle") return field.value === true ? "on" : "off";
+  if (field.type === "list") {
+    const off = Array.isArray(field.value) ? field.value.length : 0;
+    return off ? `${off} off` : "all on";
+  }
+  if (field.type === "prompt") return "";
+  const text = String(field.value ?? "");
+  return text ? shortModel(text) : "";
+}
+
+/** What a folded group says: its leaves in order, or how many files when they are all prompt files. */
+function groupPreview(leaves) {
+  if (!leaves.length) return "";
+  if (leaves.every((leaf) => leaf.field.type === "prompt")) {
+    return `${leaves.length} file${leaves.length === 1 ? "" : "s"}`;
+  }
+  return leaves
+    .map((leaf) => leafShown(leaf.field))
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/**
+ * What the board's config says a leaf is worth, read from the template the field writes rather than
+ * from its name: the keys the template fills are the keys the config answers in, and the two halves of
+ * a split value come back joined with the same split. A setting the config names otherwise (a picker's
+ * route answers `thinking` for the `level` it is given) is left to the reread that follows a write.
+ */
+function configValue(field) {
+  const body = field.write?.body;
+  if (!body || typeof body !== "object") return undefined;
+  const keysFilledWith = (token) => Object.keys(body).filter((key) => body[key] === token);
+  const whole = keysFilledWith("@value");
+  if (field.type === "list") {
+    // A list of names can arrive split over two keys, the built-in tools and the extensions, and the
+    // row counts what is off in both.
+    const held = whole.map((key) => boardConfig[key]).filter(Array.isArray);
+    return held.length === whole.length && whole.length ? held.flat() : undefined;
+  }
+  if (whole.length) {
+    const [key] = whole;
+    if (!(key in boardConfig)) return undefined;
+    if (field.type === "toggle") return boardConfig[key] !== false;
+    const text = String(boardConfig[key] ?? "");
+    return text ? text : undefined;
+  }
+  const [head] = keysFilledWith("@head");
+  const [rest] = keysFilledWith("@rest");
+  if (!head || !rest || !boardConfig[head] || !boardConfig[rest]) return undefined;
+  return `${boardConfig[head]}${field.split ?? "/"}${boardConfig[rest]}`;
+}
+
+/** The values on every row, and the sum on every folded group. */
+function paintTree() {
+  for (const leaf of treeLeaves) leaf.value.textContent = leafShown(leaf.field);
+  for (const group of treeGroups) group.preview.textContent = groupPreview(group.leaves);
+}
+
+/**
+ * One leaf written through the route the document names, with the template it carries: `@value` is the
+ * control's own value, `@head` and `@rest` are the halves of `split` at the first separator, and any
+ * other string is a literal the daemon expects (a prompt name, say).
+ */
+async function writeLeaf(field, value) {
+  const write = field.write;
+  if (!write?.route) return null;
+  const split = field.split ?? "/";
+  const text = String(value ?? "");
+  const at = text.indexOf(split);
+  const head = at < 0 ? text : text.slice(0, at);
+  const rest = at < 0 ? "" : text.slice(at + split.length);
+  const body = {};
+  for (const [key, slot] of Object.entries(write.body ?? {})) {
+    body[key] = slot === "@value" ? value : slot === "@head" ? head : slot === "@rest" ? rest : slot;
+  }
+  try {
+    const response = await fetch(`${write.route}?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    const payload = await response.json();
+    if (payload.config) applyConfig(payload.config);
+    // The row says what it wrote at once; the daemon's frame then rereads the document, which is the
+    // whole truth about this setting.
+    field.value = value;
+    paintConfig();
+    return payload;
+  } catch (error) {
+    hintLine(`could not change it: ${error.message || error}`, true);
+    return null;
+  }
+}
+
+/** A leaf pressed: flip a switch, open a file, or hand the work to the picker that names it. */
+async function openLeaf(field, row) {
+  if (field.type === "toggle") {
+    await writeLeaf(field, field.value !== true);
+    return;
+  }
+  if (field.type === "prompt") {
+    pePanel.hidden = false;
+    try {
+      await loadPrompts();
+      await openPrompt(field.file ?? field.value);
+    } catch (error) {
+      peHint.textContent = `could not read it: ${error.message || error}`;
+    }
+    return;
+  }
+  // Every picker here writes the board's default itself and broadcasts the config that follows, so the
+  // choice is never posted twice.
+  if (field.pick) await openPick(field.pick, row, true);
 }
 
 // ---------- clean and new ------------------------------------------------
@@ -6123,23 +6354,14 @@ newBtn.addEventListener("click", async () => {
 
 configBtn.addEventListener("click", () => {
   closePick();
-  shownConfig(configPanel.hidden);
-  paintConfig();
+  const on = configPanel.hidden;
+  shownConfig(on);
+  if (!on) return;
+  // A document already in hand is drawn at once, so the panel never opens blank; the read that follows
+  // is what it settles on.
+  if (boardDoc) renderTree(boardDoc);
+  void loadBoardSettings();
 });
-
-// The tools are a list, not a row you can flip: a thread has sixteen of them, and sixteen switches
-// in this panel made it taller than the board. It opens the same picker a model does.
-cfgTools.addEventListener("click", () => void openPick("tools", cfgTools, true));
-
-/** The flow a new boss starts on. The same list as a thread's, aimed at the board instead. */
-cfgPath.addEventListener("click", () => void openPick("path", cfgPath, true));
-cfgVerbosity.addEventListener("click", () => void openPick("verbosity", cfgVerbosity, true));
-cfgAudience.addEventListener("click", () => void openPick("audience", cfgAudience, true));
-for (const [button, , key] of CARD_SWITCHES) {
-  // The id the list opens with is the short name: `code`, `math`, `charts`, `refs`.
-  const which = Object.keys(CARD_LEVEL_KEYS).find((name) => CARD_LEVEL_KEYS[name] === key);
-  document.getElementById(button).addEventListener("click", () => void openPick(which, document.getElementById(button), true));
-}
 
 // ---------- the prompt files ----------------------------------------------
 // A role, a mode and a flow are markdown under `prompts/`. They are read when a thread starts, so an
@@ -6171,17 +6393,6 @@ async function openPrompt(name) {
   peHint.textContent = chosen;
 }
 
-cfgPrompts.addEventListener("click", async () => {
-  pePanel.hidden = !pePanel.hidden;
-  if (pePanel.hidden) return;
-  try {
-    await loadPrompts();
-    await openPrompt(pePick.value);
-  } catch (error) {
-    peHint.textContent = `could not read them: ${error.message || error}`;
-  }
-});
-
 pePick.addEventListener("change", () => {
   void openPrompt(pePick.value).catch((error) => {
     peHint.textContent = `could not read it: ${error.message || error}`;
@@ -6202,23 +6413,6 @@ peSave.addEventListener("click", async () => {
   }
 });
 
-cfgDim.addEventListener("click", async () => {
-  const want = boardConfig.dimOthers === false;
-  try {
-    const response = await fetch(`/config?${auth}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dimOthers: want }),
-    });
-    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
-    applyConfig((await response.json()).config);
-  } catch (error) {
-    hintLine(`could not change it: ${error.message || error}`, true);
-  }
-});
-
-cfgModel.addEventListener("click", () => void openPick("model", cfgModel, true));
-cfgThinking.addEventListener("click", () => void openPick("thinking", cfgThinking, true));
 runtimeSearch.addEventListener("input", () => (picking === "tools" ? drawTools(runtimeSearch.value) : drawModels(runtimeSearch.value)));
 window.addEventListener("resize", () => {
   if (!runtimePick.hidden) placeRuntimePick();
