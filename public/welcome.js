@@ -691,13 +691,12 @@
 
   /**
    * Which of the route's lists a field offers. The route answers the built-in tools and the installed
-   * extensions side by side, and the key the field writes — `toolsOff`, `extensionsOff` — says which of
-   * the two it keeps names out of.
+   * extensions side by side, and the leaf's own `from` says which of the two it keeps names out of. A
+   * document that does not say reads as the built-in tools, which is what it offered before it could.
    */
   function offeredNames(field, catalogue) {
     if (!catalogue) return [];
-    const key = Object.keys(field.write?.body ?? {})[0] ?? "";
-    if (/extension/i.test(key)) return (catalogue.extensions ?? []).map((one) => one.name);
+    if (field.from === "extensions") return (catalogue.extensions ?? []).map((one) => one.name);
     return catalogue.builtin ?? [];
   }
 

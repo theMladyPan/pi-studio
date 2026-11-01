@@ -55,6 +55,12 @@ export type SettingsField = {
 	options?: string[];
 	/** A route the picker reads its rows from instead: the model catalogue, this machine's tools. */
 	source?: string;
+	/**
+	 * Which of the route's lists a `list` leaf keeps names out of. `/tools` answers pi's own tools and the
+	 * installed extension folders side by side, so a leaf has to say which of the two it is; without it the
+	 * client would have to read the key its `write.body` fills and guess.
+	 */
+	from?: "builtin" | "extensions";
 	/** The character a composite value such as `provider/model` is split at, once, for `write.body`. */
 	split?: string;
 	/** The prompt file a `prompt` leaf edits, as `${folder}/${name}` relative to `prompts/`. */
@@ -259,6 +265,7 @@ export function settingsDocument({ scope, values, title, subtitle, foot }: Setti
 						type: "list",
 						pick: "tools",
 						source: "/tools",
+						from: "builtin",
 						value: values.toolsOff ?? [],
 						write: write("toolsOff"),
 					},
@@ -268,6 +275,7 @@ export function settingsDocument({ scope, values, title, subtitle, foot }: Setti
 						type: "list",
 						pick: "tools",
 						source: "/tools",
+						from: "extensions",
 						value: values.extensionsOff ?? [],
 						write: write("extensionsOff"),
 					},
