@@ -1,5 +1,4 @@
 /* pi board — canvas client. Cards arrive from the daemon over server-sent events. */
-import { renderChart } from "./chart.js";
 const world = document.getElementById("world");
 const viewport = document.getElementById("viewport");
 // `overflow: clip` keeps the viewport out of the scroll containers, but an engine that ignores
@@ -466,9 +465,43 @@ function loadMermaid() {
   return mermaidReady;
 }
 
+// ---------- chart.js ------------------------------------------------------
+// The same bargain as mermaid: a card that holds no chart never pays for a charting library. Chart.js
+// arrives as a lazy global, and its defaults take the board's palette once so a config draws in the
+// card's own colours without naming them.
+let chartReady = null;
+
+function loadChartJs() {
+  if (window.Chart) return Promise.resolve(window.Chart);
+  if (!chartReady) {
+    chartReady = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "/client/chart-umd-min.js";
+      script.onload = () => {
+        window.Chart.defaults.color = "#c9d1d9";
+        window.Chart.defaults.borderColor = "#30363d";
+        window.Chart.defaults.font.family = "system-ui, -apple-system, 'Segoe UI', sans-serif";
+        window.Chart.defaults.font.size = 11;
+        window.Chart.defaults.animation = false;
+        resolve(window.Chart);
+      };
+      // A missing bundle leaves the next card free to try again rather than failing for the session.
+      script.onerror = () => {
+        chartReady = null;
+        reject(new Error("chart-umd-min.js did not load"));
+      };
+      document.head.appendChild(script);
+    });
+  }
+  return chartReady;
+}
+
 /** Drawn diagrams by source: a card re-renders on every tick of the board, and parsing is not free. */
 const diagrams = new Map();
-/** Charts by fence body, for the same reason: a redraw must not re-lay-out a drawing that has not changed. */
+/**
+ * Charts by fence body, holding a PNG data URL: a card re-renders on every tick of the board, and a
+ * redraw that has not changed must not pay for Chart.js at all.
+ */
 const charts = new Map();
 let diagramSeq = 0;
 
@@ -518,6 +551,90 @@ function drawDiagram(holder, source) {
       why.textContent = `mermaid could not draw this: ${String(error.message || error).split("\n")[0]}`;
       holder.replaceChildren(pre, why);
     });
+}
+
+/** The size a chart is drawn at, in CSS pixels. A card is about 430px wide, so the card's CSS scales it. */
+const CHART_WIDTH = 400;
+const CHART_HEIGHT = 240;
+
+function chartImage(png) {
+  const img = document.createElement("img");
+  img.src = png;
+  // The drawing says nothing a screen reader could not take from the sentence above it.
+  img.alt = "";
+  return img;
+}
+
+/**
+ * A chart fence that will not parse shows why, and the one line that says what the block is meant to
+ * be. The model wrote the block, so the error is addressed to the model: never a blank box.
+ */
+function chartProblem(why) {
+  const pre = el("pre");
+  const code = el("code");
+  code.textContent = why;
+  pre.appendChild(code);
+  const hint = el("p");
+  hint.textContent = "a chart block is a Chart.js config as JSON, see prompts/skills/chart.md";
+  return [pre, hint];
+}
+
+/**
+ * A chart fence is a Chart.js config written as JSON, and it reaches the card as a PNG. A card body is
+ * rebuilt on every tick of the board, so no Chart instance may outlive the paint: the drawing is
+ * snapshotted and destroyed in the same turn, and the data URL is what the next tick reuses.
+ */
+function drawChart(holder, body) {
+  const drawn = charts.get(body);
+  if (drawn) {
+    holder.appendChild(chartImage(drawn));
+    return;
+  }
+  let config;
+  try {
+    // The body is data, so it is parsed and never evaluated: a config cannot run, by construction.
+    config = JSON.parse(body);
+  } catch (error) {
+    holder.replaceChildren(...chartProblem(String(error.message || error)));
+    return;
+  }
+  if (!config || typeof config !== "object" || !config.type || !config.data) {
+    holder.replaceChildren(...chartProblem("a chart config needs a `type` and a `data` object"));
+    return;
+  }
+  loadChartJs()
+    .then((Chart) => {
+      const ratio = window.devicePixelRatio || 1;
+      const canvas = document.createElement("canvas");
+      // Chart.js reads these as the CSS size and multiplies by `devicePixelRatio` into the backing
+      // store, so the snapshot is 400px wide on any screen and sharp on a retina one.
+      canvas.width = CHART_WIDTH;
+      canvas.height = CHART_HEIGHT;
+      const chart = new Chart(canvas, {
+        ...config,
+        options: {
+          ...config.options,
+          // A card cannot be a live canvas, so the options that would tie the drawing to one are the
+          // board's to set, and the config may style every other thing it likes.
+          responsive: false,
+          maintainAspectRatio: false,
+          animation: false,
+          devicePixelRatio: ratio,
+        },
+      });
+      let png;
+      try {
+        // A canvas outside the document is never laid out by the browser, so Chart.js leaves the
+        // first paint to the caller. One update lays it out and draws it.
+        chart.update();
+        png = canvas.toDataURL("image/png");
+      } finally {
+        chart.destroy();
+      }
+      charts.set(body, png);
+      holder.replaceChildren(chartImage(png));
+    })
+    .catch((error) => holder.replaceChildren(...chartProblem(String(error.message || error))));
 }
 
 /** `|---|:--:|` under a header row is what makes the block above it a table. */
@@ -593,15 +710,8 @@ function renderMarkdown(markdown) {
         drawDiagram(wrap, body.trim());
         holder.appendChild(wrap);
       } else if (lang === "chart") {
-        // The svg comes from our own layout code and carries no user markup, but every fence that holds
-        // markup goes through the same string filter, so there is one rule and no exception to remember.
         const wrap = el("div", "svg-wrap chart-wrap");
-        let svg = charts.get(body);
-        if (!svg) {
-          svg = sanitizeSvg(renderChart(body).svg);
-          charts.set(body, svg);
-        }
-        wrap.innerHTML = svg;
+        drawChart(wrap, body);
         holder.appendChild(wrap);
       } else {
         const pre = el("pre");

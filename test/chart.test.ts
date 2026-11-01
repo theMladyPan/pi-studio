@@ -1,74 +1,91 @@
 import assert from "node:assert/strict";
+import { existsSync, statSync } from "node:fs";
 import { test } from "node:test";
 import { auditMarkdown } from "../server/chart-audit.ts";
 
 /**
- * The drawing is a client module, and `tsconfig.node.json` includes `server/**` and `test/**` only, so
- * the specifier is computed: a literal path there would make `tsc` try to type a file outside its
- * include and fail on the missing declarations instead of checking anything.
+ * The audit is the whole of the chart contract this side of the browser: a chart block is a Chart.js
+ * config written as JSON, and the client snapshots it to a PNG. So there is no renderer to unit-test
+ * here, only what the model is told about the config it wrote.
  */
-const client = await import(new URL("../public/client/chart.js", import.meta.url).href);
-const renderChart = client.renderChart as (source: string, options?: { width?: number; height?: number }) => { svg: string; warnings: string[] };
 
 /** A fence body in the markdown the model writes, which is the only shape the audit reads. */
 const fence = (body: string) => ["```chart", body, "```"].join("\n");
 
-/** Three bars, one series: the smallest chart that has a shape to check. */
-const threeBars = `type: bar
-title: errors per hour
-x: time
-y: errors (count)
----
-09:00 | 12
-10:00 | 9
-11:00 | 3`;
-
-test("three bars draw three rects, and nothing that can run or animate", () => {
-	const { svg } = renderChart(threeBars);
-	assert.equal((svg.match(/<rect/g) ?? []).length, 3, "one rect per bar");
-	// A card inserts this markup directly, so anything executable or self-restyling in it is a defect.
-	for (const forbidden of ["<script", "<style", "animate", "<foreignObject", "class=", "javascript:"]) {
-		assert.ok(!svg.toLowerCase().includes(forbidden.toLowerCase()), `the drawing must not contain ${forbidden}`);
-	}
-	assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="0 0 420 220"/);
+/** Twelve labels and one series: the smallest config that has a shape worth summarising. */
+const twelveBars = JSON.stringify({
+	type: "bar",
+	data: {
+		labels: Array.from({ length: 12 }, (_, index) => `0${Math.min(index + 1, 9)}:00`),
+		datasets: [{ label: "errors", data: Array.from({ length: 12 }, (_, index) => index) }],
+	},
 });
 
-test("twelve categories in 400px say so, and name the width the reader would need", () => {
-	const crowded = `type: bar
-y: count
----
-${Array.from({ length: 12 }, (_, index) => `category number ${index + 1} | ${index + 1}`).join("\n")}`;
-	const { warnings } = renderChart(crowded, { width: 400 });
+/** Anything the fixture above says nothing about: a warning here is a warning the model cannot use. */
+test("a valid bar config is clean, and the summary names its shape", () => {
+	const audited = auditMarkdown(fence(twelveBars), 800);
+	assert.deepEqual(audited.warnings, []);
+	assert.equal(audited.summary, "chart: bar, 12 labels, 1 dataset");
+});
+
+test("a config carrying a function says so, because JSON cannot carry one", () => {
+	// The model reaches for the Chart.js docs and writes a tick callback; quoted, it is data that does
+	// nothing, and unquoted it is not JSON at all. Both are reported, and this is the quoted one.
+	const withCallback = JSON.stringify({
+		type: "line",
+		data: { labels: ["a", "b"], datasets: [{ label: "p95 (ms)", data: [180, 240] }] },
+		options: { scales: { y: { ticks: { callback: "function (value) { return value + 'ms'; }" } } } },
+	});
+	const { warnings } = auditMarkdown(fence(withCallback));
 	assert.ok(
-		warnings.some((warning: string) => warning.includes("wide")),
-		`a crowded chart has to tell the model to go wide or drop points, got ${JSON.stringify(warnings)}`,
+		warnings.some((warning) => warning.includes("function")),
+		`a callback in the config has to be named, got ${JSON.stringify(warnings)}`,
 	);
 });
 
-test("a body with nothing to draw says no chart data instead of returning an empty box", () => {
-	const { svg, warnings } = renderChart("bogus");
-	assert.ok(svg.includes("no chart data"), svg);
-	assert.ok(warnings.length > 0, "a silent empty drawing is the failure this guards");
+test("a body that is not JSON names the parser's complaint and says nothing else", () => {
+	const { warnings, summary } = auditMarkdown(
+		fence(`{
+  type: "bar",
+  data: { labels: ["a"], datasets: [{ label: "x", data: [1] }] },
+  options: { scales: { y: { ticks: { callback: (value) => value + "ms" } } } }
+}`),
+	);
+	assert.equal(warnings.length, 1, `a body that does not parse has no other shape to report, got ${JSON.stringify(warnings)}`);
+	assert.ok(warnings[0].includes("not JSON"), warnings[0]);
+	assert.equal(summary, "");
 });
 
-test("the audit refuses a chart fence that is not a chart", () => {
-	const { warnings, summary } = auditMarkdown("```chart\nbogus\n```");
-	assert.deepEqual(warnings, ["chart block does not parse: no --- separator and no two-column rows"]);
-	assert.equal(summary, "", "a fence that does not parse has no shape to describe");
+test("twelve labels in a 400px card say so, and name the width the reader would need", () => {
+	const { warnings } = auditMarkdown(fence(twelveBars), 400);
+	assert.ok(
+		warnings.some((warning) => warning.includes("wide")),
+		`a crowded chart has to tell the model to go wide or drop labels, got ${JSON.stringify(warnings)}`,
+	);
+});
+
+test("seven datasets in one chart say so", () => {
+	const seven = JSON.stringify({
+		type: "line",
+		data: {
+			labels: ["a", "b", "c"],
+			datasets: Array.from({ length: 7 }, (_, index) => ({ label: `series ${index + 1}`, data: [1, 2, 3] })),
+		},
+	});
+	const { warnings } = auditMarkdown(fence(seven));
+	assert.ok(
+		warnings.some((warning) => warning.includes("7 datasets")),
+		`seven lines in one card is the failure this guards, got ${JSON.stringify(warnings)}`,
+	);
 });
 
 test("the audit says nothing about markdown that holds no chart", () => {
 	assert.deepEqual(auditMarkdown("A note with a ```js fence\nconsole.log(1)\n``` and no chart."), { warnings: [], summary: "" });
 });
 
-test("the audit describes the chart the card will draw, in one line", () => {
-	const crowded = fence(`type: bar
-y: count
----
-${Array.from({ length: 12 }, (_, index) => `c${index} | ${index}`).join("\n")}`);
-	const audited = auditMarkdown(crowded);
-	assert.equal(audited.summary, "chart: bar, 12 points, 1 series, not sorted");
-	assert.deepEqual(audited.warnings, ['12 categories in 406px: labels will be elided or rotated, use size="wide" or fewer points']);
-	// The same chart on a wide card fits, so the warning is about the width and not about the count alone.
-	assert.deepEqual(auditMarkdown(crowded, 800).warnings, []);
+test("the Chart.js bundle is vendored, and is the library rather than a stub", () => {
+	const bundle = new URL("../public/client/chart-umd-min.js", import.meta.url);
+	assert.ok(existsSync(bundle), "public/client/chart-umd-min.js is missing, so no chart block can draw");
+	const bytes = statSync(bundle).size;
+	assert.ok(bytes > 100_000, `the bundle is ${bytes} bytes, which is too small to be Chart.js`);
 });

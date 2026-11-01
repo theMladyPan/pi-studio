@@ -1,51 +1,96 @@
 /**
  * What a chart fence will look like on the card, said back to the model that wrote it.
  *
- * The client draws the svg, but the model cannot see the drawing, so the two things that make a chart
- * unreadable in a card about 400px wide — too many categories, too many series — have to be said in
- * words and said before the reader meets them. This module parses the fence and reports only what the
- * model can act on. It never draws and never imports the client: `tsc` cannot resolve a `.js` under
- * `public/`, and the layout numbers here are the ones the drawing budgets for anyway.
+ * A chart block is a Chart.js config written as JSON, so there is nothing here to draw and nothing to
+ * import from the client: this module reads the config and reports only what the model can act on. The
+ * failures that matter are the ones a card 400px wide makes for it — too many labels, too many series,
+ * a config that is not JSON at all — and every message is one line that says what to change.
  */
 
-const CHAR = 7;
+/** A card below this width cannot hold many labels, and `size="wide"` is what lifts the limit. */
 const WIDE = 600;
-const MAX_CATEGORIES = 10;
-const MAX_SERIES = 6;
-
-type Fence = {
-	type: string;
-	sort: string;
-	series: number;
-	points: number;
-	values: number;
-	hasY: boolean;
-};
+const MAX_LABELS = 10;
+const MAX_DATASETS = 6;
+/** `options` itself counts as one, so four is `options.scales.y.ticks` and no deeper. */
+const MAX_OPTION_DEPTH = 4;
+/** The types Chart.js registers in the bundle the board ships. */
+const TYPES = ["bar", "line", "pie", "doughnut", "polarArea", "radar", "bubble", "scatter"];
 
 export function auditMarkdown(markdown: string, width = 406): { warnings: string[]; summary: string } {
 	const warnings: string[] = [];
 	const summaries: string[] = [];
 	try {
 		for (const body of chartFences(String(markdown ?? ""))) {
-			const fence = parseFence(body);
-			if (!fence) {
-				warnings.push("chart block does not parse: no --- separator and no two-column rows");
-				continue;
+			try {
+				const audited = auditFence(body, width);
+				warnings.push(...audited.warnings);
+				if (audited.summary) summaries.push(audited.summary);
+			} catch (error) {
+				// A reader that chokes on one fence must not take the rest of the note with it.
+				warnings.push(`chart block could not be read: ${message(error)}`);
 			}
-			if (!fence.hasY) warnings.push("chart block has data but no y: header");
-			if (fence.values === 1) warnings.push("a chart of one value says nothing a sentence cannot");
-			if (fence.points > MAX_CATEGORIES && width < WIDE) {
-				warnings.push(`${fence.points} categories in ${width}px: labels will be elided or rotated, use size="wide" or fewer points`);
-			}
-			if (fence.series > MAX_SERIES) warnings.push(`${fence.series} series in one chart: unreadable, split it or keep the top three`);
-			const order = fence.sort === "none" ? "not sorted" : `sorted ${fence.sort}`;
-			summaries.push(`chart: ${fence.type}, ${fence.points} point${fence.points === 1 ? "" : "s"}, ${fence.series} series, ${order}`);
 		}
 	} catch {
-		// A note is not worth failing over: a fence this reader chokes on draws as an empty box and says
-		// nothing, which is what the client already does on its own.
+		// A note is never worth failing a tool call over: the worst case is a fence nobody described.
 	}
 	return { warnings, summary: summaries.join(" · ") };
+}
+
+/** One fence, as a warning list and a line naming the shape the reader will meet. */
+function auditFence(body: string, width: number): { warnings: string[]; summary: string } {
+	let config: unknown;
+	try {
+		config = JSON.parse(body);
+	} catch (error) {
+		// The most common failure by far, so it is the shortest message: the parser already says where.
+		return { warnings: [`chart block is not JSON: ${message(error)}`], summary: "" };
+	}
+	const warnings: string[] = [];
+	// A config is data. A callback written into one is either a string that does nothing or a body that
+	// does not parse, and both are worth saying out loud.
+	if (/\bfunction\b|=>|\bnew\s/.test(body)) {
+		warnings.push("chart block holds code: JSON carries data only, so a function or `new` here never runs");
+	}
+	const chart = asObject(config);
+	const type = typeof chart.type === "string" ? chart.type : "";
+	if (!type) warnings.push(`chart block has no type: one of ${TYPES.join(", ")}`);
+	else if (!TYPES.includes(type)) warnings.push(`${type} is not a chart type here: use one of ${TYPES.join(", ")}`);
+
+	const data = asObject(chart.data);
+	const labels = Array.isArray(data.labels) ? data.labels : [];
+	const declared = Array.isArray(data.datasets) ? data.datasets : [];
+	if (!Array.isArray(data.datasets)) warnings.push("chart block has no data.datasets");
+	else if (!declared.length) warnings.push("data.datasets is empty: a chart needs one dataset with values");
+
+	if (labels.length > MAX_LABELS && width < WIDE) {
+		warnings.push(`${labels.length} labels in a ${width}px card: rotate, shorten, or use size="wide"`);
+	}
+	if (declared.length > MAX_DATASETS) {
+		warnings.push(`${declared.length} datasets in one chart: unreadable, keep the top three`);
+	}
+
+	let points = 0;
+	declared.forEach((entry, index) => {
+		const dataset = asObject(entry);
+		const values = Array.isArray(dataset.data) ? dataset.data : [];
+		points += values.length;
+		const name = typeof dataset.label === "string" && dataset.label ? `"${dataset.label}"` : `#${index + 1}`;
+		if (!values.length) warnings.push(`dataset ${name} has no data`);
+		else if (labels.length && values.length !== labels.length) {
+			warnings.push(`${values.length} values in dataset ${name} for ${labels.length} labels: one value per label`);
+		}
+	});
+	if (points === 1) warnings.push("a chart of one value says nothing a sentence cannot");
+
+	const depth = depthOf(chart.options);
+	if (depth > MAX_OPTION_DEPTH) {
+		warnings.push(`options nested ${depth} deep: keep only what you need, the board sets the rest`);
+	}
+
+	const summary = type
+		? `chart: ${type}, ${labels.length} label${labels.length === 1 ? "" : "s"}, ${declared.length} dataset${declared.length === 1 ? "" : "s"}`
+		: "";
+	return { warnings, summary };
 }
 
 /** The bodies of every ```chart fence, matched the way the client matches a fence. */
@@ -57,71 +102,22 @@ function chartFences(markdown: string): string[] {
 	return found;
 }
 
-/**
- * The same fence grammar the drawing reads, cut down to what a warning needs: the type, the order, how
- * many rows and series the model wrote, and whether it named them. `null` means the body is not a chart.
- */
-function parseFence(body: string): Fence | null {
-	const lines = body
-		.split("\n")
-		.map((line) => line.trim())
-		.filter(Boolean);
-	const separator = lines.indexOf("---");
-	let type = "bar";
-	let sort = "none";
-	let yText = "";
-	const rows: string[] = [];
-
-	const readHeader = (line: string) => {
-		const pair = line.match(/^([a-z][\w-]*)\s*:\s*(.*)$/i);
-		if (!pair) return false;
-		const key = pair[1].toLowerCase();
-		const value = pair[2].trim();
-		if (key === "type") type = value.toLowerCase() || "bar";
-		else if (key === "sort") sort = value.toLowerCase() || "none";
-		else if (key === "y") yText = value;
-		else if (!["title", "x", "scale", "labels", "goal"].includes(key)) return false;
-		return true;
-	};
-
-	if (separator < 0) {
-		// No `---`: the body is a two-column table, so a line with a value is data and a known key is a header.
-		for (const line of lines) if (!readHeader(line)) rows.push(line);
-	} else {
-		for (const line of lines.slice(0, separator)) readHeader(line);
-		rows.push(...lines.slice(separator + 1));
-	}
-
-	let dataRows = rows.map(cellsOf).filter((row) => row.length >= 2);
-	if (!dataRows.length) {
-		// The drawing accepts a `---` block whose rows hold one value each, so the audit does too.
-		const lone = rows.map(cellsOf).filter((row) => row.length === 1 && numberOf(row[0]) !== null);
-		if (separator < 0 || !lone.length) return null;
-		dataRows = lone;
-	}
-	const widestRow = dataRows.reduce((most, row) => Math.max(most, row.length - 1), 1);
-	const values = dataRows.reduce((total, row) => total + row.slice(1, widestRow + 1).filter((cell) => numberOf(cell) !== null).length, 0);
-	const declared = yText ? yText.split(",").filter((entry) => entry.trim()) : [];
-	return {
-		type,
-		sort: sort === "asc" || sort === "desc" ? sort : type === "hbar" ? "desc" : "none",
-		series: Math.max(1, declared.length || widestRow),
-		points: dataRows.length,
-		values,
-		hasY: declared.length > 0,
-	};
+/** A parsed config or one of its parts, read as a bag of keys without trusting that it is one. */
+function asObject(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
-/** A row's cells, separated the way the drawing separates them: `|`, then a comma, then a `label: value`. */
-function cellsOf(line: string): string[] {
-	if (line.includes("|")) return line.split("|").map((cell) => cell.trim());
-	if (line.includes(",")) return line.split(",").map((cell) => cell.trim());
-	return line.split(/:(.+)/).map((cell) => cell.trim());
+/** How many objects deep `options` reaches, counting `options` itself as the first. */
+function depthOf(value: unknown, depth = 1): number {
+	const node = asObject(value);
+	let deepest = depth;
+	for (const child of Object.values(node)) {
+		if (child && typeof child === "object") deepest = Math.max(deepest, depthOf(child, depth + 1));
+	}
+	return deepest;
 }
 
-function numberOf(cell: string | undefined): number | null {
-	const cleaned = String(cell ?? "").replace(/[\s,_%]/g, "");
-	if (!cleaned || !/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(cleaned)) return null;
-	const parsed = Number(cleaned);
-	return Number.isFinite(parsed) ? parsed : null;
+/** The parser's own message, on one line: a warning that wraps is a warning the model skims past. */
+function message(error: unknown): string {
+	return String((error as { message?: unknown } | null)?.message ?? error).split("\n")[0];
 }
