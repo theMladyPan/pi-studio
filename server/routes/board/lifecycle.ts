@@ -123,11 +123,14 @@ export function forgetCard(board, cardId) {
 /** Keep the board bounded: the oldest plain card goes when a new one arrives and there is no room. */
 export function makeRoom(board) {
 	while (board.cards.size >= MAX_PLAIN_CARDS) {
-		const oldest = [...board.cards.values()].sort((a, b) => a.at - b.at)[0];
-		if (!oldest) break;
-		board.cards.delete(oldest.id);
-		forgetCard(board, oldest.id);
-		broadcast(board, { type: "remove", id: oldest.id });
+		const oldest = [...board.cards.values()].sort((a, b) => a.at - b.at);
+		// A pinned card is one the human keeps in sight, so the oldest unpinned card goes first. A board of
+		// nothing but pinned cards still gives one up: the new card has to land, and this loop has to end.
+		const gone = oldest.find((held) => !held.pinned) ?? oldest[0];
+		if (!gone) break;
+		board.cards.delete(gone.id);
+		forgetCard(board, gone.id);
+		broadcast(board, { type: "remove", id: gone.id });
 	}
 }
 

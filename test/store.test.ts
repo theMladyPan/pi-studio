@@ -145,6 +145,36 @@ test("a plain card becomes a card of its own kind", () => {
 	assert.equal(card.markdown, "body");
 });
 
+test("a card carries its lineage, its size and its pin to the browser and back from its file", () => {
+	const card = plainCardFor(
+		{ id: "c11", type: "note", title: "n", at: now, markdown: "| a | b |", after: ["c7"], size: "wide", pinned: true },
+		null,
+	) as any;
+	assert.deepEqual(card.after, ["c7"]);
+	assert.equal(card.size, "wide");
+	assert.equal(card.pinned, true);
+	// A card with none of them says nothing about them, so a board that never carried one reads the same.
+	const bare = plainCardFor({ id: "c12", type: "note", title: "n", at: now, markdown: "body", after: [] }, null) as any;
+	assert.equal(bare.after, undefined);
+	assert.equal(bare.size, undefined);
+	assert.equal(bare.pinned, undefined);
+	// The file is the other half: what comes back has the three, and a shape nothing names is dropped.
+	const saved = restoredPlainCard({
+		id: "c13",
+		type: "note",
+		markdown: "body",
+		after: ["c7", 4],
+		size: "wide",
+		pinned: true,
+	}) as any;
+	assert.deepEqual(saved.after, ["c7"]);
+	assert.equal(saved.size, "wide");
+	assert.equal(saved.pinned, true);
+	const odd = restoredPlainCard({ id: "c14", type: "note", markdown: "body", size: "enormous", pinned: "yes" }) as any;
+	assert.equal(odd.size, undefined);
+	assert.equal(odd.pinned, undefined);
+});
+
 test("the browser is told when a question takes several answers", () => {
 	const card = plainCardFor(
 		{ id: "c9", type: "question", title: "q", at: now, question: "which?", options: ["a", "b"], multiple: true, status: "answered", answer: "a, b", answers: ["a", "b"] },

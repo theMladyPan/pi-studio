@@ -80,6 +80,10 @@ import { spawnSync } from "node:child_process";
  * @property {number} [updatedAt]
  * @property {{x:number,y:number,w:number,h:number}} [rect]
  * @property {boolean} [mini]
+ * @property {string[]} [after] the cards this one builds on, one arrow drawn from each
+ * @property {"compact"|"normal"|"wide"|"tall"} [size] the form the card is drawn in, which is a
+ *   shape rather than emphasis: a wide card holds a chart, a compact one a three-line answer
+ * @property {boolean} [pinned] the human keeps this card in sight, so eviction passes it over
  */
 
 /**

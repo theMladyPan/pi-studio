@@ -163,7 +163,9 @@ export async function onLayout(req, res, board) {
 	const clamp = (value) => Math.max(0, Math.min(40000, Math.round(Number.isFinite(Number(value)) ? Number(value) : 0)));
 	held.rect = { x: clamp(rect.x), y: clamp(rect.y), w: clamp(rect.w), h: clamp(rect.h) };
 	if (typeof body.mini === "boolean") held.mini = body.mini;
-	broadcast(board, { type: "move", id: held.id, rect: held.rect, mini: held.mini === true });
+	// A pin is the human's: the card stays when the board has to make room for a new one.
+	if (typeof body.pinned === "boolean") held.pinned = body.pinned;
+	broadcast(board, { type: "move", id: held.id, rect: held.rect, mini: held.mini === true, pinned: held.pinned === true });
 	scheduleSave(board);
 	answer(res, 200, { placed: held.id });
 }

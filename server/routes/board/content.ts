@@ -19,6 +19,43 @@ import { homedir } from "node:os";
 
 
 
+/** The sizes a card may be drawn in. Anything else in a body is ignored, not refused. */
+const CARD_SIZES = ["compact", "normal", "wide", "tall"];
+
+/** How many cards one card may name as what it builds on: the board draws an arrow from each. */
+const MAX_PREDECESSORS = 8;
+
+/**
+ * One entry of a card's `after`, as an id. A key resolves the way a `[[key]]` does — against a card's
+ * key and against a thread's — so an agent can name `load-shape` instead of an id nobody showed it.
+ */
+export function predecessorId(board, name) {
+	const wanted = typeof name === "string" ? name.trim() : "";
+	if (!wanted) return "";
+	const plain = board.cards.get(wanted) ?? [...board.cards.values()].find((held) => held.key === wanted);
+	if (plain) return plain.id;
+	const thread = board.threads.get(wanted) ?? [...board.threads.values()].find((held) => held.key === wanted);
+	return thread?.id ?? "";
+}
+
+/**
+ * What a new card builds on: the ids it named that this board knows, keys and ids both, at most eight.
+ * An entry that names nothing is dropped rather than refused: the card is worth drawing even when the
+ * arrow it asked for points at something a sweep has since taken away.
+ */
+export function predecessors(board, list) {
+	const ids = [];
+	for (const one of Array.isArray(list) ? list : []) {
+		const id = predecessorId(board, one);
+		if (!id || ids.includes(id)) continue;
+		ids.push(id);
+		if (ids.length >= MAX_PREDECESSORS) break;
+	}
+	return ids;
+}
+
+
+
 export async function onNote(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
@@ -27,6 +64,10 @@ export async function onNote(req, res, board) {
 	if (markdown.length > MAX_NOTE_CHARS) return void fail(res, 413, `a note holds at most ${MAX_NOTE_CHARS} characters`);
 	const title = field(body.title);
 	const key = field(body.key);
+	// The form the card is drawn in and what it builds on: a size nobody names is ignored, and an `after`
+	// of ids and keys that name nothing on this board is no arrow at all.
+	const size = CARD_SIZES.includes(body.size) ? body.size : "";
+	const after = predecessors(board, body.after);
 	const root = rootOf(board, body);
 	// A key makes the card stable: saying the same thing twice revises one note instead of stacking
 	// a second copy of it on the board, which is what a running agent stepping through a job does.
@@ -35,6 +76,9 @@ export async function onNote(req, res, board) {
 		held.markdown = markdown;
 		held.updatedAt = Date.now();
 		if (title) held.title = title;
+		// A revision that says nothing about the size or the lineage leaves what the card already carries.
+		if (size) held.size = size;
+		if (after.length) held.after = after;
 		// Ownership moves only when a fork takes the card or a new thread starts answering it, so a
 		// revision never changes who is responsible for the card it revises.
 		if (root && !held.ownerThread) held.ownerThread = root;
@@ -53,6 +97,8 @@ export async function onNote(req, res, board) {
 		markdown,
 		at: Date.now(),
 		...(key ? { key } : {}),
+		...(after.length ? { after } : {}),
+		...(size ? { size } : {}),
 		...(root ? { threadRoot: anchorOf(board, root), ownerThread: root } : {}),
 	};
 	const rect = placedRect(body);
@@ -106,6 +152,8 @@ export async function onSource(req, res, board) {
 	const label = field(body.title, 200);
 	const title = label ? `${named} - ${label}` : named;
 	const line = Number.isFinite(body.line) && body.line > 0 ? Math.round(body.line) : undefined;
+	const size = CARD_SIZES.includes(body.size) ? body.size : "";
+	const after = predecessors(board, body.after);
 	const root = rootOf(board, body);
 	const held = cardByKey(board, key, "source");
 	if (held) {
@@ -116,6 +164,9 @@ export async function onSource(req, res, board) {
 		held.updatedAt = Date.now();
 		if (line) held.line = line;
 		else delete held.line;
+		// Absent from the request means "as it was": a refresh of the file says nothing about the shape.
+		if (size) held.size = size;
+		if (after.length) held.after = after;
 		if (root && !held.ownerThread) held.ownerThread = root;
 		broadcast(board, { type: "update", card: plainCardFor(held, board) });
 		scheduleSave(board);
@@ -133,6 +184,8 @@ export async function onSource(req, res, board) {
 		key,
 		at: Date.now(),
 		...(line ? { line } : {}),
+		...(after.length ? { after } : {}),
+		...(size ? { size } : {}),
 		...(root ? { threadRoot: anchorOf(board, root), ownerThread: root } : {}),
 	};
 	board.cards.set(card.id, card);

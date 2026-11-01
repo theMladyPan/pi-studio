@@ -74,7 +74,7 @@ const noteTool = defineTool({
 	name: "board_note",
 	label: "Board note",
 	description:
-		"Put a note on the user's board. Use it for a diagram, a table, a file tree, a todo list that will be updated, or a finding worth keeping beside the conversation instead of buried in it. One card holds one kind of thing: a chart and the todo for it are two notes. Markdown is rendered; a fenced mermaid block draws a diagram, so a flow, a state machine, a sequence or a tree is mermaid, and a fenced svg block draws a picture, kept for a chart with numbers on an axis. Pass the same key again to revise that note in place, which is how a checklist grows." +
+		"Put a note on the user's board. Use it for a diagram, a table, a file tree, a todo list that will be updated, or a finding worth keeping beside the conversation instead of buried in it. One card holds one kind of thing: a chart and the todo for it are two notes. Markdown is rendered; a fenced mermaid block draws a diagram, so a flow, a state machine, a sequence or a tree is mermaid, and a chart with numbers on an axis is a ```chart block, never a hand-written svg. Pass the same key again to revise that note in place, which is how a checklist grows." +
 		(RULES ? ` ${RULES}` : ""),
 	parameters: Type.Object({
 		markdown: Type.String({ description: "Note body in markdown." }),
@@ -85,6 +85,17 @@ const noteTool = defineTool({
 					"Stable name for this note, e.g. 'plan'. Reusing it revises the same card. A [[key]] in your chat answer points at this card, so give every note one and use the same string in both places.",
 			}),
 		),
+		size: Type.Optional(
+			Type.Union(["compact", "normal", "wide", "tall"].map((size) => Type.Literal(size)), {
+				description:
+					"Card size for the form, not for emphasis: 'wide' for a chart or table with more than ten columns or points, 'compact' for a three-line answer, 'tall' for a long checklist or trace. Leave it out on almost every card.",
+			}),
+		),
+		after: Type.Optional(
+			Type.Array(Type.String(), {
+				description: "Keys or ids of the cards this one builds on. The board draws an arrow from each.",
+			}),
+		),
 	}),
 	async execute(_id, params) {
 		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
@@ -93,10 +104,15 @@ const noteTool = defineTool({
 				markdown: params.markdown,
 				...(params.title ? { title: params.title } : {}),
 				...(params.key ? { key: params.key } : {}),
+				...(params.size ? { size: params.size } : {}),
+				...(params.after?.length ? { after: params.after } : {}),
 			});
 			const what = result.updated ? "Revised" : "Added";
+			// The key is how a later turn revises this card and how a [[key]] in the chat finds it.
+			const key = result.card?.key ?? params.key ?? "";
+			const said = `${what} board note${params.title ? `: ${params.title}` : ""}${key ? ` (key [[${key}]])` : ""}.`;
 			return {
-				content: [{ type: "text", text: `${what} board note${params.title ? `: ${params.title}` : ""}.` }],
+				content: [{ type: "text", text: typeof result.report === "string" && result.report ? `${said} ${result.report}` : said }],
 				details: { cardId: result.cardId },
 			};
 		} catch (error) {
@@ -116,6 +132,12 @@ const sourceTool = defineTool({
 		line: Type.Optional(Type.Number({ description: "Line to centre the view on." })),
 		title: Type.Optional(Type.String({ description: "Optional card title, defaults to the file name." })),
 		key: Type.Optional(Type.String({ description: "Stable name for this card. Defaults to the path." })),
+		size: Type.Optional(
+			Type.Union(["compact", "normal", "wide", "tall"].map((size) => Type.Literal(size)), {
+				description:
+					"Card size for the form, not for emphasis: 'wide' for a chart or table with more than ten columns or points, 'compact' for a three-line answer, 'tall' for a long checklist or trace. Leave it out on almost every card.",
+			}),
+		),
 	}),
 	async execute(_id, params) {
 		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
@@ -125,6 +147,7 @@ const sourceTool = defineTool({
 				...(Number.isFinite(params.line) ? { line: params.line } : {}),
 				...(params.title ? { title: params.title } : {}),
 				...(params.key ? { key: params.key } : {}),
+				...(params.size ? { size: params.size } : {}),
 			});
 			const card = result.card ?? {};
 			const lines = Number.isFinite(card.lines) ? ` (${card.lines} lines)` : "";
@@ -311,6 +334,26 @@ const pathTool = defineTool({
 });
 
 
+const skillTool = defineTool({
+	name: "board_skill",
+	label: "Board skill",
+	description:
+		"Load the chart documentation before writing your first ```chart block in a session. Returns the grammar, the rules that keep a chart legible in a small card, and worked examples.",
+	parameters: Type.Object({
+		name: Type.Literal("chart", { description: "The skill to load. `chart` is the only one so far." }),
+	}),
+	async execute(_id, params) {
+		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
+		try {
+			const result = await call("/skill", { name: params.name });
+			return { content: [{ type: "text", text: result.text }] };
+		} catch (error) {
+			return failure(error);
+		}
+	},
+});
+
+
 export default function boardBridge(pi) {
 	if (!attached()) return;
 	pi.registerTool(noteTool);
@@ -318,4 +361,5 @@ export default function boardBridge(pi) {
 	pi.registerTool(askTool);
 	pi.registerTool(threadTool);
 	pi.registerTool(pathTool);
+	pi.registerTool(skillTool);
 }

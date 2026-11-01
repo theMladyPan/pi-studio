@@ -401,7 +401,14 @@ test("a closed note comes back on /undo, with its id and its key", async () => {
 	try {
 		const opened = await post(daemon, "/workspace", { folder });
 		const board = JSON.parse(opened.body).board;
-		const made = await postTo(daemon, board.id, "/card/note", { key: "kept", title: "a note", markdown: "as written" });
+		const base = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "base", markdown: "what it builds on" })).body).cardId;
+		const made = await postTo(daemon, board.id, "/card/note", {
+			key: "kept",
+			title: "a note",
+			markdown: "as written",
+			size: "wide",
+			after: ["base"],
+		});
 		assert.equal(made.status, 200);
 		const id = JSON.parse(made.body).cardId;
 
@@ -418,11 +425,46 @@ test("a closed note comes back on /undo, with its id and its key", async () => {
 		// The key is what a `[[key]]` resolves to, so a card back with a different one is a dead link.
 		assert.equal(restored.key, "kept");
 		assert.equal(restored.markdown, "as written");
+		// The shape and the arrows are part of the card: a note back in a different shape or with its
+		// predecessors gone is a card the human has to put together again.
+		assert.equal(restored.size, "wide");
+		assert.deepEqual(restored.after, [base]);
 
 		// Nothing else was closed, so the second press has nothing to give and says so.
 		const empty = await postTo(daemon, board.id, "/undo", {});
 		assert.equal(empty.status, 409);
 		assert.equal(empty.body, "nothing to undo");
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a pinned card makes room by evicting the second-oldest note", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-pinned-"));
+	const daemon = await boot(folder);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const kept = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "pinned", markdown: "the one the human keeps" })).body).cardId;
+		// Eviction is by age, and two cards made in one breath would tie on `at`.
+		await new Promise((done) => setTimeout(done, 5));
+		const second = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "second", markdown: "the oldest unpinned" })).body).cardId;
+		for (let made = 2; made < 200; made++) {
+			const filler = await postTo(daemon, board.id, "/card/note", { key: `filler-${made}`, markdown: "filler" });
+			assert.equal(filler.status, 200);
+		}
+		// The oldest card is pinned, so a new card has to take the one after it instead.
+		const pin = await postTo(daemon, board.id, "/layout", { cardId: kept, rect: { x: 0, y: 0, w: 300, h: 200 }, pinned: true });
+		assert.equal(pin.status, 200);
+		assert.equal((await postTo(daemon, board.id, "/card/note", { key: "newest", markdown: "the newcomer" })).status, 200);
+
+		const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		const cards = state.cards as any[];
+		const pinned = cards.find((card) => card.id === kept);
+		assert.ok(pinned, "the pinned card was evicted");
+		assert.equal(pinned.pinned, true);
+		assert.equal(cards.some((card) => card.id === second), false, "the second-oldest card was not the one evicted");
+		assert.equal(cards.length, 200);
 	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });
