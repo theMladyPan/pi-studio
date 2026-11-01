@@ -11,6 +11,7 @@ import { INSTANCE, STATE_DIR, STATE_FILE, buildHash, randomToken, readJsonFile, 
 import { answer, fail, send, serveStatic } from "./http.ts";
 import { activeHomeDefaults, describeWorkspace, welcomeClients, workspaces } from "./workspaces.ts";
 import { boardFrom, boards, flushBoard } from "./store.ts";
+import { boardSettingsDocument } from "./board-settings.ts";
 import { boardMeta, cardsFor } from "./cards.ts";
 import { closedCards } from "./bus.ts";
 import { gitPicture, refreshGit, unwatchGit, watchGit } from "./git/graph.ts";
@@ -328,6 +329,15 @@ export const server = createServer((req, res) => {
 				// What the strip draws, read now rather than cached: a script asking gets the disk's answer.
 				git: gitPicture(board),
 			});
+			return;
+		}
+		// This board's settings as one document: the tree the panel draws, the value each control holds, and
+		// the route a change goes back through. Read per call, so a prompt file added while the daemon runs
+		// is a leaf the panel offers without a restart.
+		if (req.method === "GET" && url.pathname === "/settings/board") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			answer(res, 200, boardSettingsDocument(board));
 			return;
 		}
 		if (req.method === "POST") {
