@@ -10,10 +10,11 @@ import { activeHomeDefaults, describeWorkspace, homeDefaults, rememberWorkspace,
 import { boardFor } from "../store.ts";
 import { nudgeWelcome } from "../bus.ts";
 import { cardFor } from "../cards.ts";
-import { THINKING_LEVELS, modelCatalog } from "../models.ts";
+import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog } from "../models.ts";
 import { CARD_AUDIENCE, CARD_LEVELS, CARD_SHOWS, CARD_VERBOSITY } from "../card-settings.ts";
 import { CHILD_INTEGRATION } from "../integration.ts";
-import { settingsDocument } from "../settings.ts";
+import { PATH_NAMES } from "../child/modes.ts";
+import { settingsDocument } from "../settings-document.ts";
 import { spawn } from "node:child_process";
 
 
@@ -68,6 +69,26 @@ export async function onDefaults(req, res) {
 		if (!CARD_LEVELS.includes(body[key])) return void fail(res, 400, `${key} is one of ${CARD_LEVELS.join(", ")}`);
 		next[key] = body[key];
 	}
+	// The built-in tools a new board's threads are not given, by the names pi itself uses. A name this pi
+	// does not have is dropped rather than refused, exactly as the board's own `/config` drops it.
+	if (body.toolsOff !== undefined) {
+		if (!Array.isArray(body.toolsOff)) return void fail(res, 400, "toolsOff must be a list of tool names");
+		next.toolsOff = body.toolsOff.filter((name) => BUILTIN_TOOLS.includes(name));
+	}
+	// The extensions a new board's threads do not load, by folder name. An unknown name is a mistake in the
+	// request, so it is refused instead of quietly accepted as a no-op.
+	if (body.extensionsOff !== undefined) {
+		if (!Array.isArray(body.extensionsOff)) return void fail(res, 400, "extensionsOff must be a list of extension names");
+		const known = new Set(CHILD_EXTENSIONS.map((one) => one.name));
+		const unknown = body.extensionsOff.filter((name) => !known.has(name));
+		if (unknown.length) return void fail(res, 400, `no such extension: ${unknown.join(", ")}`);
+		next.extensionsOff = body.extensionsOff;
+	}
+	// The flow a new board's boss starts on.
+	if (body.path !== undefined) {
+		if (!PATH_NAMES.includes(body.path)) return void fail(res, 400, `a path is one of ${PATH_NAMES.join(", ")}`);
+		next.path = body.path;
+	}
 	// How a new board brings a child's work back onto its own branch, checked the way its own route checks it.
 	if (body.childIntegration !== undefined) {
 		if (!CHILD_INTEGRATION.includes(body.childIntegration))
@@ -89,11 +110,21 @@ export async function onDefaults(req, res) {
 
 
 /**
- * The settings page's whole content: the same defaults as GET /defaults, with this machine's catalogue
- * and pi's levels filled in, so the page needs no second request to draw a picker.
+ * The crossroads' settings as one document: the same values as GET /defaults, as the tree a page draws.
+ * A board keeps its own copy from the moment it is opened, which is what the foot says.
  */
 export async function onSettingsDefaults(res) {
-	answer(res, 200, await settingsDocument());
+	answer(
+		res,
+		200,
+		settingsDocument({
+			scope: "defaults",
+			values: activeHomeDefaults(),
+			title: "every new board",
+			subtitle: "what every board is born with",
+			foot: "a board keeps its own copy from the moment it is opened",
+		}),
+	);
 }
 
 

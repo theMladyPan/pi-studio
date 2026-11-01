@@ -153,6 +153,13 @@ export let homeDefaults = (() => {
 	}
 	// How a new board brings a child's work back: an id checked against its list, so a restart does not drop it.
 	if (CHILD_INTEGRATION.includes(held.childIntegration)) known.childIntegration = held.childIntegration;
+	// The built-in tools and the extensions a new board's threads do not get, filtered the way `activeConfig`
+	// reads them: a name this pi no longer ships is dropped rather than carried into every new board.
+	if (Array.isArray(held.toolsOff)) known.toolsOff = held.toolsOff.filter((name) => BUILTIN_TOOLS.includes(name));
+	if (Array.isArray(held.extensionsOff))
+		known.extensionsOff = held.extensionsOff.filter((name) => CHILD_EXTENSIONS.some((one) => one.name === name));
+	// The flow a new board's boss starts on: an id checked against its list, as `path` is everywhere else.
+	if (PATH_NAMES.includes(held.path)) known.path = held.path;
 	return known;
 })();
 
@@ -187,6 +194,11 @@ export function activeHomeDefaults() {
 		// leaf it is given and a missing value would draw an empty control.
 		...cardSettings(homeDefaults),
 		childIntegration: integrationOf(homeDefaults),
+		// What a new board's threads may touch and which flow its boss starts on: the three the board's own
+		// settings page draws, so they are the three the crossroads' page draws too.
+		toolsOff: homeDefaults.toolsOff ?? [],
+		extensionsOff: homeDefaults.extensionsOff ?? [],
+		path: homeDefaults.path ?? "auto",
 	};
 }
 

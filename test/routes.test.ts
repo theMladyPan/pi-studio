@@ -180,6 +180,41 @@ test("the six card defaults are saved, read back and refused when nobody names t
 	}
 });
 
+test("what a new board's threads may touch is a default too, and a new board is born with it", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-tools-"));
+	const work = mkdtempSync(join(tmpdir(), "pi-studio-routes-tools-work-"));
+	const daemon = await boot(folder);
+	try {
+		// A tool this pi does not have is dropped rather than refused, exactly as POST /config drops it.
+		const saved = await post(daemon, "/defaults", { toolsOff: ["bash", "no-such-tool"], path: "simple" });
+		assert.equal(saved.status, 200, saved.body.slice(0, 200));
+		const answered = JSON.parse(saved.body).defaults;
+		assert.deepEqual(answered.toolsOff, ["bash"]);
+		assert.deepEqual(answered.extensionsOff, []);
+		assert.equal(answered.path, "simple");
+
+		// Written where the daemon reloads its defaults from, so the next board on any folder inherits them.
+		const written = JSON.parse(readFileSync(join(folder, "workspaces.json"), "utf8"));
+		assert.deepEqual(written.defaults.toolsOff, ["bash"]);
+		assert.equal(written.defaults.path, "simple");
+
+		// A flow nobody names and an extension this machine does not have are mistakes, not preferences.
+		assert.equal((await post(daemon, "/defaults", { path: "scenic" })).status, 400);
+		assert.equal((await post(daemon, "/defaults", { extensionsOff: ["no-such-extension"] })).status, 400);
+
+		// The board opened now is born with the three, because a new board's config is the defaults it found.
+		const board = JSON.parse((await post(daemon, "/workspace", { folder: work })).body).board;
+		const config = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body).meta.config;
+		assert.deepEqual(config.toolsOff, ["bash"]);
+		assert.deepEqual(config.extensionsOff, []);
+		assert.equal(config.path, "simple");
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+		rmSync(work, { recursive: true, force: true });
+	}
+});
+
 test("a board's card settings are written by /config and read back out of it", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-config-"));
 	const work = mkdtempSync(join(tmpdir(), "pi-studio-routes-config-work-"));
@@ -298,11 +333,13 @@ test("the settings document is served behind the token, and what /defaults saves
 		assert.equal(served.status, 200);
 		const body = JSON.parse(served.body);
 		assert.equal(body.version, 1);
+		assert.equal(body.scope, "defaults");
 		// The page draws a control per leaf, so the three settings have to be leaves of the tree.
 		assert.ok(leavesOf(body).some((field) => field.id === "model"), "no model field in the document");
 		const byId = Object.fromEntries(leavesOf(body).map((field) => [field.id, field]));
-		assert.ok((byId.model.options ?? []).length > 0, "the model catalogue is not filled in");
-		assert.ok((byId.thinking?.levels ?? []).length >= 4, "thinking does not carry pi's levels");
+		// The catalogue is a route the picker reads rather than a list the document has to carry.
+		assert.equal(byId.model.source, "/models", "the model field names no catalogue");
+		assert.ok((byId.thinking?.options ?? []).length >= 4, "thinking does not carry pi's levels");
 		assert.equal(byId.dimOthers?.type, "toggle");
 
 		// Saving a level used to throw `Assignment to constant variable` at the route, which answered 500
@@ -1237,10 +1274,12 @@ test("a prompt file's own bytes go back through POST /prompt, and the repository
 		assert.equal(wrote.status, 200, wrote.body);
 		assert.equal(readFileSync(path, "utf8"), original);
 
-		// The document the page draws carries the same text under the field that writes it back.
+		// The document the page draws names the file and the route that writes it; the bytes it shows are the
+		// ones read above, because a prompt leaf is a file rather than a value.
 		const document = JSON.parse((await get(daemon, `/settings/defaults?token=${daemon.token}`)).body);
 		const field = leavesOf(document).find((leaf) => leaf.id === "prompt-roles-scout");
-		assert.equal(field?.value, original, "the prompt field does not carry the file");
+		assert.equal(field?.file, "roles/scout.md", "the prompt field does not name its file");
+		assert.equal(field?.value, "", "a prompt leaf carries a value the editor would overwrite");
 		assert.equal(field?.write?.route, "/prompt");
 
 		// And the route still refuses a name it does not own, which is the answer the field shows.
