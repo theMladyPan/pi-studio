@@ -11,7 +11,7 @@ import { boardFor } from "../store.ts";
 import { nudgeWelcome } from "../bus.ts";
 import { cardFor } from "../cards.ts";
 import { THINKING_LEVELS, modelCatalog } from "../models.ts";
-import { CARD_AUDIENCE, CARD_SHOWS, CARD_VERBOSITY } from "../card-settings.ts";
+import { CARD_AUDIENCE, CARD_LEVELS, CARD_SHOWS, CARD_VERBOSITY } from "../card-settings.ts";
 import { settingsDocument } from "../settings.ts";
 import { spawn } from "node:child_process";
 
@@ -64,7 +64,7 @@ export async function onDefaults(req, res) {
 	}
 	for (const key of CARD_SHOWS) {
 		if (body[key] === undefined) continue;
-		if (typeof body[key] !== "boolean") return void fail(res, 400, `${key} is on or off`);
+		if (!CARD_LEVELS.includes(body[key])) return void fail(res, 400, `${key} is one of ${CARD_LEVELS.join(", ")}`);
 		next[key] = body[key];
 	}
 	if (typeof body.provider === "string" && typeof body.model === "string") {

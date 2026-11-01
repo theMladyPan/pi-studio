@@ -58,26 +58,7 @@
             {
               "id": "cards",
               "label": "Cards",
-              "help": "How thread and note cards behave when one is focused.",
-              "collapsed": true,
-              "fields": [
-                {
-                  "id": "dimOthers",
-                  "label": "dim others",
-                  "type": "toggle",
-                  "value": true,
-                  "labels": [
-                    "off",
-                    "on"
-                  ],
-                  "help": "Dim other cards on the canvas while one thread is selected."
-                }
-              ]
-            },
-            {
-              "id": "writing",
-              "label": "Cards written by agents",
-              "help": "What a new board's threads put on a card, how often, and for whom. The words behind each id are under Prompts below.",
+              "help": "What a new board's threads put on a card, how often, and for whom. A level is a default: asking for the thing by name overrides it for that card. The words behind each id are under Prompts below.",
               "collapsed": false,
               "fields": [
                 {
@@ -110,46 +91,61 @@
                 {
                   "id": "showCodeFragments",
                   "label": "code fragments",
-                  "type": "toggle",
-                  "value": true,
-                  "labels": [
-                    "off",
-                    "on"
+                  "type": "select",
+                  "value": "some",
+                  "options": [
+                    "none",
+                    "some",
+                    "many"
                   ],
-                  "help": "An identifier, a path, or a short snippet where the exact text matters."
+                  "help": "none: words only. some: an identifier, a path, a short snippet. many: a block whenever the code is the answer. \"Show me the function\" overrides it."
                 },
                 {
                   "id": "showMathFormulas",
                   "label": "math formulas",
-                  "type": "toggle",
-                  "value": true,
-                  "labels": [
-                    "off",
-                    "on"
+                  "type": "select",
+                  "value": "some",
+                  "options": [
+                    "none",
+                    "some",
+                    "many"
                   ],
-                  "help": "Notation and symbols, defined where they are first used."
+                  "help": "none: plain words and numbers. some: notation inline. many: the derivation, not only the result."
                 },
                 {
                   "id": "showCharts",
                   "label": "charts",
-                  "type": "toggle",
-                  "value": true,
-                  "labels": [
-                    "off",
-                    "on"
+                  "type": "select",
+                  "value": "some",
+                  "options": [
+                    "none",
+                    "some",
+                    "many"
                   ],
-                  "help": "A chart of real numbers, and a table of numbers. A mermaid diagram is always allowed: it shows structure."
+                  "help": "none: no chart, no table of numbers. some: one where it carries the point. many: a chart per series, a table per comparison."
                 },
                 {
                   "id": "showReferences",
                   "label": "references",
+                  "type": "select",
+                  "value": "some",
+                  "options": [
+                    "none",
+                    "some",
+                    "many"
+                  ],
+                  "help": "none: no source block. some: a source for every claim that is not the agent's own reasoning. many: a source for every factual statement. \"Where does that come from\" overrides it."
+                },
+                {
+                  "id": "dimOthers",
+                  "label": "dim others",
                   "type": "toggle",
                   "value": true,
                   "labels": [
                     "off",
                     "on"
                   ],
-                  "help": "A marker in the line and a source at the foot of the card: a URL, or a file path with a line."
+                  "help": "Dim other cards on the canvas while one thread is selected."
                 }
               ]
             }

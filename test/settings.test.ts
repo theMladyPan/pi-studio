@@ -116,24 +116,25 @@ test("the six card settings are drawn from the document, and an old defaults fil
 	assert.deepEqual(byId.cardsAudience?.options, ["programmer", "data-analyst", "designer", "vibecoder", "junior", "mathematician"]);
 	assert.equal(byId.cardsAudience?.type, "select");
 	for (const id of ["showCodeFragments", "showMathFormulas", "showCharts", "showReferences"]) {
-		assert.equal(byId[id]?.type, "toggle", `${id} is a ${byId[id]?.type}`);
+		assert.equal(byId[id]?.type, "select", `${id} is a ${byId[id]?.type}`);
+		assert.deepEqual(byId[id]?.options, ["none", "some", "many"], `${id} does not offer the three levels`);
 	}
 	// The seeded file above was written before these settings existed, which is what an old board looks like:
 	// every leaf still carries a value, because a control with nothing in it is a control that lies.
 	assert.equal(byId.cardsVerbosity.value, "normal");
 	assert.equal(byId.cardsAudience.value, "programmer");
-	assert.equal(byId.showReferences.value, true);
+	assert.equal(byId.showReferences.value, "some");
 });
 
 test("a card setting saved through the setter is the value the document reads next", async () => {
-	setHomeDefaults({ ...seeded, cardsVerbosity: "quiet", cardsAudience: "designer", showCodeFragments: false });
+	setHomeDefaults({ ...seeded, cardsVerbosity: "quiet", cardsAudience: "designer", showCodeFragments: "none" });
 	const document = await settingsDocument();
 	const byId = Object.fromEntries(leavesOf(document).map((field) => [field.id, field]));
 	assert.equal(byId.cardsVerbosity.value, "quiet");
 	assert.equal(byId.cardsAudience.value, "designer");
-	assert.equal(byId.showCodeFragments.value, false);
+	assert.equal(byId.showCodeFragments.value, "none");
 	// The switch nobody chose keeps its default rather than going missing.
-	assert.equal(byId.showCharts.value, true);
+	assert.equal(byId.showCharts.value, "some");
 	setHomeDefaults(seeded);
 });
 

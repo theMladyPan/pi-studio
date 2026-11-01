@@ -5524,7 +5524,7 @@ async function openPick(which, anchor = null, forBoard = false) {
   runtimePick.hidden = false;
   // A mode, a flow and the two card settings are short lists this page already holds, so they open at
   // once and the search box has nothing to search: no request, no waiting.
-  if (which === "mode" || which === "path" || which === "verbosity" || which === "audience") {
+  if (which === "mode" || which === "path" || which === "verbosity" || which === "audience" || which in CARD_LEVEL_KEYS) {
     runtimeSearch.hidden = true;
     if (which === "mode") drawModePick();
     else if (which === "path") drawPathPick();
@@ -5643,6 +5643,19 @@ const AUDIENCE_HINTS = [
   ["junior", "one idea, jargon defined"],
   ["mathematician", "notation, defined symbols"],
 ];
+/** The three levels every content switch has, and what each one asks of a card. */
+const LEVEL_HINTS = [
+  ["none", "not on a card unless you ask"],
+  ["some", "where it carries the point"],
+  ["many", "as much as it takes"],
+];
+/** The four switches, by the id their pick list is opened with. */
+const CARD_LEVEL_KEYS = {
+  code: "showCodeFragments",
+  math: "showMathFormulas",
+  charts: "showCharts",
+  refs: "showReferences",
+};
 
 /** The two lists are local, so the panel draws them without asking the daemon for anything. */
 function drawModePick() {
@@ -5661,15 +5674,27 @@ function drawPathPick() {
   );
 }
 
-/** The two card settings this board holds: one is how often, the other is who reads it. */
+/** How often, who for, and how much of each thing: the six card settings, one list each. */
 function drawCardPick(which) {
-  const verbosity = which === "verbosity";
-  const hints = verbosity ? VERBOSITY_HINTS : AUDIENCE_HINTS;
-  const now = verbosity ? boardConfig.cardsVerbosity || "normal" : boardConfig.cardsAudience || "programmer";
+  const list = which === "verbosity" ? VERBOSITY_HINTS : which === "audience" ? AUDIENCE_HINTS : LEVEL_HINTS;
+  const now = cardValue(which);
+  const head =
+    which === "verbosity"
+      ? "how often a thread opens a card"
+      : which === "audience"
+        ? "who the cards are written for"
+        : `${which}: how much of it a card carries`;
   runtimeList.replaceChildren(
-    pickHead(verbosity ? "how often a thread opens a card" : "who the cards are written for"),
-    ...hints.map(([name, hint]) => pickRow(name, hint, now === name, () => void pickCard(which, name))),
+    pickHead(head),
+    ...list.map(([name, hint]) => pickRow(name, hint, now === name, () => void pickCard(which, name))),
   );
+}
+
+/** What the board holds for one of the six, as the pick list and the panel read it. */
+function cardValue(which) {
+  if (which === "verbosity") return boardConfig.cardsVerbosity || "normal";
+  if (which === "audience") return boardConfig.cardsAudience || "programmer";
+  return boardConfig[CARD_LEVEL_KEYS[which]] || "some";
 }
 
 /** One change to this board's settings, whatever it is: the daemon answers with the whole config. */
@@ -5692,15 +5717,9 @@ async function patchConfig(body) {
 }
 
 async function pickCard(which, value) {
-  const key = which === "verbosity" ? "cardsVerbosity" : "cardsAudience";
+  const key = which === "verbosity" ? "cardsVerbosity" : which === "audience" ? "cardsAudience" : CARD_LEVEL_KEYS[which];
   if (await patchConfig({ [key]: value })) hintLine(`${which}: ${value}`);
   closePick();
-}
-
-/** One of the four content switches, flipped: a card is what the board says may be in it. */
-async function flipCardSwitch(key) {
-  const next = boardConfig[key] === false;
-  if (await patchConfig({ [key]: next })) hintLine(`${key}: ${next ? "on" : "off"}`);
 }
 
 /**
@@ -5776,7 +5795,9 @@ const cfgVerbosity = document.getElementById("cfgVerbosity");
 const cfgVerbosityValue = document.getElementById("cfgVerbosityValue");
 const cfgAudience = document.getElementById("cfgAudience");
 const cfgAudienceValue = document.getElementById("cfgAudienceValue");
-// The four content switches of a card, and the key of the board's configuration each one writes.
+// The four content switches of a card, and the key of the board's configuration each one writes. Each
+// holds a level rather than a yes: "where it carries the point" is the answer a model needs and a switch
+// cannot give it.
 const CARD_SWITCHES = [
   ["cfgCode", "cfgCodeValue", "showCodeFragments"],
   ["cfgMath", "cfgMathValue", "showMathFormulas"],
@@ -5832,9 +5853,8 @@ function paintConfig() {
   cfgPathValue.textContent = boardConfig.path || "auto";
   cfgVerbosityValue.textContent = boardConfig.cardsVerbosity || "normal";
   cfgAudienceValue.textContent = boardConfig.cardsAudience || "programmer";
-  for (const [button, value, key] of CARD_SWITCHES) {
-    document.getElementById(value).textContent = boardConfig[key] === false ? "off" : "on";
-    document.getElementById(button).title = `${key}: ${boardConfig[key] === false ? "off" : "on"} for the cards this board's threads write`;
+  for (const [, value, key] of CARD_SWITCHES) {
+    document.getElementById(value).textContent = boardConfig[key] || "some";
   }
 }
 
@@ -5921,7 +5941,9 @@ cfgPath.addEventListener("click", () => void openPick("path", cfgPath, true));
 cfgVerbosity.addEventListener("click", () => void openPick("verbosity", cfgVerbosity, true));
 cfgAudience.addEventListener("click", () => void openPick("audience", cfgAudience, true));
 for (const [button, , key] of CARD_SWITCHES) {
-  document.getElementById(button).addEventListener("click", () => void flipCardSwitch(key));
+  // The id the list opens with is the short name: `code`, `math`, `charts`, `refs`.
+  const which = Object.keys(CARD_LEVEL_KEYS).find((name) => CARD_LEVEL_KEYS[name] === key);
+  document.getElementById(button).addEventListener("click", () => void openPick(which, document.getElementById(button), true));
 }
 
 // ---------- the prompt files ----------------------------------------------

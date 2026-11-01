@@ -39,7 +39,7 @@ const WHEN = {
 /** The two sentences a card tool carries under this board's settings. */
 function cardRules() {
 	const off = OFF.map((key) => OFF_WORDS[key]).filter(Boolean);
-	const said = [WHEN[VERBOSITY] ?? "", off.length ? `Off for this board, say it in words instead: ${off.join(", ")}.` : ""];
+	const said = [WHEN[VERBOSITY] ?? "", off.length ? `Off for this board, say it in words instead: ${off.join(", ")}. A human asking for one of those by name outranks this.` : ""];
 	return said.filter(Boolean).join(" ");
 }
 
