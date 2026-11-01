@@ -1,0 +1,37 @@
+<!doctype html>
+<html><body style="margin:0;background:#0d1117;color:#e6edf3;font:13px monospace">
+<pre id="out">waiting…</pre>
+<iframe id="f" style="width:900px;height:700px;border:1px solid #30363d"></iframe>
+<script>
+const params = new URLSearchParams(location.search);
+const f = document.getElementById("f");
+const out = document.getElementById("out");
+f.src = params.get("url");
+f.addEventListener("load", () => {
+  setTimeout(() => {
+    const d = f.contentDocument;
+    const area = d.querySelector(".composer textarea");
+    const card = d.querySelector(".card.sticky");
+    const cs = getComputedStyle(area);
+    const lines = [];
+    lines.push(`resize: ${cs.resize}`);
+    lines.push(`min-height: ${cs.minHeight}  max-height: ${cs.maxHeight}`);
+    lines.push(`first height: ${area.getBoundingClientRect().height}`);
+    // A drag is a height, so asking for a tall one is what the corner does.
+    area.style.height = "300px";
+    lines.push(`after height:300px -> ${area.getBoundingClientRect().height} (clamped by max-height)`);
+    area.style.height = "20px";
+    lines.push(`after height:20px  -> ${area.getBoundingClientRect().height} (clamped by min-height)`);
+    area.style.height = "";
+    lines.push(`card height: ${card.getBoundingClientRect().height}`);
+    area.style.height = "240px";
+    const box = card.getBoundingClientRect();
+    const grip = card.querySelector(".resize").getBoundingClientRect();
+    const field = area.getBoundingClientRect();
+    lines.push(`card ${Math.round(box.height)}px, field bottom ${Math.round(field.bottom - box.top)}px inside the card, scroll column ${Math.round(card.querySelector(".card-scroll").getBoundingClientRect().height)}px`);
+    lines.push(`field inside the card: ${field.bottom <= box.bottom}`);
+    out.textContent = lines.join("\n");
+  }, 1200);
+});
+</script>
+</body></html>

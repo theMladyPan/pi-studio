@@ -1719,6 +1719,7 @@ function makeCard(data, quiet = false) {
       .catch(() => footNote(`the clipboard refused, so the card id is here · ${entry.id}`));
   });
   if (data.mini) setMini(card, true);
+  capField(card, height);
   paintCard(entry, data);
   // A card that arrives while another is selected must not arrive brighter than the rest.
   paintFocus();
@@ -2569,6 +2570,15 @@ function setMini(card, mini) {
   scheduleMap();
 }
 
+/**
+ * How tall the field in a card may be dragged, from the height the card has: the head, the field's own
+ * rows and a little of the conversation always stay, so the field's drag corner never leaves the card.
+ */
+function capField(card, height) {
+  const room = Math.max(52, Math.min(340, Math.round(height) - 200));
+  card.style.setProperty("--field-max", `${room}px`);
+}
+
 /** Move a card locally and take the space it now holds into account. */
 function placeCard(record, rect) {
   const card = record.card;
@@ -2576,6 +2586,7 @@ function placeCard(record, rect) {
   card.style.top = `${rect.y}px`;
   if (rect.w) card.style.width = `${rect.w}px`;
   if (rect.h) card.style.height = `${rect.h}px`;
+  if (rect.h) capField(card, rect.h);
   const old = card.dataset.rect ? JSON.parse(card.dataset.rect) : null;
   if (old) {
     const at = occupied.findIndex((spot) => spot.x === old.x && spot.y === old.y);
