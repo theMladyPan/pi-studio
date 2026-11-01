@@ -663,9 +663,9 @@
   }
 
   /** The route a field's values come from, as one muted tag; `wording` says what the route holds. */
-  function sourceTag(field, wording) {
-    const tag = el("span", "cfg-source-tag", field.source);
-    tag.title = `${wording} ${field.source}`;
+  function sourceTag(field, wording, route = field.source) {
+    const tag = el("span", "cfg-source-tag", route);
+    tag.title = `${wording} ${route}`;
     return tag;
   }
 
@@ -837,6 +837,9 @@
       area.rows = 10;
       area.spellcheck = false;
       area.disabled = disabled;
+      // The text a prompt box holds lives in a file, so it is read from the route the leaf names: `source`,
+      // or the `file` it edits where a document does not say. Nothing is written back before it lands.
+      const read = field.source || (field.file ? `/prompt?name=${encodeURIComponent(field.file)}` : "");
       const actions = el("div", "cfg-prompt-actions");
       const size = el("span", "cfg-prompt-size", "");
       /**
@@ -864,16 +867,51 @@
       markdownKeys(area);
       const save = el("button", "cfg-prompt-save", "save");
       save.type = "button";
-      save.disabled = disabled;
+      save.disabled = disabled || Boolean(read);
       const back = el("button", "cfg-revert", "revert");
       back.type = "button";
       back.title = "put the last saved text back";
-      back.disabled = disabled;
+      back.disabled = disabled || Boolean(read);
       const state = el("span", "cfg-prompt-state", "");
       const paint = (text, tone) => {
         state.textContent = text;
         state.dataset.state = tone || "";
       };
+      /**
+       * The file's text, read once the box is drawn. A draft a human left behind wins: the row keeps their
+       * text, marked unsaved, and what the file says becomes the value a revert goes back to. Both buttons
+       * wait for this answer, because an empty box has nothing worth writing and a save of it would blank
+       * the file — and they stay where they are when it never arrives.
+       */
+      async function loadText() {
+        paint("reading the file…", "");
+        try {
+          const response = await fetch(`${read}${read.includes("?") ? "&" : "?"}${qs()}`);
+          if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
+          const { text } = await response.json();
+          const whole = String(text ?? "");
+          save.disabled = disabled;
+          back.disabled = disabled;
+          entry.lastGood = whole;
+          field.value = whole;
+          // A draft that says exactly what the file says was saved from another tab, so it is not a draft
+          // any more; the store is written here, because the drawing has already written it once.
+          if (drafts.get(field.id) === whole) {
+            drafts.delete(field.id);
+            saveDrafts();
+          }
+          if (!drafts.has(field.id)) {
+            area.value = whole;
+            paint("saved", "saved");
+          }
+          repaint();
+        } catch (error) {
+          // The box never received the file, so there is nothing here a save could put back: the field says
+          // why it is unusable, and its own revert stays disabled with its save.
+          showFieldError(entry, `${field.file || read} could not be read: ${error.message || error}`);
+          paint("could not read the file", "error");
+        }
+      }
       area.addEventListener("input", () => {
         repaint();
         // Only text that differs from the file on disk is a draft; typing a character and deleting it again
@@ -884,16 +922,17 @@
         saveDraftsSoon();
         paint(dirty ? "unsaved" : "saved", dirty ? "dirty" : "saved");
       });
-      // Text typed before the tree was last rebuilt is still the human's, and comes back unsaved. A draft
-      // that now matches the file was saved from another tab, so it is not a draft any more; the store is
-      // written once the whole tree is drawn, not once per field.
+      // Text typed before the tree was last rebuilt is still the human's, and comes back unsaved. Whether it
+      // still differs from the file is answered once the file's text has landed, because a draft that now
+      // matches the file was saved from another tab; the store is written once the whole tree is drawn, not
+      // once per field.
       const draft = drafts.get(field.id);
-      if (draft !== undefined && draft === String(field.value ?? "")) drafts.delete(field.id);
-      else if (draft !== undefined) {
+      if (draft !== undefined) {
         area.value = draft;
         paint("unsaved", "dirty");
       }
       repaint();
+      if (read) void loadText();
       save.addEventListener("click", () => {
         void commitWrite(entry, area.value, paint).then(() => {
           // What the daemon accepted is no longer a draft; a refusal keeps the text, so nothing is lost.
@@ -923,7 +962,7 @@
       actions.append(save, back, state, size);
       // A prompt's source is the file its text is read from, so the tag rides the line its save and revert
       // sit on rather than taking a row of its own under them.
-      if (field.source) actions.append(sourceTag(field, "this text is read from and written to"));
+      if (read) actions.append(sourceTag(field, "this text is read from and written to", read));
       shell.append(mirror, area);
       line.append(shell, actions);
     } else {
