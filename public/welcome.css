@@ -809,6 +809,14 @@ body[data-view="settings"] .shelf-stage {
   opacity: 0.6;
 }
 
+/* A `list` field's names as chips: one that is on reads in the accent, one that is off stays muted.
+   The row keeps the segmented control's frame, its padding and its type size. */
+.cfg-chips button[aria-pressed="true"] {
+  background: transparent;
+  color: var(--accent);
+  box-shadow: none;
+}
+
 /* ==========================================================================
    UNCHANGED SHELF SURFACE (reachable via masthead back link)
    ========================================================================== */
