@@ -302,7 +302,14 @@
   .note-body .diagram-wrap svg { max-width: none; }
   .note-body .diagram-error { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
   .note-body ul { margin: 0 0 8px; padding-left: 18px; list-style: disc; }
+  .note-body ol { margin: 0 0 8px; padding-left: 20px; list-style: decimal; }
   .note-body li { margin: 1px 0; }
+  /* A footnote marker sits above the line it follows, small enough not to break the reading. */
+  .note-body sup.fn, .sticky-reply sup.fn { font-size: 10px; color: #79c0ff; margin-left: 1px; }
+  /* The notes a card ends with are smaller than its body and ruled off it, so a marker reads as a
+     pointer to the foot rather than as another paragraph. */
+  .note-body ol.fn-list, .sticky-reply ol.fn-list { margin: 8px 0 0; padding: 6px 0 0 20px;
+    border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); list-style: decimal; }
   /* A task item carries its own box in the text, so the list must not add a marker on top. */
   .note-body li[data-tick] { list-style: none; }
   .note-body blockquote, .sticky-reply blockquote { margin: 0 0 8px; padding: 2px 0 2px 10px;
