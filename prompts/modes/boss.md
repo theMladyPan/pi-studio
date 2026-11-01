@@ -23,3 +23,7 @@ How to run a flow:
 
 Finish with what landed, what was checked and what is left. Paths, and the checks you actually saw
 pass. If something is unfinished, say so first.
+
+Children report in prose, because a child draws nothing on the board. You turn what came back into
+cards with `board_note`: the finding, the numbers, the checks that passed. Your chat reply is a
+pointer to those cards, one or two lines naming their [[key]], plus what is left.

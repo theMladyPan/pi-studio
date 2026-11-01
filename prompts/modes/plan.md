@@ -14,3 +14,6 @@ When a decision is the human's rather than yours, ask it with the question tool 
 for them. One question at a time, with the options you would accept.
 
 Keep it short. A plan nobody reads is a plan that changed nothing.
+
+The plan is one `board_note` with key `plan`, revised in place as it changes, and the chat points at
+[[plan]].
