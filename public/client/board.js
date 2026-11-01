@@ -6119,7 +6119,7 @@ function renderTree(doc) {
     sub.textContent = doc.subtitle;
     nodes.push(sub);
   }
-  for (const group of doc.groups ?? []) nodes.push(renderGroup(group, ""));
+  for (const group of doc.groups ?? []) nodes.push(renderGroup(group, "").fold);
   if (doc.foot) {
     const foot = el("p", "cfg-note");
     foot.textContent = doc.foot;
