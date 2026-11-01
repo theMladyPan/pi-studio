@@ -17,6 +17,13 @@ test("a child is started with the board bridge attached", () => {
 	assert.ok(argv.some((arg) => arg.includes("rpc")), "the child is not started in rpc mode");
 });
 
+test("a spawned child is not given the bridge at all", () => {
+	// It draws nothing, so the tools it would register are the ones the guard refuses. Loading them and
+	// refusing the route is two places to keep in step; not loading them is one.
+	const argv = childArgv(board, { ...thread, parentThread: "master-1" });
+	assert.ok(!argv.includes(BRIDGE), "a spawned child was handed the board bridge");
+});
+
 test("a child keeps its sessions in the board's own folder, not pi's list", () => {
 	const argv = childArgv(board, thread);
 	// The app owns these conversations, so a thread that restarts resumes the same one.
@@ -90,4 +97,31 @@ test("the prompts tell the child which board it is drawing on", () => {
 	assert.ok(plain.length > worktree.length, "the board prompt should carry the worktree prompt inside it");
 	assert.ok(plain.includes(board.folder), "a thread is not told which folder it works in");
 	assert.ok(worktree.includes(thread.worktree.path), "the worktree prompt does not name the tree");
+});
+
+test("a spawned child is told it draws nothing, and the pointer convention is not said to it", () => {
+	const said = boardPrompt(board, { ...thread, parentThread: "master-1" });
+	assert.match(said, /draw nothing/);
+	assert.doesNotMatch(said, /board_note/, "a spawned child was told to write a card");
+	assert.doesNotMatch(said, /\[\[/, "a spawned child was given the pointer convention");
+	// Its folder is still its own, because that is where it reads and edits.
+	assert.ok(said.includes(thread.worktree.path), "the child prompt does not name its tree");
+});
+
+test("the board's card settings reach the prompt, and a default board reads as normal for a programmer", () => {
+	const plain = boardPrompt(board, thread);
+	assert.match(plain, /Cards on this board: normal\./);
+	assert.match(plain, /Cards are written for: programmer\./);
+	for (const line of [/code fragments: yes/, /math formulas: yes/, /charts: yes/, /references: yes/]) assert.match(plain, line);
+	const quiet = boardPrompt(
+		{ ...board, config: { cardsVerbosity: "quiet", cardsAudience: "vibecoder", showCodeFragments: false, showReferences: false } },
+		thread,
+	);
+	assert.match(quiet, /Cards on this board: quiet\./);
+	assert.match(quiet, /Cards are written for: vibecoder\./);
+	assert.match(quiet, /code fragments: no/);
+	assert.match(quiet, /references: no/);
+	// A board on the defaults says the same thing as a board that stored nothing, so an old board file is
+	// the same prompt as a new one.
+	assert.equal(boardPrompt({ ...board, config: {} }, thread), plain);
 });

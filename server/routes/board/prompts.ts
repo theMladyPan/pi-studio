@@ -9,13 +9,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { answer, fail, readJson } from "../../http.ts";
 import { PROMPT_DIR, promptFiles } from "../../child/modes.ts";
 
-/** The names a prompt may have: lowercase, one file each, in one of the three folders. */
-const NAME = /^(roles|modes|flows)\/[a-z][a-z-]*\.md$/;
+/** The names a prompt may have: lowercase, one file each, in one of the folders the daemon reads. */
+const NAME = /^(roles|modes|flows|verbosity|audiences)\/[a-z][a-z-]*\.md$/;
 
 /**
  * A name that came from a request, on the way to a path. The pattern is the whole guard: it has no
- * `..`, no absolute path and no folder of its own invention, so a write can only land in the three
- * folders this page offers.
+ * `..`, no absolute path and no folder of its own invention, so a write can only land in the folders
+ * this page offers.
  */
 function promptName(given: string): string {
 	const name = String(given ?? "").trim();

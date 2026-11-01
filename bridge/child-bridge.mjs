@@ -16,6 +16,35 @@ const BASE = process.env.PI_STUDIO_URL ?? "";
 const TOKEN = process.env.PI_STUDIO_TOKEN ?? "";
 const WORKSPACE = process.env.PI_STUDIO_WORKSPACE ?? "";
 const THREAD = process.env.PI_STUDIO_THREAD ?? "";
+// What this board asks of a card: how often, and what may be inside one. Both are read here rather than
+// only in the system prompt, because the description of a tool is read at the moment the model decides
+// whether to call it, and that is where a frequency rule actually lands.
+const VERBOSITY = process.env.PI_STUDIO_CARDS_VERBOSITY ?? "";
+const OFF = (process.env.PI_STUDIO_CARDS_OFF ?? "").split(",").filter(Boolean);
+
+/** The words for a switch a board has turned off, so the sentence names what it costs. */
+const OFF_WORDS = {
+	showCodeFragments: "code fragments",
+	showMathFormulas: "math formulas",
+	showCharts: "charts and tables of numbers",
+	showReferences: "references",
+};
+
+/** How often this board wants a card, one line, or nothing when the board is on the board's default. */
+const WHEN = {
+	quiet: "This board is on quiet: write a card only when the human asked for one in so many words.",
+	normal: "This board is on normal: a card for something that has to be seen, none for narration.",
+};
+
+/** The two sentences a card tool carries under this board's settings. */
+function cardRules() {
+	const off = OFF.map((key) => OFF_WORDS[key]).filter(Boolean);
+	const said = [WHEN[VERBOSITY] ?? "", off.length ? `Off for this board, say it in words instead: ${off.join(", ")}.` : ""];
+	return said.filter(Boolean).join(" ");
+}
+
+/** Said once, because it is the same sentence on both card tools. */
+const RULES = cardRules();
 
 /** True when a daemon handed this child a board to draw on. */
 function attached() {
@@ -45,7 +74,8 @@ const noteTool = defineTool({
 	name: "board_note",
 	label: "Board note",
 	description:
-		"Put a note on the user's board. Use it for a diagram, a table, a file tree, a todo list that will be updated, or a finding worth keeping beside the conversation instead of buried in it. One card holds one kind of thing: a chart and the todo for it are two notes. Markdown is rendered; a fenced mermaid block draws a diagram, so a flow, a state machine, a sequence or a tree is mermaid, and a fenced svg block draws a picture, kept for a chart with numbers on an axis. Pass the same key again to revise that note in place, which is how a checklist grows.",
+		"Put a note on the user's board. Use it for a diagram, a table, a file tree, a todo list that will be updated, or a finding worth keeping beside the conversation instead of buried in it. One card holds one kind of thing: a chart and the todo for it are two notes. Markdown is rendered; a fenced mermaid block draws a diagram, so a flow, a state machine, a sequence or a tree is mermaid, and a fenced svg block draws a picture, kept for a chart with numbers on an axis. Pass the same key again to revise that note in place, which is how a checklist grows." +
+		(RULES ? ` ${RULES}` : ""),
 	parameters: Type.Object({
 		markdown: Type.String({ description: "Note body in markdown." }),
 		title: Type.Optional(Type.String({ description: "Short card title, for example the step name." })),
@@ -79,7 +109,8 @@ const sourceTool = defineTool({
 	name: "board_source",
 	label: "Board source",
 	description:
-		"Open a file from the workspace on the user's board, scrolled to a line, so they read the real text rather than a description of it. Use it whenever you point at code or config. Passing the same path again refreshes that card after the file changes.",
+		"Open a file from the workspace on the user's board, scrolled to a line, so they read the real text rather than a description of it. For a file the human asked to see: it is not how you show evidence, which is a reference at the foot of a card. Passing the same path again refreshes that card after the file changes." +
+		(RULES ? ` ${RULES}` : ""),
 	parameters: Type.Object({
 		path: Type.String({ description: "File path, relative to the workspace folder." }),
 		line: Type.Optional(Type.Number({ description: "Line to centre the view on." })),
