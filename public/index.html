@@ -292,6 +292,10 @@
   .note-body .svg-wrap { margin: 8px 0; background: #0d1117; border: 1px solid var(--border);
     border-radius: 6px; padding: 8px; }
   .note-body .svg-wrap svg { max-width: 100%; height: auto; display: block; }
+  /* A chart is laid out at the card's own width, so it shrinks to that width instead of keeping a size
+     the reader would have to scroll to; a chart wider than the card still scrolls sideways. */
+  .note-body .chart-wrap { overflow-x: auto; }
+  .note-body .chart-wrap svg { max-width: 100%; height: auto; display: block; }
   /* A mermaid diagram arrives at the width its layout needs, so a wide graph keeps its text size
      and scrolls sideways rather than shrinking to nothing inside a narrow card. */
   .note-body .diagram-wrap { overflow-x: auto; }

@@ -1,4 +1,5 @@
 /* pi board — canvas client. Cards arrive from the daemon over server-sent events. */
+import { renderChart } from "./chart.js";
 const world = document.getElementById("world");
 const viewport = document.getElementById("viewport");
 // `overflow: clip` keeps the viewport out of the scroll containers, but an engine that ignores
@@ -467,6 +468,8 @@ function loadMermaid() {
 
 /** Drawn diagrams by source: a card re-renders on every tick of the board, and parsing is not free. */
 const diagrams = new Map();
+/** Charts by fence body, for the same reason: a redraw must not re-lay-out a drawing that has not changed. */
+const charts = new Map();
 let diagramSeq = 0;
 
 /**
@@ -588,6 +591,17 @@ function renderMarkdown(markdown) {
       } else if (lang === "mermaid") {
         const wrap = el("div", "svg-wrap diagram-wrap");
         drawDiagram(wrap, body.trim());
+        holder.appendChild(wrap);
+      } else if (lang === "chart") {
+        // The svg comes from our own layout code and carries no user markup, but every fence that holds
+        // markup goes through the same string filter, so there is one rule and no exception to remember.
+        const wrap = el("div", "svg-wrap chart-wrap");
+        let svg = charts.get(body);
+        if (!svg) {
+          svg = sanitizeSvg(renderChart(body).svg);
+          charts.set(body, svg);
+        }
+        wrap.innerHTML = svg;
         holder.appendChild(wrap);
       } else {
         const pre = el("pre");
@@ -1604,20 +1618,33 @@ function makeCard(data, quiet = false) {
   const delegate = isDelegate(data);
   const defaultHeight = isSource ? 430 : isQuestion ? 300 : isNote ? (delegate ? 220 : 420) : 440;
   const height = data.rect ? data.rect.h : defaultHeight;
+  // An agent knows the shape of what it wrote, not how wide a card is, so `size` is a preset on the
+  // defaults above rather than a size. A rect the user dragged always wins over the preset.
+  const preset =
+    data.size === "compact"
+      ? { w: Math.round(width * 0.72), h: 240 }
+      : data.size === "wide"
+        ? { w: Math.round(width * 1.45), h: height }
+        : data.size === "tall"
+          ? { w: width, h: 640 }
+          : { w: width, h: height };
+  const cardWidth = data.rect ? width : preset.w;
+  const cardHeight = data.rect ? height : preset.h;
 
   // The server remembers where a card was put, so a refresh and other tabs agree. A card
   // without a place cascades under the card its reply was asked on, and without a thread goes
   // in the nearest free area to the middle of what you are looking at.
   const spot = data.rect
-    ? { x: data.rect.x, y: data.rect.y, w: width, h: height }
-    : threadSpot(data.threadRoot, width, height) ?? findFreeSpot(width, height, viewportCenter());
+    ? { x: data.rect.x, y: data.rect.y, w: cardWidth, h: cardHeight }
+    : threadSpot(data.threadRoot, cardWidth, cardHeight) ?? findFreeSpot(cardWidth, cardHeight, viewportCenter());
   occupied.push(spot);
   if (!data.rect) void saveLayout(data.id, spot);
 
   const card = el("div", kind === "sticky" ? "card sticky" : "card");
-  card.style.cssText = `left:${spot.x}px; top:${spot.y}px; width:${width}px; height:${height}px; z-index:${z++}`;
+  card.style.cssText = `left:${spot.x}px; top:${spot.y}px; width:${cardWidth}px; height:${cardHeight}px; z-index:${z++}`;
   card.dataset.rect = JSON.stringify(spot);
   card.dataset.kind = kind;
+  card.dataset.size = data.size || "normal";
   card.dataset.id = data.id;
   if (data.threadRoot) card.dataset.threadRoot = data.threadRoot;
   setAfter(card, data.after);
