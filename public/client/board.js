@@ -6065,12 +6065,20 @@ async function openPick(which, anchor = null, forBoard = false, inst = null) {
   // board's defaults, and belongs to nobody's card.
   pickInst = forBoard ? null : inst;
   runtimePick.hidden = false;
-  // A mode, a flow and the two card settings are short lists this page already holds, so they open at
-  // once and the search box has nothing to search: no request, no waiting.
-  if (which === "mode" || which === "path" || which === "verbosity" || which === "audience" || which in CARD_LEVEL_KEYS) {
+  // A mode, a flow, how a child's work comes back and the two card settings are short lists this page
+  // already holds, so they open at once and the search box has nothing to search: no request, no waiting.
+  if (
+    which === "mode" ||
+    which === "path" ||
+    which === "childIntegration" ||
+    which === "verbosity" ||
+    which === "audience" ||
+    which in CARD_LEVEL_KEYS
+  ) {
     runtimeSearch.hidden = true;
     if (which === "mode") drawModePick();
     else if (which === "path") drawPathPick();
+    else if (which === "childIntegration") drawChildIntegrationPick();
     else drawCardPick(which);
     placeRuntimePick();
     return;
@@ -6193,6 +6201,12 @@ const LEVEL_HINTS = [
   ["some", "where it carries the point"],
   ["many", "as much as it takes"],
 ];
+/** How a child's commits reach the branch it was cut from, in the words the picker shows. */
+const CHILD_INTEGRATION_HINTS = [
+  ["merge", "keeps the merge in the history"],
+  ["cherry-pick", "lifts the commits across"],
+  ["rebase", "replays them"],
+];
 /** The four switches, by the id their pick list is opened with. */
 const CARD_LEVEL_KEYS = {
   code: "showCodeFragments",
@@ -6215,6 +6229,15 @@ function drawPathPick() {
   runtimeList.replaceChildren(
     pickHead(pickBoard ? "the flow a new boss starts on" : "the flow a boss runs"),
     ...PATH_HINTS.map(([name, hint]) => pickRow(name, hint, path === name, () => void pickPath(name))),
+  );
+}
+
+/** How a child's work comes back: three ways, each one a line of what it does to the history. */
+function drawChildIntegrationPick() {
+  const now = boardConfig.childIntegration || "merge";
+  runtimeList.replaceChildren(
+    pickHead("how a child's work comes back"),
+    ...CHILD_INTEGRATION_HINTS.map(([name, hint]) => pickRow(name, hint, now === name, () => void pickChildIntegration(name))),
   );
 }
 
@@ -6263,6 +6286,12 @@ async function patchConfig(body) {
 async function pickCard(which, value) {
   const key = which === "verbosity" ? "cardsVerbosity" : which === "audience" ? "cardsAudience" : CARD_LEVEL_KEYS[which];
   if (await patchConfig({ [key]: value })) hintLine(`${which}: ${value}`);
+  closePick();
+}
+
+/** How a child's work lands, written on the board the way a card setting is. */
+async function pickChildIntegration(value) {
+  if (await patchConfig({ childIntegration: value })) hintLine(`a child's work comes back by: ${value}`);
   closePick();
 }
 
@@ -6329,6 +6358,8 @@ const cfgTools = document.getElementById("cfgTools");
 const cfgToolsValue = document.getElementById("cfgToolsValue");
 const cfgPath = document.getElementById("cfgPath");
 const cfgPathValue = document.getElementById("cfgPathValue");
+const cfgChildIntegration = document.getElementById("cfgChildIntegration");
+const cfgChildIntegrationValue = document.getElementById("cfgChildIntegrationValue");
 const cfgVerbosity = document.getElementById("cfgVerbosity");
 const cfgVerbosityValue = document.getElementById("cfgVerbosityValue");
 const cfgAudience = document.getElementById("cfgAudience");
@@ -6389,6 +6420,8 @@ function paintConfig() {
   cfgThinkingValue.textContent = boardConfig.thinking || "off";
   cfgToolsValue.textContent = toolsSummary();
   cfgPathValue.textContent = boardConfig.path || "auto";
+  // A board file from before the choice existed has no key, and reads as the way work came back until then.
+  cfgChildIntegrationValue.textContent = boardConfig.childIntegration || "merge";
   cfgVerbosityValue.textContent = boardConfig.cardsVerbosity || "normal";
   cfgAudienceValue.textContent = boardConfig.cardsAudience || "programmer";
   for (const [, value, key] of CARD_SWITCHES) {
@@ -6476,6 +6509,8 @@ cfgTools.addEventListener("click", () => void openPick("tools", cfgTools, true))
 
 /** The flow a new boss starts on. The same list as a thread's, aimed at the board instead. */
 cfgPath.addEventListener("click", () => void openPick("path", cfgPath, true));
+/** How a child's work comes back: a list of three, aimed at the board the same way. */
+cfgChildIntegration.addEventListener("click", () => void openPick("childIntegration", cfgChildIntegration, true));
 cfgVerbosity.addEventListener("click", () => void openPick("verbosity", cfgVerbosity, true));
 cfgAudience.addEventListener("click", () => void openPick("audience", cfgAudience, true));
 for (const [button, , key] of CARD_SWITCHES) {
