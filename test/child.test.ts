@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { childArgv } from "../server/child/argv.ts";
 import { describeTool, firstLine, headline, resultText } from "../server/child/describe.ts";
@@ -97,6 +98,19 @@ test("the prompts tell the child which board it is drawing on", () => {
 	assert.ok(plain.length > worktree.length, "the board prompt should carry the worktree prompt inside it");
 	assert.ok(plain.includes(board.folder), "a thread is not told which folder it works in");
 	assert.ok(worktree.includes(thread.worktree.path), "the worktree prompt does not name the tree");
+});
+
+test("the board's conventions are the file a human edits, whole, and only once", () => {
+	const plain = boardPrompt(board, thread);
+	const file = readFileSync(new URL("../prompts/board/conventions.md", import.meta.url), "utf8").trim();
+	assert.ok(file.length > 0, "the conventions file is empty");
+	// Verbatim: the settings page saves these bytes and the prompt is built from them, so an edit there
+	// reaches the next thread with no second copy in code to disagree with it.
+	assert.ok(plain.includes(file), "the conventions file is not the text the thread reads");
+	// One copy only. Advice written in both the file and the prompt is advice a human's edit half reaches.
+	assert.equal(plain.match(/Do not narrate/g)?.length, 1, "the no-narration rule is said twice");
+	// The mechanics stay in code, where the file cannot take them away.
+	assert.match(plain, /pass a short key to board_note/);
 });
 
 test("a spawned child is told it draws nothing, and the pointer convention is not said to it", () => {

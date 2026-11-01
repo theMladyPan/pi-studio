@@ -240,6 +240,10 @@ test("every prompt field says where it came from and where it is written", async
 	const document = await settingsDocument();
 	const fields = fieldsIn(document.groups.find((group) => group.id === "prompts"));
 	assert.equal(fields.length, (await promptFilesOnDisk()).length);
+	// The guard is written against the folders the daemon reads rather than a list copied here, so a folder
+	// added to `PROMPT_FOLDERS` is a folder a save accepts without this test needing an edit.
+	const { PROMPT_FOLDERS } = await import("../server/child/modes.ts");
+	const name = new RegExp(`^(${PROMPT_FOLDERS.join("|")})/[a-z][a-z-]*\\.md$`);
 	for (const field of fields) {
 		assert.equal(field.type, "prompt", `${field.id} is a ${field.type}`);
 		assert.equal(typeof field.value, "string");
@@ -250,7 +254,7 @@ test("every prompt field says where it came from and where it is written", async
 		assert.equal(field.write?.route, "/prompt", `${field.id} has no write route`);
 		assert.equal(field.write?.method, "POST");
 		assert.equal(field.write?.keys?.text, "@value");
-		assert.match(field.write?.keys?.name ?? "", /^(roles|modes|flows|verbosity|audiences)\/[a-z][a-z-]*\.md$/);
+		assert.match(field.write?.keys?.name ?? "", name);
 	}
 });
 

@@ -82,18 +82,17 @@ commit's own account rather than on a check run now, the section below says so.
   to see, and never evidence: evidence is a reference at the foot of a card, which is what
   `showReferences` is for.
 - **What a thread is told**: `--append-system-prompt` says it is one thread on a board, in which
-  folder, that the human reads cards rather than a chat log, and that its chat answer is a pointer of
-  a line or two naming the cards it wrote as `[[key]]`, that a card must carry the very key the
-  pointer names, and that neither a plan nor a summary belongs in that answer. It is told that one
-  card holds one kind of thing — a chart, an analysis, a diagram, a checklist — that it reads the
-  board before writing so a card on the same subject is revised under its key rather than duplicated,
-  and that a fenced mermaid block draws a diagram while a fenced svg block draws a picture, mermaid
-  first for anything with boxes and arrows. It is
-  also told where its own git worktree is,
-  what branch it is on and what that branch was cut from, that it commits there, that changed files
-  earn one clause naming the branch and the path, and that no merge happens without the human. Three
-  examples of right and wrong are in the prompt. A thread whose folder is not
-  a repository is told it works in place, and why.
+  folder, that the human reads cards rather than a chat log, and that a card must carry the very key
+  its `[[key]]` pointer names. The rest is taste and is a file: `prompts/board/conventions.md` says
+  the chat answer is a pointer of a line or two, that one card holds one kind of thing — a chart, an
+  analysis, a diagram, a checklist — that the thread reads the board before writing so a card on the
+  same subject is revised under its key rather than duplicated, that a fenced mermaid block draws a
+  diagram while a fenced svg block draws a picture, mermaid first for anything with boxes and arrows,
+  and its three examples of right and wrong. It is read per spawn and edited on the settings page
+  like a role. It is also told where its own git worktree is, what branch it is on and what that
+  branch was cut from, that it commits there, that changed files earn one clause naming the branch
+  and the path, and that no merge happens without the human. A thread whose folder is not a
+  repository is told it works in place, and why.
 - **The board makes the worktree, not the child.** On a thread's first message, before anything is
   spawned, the daemon runs `git worktree add --detach <repo>/.agents/<id> <base>`, spawns the child
   with that path as its `cwd`, and leaves the branch to the child. `<id>` is the first eight hex of the

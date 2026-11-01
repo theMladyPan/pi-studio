@@ -26,9 +26,10 @@ export const PROMPT_DIR = fileURLToPath(new URL("../../prompts/", import.meta.ur
 /**
  * The folders a prompt may live in, in the order the settings page lists them. A file in `verbosity/` or
  * `audiences/` is chosen by a board's card settings rather than by a spawn, and the page edits it like
- * any other: the ids a board may hold are in `card-settings.ts`, the words are here.
+ * any other: the ids a board may hold are in `card-settings.ts`, the words are here. `board/` is what
+ * every thread the human starts reads before it writes anything, `conventions.md` being the general one.
  */
-export const PROMPT_FOLDERS = ["roles", "modes", "flows", "verbosity", "audiences"];
+export const PROMPT_FOLDERS = ["board", "roles", "modes", "flows", "verbosity", "audiences"];
 
 /** One prompt file on disk: the name a route takes, and the whole text a thread would be given. */
 export type PromptFile = { name: string; folder: string; file: string; text: string; firstLine: string };
