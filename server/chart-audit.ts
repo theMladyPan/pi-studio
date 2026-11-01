@@ -15,6 +15,8 @@ const MAX_DATASETS = 6;
 const MAX_OPTION_DEPTH = 4;
 /** A report is read by a model that cannot see the card, so it has to fit in a glance: four lines, then a count. */
 const MAX_WARNINGS = 4;
+/** The longest fence body the card draws, named here so the model hears the limit in the report. */
+const MAX_BODY = 20000;
 /** The types Chart.js registers in the bundle the board ships. */
 const TYPES = ["bar", "line", "pie", "doughnut", "polarArea", "radar", "bubble", "scatter"];
 
@@ -45,6 +47,10 @@ export function auditMarkdown(markdown: string, width = 406): { warnings: string
 
 /** One fence, as a warning list and a line naming the shape the reader will meet. */
 function auditFence(body: string, width: number): { warnings: string[]; summary: string } {
+	// The card refuses a body this long before it parses one, so the model is told the number here.
+	if (body.length > MAX_BODY) {
+		return { warnings: [`chart block is ${body.length} characters: the card draws at most ${MAX_BODY}`], summary: "" };
+	}
 	let config: unknown;
 	try {
 		config = JSON.parse(body);

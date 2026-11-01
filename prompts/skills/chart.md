@@ -32,10 +32,10 @@ trailing comma, no comment.
   `scales.y.type: "logarithmic"`, `plugins.legend.display`, `plugins.tooltip`, `plugins.title.text`.
 
 Everything not listed still works: this is Chart.js 4.6.1, and its own options are yours to use. Four
-are not: the board sets `responsive`, `animation` and `devicePixelRatio` itself, because the drawing is
-snapshotted to a PNG and a live canvas cannot outlive the paint, so a config that names them is
-overridden. And JSON cannot carry a function, so any option that takes a callback is out: no
-`ticks.callback`, no formatter, no `external` tooltip.
+are not: the board sets `responsive`, `maintainAspectRatio`, `animation` and `devicePixelRatio` itself,
+because the drawing is snapshotted to a PNG and a live canvas cannot outlive the paint, so a config that
+names them is overridden. And JSON cannot carry a function, so any option that takes a callback is out:
+no `ticks.callback`, no formatter, no `external` tooltip.
 
 ## What the board draws without being asked
 

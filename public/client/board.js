@@ -716,6 +716,8 @@ function drawDiagram(holder, source) {
 /** The size a chart is drawn at, in CSS pixels. A card is about 430px wide, so the card's CSS scales it. */
 const CHART_WIDTH = 400;
 const CHART_HEIGHT = 240;
+/** Past this the body is too large to draw, and the card says so instead of parsing it. */
+const CHART_BODY_LIMIT = 20000;
 
 function chartImage(png) {
   const img = document.createElement("img");
@@ -751,6 +753,11 @@ function drawChart(holder, body) {
     return;
   }
   let config;
+  // Checked before the parse, so an oversized body names the number instead of failing inside the parser.
+  if (body.length > CHART_BODY_LIMIT) {
+    holder.replaceChildren(...chartProblem(`a chart block holds at most ${CHART_BODY_LIMIT} characters, and this one is ${body.length}`));
+    return;
+  }
   try {
     // The body is data, so it is parsed and never evaluated: a config cannot run, by construction.
     config = JSON.parse(body);

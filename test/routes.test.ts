@@ -785,8 +785,8 @@ test("a thread closes a spent card, and a pin stops it", async () => {
 		// A message is what starts the child, and the child is what a token is minted for.
 		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" })).status, 200);
 		const child = await childEnvOf(daemon, stub.envFile);
-		const spent = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "spent", markdown: "done with" })).body).cardId;
-		const kept = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "kept", markdown: "in sight" })).body).cardId;
+		const spent = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "spent", markdown: "done with", threadRoot: threadId })).body).cardId;
+		const kept = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "kept", markdown: "in sight", threadRoot: threadId })).body).cardId;
 		const pin = await postTo(daemon, board.id, "/layout", { cardId: kept, rect: { x: 0, y: 0, w: 300, h: 200 }, pinned: true });
 		assert.equal(pin.status, 200);
 
@@ -803,8 +803,45 @@ test("a thread closes a spent card, and a pin stops it", async () => {
 		// The person who pinned it closes it as before: the pin protects the card from a thread alone.
 		assert.equal((await postTo(daemon, board.id, "/close", { cardId: kept })).status, 200);
 
-		// The card a thread answered is a card like any other, so its own closes the same way.
-		assert.equal((await postAs(daemon, child.token, board.id, "/close", { cardId: threadId })).status, 200);
+		// The card a thread answers on is the one card it may not close: the close would run `closeThread`
+		// on the caller itself, and the SIGKILL would land before the answer did.
+		const self = await postAs(daemon, child.token, board.id, "/close", { cardId: threadId });
+		assert.equal(self.status, 409);
+		assert.equal(self.body, "a thread cannot close its own card");
+
+		// A card that belongs to no thread is the human's, and an agent does not tidy the board for them.
+		const loose = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "loose", markdown: "the human's own" })).body).cardId;
+		const unowned = await postAs(daemon, child.token, board.id, "/close", { cardId: loose });
+		assert.equal(unowned.status, 409);
+		assert.equal(unowned.body, "a thread closes only the cards it wrote");
+
+		// Another thread's card is that thread's, so the same caller is refused it by id and by key.
+		const otherThread = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "someone else" })).body).threadId;
+		const theirs = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "theirs", markdown: "not yours", threadRoot: otherThread })).body).cardId;
+		const notMine = await postAs(daemon, child.token, board.id, "/close", { cardId: theirs });
+		assert.equal(notMine.status, 409);
+		assert.equal(notMine.body, "a thread closes only the cards it wrote");
+
+		// A child a thread spawned is a row that thread retires when it is done: closing it is the one thread
+		// card a caller may close, and the rest of the board stays where it is.
+		const spawnedThread = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "a child", parentThread: threadId })).body).threadId;
+		assert.equal((await postAs(daemon, child.token, board.id, "/close", { cardId: spawnedThread })).status, 200);
+
+		// Another root thread was not spawned by this one, so its card is refused like any other stranger's.
+		const stranger = await postAs(daemon, child.token, board.id, "/close", { cardId: otherThread });
+		assert.equal(stranger.status, 409);
+		assert.equal(stranger.body, "a thread closes only a thread it spawned");
+
+		// Two threads hold a card keyed `plan`, and the key resolves to the caller's own: a board-wide match
+		// would hand back whichever card was inserted first, which is how one thread closed another's.
+		writeFileSync(join(folder, "plan.ts"), "export const plan = 1;\n");
+		const theirPlan = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "plan", markdown: "their plan", threadRoot: otherThread })).body).cardId;
+		const myPlan = JSON.parse((await postTo(daemon, board.id, "/card/source", { path: "plan.ts", key: "plan", threadRoot: threadId })).body).cardId;
+		const plan = await postAs(daemon, child.token, board.id, "/close", { cardId: "plan" });
+		assert.equal(plan.status, 200);
+		assert.equal(JSON.parse(plan.body).closed, myPlan, "the key resolved to another thread's card");
+		const after = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		assert.ok(after.cards.some((card: any) => card.id === theirPlan), "the other thread's plan was closed");
 	} finally {
 		daemon.child.kill();
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });

@@ -112,6 +112,20 @@ test("the audit says nothing about markdown that holds no chart", () => {
 	assert.deepEqual(auditMarkdown("A note with a ```js fence\nconsole.log(1)\n``` and no chart."), { warnings: [], summary: "" });
 });
 
+test("a fence body past the card's limit is named, so the model hears it before the browser refuses it", () => {
+	// The client refuses a body over 20000 characters outright, so the report has to say the same number
+	// rather than describing a config nobody will draw.
+	const huge = JSON.stringify({
+		type: "bar",
+		data: { labels: ["a"], datasets: [{ label: "errors", data: [1] }] },
+		options: { note: "x".repeat(20_000) },
+	});
+	const { warnings, summary } = auditMarkdown(fence(huge));
+	assert.equal(summary, "");
+	assert.equal(warnings.length, 1);
+	assert.ok(warnings[0].includes("20000"), `the limit is what the model has to act on, got ${JSON.stringify(warnings)}`);
+});
+
 test("the Chart.js bundle is vendored, and is the library rather than a stub", () => {
 	const bundle = new URL("../public/client/chart-umd-min.js", import.meta.url);
 	assert.ok(existsSync(bundle), "public/client/chart-umd-min.js is missing, so no chart block can draw");
