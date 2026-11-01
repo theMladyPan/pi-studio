@@ -53,7 +53,7 @@ export type SettingsField = {
 	pick?: SettingsPick;
 	/** The ids a picker offers, where the daemon already knows them. */
 	options?: string[];
-	/** A route the picker reads its rows from instead: the model catalogue, this machine's tools. */
+	/** A route the field reads from instead: the model catalogue, this machine's tools, a prompt's file. */
 	source?: string;
 	/**
 	 * Which of the route's lists a `list` leaf keeps names out of. `/tools` answers pi's own tools and the
@@ -186,6 +186,7 @@ function promptGroups(): SettingsGroup[] {
 					// A prompt is a file rather than a value: the page reads it from `/prompt` and writes it back.
 					value: "",
 					file,
+					source: `/prompt?name=${encodeURIComponent(file)}`,
 					help: one.firstLine,
 					write: { route: "/prompt", body: { name: file, text: "@value" } },
 				};
