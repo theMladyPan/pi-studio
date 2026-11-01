@@ -5,6 +5,7 @@
  */
 import { AGENTS_DIR, shortId, workdirOf } from "../worktrees/make.ts";
 import { cardsBlock } from "../card-settings.ts";
+import { INTEGRATION_COMMAND, integrationOf } from "../integration.ts";
 import { promptText } from "./modes.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -87,6 +88,7 @@ const NO_CONVENTIONS =
 export function boardPrompt(board, thread) {
 	if (thread.parentThread) return childPrompt(board, thread);
 	const workdir = workdirOf(board, thread);
+	const integration = integrationOf(board.config);
 	return [
 		`You are thread "${thread.title}" on a board, working in the folder ${workdir}.`,
 		`The workspace this board opened is ${board.folder}, which is where the rest of the board reads files from.`,
@@ -97,6 +99,9 @@ export function boardPrompt(board, thread) {
 		"A [[key]] only works if the card carries that exact key, so pass a short key to board_note every time and name the card by it.",
 		"How many cards this thread writes, and what may be inside one, is set at the end of this prompt.",
 		worktreePrompt(board, thread),
+		// How a branch a child cut comes back onto this board's own branch: one strategy and the git command
+		// that carries it out, so the boss reads the rule rather than three it has to choose between.
+		`The board brings a child's work back with: ${integration} — ${INTEGRATION_COMMAND[integration]}.`,
 		cardsBlock(board.config),
 	].join("\n");
 }

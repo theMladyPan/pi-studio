@@ -210,6 +210,56 @@ test("a board's card settings are written by /config and read back out of it", a
 	}
 });
 
+test("how a child's work comes back is a default a new board is born with", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-integration-"));
+	const daemon = await boot(folder);
+	try {
+		const saved = await post(daemon, "/defaults", { childIntegration: "cherry-pick" });
+		assert.equal(saved.status, 200, saved.body.slice(0, 200));
+		const answered = JSON.parse(saved.body).defaults;
+		assert.equal(answered.childIntegration, "cherry-pick");
+
+		// Written where the daemon reloads its defaults from, so the next board on this folder inherits it.
+		const written = JSON.parse(readFileSync(join(folder, "workspaces.json"), "utf8"));
+		assert.equal(written.defaults.childIntegration, "cherry-pick");
+
+		const refused = await post(daemon, "/defaults", { childIntegration: "squash" });
+		assert.equal(refused.status, 400);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a board's integration setting is written by /config and read back out of it", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-integration-config-"));
+	const work = mkdtempSync(join(tmpdir(), "pi-studio-routes-integration-config-work-"));
+	const daemon = await boot(folder);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder: work })).body).board;
+		// A board that has never been configured merges, which is what the boss is told to do.
+		const fresh = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body).meta.config;
+		assert.equal(fresh.childIntegration, "merge");
+
+		const saved = await postTo(daemon, board.id, "/config", { childIntegration: "rebase", dimOthers: false });
+		assert.equal(saved.status, 200, saved.body.slice(0, 200));
+		const after = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body).meta.config;
+		assert.equal(after.childIntegration, "rebase");
+
+		// A body carries one switch and never has to repeat the rest.
+		assert.equal((await postTo(daemon, board.id, "/config", { childIntegration: "merge" })).status, 200);
+		const partial = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body).meta.config;
+		assert.equal(partial.childIntegration, "merge");
+		assert.equal(partial.dimOthers, false, "a switch nobody touched changed with the one that was");
+
+		assert.equal((await postTo(daemon, board.id, "/config", { childIntegration: "squash" })).status, 400);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+		rmSync(work, { recursive: true, force: true });
+	}
+});
+
 test("a route without the token is refused, and the page is not", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-"));
 	const daemon = await boot(folder);

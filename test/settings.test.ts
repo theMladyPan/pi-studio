@@ -119,6 +119,9 @@ test("the six card settings are drawn from the document, and an old defaults fil
 		assert.equal(byId[id]?.type, "select", `${id} is a ${byId[id]?.type}`);
 		assert.deepEqual(byId[id]?.options, ["none", "some", "many"], `${id} does not offer the three levels`);
 	}
+	// The one choice about how a child's work comes back is drawn the same way.
+	assert.equal(byId.childIntegration?.type, "select");
+	assert.deepEqual(byId.childIntegration?.options, ["merge", "cherry-pick", "rebase"]);
 	// The seeded file above was written before these settings existed, which is what an old board looks like:
 	// every leaf still carries a value, because a control with nothing in it is a control that lies.
 	assert.equal(byId.cardsVerbosity.value, "normal");

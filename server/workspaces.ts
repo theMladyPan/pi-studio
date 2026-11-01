@@ -9,6 +9,7 @@ import { sessionFacts } from "./session.ts";
 import { basename } from "node:path";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, MODEL, PROVIDER, THINKING_LEVELS, run } from "./models.ts";
 import { CARD_AUDIENCE, CARD_LEVELS, CARD_SHOWS, CARD_VERBOSITY, cardSettings } from "./card-settings.ts";
+import { CHILD_INTEGRATION, integrationOf } from "./integration.ts";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { PATH_NAMES } from "./child/modes.ts";
 import { spawnSync } from "node:child_process";
@@ -150,6 +151,8 @@ export let homeDefaults = (() => {
 		const value = held[key];
 		if (CARD_LEVELS.includes(value) || typeof value === "boolean") known[key] = value;
 	}
+	// How a new board brings a child's work back: an id checked against its list, so a restart does not drop it.
+	if (CHILD_INTEGRATION.includes(held.childIntegration)) known.childIntegration = held.childIntegration;
 	return known;
 })();
 
@@ -183,6 +186,7 @@ export function activeHomeDefaults() {
 		// A new board is born with the six card settings, chosen or default: the settings page draws every
 		// leaf it is given and a missing value would draw an empty control.
 		...cardSettings(homeDefaults),
+		childIntegration: integrationOf(homeDefaults),
 	};
 }
 
@@ -305,6 +309,8 @@ export function activeConfig(board) {
 			: [],
 		// The flow a boss starts on: `auto` unless the board prefers one.
 		path: PATH_NAMES.includes(chosen.path) ? chosen.path : "auto",
+		// How this board brings a child's work back onto its own branch, which is what a boss is told.
+		childIntegration: integrationOf(chosen),
 	};
 }
 
