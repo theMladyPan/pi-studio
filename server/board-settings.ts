@@ -13,13 +13,25 @@
 import { activeConfig } from "./workspaces.ts";
 import { CARD_AUDIENCE, CARD_LEVELS, CARD_VERBOSITY } from "./card-settings.ts";
 import { PATH_NAMES, PROMPT_FOLDERS, promptFiles } from "./child/modes.ts";
+import { CHILD_INTEGRATION } from "./integration.ts";
 import { THINKING_LEVELS } from "./models.ts";
 
 /**
  * The picker a leaf opens. A `select` says a value is one of a list, not what the list means; the panel
  * needs the name of the picker to open the right one, and the set of them is closed here.
  */
-export type BoardPick = "model" | "thinking" | "path" | "tools" | "verbosity" | "audience" | "code" | "math" | "charts" | "refs";
+export type BoardPick =
+	| "model"
+	| "thinking"
+	| "path"
+	| "childIntegration"
+	| "tools"
+	| "verbosity"
+	| "audience"
+	| "code"
+	| "math"
+	| "charts"
+	| "refs";
 
 /**
  * One control the panel draws. `type` is how it is painted and `pick` is the list behind it, if any.
@@ -78,6 +90,7 @@ type BoardConfig = {
 	model: string;
 	thinking?: string;
 	path: string;
+	childIntegration: string;
 	dimOthers: boolean;
 	toolsOff: string[];
 	extensionsOff: string[];
@@ -169,6 +182,16 @@ export function boardSettingsDocument(board: BoardSettingsSource): BoardSettings
 						options: PATH_NAMES,
 						value: config.path ?? "auto",
 						write: { route: "/config", body: { path: "@value" } },
+					},
+					{
+						id: "childIntegration",
+						label: "a child's work comes back by",
+						type: "select",
+						pick: "childIntegration",
+						// `activeConfig` reads an older board file as the default, so this leaf always names a strategy.
+						options: [...CHILD_INTEGRATION],
+						value: config.childIntegration,
+						write: { route: "/config", body: { childIntegration: "@value" } },
 					},
 				],
 			},

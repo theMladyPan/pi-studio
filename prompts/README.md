@@ -27,6 +27,9 @@ instead, and a boss among those also gets a flow. Two of the board's card settin
   neither a planner nor a boss may write or edit.
 - `flows/<path>.md` is the flow a boss runs: `simple`, `advanced`, `complex`. A boss on `auto` reads
   none of them, picks one, and says which with the `board_path` tool, so its card can show it.
+- `skills/<name>.md` is a document a thread pulls in on demand by calling `board_skill` with that name,
+  never as part of a spawn: `chart.md` is the grammar and the rules for a ```chart block, and a thread
+  reads it once before it writes its first chart.
 - `verbosity/<id>.md` and `audiences/<id>.md` are not chosen by a spawn but by the board: they are the
   words behind `cardsVerbosity` and `cardsAudience`. The ids a board may hold are in
   `server/card-settings.ts`, and `PROMPT_FOLDERS` in `server/child/modes.ts` lists both folders, so

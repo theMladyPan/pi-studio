@@ -10,7 +10,7 @@ import { answer, fail, readJson } from "../../http.ts";
 import { PROMPT_DIR, promptFiles } from "../../child/modes.ts";
 
 /** The names a prompt may have: lowercase, one file each, in one of the folders the daemon reads. */
-const NAME = /^(board|roles|modes|flows|verbosity|audiences)\/[a-z][a-z-]*\.md$/;
+const NAME = /^(board|roles|modes|flows|verbosity|audiences|skills)\/[a-z][a-z-]*\.md$/;
 
 /**
  * A name that came from a request, on the way to a path. The pattern is the whole guard: it has no

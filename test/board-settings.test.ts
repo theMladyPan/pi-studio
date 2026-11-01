@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { boardSettingsDocument } from "../server/board-settings.ts";
 import { PATH_NAMES, PROMPT_FOLDERS, promptFiles } from "../server/child/modes.ts";
 import { CARD_AUDIENCE, CARD_LEVELS, CARD_VERBOSITY } from "../server/card-settings.ts";
+import { CHILD_INTEGRATION } from "../server/integration.ts";
 import { THINKING_LEVELS } from "../server/models.ts";
 
 /**
@@ -80,15 +81,15 @@ test("the document is five groups in the order the panel draws them", () => {
 	);
 });
 
-test("the tree holds twelve setting leaves and each one is a control a human can change", () => {
-	// Twelve: three for the thread, two for the tools, six for the cards, one for the canvas. The brief
-	// this was written from says thirteen and then enumerates exactly these twelve.
+test("the tree holds thirteen setting leaves and each one is a control a human can change", () => {
+	// Thirteen: four for the thread, two for the tools, six for the cards, one for the canvas.
 	assert.deepEqual(
 		settingLeaves.map((field) => field.id),
 		[
 			"model",
 			"thinking",
 			"path",
+			"childIntegration",
 			"toolsOff",
 			"extensionsOff",
 			"cardsVerbosity",
@@ -100,10 +101,10 @@ test("the tree holds twelve setting leaves and each one is a control a human can
 			"dimOthers",
 		],
 	);
-	assert.equal(settingLeaves.length, 12);
+	assert.equal(settingLeaves.length, 13);
 	assert.deepEqual(
 		settingLeaves.map((field) => field.type),
-		["combo", "select", "select", "list", "list", "select", "select", "select", "select", "select", "select", "toggle"],
+		["combo", "select", "select", "select", "list", "list", "select", "select", "select", "select", "select", "select", "toggle"],
 	);
 });
 
@@ -114,7 +115,7 @@ test("every setting names its picker and the route a change goes back through", 
 		// A toggle is flipped where it stands, so it names no picker; everything else opens a list.
 		if (field.type === "toggle") continue;
 		assert.ok(
-			["model", "thinking", "path", "tools", "verbosity", "audience", "code", "math", "charts", "refs"].includes(field.pick),
+			["model", "thinking", "path", "childIntegration", "tools", "verbosity", "audience", "code", "math", "charts", "refs"].includes(field.pick),
 			`${field.id} opens no picker`,
 		);
 	}
@@ -180,6 +181,8 @@ test("every leaf carries a value, and the board's own choices are the ones the p
 	for (const leaf of leavesOf(document.groups)) assert.notEqual(leaf.value, undefined, `${leaf.id} has no value`);
 	assert.equal(byId.thinking.value, "high");
 	assert.equal(byId.path.value, "simple");
+	// A board file from before the choice existed reads as the default, so this leaf is never empty.
+	assert.equal(byId.childIntegration.value, "merge");
 	assert.equal(byId.dimOthers.value, false);
 	assert.deepEqual(byId.toolsOff.value, ["bash"]);
 	assert.deepEqual(byId.extensionsOff.value, []);
@@ -191,6 +194,7 @@ test("every leaf carries a value, and the board's own choices are the ones the p
 	// The lists are the daemon's own, not a copy written out here.
 	assert.deepEqual(byId.thinking.options, THINKING_LEVELS);
 	assert.deepEqual(byId.path.options, PATH_NAMES);
+	assert.deepEqual(byId.childIntegration.options, CHILD_INTEGRATION);
 	assert.deepEqual(byId.cardsVerbosity.options, CARD_VERBOSITY);
 	assert.deepEqual(byId.cardsAudience.options, CARD_AUDIENCE);
 	for (const id of ["showCodeFragments", "showMathFormulas", "showCharts", "showReferences"]) {
@@ -199,6 +203,6 @@ test("every leaf carries a value, and the board's own choices are the ones the p
 	// The label is the UI text a human reads, and the id is what a write sends.
 	assert.deepEqual(
 		settingLeaves.map((field) => field.label),
-		["model", "thinking", "boss flow", "built-in", "extensions", "how often", "written for", "code", "math", "charts", "references", "dim others"],
+		["model", "thinking", "boss flow", "a child's work comes back by", "built-in", "extensions", "how often", "written for", "code", "math", "charts", "references", "dim others"],
 	);
 });

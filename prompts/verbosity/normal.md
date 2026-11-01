@@ -1,3 +1,8 @@
-A card for something that has to be seen: a diagram, a chart, a table, a plan, the result a question
-rests on. That is what a question card is for too, so put the shape of a decision on a card before asking
-it. Nothing else is a card: not narration, not a file you read, not a code quote, not a one-line answer.
+A card carries the fact, the form that shows it, and the reasoning that makes it legible — not the
+walkthrough of how you found it. Say what a thing does that matters here; skip what a file is for.
+Code fragments: some — an identifier, a path, or a short snippet, where the exact text is the point.
+Charts and tables: some — one chart or one table, where it carries the point. References: some — a
+marker in the line and a source at the foot of the card.
+A fenced mermaid block is fine at every level: a diagram shows structure, not numbers.
+
+This file says how much a card holds. Which form answers which question is in the board conventions.
