@@ -58,9 +58,9 @@
   body.text-select #viewport:not(.dragging) { cursor: default; }
   body.text-select .card:not(.dragging) { cursor: text; }
   /* With the stream down nothing on the board can change, so it dims to read as stale. Each card's
-     contents dim rather than the viewport, so a docked composer stays readable while the agent is
+     contents dim rather than the viewport, so a field stays readable while the agent is
      blocked on a question. */
-  body.link-down #world > .card > *:not(#composer),
+  body.link-down #world > .card > *:not(.composer),
   body.link-down #empty { opacity: .55; }
   /* Zoom is a real layout zoom, not a scaled bitmap: text is laid out at the size it is
      shown at, so it stays sharp instead of waiting for a repaint to catch up. */
@@ -176,15 +176,16 @@
   .min:hover { background: #21262d; color: var(--text); }
   /* Folded: the head is the whole card, and the real height stays saved for restoring. */
   .card.mini { height: auto !important; min-height: 0; }
-  .card.mini .body, .card.mini .thread, .card.mini .card-live, .card.mini .resize { display: none; }
+  .card.mini .body, .card.mini .thread, .card.mini .card-live, .card.mini .resize,
+  .card.mini .composer { display: none; }
   .card.mini .head { border-bottom: none; }
-  /* The pulse would repaint the halo of a card that holds the composer, so the amber ring is left
-     to say it is the reply target. */
-  .card.replying { border-color: #d29922; box-shadow: 0 0 0 1px rgba(210,153,34,.45), 0 12px 32px rgba(1,4,9,.5);
-    animation: none; }
+  /* The pulse would repaint the halo of a card whose field has the keyboard, so the amber ring is left
+     to say the message is being written there. */
+  .card:has(.composer:focus-within) { border-color: #d29922;
+    box-shadow: 0 0 0 1px rgba(210,153,34,.45), 0 12px 32px rgba(1,4,9,.5); animation: none; }
 
-  /* The card a message is about: dashed, because the field itself lives in the thread's own window
-     and a second amber ring would read as a second place to type. */
+  /* The cards the message being written names: dashed, because the field is elsewhere and a second
+     amber ring would read as a second place to type. */
   .card.referenced { border-style: dashed; border-color: rgba(210,153,34,.75); }
 
   /* Follow-ups live under the card body, in the order they were asked. The whole column scrolls
@@ -589,24 +590,32 @@
   @keyframes pulseDot { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
 
   /* composer */
-  #composer {
-    position: fixed; left: var(--rail); right: 0; bottom: 0; z-index: 9; height: 96px;
-    display: flex; gap: 10px; padding: 10px 14px; background: rgba(10,15,22,.96);
-    border-top: 1px solid var(--border); backdrop-filter: blur(8px);
+  /* Every thread card carries its own field, so a message is written where its answer will be read
+     and the field is always there rather than moving to whichever card was clicked last. One block
+     serves both this and the bottom bar that a board with a single session behind it keeps. */
+  .composer {
+    flex: none; display: flex; flex-wrap: wrap; gap: 6px 8px; padding: 7px 9px;
+    background: #0f141b; border-top: 1px solid var(--border);
   }
+  .composer .type { order: 1; flex: 1 1 100%; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  /* A narrow card cannot hold the buttons and the send side by side, so the row wraps: the buttons
+     first, then the hint and the send on the right of whatever line is left. */
+  .composer .side { order: 2; flex: 1 1 100%; display: flex; flex-wrap: wrap;
+    justify-content: flex-end; align-items: center; gap: 6px 8px; }
+  .composer .modes { display: flex; gap: 5px; flex-wrap: wrap; margin-right: auto; }
   /* A board of threads has no single session to message, so its field lives inside a card and the
      bottom bar is gone. The same client serves a one-session board, which keeps both. */
-  body.threads #viewport { inset: 44px 0 0 var(--rail); }
-  body.threads #composer:not(.docked) { display: none; }
-  body.threads #newThread { display: grid; }
-  #composer .type { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-  /* Docked: the same field, living at the bottom of the card it is replying to. */
-  #composer.docked {
-    position: relative; left: auto; right: auto; bottom: auto; top: auto;
-    height: auto; flex: none; padding: 8px 10px; gap: 8px;
-    background: #0f141b; border-top: 1px solid var(--border); backdrop-filter: none;
+  #composerHome {
+    position: fixed; left: var(--rail); right: 0; bottom: 0; z-index: 9;
+    background: rgba(10,15,22,.96); border-top: 1px solid var(--border); backdrop-filter: blur(8px);
   }
-  #composer.docked textarea { min-height: 54px; max-height: 150px; font-size: 13px; }
+  #composerHome .composer { background: none; border-top: 0; padding: 10px 14px; gap: 10px; }
+  body.threads #composerHome { display: none; }
+  body.threads #viewport { inset: 44px 0 0 var(--rail); }
+  body.threads #newThread { display: grid; }
+  /* The corner grip sits where the field's send button does, so it steps aside while the field has
+     the keyboard and comes back when it does not. */
+  .card:has(.composer:focus-within) .resize { display: none; }
   /* The conversation behind a thread, opened from the activity rail. A drawer over the board: it costs
      nothing while closed, and the canvas does not have to make room for it. */
   #transcript { position: fixed; right: 14px; bottom: 42px; width: min(660px, 48vw); height: min(72vh, 780px);
@@ -628,97 +637,96 @@
   .tr-entry.thinking { color: var(--muted); font-style: italic; }
   .tr-entry.call { color: var(--accent); }
   .tr-entry.result { color: #9fb0c0; opacity: .8; padding-left: 12px; border-left: 1px solid var(--border); }
-  /* A narrow card cannot hold the field and the buttons side by side, so they stack: buttons
-     on the right of the first row, the chip and the field filling the second. */
-  #composer.docked { flex-wrap: wrap; }
-  #composer.docked .side { order: 1; flex: 1 1 100%; flex-direction: row;
-    justify-content: flex-end; align-items: center; gap: 8px; }
-  #composer.docked .type { order: 2; flex: 1 1 100%; }
-  #composer.docked .hintline { display: none; }
-  .card.replying .resize { display: none; }
-  /* Floating above the composer, so attachments never squeeze the textarea. */
-  #attachments { position: absolute; bottom: 100%; left: 14px; display: flex; gap: 6px; padding-bottom: 6px; }
-  #attachments:empty { display: none; }
-  #attachments .shot { position: relative; }
-  #attachments .shot img { height: 64px; border-radius: 5px; border: 1px solid var(--border); display: block; }
-  #attachments .shot button { position: absolute; top: -5px; right: -5px; width: 16px; height: 16px;
+  /* Floating above the field, so attachments never squeeze the textarea. */
+  .composer .shots { display: flex; gap: 6px; flex-wrap: wrap; }
+  .composer .shots:empty { display: none; }
+  .composer .shots .shot { position: relative; }
+  .composer .shots .shot img { height: 56px; border-radius: 5px; border: 1px solid var(--border); display: block; }
+  .composer .shots .shot button { position: absolute; top: -5px; right: -5px; width: 16px; height: 16px;
     border-radius: 50%; border: 1px solid var(--border); background: #21262d; color: var(--text);
     font: 10px var(--mono); line-height: 1; cursor: pointer; padding: 0; }
   /* One row, scrolling sideways, so a long list of picks costs one line of the field. */
-  #pathChips { display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; }
-  #pathChips:empty { display: none; }
-  #pathChips .chip { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; max-width: 240px;
+  .composer .paths { display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; }
+  .composer .paths:empty { display: none; }
+  .composer .paths .chip { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; max-width: 240px;
     font: 11px var(--mono); color: var(--text); background: #161b22;
     border: 1px solid var(--border); border-radius: 999px; padding: 2px 4px 2px 9px; }
-  #pathChips .chip.folder { color: var(--accent); border-color: var(--accent-dim); }
-  #pathChips .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #pathChips .chip button { border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  .composer .paths .chip.folder { color: var(--accent); border-color: var(--accent-dim); }
+  .composer .paths .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .composer .paths .chip button { border: 0; background: transparent; color: var(--muted); cursor: pointer;
     font: 12px var(--mono); line-height: 1; padding: 1px 4px; border-radius: 50%; }
-  #pathChips .chip button:hover { background: #21262d; color: var(--text); }
-  #composer textarea {
-    flex: 1; resize: none; font: 14px/1.45 system-ui, sans-serif; color: var(--text);
-    background: #0d1117; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+  .composer .paths .chip button:hover { background: #21262d; color: var(--text); }
+  /* The field is dragged taller from its corner. The card clips whatever grows past it, so the drag
+     stops at the height that card can hold (`--field-max`, set from the card's own height): a field
+     taller than its card would push its own drag corner out of the card, where nothing can grab it. */
+  .composer textarea {
+    /* `flex: none`, not `flex: 1`: a zero flex basis would ignore the height the corner sets, and the
+       drag would look like it did nothing. The field is its own height between a floor and the card. */
+    flex: none; resize: vertical; font: 13px/1.45 system-ui, sans-serif; color: var(--text);
+    min-height: 52px; max-height: var(--field-max, 150px); background: #0d1117;
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px;
   }
-  #composer textarea:focus { outline: none; border-color: var(--accent-dim); }
-  #composer .side { display: flex; flex-direction: column; gap: 6px; justify-content: space-between; }
-  #composer .modes { display: flex; gap: 6px; flex-wrap: wrap; }
-  #composer .modes button { font: 11px var(--mono); color: var(--muted); background: #161b22;
+  /* The bottom bar is the window's, not a card's, so it takes what the window gives it. */
+  #composerHome .composer textarea { font-size: 14px; padding: 8px 10px; max-height: min(320px, 40vh); }
+  .composer textarea:focus { outline: none; border-color: var(--accent-dim); }
+  .composer .modes button { font: 11px var(--mono); color: var(--muted); background: #161b22;
     border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
-  #composer .modes button.on { color: #0d1117; background: var(--accent); border-color: var(--accent); }
+  .composer .modes button.on { color: #0d1117; background: var(--accent); border-color: var(--accent); }
   /* How hard the model thinks is worn by the think chip: its border takes the level's colour from
      the ironbow ramp and a soft halo of the same hue sits around it. Two shadows, a tight one and a
      wide one, so the halo has a hot core instead of reading as a flat ring. The script sets both
      colours, and takes them off again at `off`, so the chip then falls back to the plain border it
      always had. The ramp stops at yellow, so the hardest think reads warm rather than white-hot. */
-  #thinkPick {
+  .composer .think-pick {
     border-color: var(--heat-tint, var(--border));
     box-shadow: 0 0 3px var(--heat-haze, transparent), 0 0 11px var(--heat-haze, transparent);
   }
   /* Steering cuts a run short, so the button wears the warning colour while that is what it would do. */
-  #composer .modes button.steer { color: #0d1117; background: var(--amber); border-color: var(--amber); }
-  #composer #send { font: 12px var(--mono); color: #0d1117; background: var(--green);
-    border: 0; border-radius: 6px; padding: 7px 14px; cursor: pointer; }
-  #composer #send:disabled { opacity: .5; cursor: default; }
+  .composer .modes button.steer { color: #0d1117; background: var(--amber); border-color: var(--amber); }
+  .composer .send { font: 12px var(--mono); color: #0d1117; background: var(--green);
+    border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  .composer .send:disabled { opacity: .5; cursor: default; }
   /* The context figure is also the compact button, and the fill behind the words is how much of the
      window that thread has spent. It wears its neighbours' box, so the row keeps one rhythm. */
-  #composer #ctxBtn { position: relative; overflow: hidden; appearance: none; cursor: pointer;
+  .composer .ctx-btn { position: relative; overflow: hidden; appearance: none; cursor: pointer;
     font: 11px var(--mono); color: var(--muted); background: #161b22;
     border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; --fill: 0%; }
-  /* `display` on the id beats the user agent's [hidden] rule, so hiding is spelled out. */
-  #composer #ctxBtn[hidden] { display: none; }
+  /* `display` on the class beats the user agent's [hidden] rule, so hiding is spelled out. */
+  .composer .ctx-btn[hidden] { display: none; }
   /* One width is the whole meter: the fill is a wash over the button's own ground, so the label stays
      readable at every percentage and no second element has to be kept in step. */
-  #composer #ctxBtn::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: var(--fill);
+  .composer .ctx-btn::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: var(--fill);
     background: linear-gradient(180deg, rgba(88,166,255,.3), rgba(88,166,255,.14)); pointer-events: none; }
-  #composer #ctxBtn span { position: relative; }
-  #composer #ctxBtn:hover, #composer #ctxBtn:focus-visible { color: var(--text); border-color: var(--border-bright); }
+  .composer .ctx-btn span { position: relative; }
+  .composer .ctx-btn:hover, .composer .ctx-btn:focus-visible { color: var(--text); border-color: var(--border-bright); }
   /* Half the window gone is where the number stops being a statistic: the fill takes the amber the
      board uses for work in flight, and a sheen crosses it the way heat crosses iron. */
-  #composer #ctxBtn.hot { color: #e3b341; border-color: rgba(210,153,34,.55); }
-  #composer #ctxBtn.hot::before { background: linear-gradient(180deg, rgba(210,153,34,.36), rgba(210,153,34,.16)); }
-  #composer #ctxBtn.hot::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  .composer .ctx-btn.hot { color: #e3b341; border-color: rgba(210,153,34,.55); }
+  .composer .ctx-btn.hot::before { background: linear-gradient(180deg, rgba(210,153,34,.36), rgba(210,153,34,.16)); }
+  .composer .ctx-btn.hot::after { content: ""; position: absolute; inset: 0; pointer-events: none;
     background: linear-gradient(105deg, transparent 38%, rgba(255,255,255,.22) 50%, transparent 62%);
     background-size: 200% 100%; animation: ironSheen 2.6s linear infinite; }
   /* Near the window's edge the same heat goes red, because past this the next answer is the one at risk. */
-  #composer #ctxBtn.full { color: var(--red); border-color: rgba(248,81,73,.55); }
-  #composer #ctxBtn.full::before { background: linear-gradient(180deg, rgba(248,81,73,.36), rgba(248,81,73,.16)); }
+  .composer .ctx-btn.full { color: var(--red); border-color: rgba(248,81,73,.55); }
+  .composer .ctx-btn.full::before { background: linear-gradient(180deg, rgba(248,81,73,.36), rgba(248,81,73,.16)); }
   @keyframes ironSheen { from { background-position: 150% 0; } to { background-position: -50% 0; } }
   /* Nothing to do while the child is busy: the press answers with the reason rather than looking stuck. */
-  #composer #ctxBtn.working { color: var(--text); cursor: progress; }
-  #composer #ctxBtn.working::after { animation: none; }
-  #composer .hintline { color: var(--muted); font: 11px var(--mono); }
+  .composer .ctx-btn.working { color: var(--text); cursor: progress; }
+  .composer .ctx-btn.working::after { animation: none; }
+  .composer .hintline { color: var(--muted); font: 11px var(--mono); }
   /* A note that reports a failure, so it does not read as the usual quiet hint. */
-  #composer .hintline.bad { color: var(--red); }
-  /* Which card the next message answers, shown above the box until it is sent or cleared. */
-  #replyChip { display: flex; align-items: center; gap: 6px; align-self: flex-start;
+  .composer .hintline.bad { color: var(--red); }
+  /* The cards a message names beside the one it is written in, added with `r` or with the ↩ in a
+     card's head. A row of chips, so three of them cost one line and each drops on its own. */
+  .composer .refs { display: flex; flex-wrap: wrap; gap: 5px; }
+  .composer .refs[hidden] { display: none; }
+  .composer .ref { display: flex; align-items: center; gap: 4px; max-width: 100%;
     font: 11px var(--mono); color: #e3b341; background: rgba(210,153,34,.12);
-    border: 1px solid rgba(210,153,34,.4); border-radius: 999px; padding: 2px 4px 2px 9px;
-    max-width: 100%; }
-  #replyChip[hidden] { display: none; }
-  #replyChipText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #replyChip button { border: 0; background: transparent; color: #e3b341; cursor: pointer;
+    border: 1px solid rgba(210,153,34,.4); border-radius: 999px; padding: 1px 4px 1px 9px; }
+  .composer .ref span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .composer .ref button { border: 0; background: transparent; color: #e3b341; cursor: pointer;
     font: 12px var(--mono); line-height: 1; padding: 1px 4px; border-radius: 50%; }
-  #replyChip button:hover { background: rgba(210,153,34,.25); }
+  .composer .ref button:hover { background: rgba(210,153,34,.25); }
 
   /* Folder picker: anchored above the composer, sized so a folder fits in one glance. */
   /* One button starts a thread. It sits where the eye goes for "make another one" and stays out
@@ -920,7 +928,7 @@
      loses nothing when the reader asks for less motion. Last, because it kills rules from the card
      states, the header and the rail alike. */
   @media (prefers-reduced-motion: reduce) {
-    .card.fresh, .card.flash, header .live.working b, .act.running .dot, #composer #ctxBtn.hot::after { animation: none; }
+    .card.fresh, .card.flash, header .live.working b, .act.running .dot, .composer .ctx-btn.hot::after { animation: none; }
   }
 </style>
 </head>
@@ -995,28 +1003,36 @@
 </aside>
 <button id="railOpen" title="show activity">activity <b id="railOpenCount"></b></button>
 
-<div id="composer">
-  <div class="type">
-    <div id="replyChip" hidden><span id="replyChipText"></span><button id="replyChipClear" title="ask on the board instead of in this card">×</button></div>
-    <div id="pathChips"></div>
-    <div id="attachments"></div>
-    <textarea id="msg" placeholder="message the agent…  (enter sends, shift+enter for a new line, paste an image or pick files)"></textarea>
-  </div>
-  <div class="side">
-    <div class="modes">
-      <button id="modeToggle" type="button" title="queue: this message waits for the run in flight">queue</button>
-      <button id="forkMode" type="button" title="ask a new thread instead of the one that made this card">fork</button>
-      <button id="modePick" type="button" title="an agent does the work, a plan plans, a boss spawns children">agent</button>
-      <button id="pathPick" type="button" hidden title="the flow a boss runs">auto</button>
-      <button id="modelPick" type="button" title="the model this card answers with">model</button>
-      <button id="thinkPick" type="button" title="how hard the model thinks before answering">think</button>
-      <button id="ctxBtn" type="button" hidden><span id="ctxLabel"></span></button>
-      <button id="pickFiles" title="attach files or folders from disk">files</button>
+<!-- Where the field of a board with a single session behind it lives. A board of threads has none:
+     every thread card carries its own field, built from the template below. -->
+<div id="composerHome"></div>
+
+<!-- One composer. Every thread card gets one, so the field is always where the answer will be read,
+     and a card that is only named in a message never grows one. -->
+<template id="composerTpl">
+  <div class="composer">
+    <div class="type">
+      <div class="refs" hidden></div>
+      <div class="paths"></div>
+      <div class="shots"></div>
+      <textarea class="msg" rows="1" placeholder="message the agent…  (enter sends, shift+enter for a new line, paste an image or pick files)"></textarea>
     </div>
-    <span class="hintline" id="composerHint" role="status" aria-live="polite"></span>
-    <button id="send">send</button>
+    <div class="side">
+      <div class="modes">
+        <button class="mode-toggle" type="button" title="queue: this message waits for the run in flight">queue</button>
+        <button class="fork" type="button" hidden title="ask a new thread instead of the one that made this card">fork</button>
+        <button class="mode-pick" type="button" title="an agent does the work, a plan plans, a boss spawns children">agent</button>
+        <button class="path-pick" type="button" hidden title="the flow a boss runs">auto</button>
+        <button class="model-pick" type="button" title="the model this card answers with">model</button>
+        <button class="think-pick" type="button" title="how hard the model thinks before answering">think</button>
+        <button class="ctx-btn" type="button" hidden><span class="ctx-label"></span></button>
+        <button class="files" type="button" title="attach files or folders from disk">files</button>
+      </div>
+      <span class="hintline" role="status" aria-live="polite"></span>
+      <button class="send" type="button">send</button>
+    </div>
   </div>
-</div>
+</template>
 
 <aside id="transcript" hidden aria-label="thread transcript">
   <div class="tr-head">

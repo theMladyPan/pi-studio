@@ -38,8 +38,7 @@ commit's own account rather than on a check run now, the section below says so.
 - **A link to a card that is not there says so.** `[[key]]` is resolved against the keys and names on
   the board each time a card paints, so a link whose card was closed or never written is marked
   `stale` before any click: muted, dashed, with a title naming what is missing. The click reports the
-  miss in the footer's `footHint`, which is always on screen, unlike the composer's own hint that goes
-  away when its field is docked in a card.
+  miss in the footer's `footHint`, which is on screen whatever the board is doing.
 - **A thread draws on its own board.** Every child is started with `-ne -e bridge/child-bridge.mjs`
   and four environment variables (`PI_STUDIO_URL`, `PI_STUDIO_TOKEN`, `PI_STUDIO_WORKSPACE`,
   `PI_STUDIO_THREAD`), and the bridge registers three tools that post to the board's own routes:
@@ -160,8 +159,8 @@ commit's own account rather than on a check run now, the section below says so.
   under `cards` and read from an older file's `notes` too.
 - **Commenting on a card**: a thread answers in itself. A card without a child is asked of the thread
   that made it — its `threadRoot` — and the card is quoted at the top of the message, so the agent
-  that wrote the note is the one that answers about it. `{"fork": true}` on `/message`, the composer's
-  `fork` button, asks a new thread *beside* that card instead: the thread is drawn as a card of its
+  that wrote the note is the one that answers about it. `{"fork": true}` on `/message`, the `fork`
+  button of a field that names that card, asks a new thread *beside* it instead: the thread is drawn as a card of its
   own, cascades under the card it was asked about, and the card keeps its owner. A card nobody made,
   or one whose thread has ended, starts a child under the card too. Either way the card is only
   quoted: the question and the answer are drawn on the card of the thread that answered, next to the
@@ -169,8 +168,8 @@ commit's own account rather than on a check run now, the section below says so.
 - **A card has a thread behind it, not a thread card beside it.** `threadRoot` on a plain card is where
   the card cascades; `ownerThread` is the thread that answers comments on it; and a thread marked
   `hidden` is never drawn — the card is the surface. A comment on a card that already has an owner is
-  answered by that thread, and the exchange is kept in `thread.turns`: the composer is docked in that
-  thread's card, so that is where the answer is read. Only a hidden child, which has no card of its
+  answered by that thread, and the exchange is kept in `thread.turns`: the field of that thread's card
+  is where the comment is written, so that is where the answer is read. Only a hidden child, which has no card of its
   own, keeps the turn in `card.turns`, because the card is the only place it can be read. A card nobody
   answers for yet starts a hidden child and hands the card to it, so the conversation moves to a fresh
   session while the card stays where it is. A fork is the other shape: a thread with a card of its own,
@@ -328,7 +327,7 @@ commit's own account rather than on a check run now, the section below says so.
   it is read, and the crossroads counts only threads that are drawn.
 - **A turn is drawn in the card that was asked, and that card is the thread's own.** A comment on a
   note, source or question is answered by the thread behind it, and the question and the answer are
-  written to `thread.turns`, where the composer that asked them is docked. The card is quoted into
+  written to `thread.turns`, the field that asked them living in that thread's own card. The card is quoted into
   the preamble instead of being written on, so its markdown stays what the child made and the
   exchange reads beside the field. A thread that starts on a comment is drawn as a card, so a fork
   answers on its own card; only the child a card nobody answers for gets has no card of its own, and
@@ -344,8 +343,8 @@ commit's own account rather than on a check run now, the section below says so.
 - **Sessions resume**: the child writes its session under the app's own session dir, the thread
   stores the id, and a message after a daemon restart resumes that session. Verified: after a
   restart the agent remembered the word it had answered in the previous run.
-- **Steering and queueing** per thread; a turn a steer displaced reads `stopped`. The composer carries
-  one button for the choice (`#modeToggle`), not two: its label is the mode the next message will use
+- **Steering and queueing** per thread; a turn a steer displaced reads `stopped`. Each field carries
+  one button for the choice (`.mode-toggle`), not two: its label is the mode the next message will use
   and it flips when pressed, so it is on screen whether or not a run is live. `steer` wears the warning
   colour, because that is the one that cuts a run short.
 - **Layout**: `POST /layout {cardId, rect, mini}` is saved with the board and restored on open.
@@ -548,7 +547,7 @@ next thread started with it. **The fork part of that is no longer what the daemo
 drawn thread now, and a card nobody answers for is the only thing that gets a hidden child.
 
 Seen in a browser (the only part of this app that has been): the note card with its comment chain, the
-composer docked in it, the model and thinking chips reading `claude-sonnet-5-5` and `think medium`, the
+field of the thread card beside it, the model and thinking chips reading `claude-sonnet-5-5` and `think medium`, the
 model picker listing 590 models grouped by provider with a search field, and each choice repainting the
 chip and landing on the thread behind the card. A fork put its question and answer on the note and
 opened no card. **That was the old routing**: since a comment about a card is answered on the thread
@@ -687,22 +686,29 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
   wheel scrolls that card wherever the pointer is, and cards of other threads drop to 70% opacity
   (`board.config.dimOthers`). With nothing selected the wheel pans the board and every card is equal.
   Escape gives the selection up.
-- **The composer is bound to the selected card.** The field docked in a card is that card's field, and
-  it opens only when asked: the `↩` in the card's head, or `r` on the selected card. Selecting a card
-  is reading it, so a click on the card body cannot land the caret in a textarea, and a thread card is
-  no exception. Giving the selection up — Escape, a click on the canvas — puts the field away with it.
-  Selecting another card never carries the text across: every
-  card keeps its own draft (text, pasted images and picked paths), parked when the field leaves and
-  restored when the card comes back, and spent only by the card that sends it. A folded card has no
-  room for a field, so folding parks the draft and unfolding brings it back. A panel or an editor
-  takes Escape first and stops it there, so closing one costs neither the selection nor the draft.
+- **Every thread card carries its own field, and it is always there.** One `.composer` is built per
+  thread card from the `<template id="composerTpl">` in `index.html`, and holds its own text, pasted
+  images, picked paths, model and thinking chips and context meter, so two cards share nothing. A note,
+  a source and a question grow none: they are read through the thread above them. The caret goes into a
+  field by clicking it, by the `↩` in the card's head, or with `r` — and Escape gives the keyboard back
+  to the board while the words stay where they were written. The card whose field has the keyboard wears
+  the amber ring (`.card:has(.composer:focus-within)`); a folded card shows only its head, so the field
+  is hidden with the body and comes back with it. A panel or an editor takes Escape first and stops it
+  there, so closing one costs neither the selection nor the draft.
+- **One message can name several cards.** `r` on a selected card names it in a field instead of moving
+  the field: a thread card takes the caret to its own field, and any other card joins the message being
+  written, or the message of the thread that answers it when nothing is focused. The named cards sit as
+  chips above the field, each dropped on its own with an ×, and travel on `POST /message` as `refs`,
+  which the daemon quotes into the prompt with the same `cardPreamble` it uses for the card being
+  answered. A named card that a thread already answers offers `fork`, which asks a new thread about it.
+  Sending spends the names with the words, and a card that has left the board drops out of the row.
 - **`t` starts a thread.** The key is the `+` button's twin — the same request, the same wait for the
   card to arrive, the field put in it — and it stays quiet while a card is selected, because a reading
   position keeps the letters, and on a board with one session behind it, which has no threads to
   start. The empty board names both ways in: `press + or t to start a thread`.
 - **A card is a handle.** Press and drag anywhere on a card moves it; press the background and the
   board pans; ctrl+drag inside a card selects its text. Controls keep their own press: header buttons,
-  the docked composer, links, checkboxes, editable fields and the resize corner.
+  the field inside a card, links, checkboxes, editable fields and the resize corner.
 - **A reload in development.** The daemon reuses the port it printed last, so `npm run dev`
   (`node --watch server.ts --no-open`) restarts behind the URL a tab is already on, and the tab
   reconnects to a snapshot by itself. Client files need only a browser reload.

@@ -891,6 +891,43 @@ test("a fork answers on a card of its own, and the note keeps its owner and its 
 	}
 });
 
+test("one message can name several cards, and each is quoted to the child", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-refs-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-refs-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		const first = JSON.parse((await postTo(daemon, board.id, "/card/note", { markdown: "the first artifact", key: "named-first", threadRoot: threadId })).body);
+		const second = JSON.parse((await postTo(daemon, board.id, "/card/note", { markdown: "the second artifact", key: "named-second", threadRoot: threadId })).body);
+
+		// The field lives in the thread's own card, and the cards it names travel beside it: that is the
+		// shape a message typed about several artifacts arrives in.
+		const asked = await postTo(daemon, board.id, "/message", {
+			cardId: threadId,
+			refs: [first.cardId, second.cardId, "no-such-card"],
+			text: "compare these two",
+		});
+		assert.equal(asked.status, 200, asked.body);
+		await settledThread(daemon, board.id, threadId, 1);
+
+		const prompt = framesOf(stub).filter((frame: any) => frame.type === "prompt")[0].message;
+		assert.match(prompt, /The card says: the first artifact/, "the first card the message named was not quoted");
+		assert.match(prompt, /The card says: the second artifact/, "the second card the message named was not quoted");
+		assert.match(prompt, /compare these two/, "the words the human typed did not reach the child");
+		// A card that is not on the board is passed over rather than refusing the message.
+		assert.doesNotMatch(prompt, /no-such-card/, "an unknown reference reached the child");
+		// The turn belongs to the thread's card, and the cards named keep their own text and no turn.
+		const settled = await threadState(daemon, board.id, threadId);
+		assert.deepEqual(settled.turns.map((turn: any) => turn.text), ["compare these two"]);
+		assert.deepEqual((await cardState(daemon, board.id, first.cardId))?.turns ?? [], []);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
 test("a message queued behind a run lands on its own turn, once", async () => {
 	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-queue-turns-"));
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-queue-turns-work-"));

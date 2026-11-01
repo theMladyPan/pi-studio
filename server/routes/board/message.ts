@@ -20,6 +20,15 @@ export async function onMessage(req, res, board) {
 	const mode = body.mode === "steer" ? "steer" : "queue";
 	const asked = typeof body.cardId === "string" ? body.cardId : "";
 	const fork = body.fork === true;
+	// The cards a message names beside the one it answers. Each is quoted into the prompt below, so one
+	// message can put several artifacts in front of the agent at once: a note it wrote, a source it read,
+	// and the question it is answering. A thread card is not a card of this map — it is the thread that
+	// reads the message — so naming one simply adds nothing.
+	const named = [
+		...(new Set(Array.isArray(body.refs) ? body.refs.filter((id) => typeof id === "string" && id) : [])),
+	]
+		.filter((id) => id !== asked)
+		.slice(0, 8);
 	// A thread answers about itself. A card without a child — a note, a source, a question — is asked
 	// of the thread that made it, quoted, so the agent that wrote it is the one that answers. A fork,
 	// or a thread that has since ended, starts a thread of its own under the card instead.
@@ -39,6 +48,13 @@ export async function onMessage(req, res, board) {
 		}
 	}
 	const preamble = askedCard ? cardPreamble(askedCard, !answeredByOwner) : "";
+	// What the message names, in the order the human named it: the agent reads the same words the board
+	// shows, and the card it is asked about comes first.
+	const naming = named
+		.map((id) => board.cards.get(id))
+		.filter(Boolean)
+		.map((held) => cardPreamble(held, false))
+		.join("");
 	if (!thread) {
 		// Two shapes, and only one of them is drawn. A card nobody answers for gets a hidden child: the
 		// child answers for the card and is not drawn, because the card already is the surface this
@@ -79,7 +95,7 @@ export async function onMessage(req, res, board) {
 	// the answer are read on the card of the thread that answered. A fork is such a thread now. Only a
 	// child a card nobody answers for got has no card of its own, so the card is the only place its turn
 	// can be read, and it keeps the turn there.
-	const message = `${preamble}${text}`;
+	const message = `${preamble}${naming}${text}`;
 	const holding = askedCard && thread.hidden ? askedCard : null;
 	let target = null;
 	let index;
