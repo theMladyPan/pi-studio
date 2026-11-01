@@ -25,6 +25,7 @@ import { onAnswer, onAsk } from "./routes/board/answer.ts";
 import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.ts";
 import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
 import { onPrompt, onPromptWrite, onPrompts } from "./routes/board/prompts.ts";
+import { onSkill } from "./routes/board/skill.ts";
 import { onClean, onClose, onKill, onNew, onReopen, onStop, onUndo } from "./routes/board/lifecycle.ts";
 
 
@@ -43,7 +44,7 @@ export const token = (() => {
 
 
 /** The routes a child may reach. Everything else on this daemon belongs to the human. */
-export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/path"]);
+export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/path", "/skill"]);
 
 
 
@@ -338,6 +339,7 @@ export const server = createServer((req, res) => {
 				"/mode": onMode,
 				"/card/note": onNote,
 				"/card/source": onSource,
+				"/skill": onSkill,
 				"/card/ask": onAsk,
 				"/edit": onEdit,
 				"/rename": onRename,

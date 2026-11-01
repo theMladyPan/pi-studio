@@ -96,8 +96,8 @@ export function boardPrompt(board, thread) {
 		promptText("board", "conventions") || NO_CONVENTIONS,
 		"A [[key]] only works if the card carries that exact key, so pass a short key to board_note every time and name the card by it.",
 		"How many cards this thread writes, and what may be inside one, is set at the end of this prompt.",
-		cardsBlock(board.config),
 		worktreePrompt(board, thread),
+		cardsBlock(board.config),
 	].join("\n");
 }
 

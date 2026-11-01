@@ -109,9 +109,9 @@ const SHOW_TEXT = {
 		many: "the derivation and not only the result: the steps, the assumptions, the formula it comes from.",
 	},
 	showCharts: {
-		none: "no chart and no table of numbers.",
-		some: "one chart or one table, where it carries the point.",
-		many: "a chart per series and a table per comparison, so the numbers read side by side.",
+		none: "no chart and no table of numbers. The number goes in the line, and the ```chart block stays out.",
+		some: "one ```chart block or one table, where it carries the point. A chart with numbers is a ```chart block, whose grammar is the board_skill \"chart\" document; mermaid draws structure.",
+		many: "a ```chart block per series and a table per comparison, so the numbers read side by side, each one laid out by the board_skill \"chart\" document.",
 	},
 	showReferences: {
 		none: "no source block; a claim that will not stand without one is left out rather than asserted.",
@@ -138,7 +138,7 @@ export function cardsBlock(config) {
 		`Cards are written for: ${cards.cardsAudience}.${audience ? ` ${audience}` : ""}`,
 		"What a card may contain:",
 		...CARD_SHOWS.map((key) => `- ${LABELS[key].name}: ${cards[key]} — ${SHOW_TEXT[key][cards[key]]}`),
-		"A fenced mermaid block is fine at every level: a diagram shows structure, not numbers.",
+		"Mermaid is the structural drawing: a fenced mermaid block is fine at every level, and a chart with numbers is a ```chart block, documented by board_skill.",
 		`A level is a default, not a refusal: when the human asks for the thing by name — ${CARD_SHOWS.map((key) => LABELS[key].asked).join(", ")} — that card carries it at full strength, whatever level the switch holds.`,
 		"This thread's own flow, or the human asking for a card in so many words, wins over every level above.",
 	].join("\n");

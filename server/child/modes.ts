@@ -29,7 +29,7 @@ export const PROMPT_DIR = fileURLToPath(new URL("../../prompts/", import.meta.ur
  * any other: the ids a board may hold are in `card-settings.ts`, the words are here. `board/` is what
  * every thread the human starts reads before it writes anything, `conventions.md` being the general one.
  */
-export const PROMPT_FOLDERS = ["board", "roles", "modes", "flows", "verbosity", "audiences"];
+export const PROMPT_FOLDERS = ["board", "roles", "modes", "flows", "verbosity", "audiences", "skills"];
 
 /** One prompt file on disk: the name a route takes, and the whole text a thread would be given. */
 export type PromptFile = { name: string; folder: string; file: string; text: string; firstLine: string };
