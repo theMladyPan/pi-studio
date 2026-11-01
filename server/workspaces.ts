@@ -8,6 +8,7 @@ import { boards } from "./store.ts";
 import { sessionFacts } from "./session.ts";
 import { basename } from "node:path";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, MODEL, PROVIDER, THINKING_LEVELS, run } from "./models.ts";
+import { CARD_AUDIENCE, CARD_DEFAULTS, CARD_SHOWS, CARD_VERBOSITY, cardSettings } from "./card-settings.ts";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { PATH_NAMES } from "./child/modes.ts";
 import { spawnSync } from "node:child_process";
@@ -136,6 +137,11 @@ export let homeDefaults = (() => {
 	if (typeof held.model === "string" && held.model) known.model = held.model;
 	if (THINKING_LEVELS.includes(held.thinking)) known.thinking = held.thinking;
 	if (typeof held.dimOthers === "boolean") known.dimOthers = held.dimOthers;
+	// The card settings: two ids checked against the list they belong to, and four switches that are only
+	// read when they are booleans. A board file written before these existed simply has none of them.
+	if (CARD_VERBOSITY.includes(held.cardsVerbosity)) known.cardsVerbosity = held.cardsVerbosity;
+	if (CARD_AUDIENCE.includes(held.cardsAudience)) known.cardsAudience = held.cardsAudience;
+	for (const key of CARD_SHOWS) if (typeof held[key] === "boolean") known[key] = held[key];
 	return known;
 })();
 
@@ -166,6 +172,9 @@ export function activeHomeDefaults() {
 		model: homeDefaults.model ?? MODEL,
 		...(homeDefaults.thinking ? { thinking: homeDefaults.thinking } : {}),
 		dimOthers: homeDefaults.dimOthers !== false,
+		// A new board is born with the six card settings, chosen or default: the settings page draws every
+		// leaf it is given and a missing value would draw an empty control.
+		...cardSettings(homeDefaults),
 	};
 }
 
@@ -277,6 +286,9 @@ export function activeConfig(board) {
 	return {
 		...runtimeDefaults(board),
 		dimOthers: chosen.dimOthers !== false,
+		// How often a thread here opens a card, who reads it, and what may be inside one. A board file from
+		// before these settings reads as the defaults, which is what `cardSettings` is for.
+		...cardSettings(chosen),
 		// Which tools a new thread is not given: built-in ones by name, extensions by folder. The panel
 		// draws a checkbox per entry from these two lists, so they are always readable, never absent.
 		toolsOff: Array.isArray(chosen.toolsOff) ? chosen.toolsOff.filter((name) => BUILTIN_TOOLS.includes(name)) : [],

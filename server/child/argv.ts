@@ -133,8 +133,9 @@ export function childArgv(board, thread) {
 		...session,
 		"-ne",
 		// `-ne` stops discovery, and an explicit `-e` still loads: that is how a thread gets its verbs
-		// and the research tools, without anything else coming along.
-		...(existsSync(BRIDGE) ? ["-e", BRIDGE] : []),
+		// and the research tools, without anything else coming along. A spawned child is not given the
+		// bridge at all: it draws nothing, so the tools it would register are the ones the guard refuses.
+		...(existsSync(BRIDGE) && !thread.parentThread ? ["-e", BRIDGE] : []),
 		...extensionsFor(board).flatMap((path) => ["-e", path]),
 		// No allowlist unless one was asked for: a thread gets the tools a console pi gets.
 		...(TOOLS ? ["--tools", TOOLS] : []),

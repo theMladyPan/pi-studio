@@ -4,6 +4,7 @@
  * turn answers with.
  */
 import { childArgv, piCli } from "./argv.ts";
+import { CARD_SHOWS, cardSettings } from "../card-settings.ts";
 import { spawn } from "node:child_process";
 import { ensureWorktree, shortId, workdirOf } from "../worktrees/make.ts";
 import { handleChildLine, thinkingRuns } from "../thought.ts";
@@ -26,12 +27,16 @@ export function ensureChild(board, thread) {
 	const existing = board.children.get(thread.id);
 	if (existing && existing.exitCode === null && existing.stdin?.writable) return existing;
 	const cli = piCli();
+	// What this board asks of a card. The bridge reads these two, because a tool description is read at the
+	// moment a model decides whether to call the tool, which is where a frequency rule earns its keep.
+	const cards = cardSettings(board.config);
 	const child = spawn(cli.command, [...cli.args, ...childArgv(board, thread)], {
 		// A thread with a tree works in it: the child's whole notion of `here` is its own branch.
 		cwd: workdirOf(board, thread),
 		shell: false,
 		stdio: ["pipe", "pipe", "pipe"],
-		// The bridge reads these: where the board is, what it may write to, and whose card it is.
+		// The bridge reads these: where the board is, what it may write to, whose card it is, and what the
+		// board wants of a card.
 		env: {
 			...process.env,
 			PI_STUDIO_URL: `http://127.0.0.1:${port}`,
@@ -40,6 +45,8 @@ export function ensureChild(board, thread) {
 			PI_STUDIO_TOKEN: (thread.token ??= randomToken()),
 			PI_STUDIO_WORKSPACE: board.id,
 			PI_STUDIO_THREAD: thread.id,
+			PI_STUDIO_CARDS_VERBOSITY: cards.cardsVerbosity,
+			PI_STUDIO_CARDS_OFF: CARD_SHOWS.filter((key) => !cards[key]).join(","),
 		},
 	});
 	board.children.set(thread.id, child);

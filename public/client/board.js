@@ -5722,12 +5722,13 @@ async function openPick(which, anchor = null, forBoard = false, inst = null) {
   // board's defaults, and belongs to nobody's card.
   pickInst = forBoard ? null : inst;
   runtimePick.hidden = false;
-  // The mode and the flow are two short lists this page already holds, so they open at once and the
-  // search box has nothing to search: no request, no waiting.
-  if (which === "mode" || which === "path") {
+  // A mode, a flow and the two card settings are short lists this page already holds, so they open at
+  // once and the search box has nothing to search: no request, no waiting.
+  if (which === "mode" || which === "path" || which === "verbosity" || which === "audience") {
     runtimeSearch.hidden = true;
     if (which === "mode") drawModePick();
-    else drawPathPick();
+    else if (which === "path") drawPathPick();
+    else drawCardPick(which);
     placeRuntimePick();
     return;
   }
@@ -5829,6 +5830,21 @@ const PATH_HINTS = [
   ["complex", "triage, parallel scouts, re-review"],
 ];
 
+/** How often a card is written, and who it is written for, in the words the picker shows. */
+const VERBOSITY_HINTS = [
+  ["quiet", "a card only when you ask"],
+  ["normal", "a card for something to see"],
+  ["verbose", "a card for every finding"],
+];
+const AUDIENCE_HINTS = [
+  ["programmer", "the fact, no walkthrough"],
+  ["data-analyst", "tables, units, counts"],
+  ["designer", "screens, states, spacing"],
+  ["vibecoder", "plain words, no code"],
+  ["junior", "one idea, jargon defined"],
+  ["mathematician", "notation, defined symbols"],
+];
+
 /** The two lists are local, so the panel draws them without asking the daemon for anything. */
 function drawModePick() {
   const { mode } = modeShown();
@@ -5844,6 +5860,48 @@ function drawPathPick() {
     pickHead(pickBoard ? "the flow a new boss starts on" : "the flow a boss runs"),
     ...PATH_HINTS.map(([name, hint]) => pickRow(name, hint, path === name, () => void pickPath(name))),
   );
+}
+
+/** The two card settings this board holds: one is how often, the other is who reads it. */
+function drawCardPick(which) {
+  const verbosity = which === "verbosity";
+  const hints = verbosity ? VERBOSITY_HINTS : AUDIENCE_HINTS;
+  const now = verbosity ? boardConfig.cardsVerbosity || "normal" : boardConfig.cardsAudience || "programmer";
+  runtimeList.replaceChildren(
+    pickHead(verbosity ? "how often a thread opens a card" : "who the cards are written for"),
+    ...hints.map(([name, hint]) => pickRow(name, hint, now === name, () => void pickCard(which, name))),
+  );
+}
+
+/** One change to this board's settings, whatever it is: the daemon answers with the whole config. */
+async function patchConfig(body) {
+  try {
+    const response = await fetch(`/config?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    const payload = await response.json();
+    if (payload.config) applyConfig(payload.config);
+    paintConfig();
+    return true;
+  } catch (error) {
+    hintLine(`could not change it: ${error.message || error}`, true);
+    return false;
+  }
+}
+
+async function pickCard(which, value) {
+  const key = which === "verbosity" ? "cardsVerbosity" : "cardsAudience";
+  if (await patchConfig({ [key]: value })) hintLine(`${which}: ${value}`);
+  closePick();
+}
+
+/** One of the four content switches, flipped: a card is what the board says may be in it. */
+async function flipCardSwitch(key) {
+  const next = boardConfig[key] === false;
+  if (await patchConfig({ [key]: next })) hintLine(`${key}: ${next ? "on" : "off"}`);
 }
 
 /**
@@ -5909,6 +5967,17 @@ const cfgTools = document.getElementById("cfgTools");
 const cfgToolsValue = document.getElementById("cfgToolsValue");
 const cfgPath = document.getElementById("cfgPath");
 const cfgPathValue = document.getElementById("cfgPathValue");
+const cfgVerbosity = document.getElementById("cfgVerbosity");
+const cfgVerbosityValue = document.getElementById("cfgVerbosityValue");
+const cfgAudience = document.getElementById("cfgAudience");
+const cfgAudienceValue = document.getElementById("cfgAudienceValue");
+// The four content switches of a card, and the key of the board's configuration each one writes.
+const CARD_SWITCHES = [
+  ["cfgCode", "cfgCodeValue", "showCodeFragments"],
+  ["cfgMath", "cfgMathValue", "showMathFormulas"],
+  ["cfgCharts", "cfgChartsValue", "showCharts"],
+  ["cfgRefs", "cfgRefsValue", "showReferences"],
+];
 const cfgPrompts = document.getElementById("cfgPrompts");
 const pePanel = document.getElementById("promptEditor");
 const pePick = document.getElementById("pePick");
@@ -5956,6 +6025,12 @@ function paintConfig() {
   cfgThinkingValue.textContent = boardConfig.thinking || "off";
   cfgToolsValue.textContent = toolsSummary();
   cfgPathValue.textContent = boardConfig.path || "auto";
+  cfgVerbosityValue.textContent = boardConfig.cardsVerbosity || "normal";
+  cfgAudienceValue.textContent = boardConfig.cardsAudience || "programmer";
+  for (const [button, value, key] of CARD_SWITCHES) {
+    document.getElementById(value).textContent = boardConfig[key] === false ? "off" : "on";
+    document.getElementById(button).title = `${key}: ${boardConfig[key] === false ? "off" : "on"} for the cards this board's threads write`;
+  }
 }
 
 function shownConfig(on) {
@@ -6038,6 +6113,11 @@ cfgTools.addEventListener("click", () => void openPick("tools", cfgTools, true))
 
 /** The flow a new boss starts on. The same list as a thread's, aimed at the board instead. */
 cfgPath.addEventListener("click", () => void openPick("path", cfgPath, true));
+cfgVerbosity.addEventListener("click", () => void openPick("verbosity", cfgVerbosity, true));
+cfgAudience.addEventListener("click", () => void openPick("audience", cfgAudience, true));
+for (const [button, , key] of CARD_SWITCHES) {
+  document.getElementById(button).addEventListener("click", () => void flipCardSwitch(key));
+}
 
 // ---------- the prompt files ----------------------------------------------
 // A role, a mode and a flow are markdown under `prompts/`. They are read when a thread starts, so an

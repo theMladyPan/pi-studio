@@ -4,6 +4,7 @@
  * from the process that sends them.
  */
 import { AGENTS_DIR, shortId, workdirOf } from "../worktrees/make.ts";
+import { cardsBlock } from "../card-settings.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -60,16 +61,23 @@ export function worktreePrompt(board, thread) {
 /**
  * The thread's own card, and the board around it, said plainly enough that an agent uses it.
  *
- * The board is the product, and the chat is only the wire under it: the answer is a pointer to the
- * cards, so a thread that writes its findings in prose has done the work where nobody reads it.
+ * The board is the product, and the chat is only the wire under it: when the work is on a card the answer
+ * is a pointer to it, so a thread that writes its findings in prose has done the work where nobody reads
+ * it. When nothing is on a card the answer itself belongs in the chat, which is what keeps a quiet board
+ * usable: a prompt that made every sentence a card is why cards were never asked for.
+ *
+ * A spawned child is told none of this. It draws nothing — the bridge is not loaded for it and every card
+ * route refuses it — so the instruction and the tools agree, and `childPrompt` is what it gets.
  */
 export function boardPrompt(board, thread) {
+	if (thread.parentThread) return childPrompt(board, thread);
 	const workdir = workdirOf(board, thread);
 	return [
 		`You are thread "${thread.title}" on a board, working in the folder ${workdir}.`,
 		`The workspace this board opened is ${board.folder}, which is where the rest of the board reads files from.`,
-		"The human reads cards on that board, not a chat log or a terminal. Put the work on cards.",
-		"What you say in the chat is a pointer to those cards, one or two lines: like \"I read the request; the shapes are in [[errors-by-hour]] and the plan in [[fix-plan]]\". A bare [[key]] links the card, and the human clicks it.",
+		"The human reads cards on that board, not a chat log or a terminal. How many cards this thread writes, and what may be inside one, is set at the end of this prompt.",
+		"When the work is on a card, what you say in the chat is a pointer to it, one or two lines: like \"I read the request; the shapes are in [[errors-by-hour]] and the plan in [[fix-plan]]\". A bare [[key]] links the card, and the human clicks it.",
+		"When nothing is on a card, the answer itself belongs in the chat: a card written only to carry one sentence is a card nobody asked for.",
 		"A [[key]] only works if the card carries that exact key, so pass a short key to board_note every time and name the card by it.",
 		"Do not narrate what you are about to do, and do not add a summary under the pointer. \"I will read both files first\" and \"short version: ...\" are both the report the cards were meant to replace.",
 		"Examples:",
@@ -79,8 +87,27 @@ export function boardPrompt(board, thread) {
 		"One card holds one kind of thing: a chart with its caption, a piece of markdown analysis, a diagram, a checklist, a tree, a snippet of source. A chart and a todo on the same card makes both harder to read, so split them.",
 		"Look at the board before you write. If a card already covers the subject, revise it by passing its key again rather than adding a near-duplicate; open a new card for a new artefact.",
 		"Prefer showing to telling: a flow, a state machine, a sequence, a timeline or a tree is a fenced ```mermaid block, because the card draws it and it costs a fraction of the tokens an svg of the same drawing takes. Reach for mermaid first. Two lines are a whole diagram: a mermaid block of `flowchart TD` then `A[read the file] --> B[edit] --> C[test]`. svg is only for the one thing mermaid cannot lay out — a chart with real numbers on an axis — and a table is a table.",
-		"Keep a mermaid graph about six nodes across and label it, since the drawing keeps its own size in a card about 430px wide; a wider one has to be scrolled sideways. board_note writes the card; board_source opens a real file, scrolled to a line, instead of quoting it.",
+		"Keep a mermaid graph about six nodes across and label it, since the drawing keeps its own size in a card about 430px wide; a wider one has to be scrolled sideways. board_note writes the card; board_source opens a real file, scrolled to a line, for a human who asked to see it, and never as evidence: evidence is a reference at the foot of a card.",
 		"Detail on request: the human can ask you to expand anything in the chat, so do not spend the answer on a summary of what the board already shows.",
+		cardsBlock(board.config),
+		worktreePrompt(board, thread),
+	].join("\n");
+}
+
+
+
+/**
+ * What a spawned child is told on the same board. It draws nothing: the bridge is not loaded for it and
+ * every card route refuses it, so the report in its last message is the whole of what the thread that
+ * spawned it reads. That thread decides which card the finding is worth.
+ */
+export function childPrompt(board, thread) {
+	const workdir = workdirOf(board, thread);
+	return [
+		`You are thread "${thread.title}" on a board, working in the folder ${workdir}.`,
+		`The workspace this board opened is ${board.folder}, which is where the rest of the board reads files from.`,
+		"You draw nothing on that board: no note, no source card, no question to the human. The thread that spawned you reads your last message and writes the cards, so that message is the whole report.",
+		"Say what you found, where it is, what you changed, and what you would do next, in short prose or bullets, with paths and line numbers where they matter. Quote the exact text when the exact text is the finding.",
 		worktreePrompt(board, thread),
 	].join("\n");
 }

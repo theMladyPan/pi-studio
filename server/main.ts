@@ -69,12 +69,16 @@ export function callerOf(given) {
 /**
  * The refusal a thread earns for asking what only the human may do, or null when it may go ahead.
  *
- * A child may write cards on its own board — notes, sources, the question it puts to the human — and ask
- * for work of its own, which the depth rule then decides. Layout, close, kill, config and clean belong
- * to the human, and so does every other board. The human at the keyboard is refused nothing here.
+ * A thread that answers for a card the human started may write cards on its own board — notes, sources,
+ * the question it puts to the human — and ask for work of its own, which the depth rule then decides.
+ * A spawned child may do none of it: it reports in its last message and the thread that spawned it draws,
+ * which is what keeps a flow of six children from leaving eighteen cards behind. Layout, close, kill,
+ * config and clean belong to the human, and so does every other board. The human at the keyboard is
+ * refused nothing here.
  */
 export function threadRefusal(caller, method, pathname, workspace) {
 	if (caller.human) return null;
+	if (caller.thread?.parentThread) return "a spawned child has no board tools";
 	if (method !== "POST" || !THREAD_ROUTES.has(pathname)) return "a thread may not use that";
 	if (workspace !== caller.board.id) return "a thread may not use another board";
 	return null;

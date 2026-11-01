@@ -11,6 +11,7 @@ import { boardFor } from "../store.ts";
 import { nudgeWelcome } from "../bus.ts";
 import { cardFor } from "../cards.ts";
 import { THINKING_LEVELS, modelCatalog } from "../models.ts";
+import { CARD_AUDIENCE, CARD_SHOWS, CARD_VERBOSITY } from "../card-settings.ts";
 import { settingsDocument } from "../settings.ts";
 import { spawn } from "node:child_process";
 
@@ -49,6 +50,22 @@ export async function onDefaults(req, res) {
 	if (typeof body.thinking === "string") {
 		if (!THINKING_LEVELS.includes(body.thinking)) return void fail(res, 400, `a level is one of ${THINKING_LEVELS.join(", ")}`);
 		next.thinking = body.thinking;
+	}
+	// The six card settings a new board is born with, checked the way the board's own route checks them:
+	// an id no list names is a mistake, not a preference.
+	if (body.cardsVerbosity !== undefined) {
+		if (!CARD_VERBOSITY.includes(body.cardsVerbosity))
+			return void fail(res, 400, `a verbosity is one of ${CARD_VERBOSITY.join(", ")}`);
+		next.cardsVerbosity = body.cardsVerbosity;
+	}
+	if (body.cardsAudience !== undefined) {
+		if (!CARD_AUDIENCE.includes(body.cardsAudience)) return void fail(res, 400, `an audience is one of ${CARD_AUDIENCE.join(", ")}`);
+		next.cardsAudience = body.cardsAudience;
+	}
+	for (const key of CARD_SHOWS) {
+		if (body[key] === undefined) continue;
+		if (typeof body[key] !== "boolean") return void fail(res, 400, `${key} is on or off`);
+		next[key] = body[key];
 	}
 	if (typeof body.provider === "string" && typeof body.model === "string") {
 		const { models } = await modelCatalog();

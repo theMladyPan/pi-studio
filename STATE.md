@@ -38,11 +38,16 @@ commit's own account rather than on a check run now, the section below says so.
 - **A link to a card that is not there says so.** `[[key]]` is resolved against the keys and names on
   the board each time a card paints, so a link whose card was closed or never written is marked
   `stale` before any click: muted, dashed, with a title naming what is missing. The click reports the
-  miss in the footer's `footHint`, which is on screen whatever the board is doing.
-- **A thread draws on its own board.** Every child is started with `-ne -e bridge/child-bridge.mjs`
-  and four environment variables (`PI_STUDIO_URL`, `PI_STUDIO_TOKEN`, `PI_STUDIO_WORKSPACE`,
-  `PI_STUDIO_THREAD`), and the bridge registers three tools that post to the board's own routes:
-  `board_note`, `board_source`, `board_ask`. A child started by hand, with no daemon behind it,
+  miss in the footer's `footHint`, which is always on screen, unlike the composer's own hint that goes
+  away when its field is docked in a card.
+- **A thread draws on its own board; a spawned child does not.** A thread the human talks to is started
+  with `-ne -e bridge/child-bridge.mjs` and four environment variables (`PI_STUDIO_URL`,
+  `PI_STUDIO_TOKEN`, `PI_STUDIO_WORKSPACE`, `PI_STUDIO_THREAD`), and the bridge registers three tools
+  that post to the board's own routes: `board_note`, `board_source`, `board_ask`. A child started by a
+  thread gets neither the bridge nor the routes: `threadRefusal` answers `a spawned child has no board
+  tools` for every card route when the caller's thread has a `parentThread`, so a six-step flow cannot
+  leave eighteen cards beside the one that mattered. Its report is its last message, and the thread that
+  spawned it writes whatever card is worth writing. A child started by hand, with no daemon behind it,
   registers nothing. The tools say what the human should see; card type, placement, cascade and keys
   stay the daemon's decision, so the verbs are not pi's.
 - **A thread has the tools a console pi has**: it loads every extension installed here, and no
@@ -63,6 +68,19 @@ commit's own account rather than on a check run now, the section below says so.
   simply not passed as `-e`. The switches are stored per board as `toolsOff` and `extensionsOff`, so
   they land on the next child that starts, which is how a running thread keeps what it began with.
   The list itself comes from `GET /tools` and is read the first time the panel opens.
+- **How many cards, for whom, and out of what.** Six more settings on the same board and on the
+  crossroads as the new-board default: `cardsVerbosity` (`quiet`, `normal`, `verbose`),
+  `cardsAudience` (`programmer`, `data-analyst`, `designer`, `vibecoder`, `junior`, `mathematician`),
+  and four switches — `showCodeFragments`, `showMathFormulas`, `showCharts`, `showReferences` — on
+  unless somebody turns one off. The two choices pick a prompt file, `prompts/verbosity/<id>.md` and
+  `prompts/audiences/<id>.md`, so the words are edited on the settings page like every other prompt;
+  the four switches are one line each in `server/card-settings.ts`, because a file per boolean is a
+  file too many. `cardSettings()` is the only place an id is checked, and an older board file reads as
+  the defaults. The bridge is told the verbosity and the switched-off list in `PI_STUDIO_CARDS_VERBOSITY`
+  and `PI_STUDIO_CARDS_OFF`, so the description of `board_note` says how often this board wants a card
+  at the moment the model decides whether to call it. `board_source` is now for a file the human asked
+  to see, and never evidence: evidence is a reference at the foot of a card, which is what
+  `showReferences` is for.
 - **What a thread is told**: `--append-system-prompt` says it is one thread on a board, in which
   folder, that the human reads cards rather than a chat log, and that its chat answer is a pointer of
   a line or two naming the cards it wrote as `[[key]]`, that a card must carry the very key the
