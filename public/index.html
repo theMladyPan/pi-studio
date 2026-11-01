@@ -900,9 +900,10 @@
   .card.dim { opacity: .7; }
   /* The second press of `new` is the confirmation, so the button says so. */
   header button.armed { color: #f85149; border-color: rgba(248, 81, 73, .5); }
-  /* This board's settings. Ten rows in two groups, readable at a glance without hovering: a label and
-     its value on one line, the value in the accent, and a head over each group. A panel that has to be
-     read closely is a panel nobody reads. */
+  /* This board's settings. A tree the daemon describes, drawn here: a group folds to one line that sums
+     what is inside it, so the panel stays as tall as the human means it to be. A leaf is a label and its
+     value on one line, the value in the accent. A panel that has to be read closely is a panel nobody
+     reads. */
   #boardConfig { position: fixed; z-index: 2000; top: 46px; right: 12px; display: flex; flex-direction: column;
     width: 352px; max-height: calc(100vh - 70px); overflow-y: auto; padding: 10px 10px 12px; background: #0d1117;
     border: 1px solid var(--border-bright); border-radius: 10px; box-shadow: 0 12px 32px rgba(1, 4, 9, .55); }
@@ -919,6 +920,27 @@
   #boardConfig .cfg-row b { color: var(--accent); font: 12.5px var(--mono); font-weight: 500; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #boardConfig .cfg-note { margin: 8px 4px 0; color: var(--muted); font: 11px/1.5 var(--mono); }
+  #cfgTree { display: flex; flex-direction: column; }
+  #boardConfig .cfg-sub { margin: -3px 8px 4px; color: var(--muted); font: 10.5px var(--mono); }
+  /* A group is a folder: a marker, its name, and — while it is folded — one line summing its leaves. */
+  #boardConfig .cfg-group { margin: 0; }
+  #boardConfig .cfg-group > summary { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px;
+    border-radius: 6px; color: var(--muted); font: 10.5px var(--mono); text-transform: uppercase;
+    letter-spacing: .8px; cursor: pointer; list-style: none; }
+  #boardConfig .cfg-group > summary::-webkit-details-marker { display: none; }
+  #boardConfig .cfg-group > summary::before { content: "▸"; color: var(--border-bright); font-size: 9px; }
+  #boardConfig .cfg-group[open] > summary::before { content: "▾"; }
+  #boardConfig .cfg-group > summary:hover { background: #161b22; }
+  #boardConfig .cfg-group > summary:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+  #boardConfig .cfg-group[open] > summary { border-bottom: 1px solid #1b2029; border-radius: 6px 6px 0 0; }
+  /* The sum is the folded group's whole answer, so it is only worth the room while the group is shut. */
+  #boardConfig .cfg-group[open] > summary .cfg-preview { display: none; }
+  #boardConfig .cfg-preview { margin-left: auto; color: var(--muted); text-transform: none; letter-spacing: 0;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* One hairline per level, the way a folder tree draws its nesting. */
+  #boardConfig .cfg-kids { display: flex; flex-direction: column; margin-left: 10px; padding-left: 6px;
+    border-left: 1px solid #1b2029; }
+  #boardConfig .cfg-failure { margin: 6px 8px; color: #f85149; font: 11px/1.5 var(--mono); }
   /* The prompt files are plain markdown, so the editor is a list and a textarea: what is saved is what
      the daemon reads on the next thread that starts. */
   #promptEditor { position: fixed; z-index: 2100; top: 46px; right: 374px; display: flex;
@@ -985,25 +1007,11 @@
   <span class="stat hint" id="footHint"></span>
 </footer>
 
-<!-- The board's own configuration. Model and level share the picker the composer uses, so there is
-     one list of models in the whole app. -->
+<!-- The board's own configuration, drawn from the document `/settings/board` serves: the daemon owns
+     the shape, and every leaf here opens the picker the composer uses, so there is one list of models
+     in the whole app. -->
 <div id="boardConfig" hidden role="dialog" aria-label="this board's settings">
-  <p class="cfg-head">this board</p>
-  <button type="button" class="cfg-row" id="cfgModel"><span>default model</span><b id="cfgModelValue"></b></button>
-  <button type="button" class="cfg-row" id="cfgThinking"><span>default thinking</span><b id="cfgThinkingValue"></b></button>
-  <button type="button" class="cfg-row" id="cfgTools"><span>tools in a new thread</span><b id="cfgToolsValue"></b></button>
-  <button type="button" class="cfg-row" id="cfgPath"><span>flow for a new boss</span><b id="cfgPathValue">auto</b></button>
-  <button type="button" class="cfg-row" id="cfgChildIntegration"><span>a child's work comes back by</span><b id="cfgChildIntegrationValue">merge</b></button>
-  <button type="button" class="cfg-row" id="cfgPrompts"><span>prompts</span><b id="cfgPromptsValue">roles · modes · flows</b></button>
-  <p class="cfg-head">cards</p>
-  <button type="button" class="cfg-row" id="cfgVerbosity"><span>how often</span><b id="cfgVerbosityValue">normal</b></button>
-  <button type="button" class="cfg-row" id="cfgAudience"><span>written for</span><b id="cfgAudienceValue">programmer</b></button>
-  <button type="button" class="cfg-row" id="cfgCode"><span>code fragments</span><b id="cfgCodeValue">some</b></button>
-  <button type="button" class="cfg-row" id="cfgMath"><span>math formulas</span><b id="cfgMathValue">some</b></button>
-  <button type="button" class="cfg-row" id="cfgCharts"><span>charts and tables</span><b id="cfgChartsValue">some</b></button>
-  <button type="button" class="cfg-row" id="cfgRefs"><span>references</span><b id="cfgRefsValue">some</b></button>
-  <button type="button" class="cfg-row" id="cfgDim"><span>dim other threads</span><b id="cfgDimValue">on</b></button>
-  <p class="cfg-note">a new thread starts with these. new boards take their defaults from the crossroads. children draw nothing: they report and the thread that spawned them writes the card.</p>
+  <div id="cfgTree"></div>
 </div>
 
 <div id="promptEditor" hidden role="dialog" aria-label="prompt files">
