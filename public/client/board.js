@@ -471,6 +471,159 @@ function loadMermaid() {
 // card's own colours without naming them.
 let chartReady = null;
 
+/** The board's own series colours, so a config that names none still draws as part of this page. */
+const SERIES_COLOURS = ["#58a6ff", "#d29922", "#3fb950", "#db61a2", "#a371f7"];
+/** The 10px type a value label and a goal rule are drawn in, and the two colours the card already uses. */
+const CHART_LABEL_FONT = "10px system-ui, -apple-system, 'Segoe UI', sans-serif";
+const CHART_LABEL_COLOUR = "#7d8590";
+const CHART_GOAL_COLOUR = "#d29922";
+/** A card holds a dozen marks before a number on every one of them reads as grit instead of values. */
+const MAX_VALUE_MARKS = 12;
+const MAX_VALUE_SERIES = 2;
+
+const between = (value, low, high) => Math.min(Math.max(value, low), Math.max(low, high));
+
+/**
+ * A tick number the eye can take on a 400px card: `1250000` is `1.25M`, `1800` is `1.8k`, and `0.45`
+ * is left alone. This is the reason the board sets the tick callback itself: a config is JSON, and JSON
+ * cannot carry a function.
+ */
+function compactNumber(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return String(value);
+  // Only a fraction has zeros worth dropping: `340.0` is `340k`, and `340` stays `340`.
+  const trim = (text) => (text.includes(".") ? text.replace(/0+$/, "").replace(/\.$/, "") : text);
+  const size = Math.abs(value);
+  if (size >= 1e6) return `${trim((value / 1e6).toFixed(2))}M`;
+  if (size >= 1e3) return `${trim((value / 1e3).toFixed(1))}k`;
+  if (Number.isInteger(value)) return String(value);
+  return String(Number(value.toPrecision(3)));
+}
+
+/** The same colour, thin enough to sit under a line without reading as a block. */
+function faded(colour, alpha = 0.22) {
+  const hex = colour.replace("#", "");
+  const [r, g, b] = [0, 2, 4].map((at) => parseInt(hex.slice(at, at + 2), 16));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/** An option the board itself reads, taken from the object the config was written with. */
+function boardOption(chart, name) {
+  const written = chart.config?.options ?? chart.options ?? {};
+  return written[name];
+}
+
+/** `indexAxis: "y"` turns a bar on its side, which is the one thing that moves a value label. */
+function sideways(chart) {
+  return chart.options?.indexAxis === "y";
+}
+
+/**
+ * The palette is filled before the draw: Chart.js otherwise opens with its own red and teal, which are
+ * not this board's, and the model rarely names a colour. A colour the config did name is kept.
+ */
+function fillPalette(config) {
+  const sets = Array.isArray(config.data?.datasets) ? config.data.datasets : [];
+  sets.forEach((dataset, index) => {
+    if (!dataset || typeof dataset !== "object") return;
+    const colour = SERIES_COLOURS[index % SERIES_COLOURS.length];
+    const kind = dataset.type || config.type;
+    if (dataset.backgroundColor === undefined) {
+      // A line or a radar is a shape, so its fill goes under the stroke rather than over the plot.
+      dataset.backgroundColor = kind === "line" || kind === "radar" ? faded(colour) : colour;
+    }
+    if (dataset.borderColor === undefined) dataset.borderColor = colour;
+  });
+}
+
+/**
+ * Each datum's value, written just past the end of its mark. Registered once on the bundle, so every
+ * chart on the board gets it and no config has to ask; `options.valueLabels: false` is the way out.
+ */
+const boardValues = {
+  id: "boardValues",
+  afterDatasetsDraw(chart) {
+    if (boardOption(chart, "valueLabels") === false) return;
+    const sets = chart.data?.datasets ?? [];
+    const marks = sets.reduce((total, set) => total + (Array.isArray(set?.data) ? set.data.length : 0), 0);
+    if (!marks || marks > MAX_VALUE_MARKS || sets.length > MAX_VALUE_SERIES) return;
+    const area = chart.chartArea;
+    if (!area) return;
+    const { ctx } = chart;
+    ctx.save();
+    ctx.font = CHART_LABEL_FONT;
+    ctx.fillStyle = CHART_LABEL_COLOUR;
+    ctx.textBaseline = "top";
+    ctx.textAlign = "left";
+    sets.forEach((set, index) => {
+      const meta = chart.getDatasetMeta(index);
+      // A slice or a radar blade has no end to sit a number past, so only a bar and a line take one.
+      if (meta?.type !== "bar" && meta?.type !== "line") return;
+      const bar = meta.type === "bar";
+      (set.data ?? []).forEach((value, at) => {
+        // A mark of zero draws no length, and a nought beside it is a number nobody set out to read.
+        if (typeof value !== "number" || !Number.isFinite(value) || value === 0) return;
+        const mark = meta.data?.[at];
+        if (!mark) return;
+        const text = compactNumber(value);
+        const width = ctx.measureText(text).width;
+        // Above a vertical bar, and right of the bar's end or of the point, whichever this is.
+        const right = !bar || sideways(chart);
+        const left = right ? mark.x + 4 : mark.x - width / 2;
+        const top = right ? mark.y - 5 : mark.y - 13;
+        // A label that runs off the canvas is worth nothing, so it is held inside the plot area.
+        ctx.fillText(text, between(left, area.left, area.right - width), between(top, area.top, area.bottom - 10));
+      });
+    });
+    ctx.restore();
+  },
+};
+
+/**
+ * A rule at the one value that matters, drawn by the board: `options: { goal: 250 }` is a plain number,
+ * so it survives JSON, and the model never has to find a way to draw a line itself.
+ */
+const boardGoal = {
+  id: "boardGoal",
+  afterDatasetsDraw(chart) {
+    const goal = boardOption(chart, "goal");
+    if (typeof goal !== "number" || !Number.isFinite(goal)) return;
+    const area = chart.chartArea;
+    if (!area) return;
+    const upright = sideways(chart);
+    const at = chart.scales?.[upright ? "x" : "y"]?.getPixelForValue(goal);
+    if (!Number.isFinite(at)) return;
+    const { ctx } = chart;
+    const text = `goal ${compactNumber(goal)}`;
+    ctx.save();
+    ctx.font = CHART_LABEL_FONT;
+    ctx.fillStyle = CHART_GOAL_COLOUR;
+    ctx.strokeStyle = CHART_GOAL_COLOUR;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    if (upright) {
+      ctx.moveTo(at, area.top);
+      ctx.lineTo(at, area.bottom);
+    } else {
+      ctx.moveTo(area.left, at);
+      ctx.lineTo(area.right, at);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // The label sits at the end of the rule, held inside the plot so it cannot be clipped away.
+    if (upright) {
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText(text, between(at + 4, area.left, area.right - ctx.measureText(text).width), area.top + 2);
+    } else {
+      ctx.textAlign = "right";
+      ctx.textBaseline = "bottom";
+      ctx.fillText(text, area.right - 2, between(at - 2, area.top + 10, area.bottom));
+    }
+    ctx.restore();
+  },
+};
+
 function loadChartJs() {
   if (window.Chart) return Promise.resolve(window.Chart);
   if (!chartReady) {
@@ -483,6 +636,13 @@ function loadChartJs() {
         window.Chart.defaults.font.family = "system-ui, -apple-system, 'Segoe UI', sans-serif";
         window.Chart.defaults.font.size = 11;
         window.Chart.defaults.animation = false;
+        // A number on a tick is how a chart is read, and no config can carry the formatter that writes
+        // one, so the two scales that hold values take it here, once, for every chart on the board.
+        for (const scale of [window.Chart.defaults.scales.linear, window.Chart.defaults.scales.logarithmic]) {
+          if (scale?.ticks) scale.ticks.callback = (value) => compactNumber(value);
+        }
+        // The goal rule is drawn first so a value label sits over it rather than under a dash.
+        window.Chart.register(boardGoal, boardValues);
         resolve(window.Chart);
       };
       // A missing bundle leaves the next card free to try again rather than failing for the session.
@@ -610,6 +770,8 @@ function drawChart(holder, body) {
       // store, so the snapshot is 400px wide on any screen and sharp on a retina one.
       canvas.width = CHART_WIDTH;
       canvas.height = CHART_HEIGHT;
+      // The colours are the board's unless the config named its own, so this runs before the draw.
+      fillPalette(config);
       const chart = new Chart(canvas, {
         ...config,
         options: {
@@ -1716,6 +1878,13 @@ function isDelegate(data) {
   return typeof data.key === "string" && data.key.startsWith("delegate-");
 }
 
+/**
+ * The pin is drawn rather than typed: no font's pin glyph is monochrome on every machine, and this one
+ * has to take the amber of the pinned state. The button outlines it until the card is pinned.
+ */
+const PIN_GLYPH =
+  '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.6 1.6h6.8v1.7H2.6zM4.2 3.3h3.6L6.9 6.4H5.1zM6 6.4V10.8"/></svg>';
+
 function makeCard(data, quiet = false) {
   const isSource = data.type === "source";
   const isQuestion = data.type === "question";
@@ -1770,6 +1939,7 @@ function makeCard(data, quiet = false) {
     <button type="button" class="ask-pill" aria-label="centre this question">answer needed</button>
     <span class="chip"></span>
     <button type="button" class="copy-id" title="copy this card's id">⧉</button>
+    <button class="pin" title="pin this card" aria-label="pin this card">${PIN_GLYPH}</button>
     <button class="min" title="minimize this card" aria-label="minimize this card">▾</button>
     <button class="reply" title="ask a follow-up about this card" aria-label="ask a follow-up about this card">↩</button>
     <button class="edit" title="edit this note" aria-label="edit this note">✎</button>
@@ -1885,6 +2055,11 @@ function makeCard(data, quiet = false) {
     setMini(card, mini);
     const rect = JSON.parse(card.dataset.rect || "{}");
     void saveLayout(entry.id, rect, mini);
+  });
+
+  head.querySelector(".pin").addEventListener("click", (event) => {
+    event.stopPropagation();
+    togglePin(entry);
   });
 
   head.querySelector(".reply").addEventListener("click", (event) => {
@@ -2255,6 +2430,8 @@ function paintCard(entry, data) {
   const isSource = data.type === "source";
   const isOpenQuestion = questionWants(data);
   entry.data = data;
+  // The pin is the server's word, so a reload paints the card the way the click left it.
+  setPinned(entry.card, data.pinned === true);
   if (entry.editing) return;
   // While a name is being typed, its field sits beside this span, so a repaint writes where nobody
   // is looking and the hidden span keeps the words the rail row shows. A thread is named by its first
@@ -2300,6 +2477,9 @@ function paintCard(entry, data) {
   entry.askPill.style.display = isOpenQuestion ? "" : "none";
   const editBtn = entry.head.querySelector(".edit");
   if (editBtn) editBtn.style.display = data.type === "note" ? "" : "none";
+  // A thread is sent without `pinned`, so its head shows no pin rather than one that forgets itself.
+  const pinBtn = entry.head.querySelector(".pin");
+  if (pinBtn) pinBtn.style.display = data.type === "sticky" ? "none" : "";
   // One slot, two meanings: stop the run that is going, or end the child that is sitting idle. A card
   // with neither has nothing to stop, so it shows nothing.
   const closeBtn = entry.head.querySelector(".close");
@@ -2678,10 +2858,11 @@ function updateEmpty() {
  * scroll still cannot rearrange it.
  */
 /** Tell the server where a card sits, so placement survives a refresh. */
-function saveLayout(cardId, rect, mini) {
+function saveLayout(cardId, rect, mini, pinned) {
   const body = { cardId, rect: { x: rect.x, y: rect.y, w: rect.w, h: rect.h } };
-  // Only sent when it is asked for, so an ordinary move never clears a folded card.
+  // Only sent when it is asked for, so an ordinary move never clears a folded card or a pin.
   if (typeof mini === "boolean") body.mini = mini;
+  if (typeof pinned === "boolean") body.pinned = pinned;
   return fetch(`/layout?${auth}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2705,6 +2886,31 @@ function setMini(card, mini) {
   }
   // A folded card is as tall as its header, and the minimap draws the size the eye sees.
   scheduleMap();
+}
+
+/**
+ * A pin is the human's: the card stays when the board has to make room for a new one, and no thread may
+ * close it. Nothing here decides that — it says which state the card is in, for the eye at the head.
+ */
+function setPinned(card, pinned) {
+  card.classList.toggle("pinned", pinned);
+  const button = card.querySelector(".pin");
+  if (!button) return;
+  button.classList.toggle("on", pinned);
+  button.title = pinned ? "unpin this card" : "pin this card";
+  // The glyph says nothing out loud, so the spoken name follows the tooltip.
+  button.setAttribute("aria-label", button.title);
+}
+
+/** Flip a card's pin: the board shows it at once and the board's own repaint is what confirms it. */
+function togglePin(entry) {
+  // Only a plain card carries `pinned` back on every repaint and through a reload. A thread is sent
+  // without it, so a pin there would be forgotten by the next turn: no button, and no key either.
+  if (entry.data.type === "sticky") return;
+  const pinned = !entry.card.classList.contains("pinned");
+  setPinned(entry.card, pinned);
+  const rect = JSON.parse(entry.card.dataset.rect || "{}");
+  void saveLayout(entry.id, rect, undefined, pinned);
 }
 
 /**
@@ -6873,11 +7079,11 @@ document.addEventListener("keydown", (event) => {
   selectCard(null);
 });
 
-// `r` names the card you last clicked in a field and `q` closes it. A field keeps its own keys, so a
-// message being typed is never cut short.
+// `r` names the card you last clicked in a field, `p` pins it and `q` closes it. A field keeps its own
+// keys, so a message being typed is never cut short.
 document.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
-  if ((key !== "r" && key !== "q") || event.metaKey || event.ctrlKey || event.altKey) return;
+  if ((key !== "r" && key !== "q" && key !== "p") || event.metaKey || event.ctrlKey || event.altKey) return;
   if (typingSomewhere()) return;
   // The panel covers the board, so its closing key wins over the card it hides.
   if (!actPanel.hidden) {
@@ -6901,6 +7107,11 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   event.preventDefault();
+  if (key === "p") {
+    // A pin is the human's alone, and a thread cannot close a pinned card: the same press takes it off.
+    togglePin(record);
+    return;
+  }
   replyToCard(record);
 });
 
@@ -7247,6 +7458,8 @@ function connect() {
       const record = byId.get(payload.id);
       if (record && payload.rect) placeCard(record, payload.rect);
       if (record && typeof payload.mini === "boolean") setMini(record.card, payload.mini);
+      // A pin set in another tab is this tab's too, so the head agrees wherever it is looked at.
+      if (record && typeof payload.pinned === "boolean") setPinned(record.card, payload.pinned);
     } else if (payload.type === "remove") {
       dropCard({ id: payload.id });
     } else if (payload.type === "config") {

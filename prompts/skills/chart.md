@@ -28,14 +28,25 @@ trailing comma, no comment.
   `data`, one value per label; `backgroundColor`, `borderColor`, `borderWidth` and `fill` for its look;
   and `type`, so one dataset can be a line inside a bar chart.
 - `options` holds the rest, and these are the ones that earn their ink: `indexAxis: "y"` for a
-  horizontal bar, `scales.y.beginAtZero`, `scales.y.type: "logarithmic"`, `plugins.legend.display`,
-  `plugins.tooltip`, `plugins.title.text`.
+  horizontal bar, `goal` for the value the reader is measuring against, `scales.y.beginAtZero`,
+  `scales.y.type: "logarithmic"`, `plugins.legend.display`, `plugins.tooltip`, `plugins.title.text`.
 
-Everything not listed still works: this is Chart.js 4.6.1, and its own options are yours to use. Three
+Everything not listed still works: this is Chart.js 4.6.1, and its own options are yours to use. Four
 are not: the board sets `responsive`, `animation` and `devicePixelRatio` itself, because the drawing is
 snapshotted to a PNG and a live canvas cannot outlive the paint, so a config that names them is
 overridden. And JSON cannot carry a function, so any option that takes a callback is out: no
 `ticks.callback`, no formatter, no `external` tooltip.
+
+## What the board draws without being asked
+
+- Tick numbers are written short, so `1250000` reads `1.25M` and `1800` reads `1.8k`. Do not spend a
+  label or a tick on the long form.
+- Every mark carries its value in small grey type when the chart holds twelve marks or fewer and at
+  most two series. `options: { "valueLabels": false }` turns that off.
+- A dataset that names no `backgroundColor` or `borderColor` takes the board's palette, and a line
+  takes the same colour as a light fill. A colour you do name is kept.
+- `"goal": 250` draws a dashed rule at 250, labelled with the number: a plain number survives JSON,
+  which is why a goal line is one option rather than something to draw.
 
 ## The rules
 
@@ -96,6 +107,22 @@ question is which one is biggest.
 
 Two series that share a story, four points each, and the second dataset's own `type` gives the retries
 a line instead of a second chart.
+
+### OK — a goal line over the bars
+
+```chart
+{
+  "type": "bar",
+  "data": {
+    "labels": ["2024-11", "2024-12", "2025-01"],
+    "datasets": [{ "label": "requests (count)", "data": [74000, 91000, 118000] }]
+  },
+  "options": { "goal": 100000, "indexAxis": "y" }
+}
+```
+
+Reach for `goal` when one number is the pass mark and the question is which bars clear it: the rule
+and its label are the comparison, and no second series is needed to draw it.
 
 ### NOK — a callback the config cannot carry
 
