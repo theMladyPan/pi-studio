@@ -533,6 +533,11 @@
   function lineOf(field) {
     const labels = Array.isArray(field.labels) ? field.labels : ["off", "on"];
     if (field.type === "toggle") return `${field.label}: ${field.value ? labels[labels.length - 1] : labels[0]}`;
+    // A list holds the names that are off, so an empty list is every name on.
+    if (field.type === "list") {
+      const off = Array.isArray(field.value) ? field.value.length : 0;
+      return `${field.label}: ${off ? `${off} off` : "all on"}`;
+    }
     // A prompt's value is a whole file, so a folded group names the file and says nothing about its text.
     if (field.type === "prompt") return field.label;
     const value = String(field.value ?? "");
@@ -595,55 +600,35 @@
     entry.row.classList.remove("has-error");
   }
 
-  /** One control can write two keys: the document says how, so no field is special-cased here. */
-  function patchOf(field, value) {
-    const store = field.store;
-    if (store && typeof store.split === "string" && Array.isArray(store.keys) && store.keys.length >= 2) {
-      const text = String(value ?? "");
-      const cut = text.indexOf(store.split);
-      // A box without its separator is a half-typed answer: let the daemon refuse it in its own words.
-      if (cut < 1) return { [store.keys[0]]: "", [store.keys[1]]: text };
-      return { [store.keys[0]]: text.slice(0, cut), [store.keys[1]]: text.slice(cut + store.split.length) };
-    }
-    return { [field.id]: value };
-  }
-
   /**
-   * What the daemon says it now holds for a field. The answer to a write is the only account of what was
-   * saved, so the readout is painted from it: a value that did not reach the store is never reported as
-   * the value on disk.
+   * The body a field's own `write` mapping asks for. `@value` stands for the control's value as it is,
+   * `@head` and `@rest` for the halves either side of `field.split` at its first separator, and any other
+   * string is a literal the daemon expects. Nothing here knows which route a field names.
    */
-  function savedValueOf(field, defaults, fallback) {
-    if (!defaults || typeof defaults !== "object") return fallback;
-    const keys = field.store?.keys;
-    if (Array.isArray(keys)) {
-      const parts = keys.map((key) => defaults[key]);
-      if (parts.length && parts.every((one) => one !== undefined && one !== null && one !== "")) {
-        return parts.join(field.store?.split ?? "/");
-      }
-      return fallback;
-    }
-    return Object.hasOwn(defaults, field.id) ? defaults[field.id] : fallback;
-  }
-
-  /**
-   * The body a field's own `write` mapping asks for: its fixed keys as written, and `@value` standing for
-   * the control's value. Nothing here knows which route a field names.
-   */
-  function bodyOf(write, value) {
+  function bodyOf(field, value) {
+    const split = field.split ?? "/";
+    const text = String(value ?? "");
+    const at = text.indexOf(split);
+    const head = at < 0 ? text : text.slice(0, at);
+    const rest = at < 0 ? "" : text.slice(at + split.length);
     const body = {};
-    for (const [key, given] of Object.entries(write.keys || {})) body[key] = given === "@value" ? value : given;
+    for (const [key, slot] of Object.entries(field.write?.body ?? {})) {
+      body[key] = slot === "@value" ? value : slot === "@head" ? head : slot === "@rest" ? rest : slot;
+    }
     return body;
   }
 
-  /** A field that carries a `write` mapping is saved when the human says so, not on every change. */
-  async function commitWrite(entry, value, paint) {
+  /**
+   * A field written through the route its own `write` names. `paint` is the field's own badge: only a
+   * prompt carries one, because only a prompt is saved by a press rather than on change.
+   */
+  async function commitWrite(entry, value, paint = () => {}) {
     const field = entry.field;
     const write = field.write;
     if (!write?.route) return;
     const method = write.method || "POST";
     const route = `${write.route}${write.route.includes("?") ? "&" : "?"}${qs()}`;
-    const body = bodyOf(write, value);
+    const body = bodyOf(field, value);
     paint("saving…", "dirty");
     setSaved("dirty", `saving… · ${field.label}`);
     try {
@@ -677,41 +662,6 @@
     }
   }
 
-  async function commit(entry, value) {
-    const field = entry.field;
-    const patch = patchOf(field, value);
-    setSaved("dirty", "saving…");
-    try {
-      const response = await fetch(`/defaults?${qs()}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      if (!response.ok) {
-        const reason = (await response.text()).slice(0, 160) || response.statusText;
-        showFieldError(entry, `${response.status} ${reason}`);
-        setSaved("error", `not saved · ${field.label}`);
-        nodes.settingsReadout.textContent = `POST /defaults ${JSON.stringify(patch)} → ${response.status}`;
-        refreshPreviews();
-        return;
-      }
-      const answer = await response.json();
-      field.value = savedValueOf(field, answer?.defaults, value);
-      entry.lastGood = field.value;
-      clearFieldError(entry);
-      setSaved("saved", `saved · ${field.label}`);
-      nodes.settingsReadout.textContent = lineOf(field);
-      refreshPreviews();
-    } catch (error) {
-      showFieldError(entry, `${error.message || error}`);
-      setSaved("error", `not saved · ${field.label}`);
-      // A request that never got an answer leaves the store where it was, so the readout says that
-      // rather than keeping the last value standing.
-      nodes.settingsReadout.textContent = `not saved · ${field.label}`;
-      refreshPreviews();
-    }
-  }
-
   /** The route a field's values come from, as one muted tag; `wording` says what the route holds. */
   function sourceTag(field, wording) {
     const tag = el("span", "cfg-source-tag", field.source);
@@ -720,11 +670,84 @@
   }
 
   /**
+   * The tools a `list` field offers, as the daemon sees them: pi's own four by name, and the extension
+   * folders installed on this machine. Read on the first list drawn and kept, because only a daemon
+   * restart with a new extension installed changes the answer.
+   */
+  let toolCatalogue = null;
+  let toolsTrouble = "";
+
+  async function loadTools() {
+    if (toolCatalogue || toolsTrouble) return toolCatalogue;
+    try {
+      const response = await fetch(`/tools?${qs()}`);
+      if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
+      toolCatalogue = await response.json();
+    } catch (error) {
+      toolsTrouble = error.message || String(error);
+    }
+    return toolCatalogue;
+  }
+
+  /**
+   * Which of the route's lists a field offers. The route answers the built-in tools and the installed
+   * extensions side by side, and the key the field writes — `toolsOff`, `extensionsOff` — says which of
+   * the two it keeps names out of.
+   */
+  function offeredNames(field, catalogue) {
+    if (!catalogue) return [];
+    const key = Object.keys(field.write?.body ?? {})[0] ?? "";
+    if (/extension/i.test(key)) return (catalogue.extensions ?? []).map((one) => one.name);
+    return catalogue.builtin ?? [];
+  }
+
+  /**
+   * A `list` field: one chip per name, muted while that name is off and in the accent while it is on. A
+   * click flips one name and writes the whole list, because the route holds the list and not one row of
+   * it.
+   */
+  function listControl(field, entry, line) {
+    const chips = el("div", "seg-row cfg-chips");
+    chips.setAttribute("role", "group");
+    chips.setAttribute("aria-label", field.label);
+    const paint = () => {
+      const off = Array.isArray(field.value) ? field.value : [];
+      const names = offeredNames(field, toolCatalogue);
+      if (!names.length) {
+        chips.replaceChildren(
+          el("span", "cfg-field-help", toolsTrouble ? `the list is unavailable: ${toolsTrouble}` : "asking the daemon for its names…"),
+        );
+        return;
+      }
+      chips.replaceChildren(
+        ...names.map((name) => {
+          const on = !off.includes(name);
+          const chip = el("button", "", name);
+          chip.type = "button";
+          chip.disabled = Boolean(field.disabled);
+          chip.setAttribute("aria-pressed", String(on));
+          chip.title = on ? `${name} is given to a new board` : `${name} is kept from a new board`;
+          chip.addEventListener("click", () => {
+            const next = on ? [...off, name] : off.filter((one) => one !== name);
+            void commitWrite(entry, next).then(paint);
+          });
+          return chip;
+        }),
+      );
+    };
+    paint();
+    void loadTools().then(() => paint());
+    // A revert sets the field's value before it asks for this, so the chips are painted from it.
+    entry.set = () => paint();
+    line.append(chips);
+  }
+
+  /**
    * The control a field draws, decided by its `type` and by the lists in the document. Nothing here
    * knows a field's id: a fourth field, or a fifth level, arrives with the document alone.
    */
   function controlFor(field, entry) {
-    const options = field.options || field.levels || [];
+    const options = field.options || [];
     const disabled = Boolean(field.disabled);
     const line = el("div", "cfg-control-line");
 
@@ -746,7 +769,7 @@
         item.value = String(option);
         catalog.append(item);
       }
-      input.addEventListener("change", () => void commit(entry, input.value.trim()));
+      input.addEventListener("change", () => void commitWrite(entry, input.value.trim()));
       entry.set = (value) => {
         input.value = String(value ?? "");
       };
@@ -763,7 +786,7 @@
         item.selected = field.value === option;
         select.append(item);
       }
-      select.addEventListener("change", () => void commit(entry, select.value));
+      select.addEventListener("change", () => void commitWrite(entry, select.value));
       entry.set = (value) => {
         select.value = String(value ?? "");
       };
@@ -788,7 +811,7 @@
         button.setAttribute("aria-pressed", String(field.value === value));
         button.addEventListener("click", () => {
           for (const [other, node] of buttons) node.setAttribute("aria-pressed", String(other === value));
-          void commit(entry, value);
+          void commitWrite(entry, value);
         });
         buttons.set(value, button);
         seg.append(button);
@@ -797,6 +820,8 @@
         for (const [other, node] of buttons) node.setAttribute("aria-pressed", String(other === value));
       };
       line.append(seg);
+    } else if (field.type === "list") {
+      listControl(field, entry, line);
     } else if (field.type === "prompt") {
       // A prompt is a file, not a setting: the text stays dirty until the human presses this field's own
       // save, because a file written on every keystroke is not a file anybody meant. `write` says where
@@ -914,7 +939,7 @@
       if (field.step !== undefined) input.step = String(field.step);
       input.disabled = disabled;
       input.addEventListener("change", () => {
-        void commit(entry, input.type === "number" ? Number(input.value) : input.value);
+        void commitWrite(entry, input.type === "number" ? Number(input.value) : input.value);
       });
       entry.set = (value) => {
         input.value = String(value ?? "");
@@ -922,9 +947,9 @@
       line.append(input);
     }
 
-    // A field the page writes to a route reads its text from that route; every other source is the list the
-    // daemon fills the options from. The prompt case is answered above, on its own actions line.
-    if (field.source && !field.write) line.append(sourceTag(field, "options filled in by the daemon from"));
+    // A source the daemon fills the values from rides the line under them. The prompt case is answered
+    // above, on its own actions line, where the route is the file its text is read from and written to.
+    if (field.source && field.type !== "prompt") line.append(sourceTag(field, "options filled in by the daemon from"));
     return line;
   }
 
@@ -937,7 +962,9 @@
     const meta = el("div", "cfg-field-meta");
     const label = el("label", "cfg-field-label", field.label);
     label.htmlFor = `field-${field.id}`;
-    meta.append(label, el("span", "cfg-field-id", field.store?.keys ? field.store.keys.join(" + ") : field.id));
+    // The keys the write template fills, as they read in the request body; a field that fills one names it.
+    const keys = Object.keys(field.write?.body ?? {});
+    meta.append(label, el("span", "cfg-field-id", keys.length ? keys.join(" + ") : field.id));
 
     const control = el("div", "cfg-field-control");
     const entry = { field, row, lastGood: field.value, set: () => {}, error: null, message: null };
@@ -959,9 +986,8 @@
       refreshPreviews();
     });
     error.append(message);
-    // A field with its own `write` already carries its own revert beside the control, so this row only
-    // says what the daemon said.
-    if (!field.write) error.append(revert);
+    // A prompt carries its own revert beside the control, so this row only says what the daemon said.
+    if (field.type !== "prompt") error.append(revert);
     error.hidden = true;
     entry.error = error;
     entry.message = message;
@@ -1027,7 +1053,7 @@
     // The head counts settings: a prompt is a file the page also carries, and is not one of them.
     const settings = leavesOf(doc).filter((field) => field.type !== "prompt").length;
     nodes.docVersion.textContent = `v${doc.version ?? 1} · ${settings} settings`;
-    nodes.docHelp.textContent = doc.help || "";
+    nodes.docHelp.textContent = doc.subtitle || "";
     const collapseMap = readCollapseMap();
     nodes.tree.replaceChildren(...(doc.groups || []).map((group) => walkGroup(group, 0, "", collapseMap)));
     // A prompt file that left the disk takes its draft with it; the rest were just put back into the tree.
@@ -1046,7 +1072,7 @@
       // The tree opens as the daemon just read it, so no badge: a badge reports an action somebody took,
       // and nobody has taken one yet. Unsaved text that came back with the tree is the one exception.
       setSaved(...draftBadge());
-      nodes.settingsReadout.textContent = readoutText("defaults save on change · prompts when you press save");
+      nodes.settingsReadout.textContent = readoutText(doc.foot || "");
     } catch (error) {
       doc = null;
       entries.clear();
