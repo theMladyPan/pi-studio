@@ -126,6 +126,9 @@ test("the board's card settings reach the prompt, and a default board reads as n
 	const plain = boardPrompt(board, thread);
 	assert.match(plain, /Cards on this board: normal\./);
 	assert.match(plain, /Cards are written for: programmer\./);
+	// A board that stored nothing brings a child's work back by merging, and it says so where the prompt
+	// can be read rather than leaving the boss to guess.
+	assert.match(plain, /brings a child's work back with: merge/);
 	for (const line of [/code fragments: some/, /math formulas: some/, /charts: some/, /references: some/]) assert.match(plain, line);
 	// A mermaid diagram is not one of the four things a switch limits: it shows structure, and it says so.
 	assert.match(plain, /mermaid block is fine at every level/);

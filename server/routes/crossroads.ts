@@ -12,6 +12,7 @@ import { nudgeWelcome } from "../bus.ts";
 import { cardFor } from "../cards.ts";
 import { THINKING_LEVELS, modelCatalog } from "../models.ts";
 import { CARD_AUDIENCE, CARD_LEVELS, CARD_SHOWS, CARD_VERBOSITY } from "../card-settings.ts";
+import { CHILD_INTEGRATION } from "../integration.ts";
 import { settingsDocument } from "../settings.ts";
 import { spawn } from "node:child_process";
 
@@ -66,6 +67,12 @@ export async function onDefaults(req, res) {
 		if (body[key] === undefined) continue;
 		if (!CARD_LEVELS.includes(body[key])) return void fail(res, 400, `${key} is one of ${CARD_LEVELS.join(", ")}`);
 		next[key] = body[key];
+	}
+	// How a new board brings a child's work back onto its own branch, checked the way its own route checks it.
+	if (body.childIntegration !== undefined) {
+		if (!CHILD_INTEGRATION.includes(body.childIntegration))
+			return void fail(res, 400, `a child's work comes back by one of ${CHILD_INTEGRATION.join(", ")}`);
+		next.childIntegration = body.childIntegration;
 	}
 	if (typeof body.provider === "string" && typeof body.model === "string") {
 		const { models } = await modelCatalog();

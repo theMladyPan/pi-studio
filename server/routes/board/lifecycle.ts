@@ -123,11 +123,14 @@ export function forgetCard(board, cardId) {
 /** Keep the board bounded: the oldest plain card goes when a new one arrives and there is no room. */
 export function makeRoom(board) {
 	while (board.cards.size >= MAX_PLAIN_CARDS) {
-		const oldest = [...board.cards.values()].sort((a, b) => a.at - b.at)[0];
-		if (!oldest) break;
-		board.cards.delete(oldest.id);
-		forgetCard(board, oldest.id);
-		broadcast(board, { type: "remove", id: oldest.id });
+		const oldest = [...board.cards.values()].sort((a, b) => a.at - b.at);
+		// A pinned card is one the human keeps in sight, so the oldest unpinned card goes first. A board of
+		// nothing but pinned cards still gives one up: the new card has to land, and this loop has to end.
+		const gone = oldest.find((held) => !held.pinned) ?? oldest[0];
+		if (!gone) break;
+		board.cards.delete(gone.id);
+		forgetCard(board, gone.id);
+		broadcast(board, { type: "remove", id: gone.id });
 	}
 }
 
@@ -155,11 +158,56 @@ export function threadForRuntime(board, cardId) {
 
 
 
-export async function onClose(req, res, board) {
+/**
+ * The card a key names, as seen by the thread asking. Two threads may both hold a card keyed `plan`, so
+ * the caller's own card is looked for first: a thread reading a key off its board line means its own.
+ */
+function cardByKey(board, key, own) {
+	const held = [...board.cards.values()];
+	if (own) {
+		const mine = held.find((card) => card.key === key && (card.ownerThread === own || card.threadRoot === own));
+		if (mine) return mine;
+	}
+	return held.find((card) => card.key === key);
+}
+
+
+
+/**
+ * Why a thread may not close this card, or "" when it may. A thread tidies what it wrote and retires the
+ * children it spawned, and nothing else: another thread's cards are that thread's, the human's own card
+ * is the human's, and its own card is the one close that would kill the process asking.
+ */
+function closeRefusal(plain, thread, own) {
+	if (thread) {
+		if (thread.id === own) return "a thread cannot close its own card";
+		return thread.parentThread === own ? "" : "a thread closes only a thread it spawned";
+	}
+	if (!plain) return "";
+	return plain.ownerThread === own || plain.threadRoot === own ? "" : "a thread closes only the cards it wrote";
+}
+
+
+
+export async function onClose(req, res, board, caller = { human: false }) {
 	const body = await readJson(req, res);
 	if (!body) return;
-	const id = String(body.cardId ?? "");
-	const plain = board.cards.get(id);
+	const asked = String(body.cardId ?? "");
+	const own = caller.human ? "" : String(caller.thread?.id ?? "");
+	// A card is named by its id or by the key a [[key]] already resolves to: a thread reads the key off the
+	// board line it was given, and should not have to hold the id as well.
+	const plain = board.cards.get(asked) ?? cardByKey(board, asked, own);
+	const thread = plain ? undefined : board.threads.get(asked);
+	// A pin is the human's: a thread closes a card that is spent and leaves the one they keep in sight.
+	// The refusal is the route's rather than the tool's, so a pinned card is protected over the wire too.
+	if ((plain ?? thread)?.pinned === true && !caller.human) return void fail(res, 409, "that card is pinned");
+	// A close is scoped to the caller: a thread that could close anything could close the card it answers
+	// on, and `closeThread` would SIGKILL the process making the request before it got its answer.
+	if (!caller.human) {
+		const refused = closeRefusal(plain, thread, own);
+		if (refused) return void fail(res, 409, refused);
+	}
+	const id = plain ? plain.id : asked;
 	if (plain) {
 		board.cards.delete(id);
 		forgetCard(board, id);
@@ -169,7 +217,6 @@ export async function onClose(req, res, board) {
 		answer(res, 200, { closed: id });
 		return;
 	}
-	const thread = board.threads.get(id);
 	if (!thread) return void fail(res, 404, "no such card");
 	// Closing this card closes the thread card, not the child's life: a child lives while it has a card,
 	// so one that still answers notes keeps running where those notes are read. The last card ends it.

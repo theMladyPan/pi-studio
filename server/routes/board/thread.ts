@@ -16,6 +16,7 @@ import { ROLE_NAMES, ROLE_THINKING, roleSystemPrompt } from "../../child/roles.t
 import { MODE_NAMES, PATH_NAMES, promptText } from "../../child/modes.ts";
 import { runSpawn } from "../../child/spawn.ts";
 import { killChild, threadForRuntime } from "./lifecycle.ts";
+import { predecessorId } from "./content.ts";
 import { THINKING_LEVELS } from "../../models.ts";
 
 
@@ -37,11 +38,13 @@ function threadSpec(board, body, caller) {
 	if (depth > 1) return { error: "a thread spawned by an agent may not spawn another" };
 	if (board.threads.size >= MAX_THREADS) return { error: `this board holds ${MAX_THREADS} threads` };
 	// Predecessors are what the board draws arrows from, so a misspelled id is a mistake to report
-	// rather than something to drop quietly.
+	// rather than something to drop quietly. A key stands for a card the way a `[[key]]` does, so
+	// `after: ["load-shape"]` is an arrow too.
 	const wanted = [...new Set(Array.isArray(body.after) ? body.after.filter((id) => typeof id === "string" && id) : [])];
-	const known = wanted.filter((id) => board.threads.has(id) || board.cards.has(id));
-	if (known.length !== wanted.length) return { error: "no such predecessor" };
-	if (known.length > 8) return { error: "too many predecessors" };
+	if (wanted.length > 8) return { error: "too many predecessors" };
+	const resolved = wanted.map((id) => predecessorId(board, id));
+	if (resolved.some((id) => !id)) return { error: "no such predecessor" };
+	const known = [...new Set(resolved)];
 	// A hidden thread has no card of its own, so the arrow is drawn from the card it answers for.
 	const after = known.map((id) => (board.threads.get(id)?.hidden ? anchorOf(board, id) : id));
 	// A child hangs under the thread that spawned it, so the arrow is drawn even when the caller named
@@ -225,8 +228,11 @@ export function cardPreamble(card, whole = false) {
 			.slice(0, 1500);
 		about = `The card shows ${card.path}, lines ${from}-${to}:\n${numbered || "(empty)"}`;
 	} else {
-		const body = String(card.type === "question" ? [card.question, card.answer ?? ""].join("\n") : (card.markdown ?? ""))
-			.replace(/\s+/g, " ")
+		// A note is quoted as the human wrote it: flattening a table or a tree into one line is what
+		// makes the reply about "the card says" and not about the thing on it. A question is two strings.
+		const body = String(
+			card.type === "question" ? [card.question, card.answer ?? ""].join("\n").replace(/\s+/g, " ") : (card.markdown ?? ""),
+		)
 			.trim()
 			.slice(0, 1500);
 		about = `The card says: ${body || "(empty)"}`;
@@ -246,7 +252,7 @@ export function cardPreamble(card, whole = false) {
 		.join("\n")
 		// The newest turns matter most, so cutting from the front keeps the end intact.
 		.slice(-(whole ? 4000 : 900));
-	return `[board reply · card ${card.id} · "${title}"]\n${about}\n${chain ? `Earlier about this card:\n${chain}\n` : ""}\n`;
+	return `[board reply · card ${card.id}${card.key ? ` · key ${card.key}` : ""} · "${title}"]\n${about}\n${chain ? `Earlier about this card:\n${chain}\n` : ""}\n`;
 }
 
 

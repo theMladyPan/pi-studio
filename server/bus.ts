@@ -90,9 +90,28 @@ export const threadRef = (thread) => ({ id: thread.id, title: thread.title });
 
 
 
+/**
+ * Drop `over` rows, oldest first, from the ones that have already ended. A row still being written has
+ * its end coming, and `patchRow` can only settle a row that is still in the list: a spawn that runs for
+ * minutes while its children fill the rail used to lose the very row that reports it, so the tab kept a
+ * clock on a call nothing was doing. Running rows go only when there is nothing else left to drop.
+ */
+function dropOldestRows(activity, over) {
+	for (let at = 0; at < activity.length && over > 0; ) {
+		if (activity[at].status === "running") {
+			at += 1;
+			continue;
+		}
+		activity.splice(at, 1);
+		over -= 1;
+	}
+	if (over > 0) activity.splice(0, over);
+}
+
+
 export function addRow(board, row) {
 	board.activity.push(row);
-	if (board.activity.length > MAX_ACTIVITY) board.activity.splice(0, board.activity.length - MAX_ACTIVITY);
+	if (board.activity.length > MAX_ACTIVITY) dropOldestRows(board.activity, board.activity.length - MAX_ACTIVITY);
 	broadcast(board, { type: "activity", row });
 }
 

@@ -3,6 +3,7 @@
  * A message into a thread, and the bookkeeping that decides which cards a turn owns.
  */
 import { answer, fail, readJson } from "../../http.ts";
+import { cardIndex } from "./index.ts";
 import { cardPreamble, field } from "./thread.ts";
 import { randomUUID } from "node:crypto";
 import { runtimeDefaults } from "../../workspaces.ts";
@@ -95,7 +96,7 @@ export async function onMessage(req, res, board) {
 	// the answer are read on the card of the thread that answered. A fork is such a thread now. Only a
 	// child a card nobody answers for got has no card of its own, so the card is the only place its turn
 	// can be read, and it keeps the turn there.
-	const message = `${preamble}${naming}${text}`;
+	const message = `${cardIndex(board)}${preamble}${naming}${text}`;
 	const holding = askedCard && thread.hidden ? askedCard : null;
 	let target = null;
 	let index;
@@ -187,8 +188,9 @@ export async function onMessageEdit(req, res, board) {
 	if (!thread) return void fail(res, 409, "no such thread");
 	if (!entry) return void fail(res, 409, "that message is not waiting: the child has it");
 	entry.text = text.slice(0, 4000);
-	// Only the human's own words change: the card quote the message was queued with stays as it was.
-	entry.message = `${entry.preamble ?? ""}${entry.text}`;
+	// Only the human's own words change: the card quote the message was queued with stays as it was. The
+	// board line is built again, so a message rewritten after a card was added still names that card.
+	entry.message = `${cardIndex(board)}${entry.preamble ?? ""}${entry.text}`;
 	const turn = queuedTurn(board, thread, target);
 	if (turn) turn.text = entry.text;
 	showQueue(board, thread, target);

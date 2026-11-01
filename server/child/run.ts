@@ -46,7 +46,7 @@ export function ensureChild(board, thread) {
 			PI_STUDIO_WORKSPACE: board.id,
 			PI_STUDIO_THREAD: thread.id,
 			PI_STUDIO_CARDS_VERBOSITY: cards.cardsVerbosity,
-			PI_STUDIO_CARDS_OFF: CARD_SHOWS.filter((key) => !cards[key]).join(","),
+			PI_STUDIO_CARDS_OFF: CARD_SHOWS.filter((key) => cards[key] === "none").join(","),
 		},
 	});
 	board.children.set(thread.id, child);

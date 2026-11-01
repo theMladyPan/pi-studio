@@ -110,6 +110,9 @@ export function saveBoard(board) {
 			...(card.turns?.length ? { turns: card.turns.map(savedTurn) } : {}),
 			...(card.rect ? { rect: card.rect } : {}),
 			...(card.mini ? { mini: true } : {}),
+			...(Array.isArray(card.after) && card.after.length ? { after: card.after } : {}),
+			...(typeof card.size === "string" ? { size: card.size } : {}),
+			...(card.pinned ? { pinned: true } : {}),
 		})),
 	};
 	writeJsonFile(boardFile(board), payload);
@@ -218,6 +221,9 @@ function restoredQuestions(raw) {
 
 
 
+/** The sizes a card may be drawn in. A file naming anything else is read as a card of no size. */
+const CARD_SIZES = ["compact", "normal", "wide", "tall"];
+
 /** Rebuild a plain card from its file. One without the body its type needs is nothing, so it goes. */
 export function restoredPlainCard(raw) {
 	if (!raw || typeof raw !== "object" || typeof raw.id !== "string") return null;
@@ -263,6 +269,9 @@ export function restoredPlainCard(raw) {
 		})(),
 		...(rect ? { rect } : {}),
 		...(raw.mini ? { mini: true } : {}),
+		...(Array.isArray(raw.after) ? { after: raw.after.filter((id) => typeof id === "string") } : {}),
+		...(CARD_SIZES.includes(raw.size) ? { size: raw.size } : {}),
+		...(raw.pinned === true ? { pinned: true } : {}),
 	};
 	return card;
 }

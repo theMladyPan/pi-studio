@@ -7,6 +7,7 @@ import { answer, fail, readJson } from "../../http.ts";
 import { field } from "./thread.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog } from "../../models.ts";
 import { CARD_AUDIENCE, CARD_LEVELS, CARD_SHOWS, CARD_VERBOSITY } from "../../card-settings.ts";
+import { CHILD_INTEGRATION } from "../../integration.ts";
 import { PATH_NAMES } from "../../child/modes.ts";
 import { threadForRuntime } from "./lifecycle.ts";
 import { scheduleSave } from "../../store.ts";
@@ -163,7 +164,9 @@ export async function onLayout(req, res, board) {
 	const clamp = (value) => Math.max(0, Math.min(40000, Math.round(Number.isFinite(Number(value)) ? Number(value) : 0)));
 	held.rect = { x: clamp(rect.x), y: clamp(rect.y), w: clamp(rect.w), h: clamp(rect.h) };
 	if (typeof body.mini === "boolean") held.mini = body.mini;
-	broadcast(board, { type: "move", id: held.id, rect: held.rect, mini: held.mini === true });
+	// A pin is the human's: the card stays when the board has to make room for a new one.
+	if (typeof body.pinned === "boolean") held.pinned = body.pinned;
+	broadcast(board, { type: "move", id: held.id, rect: held.rect, mini: held.mini === true, pinned: held.pinned === true });
 	scheduleSave(board);
 	answer(res, 200, { placed: held.id });
 }
@@ -229,11 +232,19 @@ export async function onConfig(req, res, board) {
 		next[key] = body[key];
 		changed = true;
 	}
+	// How the work a child does comes back onto this board's own branch. An id no list names is a mistake
+	// rather than a preference, so it is refused the way an unknown card switch is.
+	if (body.childIntegration !== undefined) {
+		if (!CHILD_INTEGRATION.includes(body.childIntegration))
+			return void fail(res, 400, `a child's work comes back by one of ${CHILD_INTEGRATION.join(", ")}`);
+		next.childIntegration = body.childIntegration;
+		changed = true;
+	}
 	if (!changed)
 		return void fail(
 			res,
 			400,
-			"nothing to change: dimOthers, toolsOff, extensionsOff, path, cardsVerbosity, cardsAudience or a card switch",
+			"nothing to change: dimOthers, toolsOff, extensionsOff, path, cardsVerbosity, cardsAudience, a card switch or childIntegration",
 		);
 	board.config = next;
 	scheduleSave(board);

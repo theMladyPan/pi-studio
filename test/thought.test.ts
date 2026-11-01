@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { addRow, patchRow } from "../server/bus.ts";
 import { handleChildLine, settleRows } from "../server/thought.ts";
+import { MAX_ACTIVITY } from "../server/store.ts";
 
 /**
  * One activity row as the tests hand it to the reader and read back: the fields the rail, the store and a
@@ -142,4 +144,56 @@ test("a thread that stops closes the calls it was in, and nobody else's", () => 
 	assert.equal(rows.get("call-done")?.status, "ok");
 	assert.equal(rows.get("call-done")?.durationMs, 12);
 	assert.equal(rows.get("other-thread-call")?.status, "running");
+});
+
+
+/**
+ * The bug this covers: a `board_thread` row stayed `running` in the card it was spawned from for half an
+ * hour after its child had answered. The row was the oldest one on the board when three children at once
+ * filled the rail past its cap, so the cap dropped a row that was still being written — and the end that
+ * would have settled it landed on a row the board no longer held.
+ */
+test("the activity cap drops what has ended, and never a row still being written", () => {
+	const board = fakeBoard();
+	const inFlight = {
+		id: "spawn-in-flight",
+		kind: "tool",
+		tool: "board_thread",
+		status: "running",
+		startedAt: Date.now() - 300_000,
+		thread: { id: "boss", title: "a boss" },
+	};
+	addRow(board, inFlight);
+	// What three children do to the rail while the spawn that started them is still waiting.
+	for (let at = 0; at < MAX_ACTIVITY + 20; at += 1) {
+		addRow(board, {
+			id: `row-${at}`,
+			kind: "tool",
+			tool: "bash",
+			status: "ok",
+			startedAt: Date.now(),
+			durationMs: 1,
+			thread: { id: "child", title: "a child" },
+		});
+	}
+	assert.equal(board.activity.length, MAX_ACTIVITY);
+	assert.ok(board.activity.includes(inFlight), "the running row was dropped while it was still in flight");
+	// The end of that call still reaches its row, which is the whole point of keeping it.
+	patchRow(board, "spawn-in-flight", { status: "ok", summary: "Child 0f55f4be done" });
+	assert.equal(board.activity.find((row) => row.id === "spawn-in-flight")?.status, "ok");
+	// Nothing left to drop but running rows: the cap still holds, and the oldest goes.
+	const full = fakeBoard();
+	for (let at = 0; at < MAX_ACTIVITY + 1; at += 1) {
+		addRow(full, {
+			id: `r${at}`,
+			kind: "tool",
+			tool: "bash",
+			status: "running",
+			startedAt: Date.now(),
+			thread: { id: "child", title: "a child" },
+		});
+	}
+	assert.equal(full.activity.length, MAX_ACTIVITY);
+	assert.equal(full.activity[0]?.id, "r1");
+	assert.equal(full.activity[MAX_ACTIVITY - 1]?.id, `r${MAX_ACTIVITY}`);
 });

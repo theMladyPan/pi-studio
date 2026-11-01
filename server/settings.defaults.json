@@ -148,6 +148,26 @@
                   "help": "Dim other cards on the canvas while one thread is selected."
                 }
               ]
+            },
+            {
+              "id": "workflow",
+              "label": "Workflow",
+              "help": "How the work a child does comes back onto the board's own branch.",
+              "collapsed": false,
+              "fields": [
+                {
+                  "id": "childIntegration",
+                  "label": "a child's work comes back by",
+                  "type": "select",
+                  "value": "merge",
+                  "options": [
+                    "merge",
+                    "cherry-pick",
+                    "rebase"
+                  ],
+                  "help": "merge: the child's branch is merged in, and the merge stays visible in the history. cherry-pick: its commits are lifted across. rebase: its commits are replayed."
+                }
+              ]
             }
           ]
         }

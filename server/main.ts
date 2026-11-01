@@ -26,6 +26,7 @@ import { onAnswer, onAsk } from "./routes/board/answer.ts";
 import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.ts";
 import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
 import { onPrompt, onPromptWrite, onPrompts } from "./routes/board/prompts.ts";
+import { onSkill } from "./routes/board/skill.ts";
 import { onClean, onClose, onKill, onNew, onReopen, onStop, onUndo } from "./routes/board/lifecycle.ts";
 
 
@@ -44,7 +45,7 @@ export const token = (() => {
 
 
 /** The routes a child may reach. Everything else on this daemon belongs to the human. */
-export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/path"]);
+export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/path", "/skill", "/close"]);
 
 
 
@@ -73,9 +74,10 @@ export function callerOf(given) {
  * A thread that answers for a card the human started may write cards on its own board — notes, sources,
  * the question it puts to the human — and ask for work of its own, which the depth rule then decides.
  * A spawned child may do none of it: it reports in its last message and the thread that spawned it draws,
- * which is what keeps a flow of six children from leaving eighteen cards behind. Layout, close, kill,
- * config and clean belong to the human, and so does every other board. The human at the keyboard is
- * refused nothing here.
+ * which is what keeps a flow of six children from leaving eighteen cards behind. Closing a card that is
+ * spent is a thread's too, and a pin is what holds it back: the close handler refuses a pinned card
+ * from anyone but the human. Layout, kill, config and clean belong to the human, and so does every other
+ * board. The human at the keyboard is refused nothing here.
  */
 export function threadRefusal(caller, method, pathname, workspace) {
 	if (caller.human) return null;
@@ -348,6 +350,7 @@ export const server = createServer((req, res) => {
 				"/mode": onMode,
 				"/card/note": onNote,
 				"/card/source": onSource,
+				"/skill": onSkill,
 				"/card/ask": onAsk,
 				"/edit": onEdit,
 				"/rename": onRename,
