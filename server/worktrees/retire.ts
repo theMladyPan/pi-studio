@@ -4,16 +4,17 @@
  * still holds work nobody has seen.
  */
 import { existsSync, realpathSync, rmdirSync } from "node:fs";
-import { gitIn, mainRepoOf, repoOf } from "../git/repo.ts";
+import { baseRef, gitIn, mainRepoOf, repoOf } from "../git/repo.ts";
 import { basename, dirname, resolve } from "node:path";
 import { AGENTS_DIR } from "./make.ts";
 
 
 
 /**
- * Let a tree go, but only one with nothing worth keeping: uncommitted changes or a commit the base
- * does not have are reported, never deleted. `clean` is the only caller, so a tree outlives its thread
- * until the human asks for the sweep.
+ * Let a tree go, but only one whose work is already somewhere else: uncommitted changes, or commits no
+ * other branch holds, are reported and never deleted. `clean` is the only caller. Work that was merged,
+ * fast-forwarded, rebased or cherry-picked is already integrated, so counting commits against the
+ * snapshot the tree started from would keep such a tree for ever.
  */
 export function retireWorktree(board, tree) {
 	if (!tree?.path) return null;
@@ -40,18 +41,57 @@ export function retireWorktree(board, tree) {
 		if (gone !== -1) board.trees.splice(gone, 1);
 		return { path: tree.path, branch: label, removed: true, note: "the branch is already gone" };
 	}
-	// The branch is what holds the work, and a count git cannot read is not a zero: a renamed or
-	// deleted base made `rev-list` fail here once and the branch was deleted with commits on it.
-	const ahead = branch
-		? gitIn(repo, ["rev-list", "--count", `${tree.base}..${branch}`])
-		: existsSync(tree.path)
-			? gitIn(tree.path, ["rev-list", "--count", `${tree.base}..HEAD`])
-			: { ok: false, out: "" };
-	if (!ahead.ok) {
-		return { path: tree.path, branch: label, kept: `could not read ${tree.base}..${branch || "HEAD"}` };
+	// The branch the work would have been integrated into, named in every sentence below.
+	const up = baseRef(repo);
+	// The work is integrated when one of two proofs holds, and the tree then holds nothing of its own. A
+	// branch a merge, a fast-forward or a rebase put into another branch is contained in it; a branch
+	// cherry-picked in carries the same patches under other ids. Both are asked of the main checkout,
+	// which sees every ref, and a read that fails is not a proof: the tree stays.
+	let integrated = false;
+	if (branch) {
+		// The branch always contains itself, so only another name in the list is proof.
+		const held = gitIn(repo, ["for-each-ref", "--contains", `refs/heads/${branch}`, "refs/heads", "--format=%(refname:short)"], 10_000);
+		if (!held.ok) {
+			return { path: tree.path, branch: label, kept: `could not read which local branches hold ${branch}: ${held.err.split("\n")[0] || "no reason given"}` };
+		}
+		integrated = held.out.split("\n").some((name) => name.trim() && name.trim() !== branch);
+		// Commits cherry-picked into the integration branch have no id in common with it, so a "+" line
+		// is the only thing that says the work is missing. A squashed branch leaves no equivalent commit
+		// at all, which is why such a tree keeps rather than guessed away.
+		if (!integrated && up && up !== branch) {
+			const equivalent = gitIn(repo, ["cherry", up, branch], 10_000);
+			if (!equivalent.ok) {
+				return { path: tree.path, branch: label, kept: `could not read git cherry ${up} ${branch}: ${equivalent.err.split("\n")[0] || "no reason given"}` };
+			}
+			integrated = !equivalent.out.split("\n").some((line) => line.startsWith("+"));
+		}
+	} else if (existsSync(tree.path)) {
+		// A detached tree has no name to look up, so its own HEAD is asked about instead — inside the
+		// tree, because HEAD is per worktree and the main checkout's HEAD says nothing about this one.
+		const held = gitIn(tree.path, ["for-each-ref", "--contains", "HEAD", "refs/heads", "--format=%(refname:short)"], 10_000);
+		if (!held.ok) {
+			return { path: tree.path, branch: label, kept: `could not read which local branches hold ${label}: ${held.err.split("\n")[0] || "no reason given"}` };
+		}
+		integrated = held.out.split("\n").some((name) => name.trim());
 	}
-	const commits = Number(ahead.out) || 0;
-	if (commits > 0) return { path: tree.path, branch: label, kept: `${commits} commit(s) not in ${tree.base}` };
+	if (!integrated) {
+		// Nothing proves the work is somewhere else, so what the tree holds is counted and reported. A
+		// count git cannot read is not a zero: a renamed or deleted base made `rev-list` fail here once
+		// and the branch was deleted with commits on it.
+		const ahead = branch
+			? gitIn(repo, ["rev-list", "--count", `${tree.base}..${branch}`])
+			: existsSync(tree.path)
+				? gitIn(tree.path, ["rev-list", "--count", `${tree.base}..HEAD`])
+				: { ok: false, out: "" };
+		if (!ahead.ok) {
+			return { path: tree.path, branch: label, kept: `could not read ${tree.base}..${branch || "HEAD"}` };
+		}
+		const commits = Number(ahead.out) || 0;
+		if (commits > 0) {
+			const where = up && up !== branch ? up : "any local branch";
+			return { path: tree.path, branch: label, kept: `${commits} commit(s) not in ${where}` };
+		}
+	}
 	if (existsSync(tree.path)) {
 		const removed = gitIn(repo, ["worktree", "remove", tree.path], 10_000);
 		if (!removed.ok) {
@@ -68,8 +108,8 @@ export function retireWorktree(board, tree) {
 			}
 		}
 	}
-	// Nothing is ahead of the base, so the branch holds no work of its own. A detached tree has no branch
-	// to delete: its commits were never given a name, and there were none.
+	// The work is integrated or the branch holds none of its own, so the name goes with the tree. A
+	// detached tree has no branch to delete: its commits were never given a name, and there were none.
 	const branchGone = branch ? gitIn(repo, ["branch", "-D", branch]) : { ok: true, out: "" };
 	const at = board.trees.findIndex((candidate) => candidate.path === tree.path);
 	if (at !== -1) board.trees.splice(at, 1);
