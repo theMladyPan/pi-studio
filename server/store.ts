@@ -279,6 +279,22 @@ export function restoredPlainCard(raw) {
 
 
 
+/**
+ * A hidden thread with nothing left to draw it through is dropped, and one the rail still lists is not.
+ *
+ * A card and the child that answers for it belong together, and a saved file can part them, so a hidden
+ * thread that owned no card would come back to a board that can never show it. A thread carrying
+ * `closedAt` is the exception: it is in the rail's closed list, which is the one place the human can
+ * bring it back from, and a child the board put away by itself has no cards and no other record.
+ */
+export function pruneHiddenThreads(board) {
+	for (const thread of [...board.threads.values()]) {
+		if (thread.hidden && !thread.closedAt && !ownedCards(board, thread.id).length) board.threads.delete(thread.id);
+	}
+}
+
+
+
 /** Load a workspace's board into memory, or hand back the one already there. */
 export function boardFor(workspace) {
 	const existing = boards.get(workspace.id);
@@ -337,9 +353,7 @@ export function boardFor(workspace) {
 		}
 		// A card and the child that answers for it belong together, and pruning can part them. Repair it
 		// here rather than let a card quietly re-fork because a thread id in it means nothing.
-		for (const thread of [...board.threads.values()]) {
-			if (thread.hidden && !ownedCards(board, thread.id).length) board.threads.delete(thread.id);
-		}
+		pruneHiddenThreads(board);
 		// The tree is the board's record, so a thread points at that object rather than a copy of it.
 		for (const thread of board.threads.values()) {
 			const held = thread.worktree?.path ? board.trees.find((tree) => tree.path === thread.worktree.path) : null;
