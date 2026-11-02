@@ -6,7 +6,7 @@
 import { liveTurn, stopStream } from "../../child/run.ts";
 import { broadcast, card, closedCards, nudgeWelcome, resync, update, updateCard } from "../../bus.ts";
 import { CHILD_CLOSE_DELAY_MS, MAX_PUT_AWAY_CHILDREN } from "../../limits.ts";
-import { MAX_PLAIN_CARDS, scheduleSave } from "../../store.ts";
+import { MAX_PLAIN_CARDS, putAwayByBoard, scheduleSave } from "../../store.ts";
 import { ownedCards, refreshOwned } from "./message.ts";
 import { answer, fail, readJson } from "../../http.ts";
 import { field } from "./thread.ts";
@@ -193,18 +193,18 @@ function hideClosedCard(board, thread) {
 
 
 /**
- * Hold the rail's closed list to the same ceiling a restart applies. The cap on put-away children is
+ * Hold the rail's put-away children to the same ceiling a restart applies. The cap on put-away children is
  * enforced at load, and a daemon that ran all day would file them without one until the next start — at
  * which point the rows the human saw last were the ones that went. So the oldest goes here, when the
  * newest arrives, and a session and a restart agree on what is still offerable.
  *
- * The count is the rail's own — every thread carrying `closedAt` — because that is the shape the load keeps
- * and the shape the rail draws. Only a child the board put away is retired: a thread that still owns a card
- * is drawn through it, one that is not idle is still working, and one the human started is theirs to keep,
- * so each of those is passed over rather than read as room.
+ * Both places count the one shape `putAwayByBoard` describes — a child the board put away — so a thread the
+ * human started or closed by hand is never read as room, however many rows the rail draws with it. Only a
+ * child the board put away is retired: a thread that still owns a card is drawn through it, and one that is
+ * not idle is still working, so each of those is passed over rather than read as room.
  */
 function trimPutAway(board) {
-	const away = [...board.threads.values()].filter((thread) => thread.hidden && thread.closedAt);
+	const away = [...board.threads.values()].filter(putAwayByBoard);
 	if (away.length <= MAX_PUT_AWAY_CHILDREN) return;
 	away.sort((a, b) => a.closedAt - b.closedAt);
 	for (const old of away.slice(0, away.length - MAX_PUT_AWAY_CHILDREN)) {
