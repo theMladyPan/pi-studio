@@ -352,15 +352,19 @@ export function boardFor(workspace) {
 	boards.set(board.id, board);
 	// The startup sweep. A board is built the first time something opens it, and no child of it exists
 	// yet, so every tree its file still names is one no live thread is working in. A sweep that throws
-	// must not cost the board its load, so the board is handed back either way.
-	try {
-		if (sweepTrees(board).length) scheduleSave(board);
-	} catch (error) {
-		// The sweep may already have spliced records out of `board.trees` before it threw, so the board in
-		// memory is no longer what the file says. A save is scheduled to bring the two back together.
-		scheduleSave(board);
-		console.error(`pi-studio: the startup sweep of ${board.name} failed: ${error.message}`);
-	}
+	// must not cost the board its load, so the board is handed back either way. It runs once the response
+	// that opened the board can be drawn: a sweep is a git call per tree and the first paint must not wait
+	// for git.
+	setImmediate(() => {
+		try {
+			if (sweepTrees(board).length) scheduleSave(board);
+		} catch (error) {
+			// The sweep may already have spliced records out of `board.trees` before it threw, so the board in
+			// memory is no longer what the file says. A save is scheduled to bring the two back together.
+			scheduleSave(board);
+			console.error(`pi-studio: the startup sweep of ${board.name} failed: ${error.message}`);
+		}
+	});
 	return board;
 }
 
