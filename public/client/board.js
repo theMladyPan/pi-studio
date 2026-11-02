@@ -6944,8 +6944,8 @@ function shrinkImage(dataUrl, mimeType) {
 
 // ---------- file picker --------------------------------------------------
 // The agent works on paths, so the picker attaches paths: it lists a folder's names and never
-// pulls file contents through the browser. Picking starts at the session folder and walks
-// anywhere the server can read, which is what the user asked for when attaching a file.
+// pulls file contents through the browser. Picking starts at the folder the board was opened on
+// and walks anywhere the server can read, which is what the user asked for when attaching a file.
 const picker = document.getElementById("picker");
 const pickList = document.getElementById("pickList");
 const pickPathInput = document.getElementById("pickPath");
@@ -7075,6 +7075,8 @@ async function browse(path, { focus = true } = {}) {
   pickError.hidden = true;
   try {
     const query = new URLSearchParams({ token, path: path ?? "" });
+    // The server is what knows the folder a board was opened on, so the picker asks with its id.
+    if (workspace) query.set("workspace", workspace);
     if (pickHidden.checked) query.set("hidden", "1");
     const needle = pickFilter.value.trim();
     // Filtering happens on the server because the server is what caps how many names travel.

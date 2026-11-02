@@ -9,7 +9,7 @@ import { BROWSE_LIMIT, CONTROL_CHARS, MAX_NOTE_CHARS, MAX_SOURCE_CHARS, MAX_TITL
 import { anchorOf, cardByKey, field, placedRect, rootOf } from "./thread.ts";
 import { broadcast, card, update, updateCard } from "../../bus.ts";
 import { cardFor, plainCardFor } from "../../cards.ts";
-import { scheduleSave } from "../../store.ts";
+import { boardFrom, scheduleSave } from "../../store.ts";
 import { makeRoom } from "./lifecycle.ts";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -259,9 +259,16 @@ export async function onRename(req, res, board) {
 
 
 
-/** The composer's file picker walks folders and answers with paths, never with file contents. */
+/**
+ * The composer's file picker walks folders and answers with paths, never with file contents. It starts
+ * where the human works, not where the daemon was launched.
+ */
 export function onBrowse(url, res) {
-	const start = process.cwd();
+	// A request that names no board keeps the daemon's own folder, which is where it always started.
+	const asking = url.searchParams.has("workspace");
+	const board = asking ? boardFrom(url, res) : null;
+	if (asking && !board) return;
+	const start = board?.folder ?? process.cwd();
 	const asked = url.searchParams.get("path") ?? "";
 	let dir = start;
 	let named = "";
@@ -302,7 +309,7 @@ export function onBrowse(url, res) {
 		path: dir,
 		parent: dirname(dir),
 		home: homedir(),
-		cwd: start,
+		cwd: process.cwd(),
 		entries: entries.slice(0, BROWSE_LIMIT),
 		total: entries.length,
 		truncated: entries.length > BROWSE_LIMIT,
