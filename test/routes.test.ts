@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -104,6 +104,21 @@ test("the daemon boots, opens a workspace, and answers for its board", async () 
 
 		const browse = await get(daemon, `/browse?token=${daemon.token}&path=${encodeURIComponent(folder)}`);
 		assert.equal(browse.status, 200);
+
+		// The picker opens where the human works: the board names its folder, and a relative path
+		// resolves against that folder rather than against where the daemon was launched.
+		mkdirSync(join(folder, "inside"));
+		const started = await get(daemon, `/browse?token=${daemon.token}&workspace=${board.id}&path=`);
+		assert.equal(started.status, 200);
+		assert.equal(JSON.parse(started.body).path, realpathSync(folder));
+		const relative = await get(daemon, `/browse?token=${daemon.token}&workspace=${board.id}&path=inside`);
+		assert.equal(relative.status, 200);
+		assert.equal(JSON.parse(relative.body).path, realpathSync(join(folder, "inside")));
+
+		// A request that names no board keeps the old contract: the daemon's own folder.
+		assert.equal((await get(daemon, `/browse?token=${daemon.token}&path=`)).status, 200);
+		// A board nobody opened is refused rather than quietly answered from somewhere else.
+		assert.equal((await get(daemon, `/browse?token=${daemon.token}&workspace=nope&path=`)).status, 409);
 
 		const layout = await post(daemon, "/layout", { id: board.id, view: { x: 1, y: 2, k: 1 } });
 		// 409 is the honest answer for a card that is not on this board, and it means the route was reached.
