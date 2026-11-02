@@ -83,12 +83,14 @@ function rememberClosed(board, entry) {
  * child with the conversation it had; only the process goes.
  */
 export function killChild(board, thread) {
-	const child = board.children.get(thread.id);
-	if (!child) return false;
 	// A child that died is not one whose answer is being read, and a kill leaves the thread idle: the
 	// put-away a finished answer queued must not fire on it. A close disarms it in `closeThread`; this is
-	// the kill that leaves the thread in place, which is what `onKill` asks for.
+	// the kill that leaves the thread in place, which is what `onKill` asks for. It is disarmed before the
+	// lookup, because a run that has already exited is the ordinary shape a second after the answer and a
+	// kill on it still has to take the queued put-away with it.
 	cancelAutoClose(thread);
+	const child = board.children.get(thread.id);
+	if (!child) return false;
 	// The child stops being this thread's voice before it is killed, so its death is not the run failing.
 	board.children.delete(thread.id);
 	const { turn, card: asked } = liveTurn(board, thread);
@@ -196,18 +198,19 @@ function hideClosedCard(board, thread) {
  * which point the rows the human saw last were the ones that went. So the oldest goes here, when the
  * newest arrives, and a session and a restart agree on what is still offerable.
  *
- * Only a cardless one is retired: that is the shape the cap counts, and a thread that still owns a card is
- * drawn through it, so its record has to stay.
+ * The count is the rail's own — every thread carrying `closedAt` — because that is the shape the load keeps
+ * and the shape the rail draws. Only a child the board put away is retired: a thread that still owns a card
+ * is drawn through it, one that is not idle is still working, and one the human started is theirs to keep,
+ * so each of those is passed over rather than read as room.
  */
 function trimPutAway(board) {
-	const away = [...board.threads.values()].filter(
-		(thread) => thread.hidden && thread.closedAt && !ownedCards(board, thread.id).length,
-	);
+	const away = [...board.threads.values()].filter((thread) => thread.hidden && thread.closedAt);
 	if (away.length <= MAX_PUT_AWAY_CHILDREN) return;
 	away.sort((a, b) => a.closedAt - b.closedAt);
 	for (const old of away.slice(0, away.length - MAX_PUT_AWAY_CHILDREN)) {
-		// The record goes and nothing is killed: only a child that had finished is here, and one still holding
-		// a process exits when its stdin closes, which is the end a restart gives it by not finding it at all.
+		if (!old.parentThread || old.status !== "idle" || ownedCards(board, old.id).length) continue;
+		// The record goes and nothing is killed: a child that had finished exits when its stdin closes, which is
+		// the end a restart gives it by not finding it at all.
 		try {
 			board.children.get(old.id)?.stdin?.end();
 		} catch {
