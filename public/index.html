@@ -330,6 +330,13 @@
   .card .pin svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
     stroke-width: 1.2; stroke-linejoin: round; }
   .card .pin.on svg { fill: currentColor; }
+  /* The trash on a thread is drawn for the same reason the pin is, and it stays muted until the pointer
+     is on it: it is the one press on this board that destroys work. */
+  .card .trash { border: 0; background: transparent; color: var(--muted); cursor: pointer;
+    padding: 2px 4px; border-radius: 4px; display: flex; align-items: center; }
+  .card .trash:hover { background: #21262d; color: #f85149; }
+  .card .trash svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
+    stroke-width: 1.2; stroke-linejoin: round; }
   /* A floor, because a textarea has no height of its own: without one the card would collapse to its
      minimum and the editor be a slit. */
   .note-edit { width: 100%; height: 100%; min-height: 200px; resize: none; border: 0; outline: none;
@@ -904,6 +911,17 @@
   .sheet .act-note .diagram-wrap { overflow-x: auto; }
   .sheet .act-note .diagram-wrap svg { max-width: none; }
   .sheet .act-note .diagram-error { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+  /* The answers of a sheet that asks before it acts, in the same strip as the panel's head. The second
+     press of the red one is the confirmation, so `armed` means here what it means in the header. */
+  .sheet .sheet-actions { display: flex; gap: 8px; justify-content: flex-end; flex: none;
+    padding: 8px 10px; border-top: 1px solid var(--border); background: var(--card-head); }
+  .sheet .sheet-btn { font: 11px var(--mono); color: var(--muted); background: #161b22;
+    border: 1px solid var(--border); border-radius: 5px; padding: 3px 10px; cursor: pointer; }
+  .sheet .sheet-btn:hover { color: var(--text); border-color: var(--border-bright); }
+  .sheet .sheet-btn:disabled { cursor: default; opacity: .55; }
+  .sheet .sheet-btn.armed { color: #f85149; border-color: rgba(248,81,73,.5); }
+  /* A leftover row: the name on the left, what the board knows about it on the right, then its press. */
+  .sheet .frag-row .v { flex: 1; text-align: right; }
 
   /* sticky card */
   .sticky-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
@@ -1021,6 +1039,7 @@
   <button id="reset">100%</button>
   <button id="mapBtn" aria-pressed="true" title="hide the board overview (m)">map</button>
   <button id="cleanBtn" title="forget dead threads and their logs">clean</button>
+  <button id="leftBtn" title="folders and branches the board left behind, cleared one at a time">leftovers</button>
   <button id="newBtn" title="start over in this workspace: same folder, same settings, empty board">new</button>
   <button id="configBtn" title="this board's settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
 </header>
@@ -1178,6 +1197,40 @@
     </div>
     <!-- Focusable so a keyboard user can scroll past the first screen; it is the second tab stop. -->
     <div id="cleanDetailBody" class="sheet-body" tabindex="0"></div>
+  </div>
+</div>
+
+<!-- What the trash on a thread would take with the card: its conversation, the folder the thread worked
+     in and that thread's branch, and the work that goes with them. Nothing is kept, so the sheet says
+     what would be lost before the second press. -->
+<div id="removeDetail" class="sheet" role="dialog" aria-modal="true" aria-labelledby="removeDetailName" tabindex="-1" hidden>
+  <div class="panel">
+    <div class="panel-head">
+      <span class="name" id="removeDetailName"></span>
+      <span class="meta" id="removeDetailMeta"></span>
+      <button class="close" id="removeDetailClose" title="close (esc)">×</button>
+    </div>
+    <!-- Focusable so a keyboard user can scroll past the first screen; it is the second tab stop. -->
+    <div id="removeDetailBody" class="sheet-body" tabindex="0"></div>
+    <!-- Two answers only: the one that changes nothing, and the red one whose second press is the answer. -->
+    <div class="sheet-actions">
+      <button type="button" class="sheet-btn" id="removeDetailKeep">keep it</button>
+      <button type="button" class="sheet-btn" id="removeDetailGo">remove it</button>
+    </div>
+  </div>
+</div>
+
+<!-- What no thread answers for any more: a whole worktree folder, a folder the board forgot, a branch
+     left behind. One row each, so the human clears the one they mean. -->
+<div id="leftDetail" class="sheet" role="dialog" aria-modal="true" aria-labelledby="leftDetailName" tabindex="-1" hidden>
+  <div class="panel">
+    <div class="panel-head">
+      <span class="name" id="leftDetailName"></span>
+      <span class="meta" id="leftDetailMeta"></span>
+      <button class="close" id="leftDetailClose" title="close (esc)">×</button>
+    </div>
+    <!-- Focusable so a keyboard user can scroll past the first screen; it is the second tab stop. -->
+    <div id="leftDetailBody" class="sheet-body" tabindex="0"></div>
   </div>
 </div>
 

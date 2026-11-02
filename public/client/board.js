@@ -1946,6 +1946,13 @@ function isDelegate(data) {
 const PIN_GLYPH =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.6 1.6h6.8v1.7H2.6zM4.2 3.3h3.6L6.9 6.4H5.1zM6 6.4V10.8"/></svg>';
 
+/**
+ * The trash is drawn for the same reason the pin is: no font's bin glyph is monochrome on every machine.
+ * It outlines a lid and a bin, which is what it reads as at eleven pixels.
+ */
+const TRASH_GLYPH =
+  '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 3.2h8M4.6 3.2V2.1h2.8v1.1M3.3 3.2l.6 6.6h4.2l.6-6.6M5 4.9v3.2M7 4.9v3.2"/></svg>';
+
 function makeCard(data, quiet = false) {
   const isSource = data.type === "source";
   const isQuestion = data.type === "question";
@@ -2004,6 +2011,7 @@ function makeCard(data, quiet = false) {
     <button class="min" title="minimize this card" aria-label="minimize this card">▾</button>
     <button class="reply" title="ask a follow-up about this card" aria-label="ask a follow-up about this card">↩</button>
     <button class="edit" title="edit this note" aria-label="edit this note">✎</button>
+    ${kind === "sticky" ? `<button type="button" class="trash" title="remove this thread, the folder it worked in and its branch" aria-label="remove this thread with its folder and its branch">${TRASH_GLYPH}</button>` : ""}
     <button class="close" title="close" aria-label="close">×</button>`;
   // One scroll column holds the note and its follow-ups, so a long card has one scrollbar.
   const scroll = el("div", "card-scroll");
@@ -2151,6 +2159,14 @@ function makeCard(data, quiet = false) {
   head.querySelector(".close").addEventListener("click", (event) => {
     event.stopPropagation();
     closeCard(entry);
+  });
+
+  // The trash says what it would take before it takes it, so the press asks the daemon and opens a sheet
+  // rather than acting. A note and a question have nothing behind them to remove, so they carry none.
+  const trash = head.querySelector(".trash");
+  trash?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    void openRemoveSheet(entry, trash);
   });
 
   head.addEventListener("pointerdown", (event) => {
@@ -6906,6 +6922,352 @@ newBtn.addEventListener("click", async () => {
   hintLine("a new board in the same workspace");
 });
 
+// ---------- removing a thread --------------------------------------------
+// The trash is the only press on this board that destroys work: the card, the conversation on it, the
+// folder its thread worked in and that thread's branch all go, in that order, and nothing is kept. So
+// the sheet says what would be lost before it offers the press, and the press is the second one.
+const removePanel = document.getElementById("removeDetail");
+const removePanelName = document.getElementById("removeDetailName");
+const removePanelMeta = document.getElementById("removeDetailMeta");
+const removePanelBody = document.getElementById("removeDetailBody");
+const removePanelClose = document.getElementById("removeDetailClose");
+const removeKeep = document.getElementById("removeDetailKeep");
+const removeGo = document.getElementById("removeDetailGo");
+
+/** The card the open sheet belongs to, and the trash the focus goes back to. */
+let removeCard = null;
+let removeOpener = null;
+/** What the sheet calls the thread, for a receipt that comes back without a title. */
+let removeName = "this thread";
+
+/** One POST with a body, and the daemon's own words in the footer when it refuses. */
+async function postRemove(path, body, what) {
+  try {
+    const response = await fetch(`/${path}?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error((await response.text()).trim().slice(0, 80) || response.statusText);
+    return await response.json();
+  } catch (error) {
+    // A daemon older than these routes answers 404, which is one footer line and not an exception.
+    footNote(`could not ${what}: ${error.message || error}`, true);
+    return null;
+  }
+}
+
+/**
+ * The board's one confirmation: the first press turns the button into a question for four seconds and
+ * the second press is the answer. `new` keeps its own counter for the same window; both wear `armed`, so
+ * red means the same thing wherever it is pressed.
+ */
+function armedPress(button, label, act) {
+  let armedAt = 0;
+  const reset = () => {
+    armedAt = 0;
+    button.textContent = label;
+    button.classList.remove("armed");
+  };
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const now = Date.now();
+    if (now - armedAt > 4000) {
+      armedAt = now;
+      button.textContent = "sure?";
+      button.classList.add("armed");
+      setTimeout(() => {
+        if (Date.now() - armedAt >= 4000) reset();
+      }, 4200);
+      return;
+    }
+    reset();
+    void act();
+  });
+  return reset;
+}
+
+const removeGoReset = armedPress(removeGo, "remove it", () => removeThread());
+
+/**
+ * The trash on a thread: the sheet opens at once with the line that it is asking, then holds what the
+ * removal would cost. The remove press stays dead until that answer is on screen, so nobody confirms a
+ * sheet that has not said what goes with the card.
+ */
+async function openRemoveSheet(entry, opener) {
+  removeCard = entry.id;
+  removeOpener = opener || null;
+  removeName = entry.data.title || "this thread";
+  removePanelName.textContent = removeName;
+  removePanelMeta.textContent = "";
+  removeGoReset();
+  removeGo.disabled = true;
+  const looking = el("div", "gone");
+  looking.textContent = "looking at what would go with it…";
+  removePanelBody.replaceChildren(looking);
+  removePanel.hidden = false;
+  removePanel.focus();
+  const preview = await postRemove("remove/preview", { card: entry.id }, "read what this thread holds");
+  // A sheet the reader closed while the daemon was thinking must not be painted over.
+  if (removePanel.hidden || removeCard !== entry.id) return;
+  if (!preview) {
+    closeRemoveSheet();
+    return;
+  }
+  paintRemoveSheet(preview);
+  removeGo.disabled = false;
+}
+
+/** What the removal would cost, said before the press that pays for it. */
+function paintRemoveSheet(preview) {
+  const dirty = Number(preview.dirty) || 0;
+  const commits = Number(preview.commits) || 0;
+  const base = preview.base || "";
+  // A thread that never got a worktree has no folder and no branch, so nothing is claimed about either.
+  const tree = Boolean(preview.path || preview.branch);
+  removeName = preview.thread?.title || removeName;
+  removePanelName.textContent = removeName;
+  removePanelMeta.textContent = preview.branch || preview.path || "no folder";
+  // One sentence for the whole of it: what goes, and the fact that nothing comes back.
+  const warning = el("div", "act-note");
+  warning.textContent = tree
+    ? "This removes the card, the conversation on it, the folder the thread worked in and its branch. Nothing is kept, so there is no undo."
+    : "This removes the card and the conversation on it. Nothing is kept, so there is no undo.";
+  const parts = [warning];
+  // The two counts in words: the work sitting in the folder, and the work that never left the branch.
+  if (tree) {
+    const risk = el("div", "act-prose");
+    risk.textContent = [
+      dirty ? `${counted(dirty, "uncommitted file")} in the folder would go` : "the folder holds nothing uncommitted",
+      commits
+        ? `${counted(commits, "commit")} never reached ${base || "another branch"}`
+        : base
+          ? `no commit on the branch is missing from ${base}`
+          : "no commit on the branch is waiting for another",
+    ].join("\n");
+    parts.push(panelBlock("the work at risk", risk));
+  }
+  // The daemon's own line about this removal, when it has one: it is the only thing that can say why a
+  // folder has no diff, so it stands on its own rather than under a heading that would contradict it.
+  if (preview.note) {
+    const said = el("div", "gone");
+    said.textContent = preview.note;
+    parts.push(said);
+  }
+  // The diff is the reason for the question, so it is the body of the sheet. Nothing is drawn empty under
+  // a heading when there is nothing to show and a note has already explained it.
+  if (preview.diff) {
+    const block = panelBlock("the changes that would go", panelDiff(preview.diff));
+    if (preview.trunc) block.appendChild(el("div", "cut")).textContent = "cut short: the folder holds more changes than this";
+    parts.push(block);
+  } else if (tree && !preview.note) {
+    const none = el("div", "gone");
+    none.textContent = "the folder is clean, so there is no diff to show";
+    parts.push(panelBlock("the changes that would go", none));
+  }
+  removePanelBody.replaceChildren(...parts);
+}
+
+function closeRemoveSheet() {
+  if (removePanel.hidden) return;
+  removePanel.hidden = true;
+  removePanelBody.replaceChildren();
+  removeCard = null;
+  removeGoReset();
+  removeGo.disabled = true;
+  // The trash may have gone with the card it sat on, in which case the focus has nowhere to go.
+  removeOpener?.focus();
+  removeOpener = null;
+}
+
+removePanelClose.addEventListener("click", closeRemoveSheet);
+removeKeep.addEventListener("click", closeRemoveSheet);
+removePanel.addEventListener("click", (event) => {
+  if (event.target === removePanel) closeRemoveSheet();
+});
+removePanel.addEventListener("keydown", (event) => {
+  // The sheet covers the board, so a board shortcut behind it would act on what is out of reach.
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeRemoveSheet();
+    return;
+  }
+  // Four stops are inside: the close button, the body and the two answers. A dead remove button is not
+  // one of them, so tab cannot land on a nothing before the sheet has said what goes with the card.
+  if (event.key === "Tab") {
+    event.preventDefault();
+    const stops = [removePanelClose, removePanelBody, removeKeep, removeGo].filter((stop) => !stop.disabled);
+    const at = stops.indexOf(document.activeElement);
+    const step = event.shiftKey ? stops.length - 1 : 1;
+    stops[at < 0 ? (event.shiftKey ? stops.length - 1 : 0) : (at + step) % stops.length].focus();
+  }
+});
+
+/** The second press. The daemon does the whole of it; this asks, then says what it did. */
+async function removeThread() {
+  const card = removeCard;
+  if (!card) return;
+  const name = removeName;
+  removeGo.disabled = true;
+  const receipt = await postRemove("remove", { card }, "remove it");
+  closeRemoveSheet();
+  if (!receipt) return;
+  // The card leaves this board at once: the daemon broadcasts the removal to every other tab, and a tab
+  // that asked does not wait for the echo of its own press.
+  const entry = byId.get(card);
+  if (entry) dropCard(entry);
+  footNote(removeReceipt(receipt, name));
+}
+
+/** The words the daemon's steps use for the things that go, as a reader would say them. */
+const REMOVE_STEP_WORDS = { child: "child threads", card: "card", session: "conversation", tree: "folder", branch: "branch" };
+
+/** What one removal did, in the one line the footer has: the whole of it, or what would not go. */
+function removeReceipt(receipt, name) {
+  const what = receipt.thread?.title || name || "the thread";
+  const stuck = (receipt.steps ?? []).filter((step) => !step.ok);
+  if (stuck.length) {
+    const why = stuck.map((step) => step.note || `its ${REMOVE_STEP_WORDS[step.what] || step.what} would not go`);
+    return `removed ${what}, but ${why.join("; ")}`;
+  }
+  const went = [receipt.path ? "its folder" : "", receipt.branch ? "its branch" : ""].filter(Boolean);
+  const line = `removed ${what}${went.length ? ` with ${went.join(" and ")}` : ""}`;
+  return receipt.note ? `${line} · ${receipt.note}` : line;
+}
+
+// ---------- the leftovers ------------------------------------------------
+// A clean sweeps what the board can see. What it cannot see is a folder or a branch a dead thread left
+// behind: no card answers for it, so nothing on the board would ever take it away. This sheet lists
+// those, one row each, so the human clears the one they mean instead of the lot.
+const leftPanel = document.getElementById("leftDetail");
+const leftPanelName = document.getElementById("leftDetailName");
+const leftPanelMeta = document.getElementById("leftDetailMeta");
+const leftPanelBody = document.getElementById("leftDetailBody");
+const leftPanelClose = document.getElementById("leftDetailClose");
+const leftBtn = document.getElementById("leftBtn");
+let leftOpener = null;
+
+/** What each kind of leftover is, in words a reader who does not read code can follow. */
+const LEFT_KINDS = {
+  tree: "folders the board still remembers",
+  orphan: "folders the board forgot",
+  branch: "branches no thread answers for",
+};
+
+/** One leftover: its name on the left, what the board knows about it on the right, then its own press. */
+function fragmentRow(item) {
+  const label = item.label || item.path || item.branch || "leftover";
+  const row = el("div", "act-row frag-row");
+  row.append(el("span", "k"), el("span", "v"));
+  row.children[0].textContent = label;
+  row.children[1].textContent = item.note || "";
+  const button = el("button", "sheet-btn");
+  button.type = "button";
+  button.textContent = "clear";
+  button.title = `clear ${label}`;
+  button.setAttribute("aria-label", `clear ${label}`);
+  armedPress(button, "clear", async () => {
+    // The press clears this row alone, so it names the row to the daemon and nothing else goes with it.
+    button.disabled = true;
+    const receipt = await postRemove(
+      "fragments/remove",
+      { kind: item.kind, path: item.path ?? null, branch: item.branch ?? null },
+      "clear that",
+    );
+    if (!receipt) {
+      button.disabled = false;
+      return;
+    }
+    row.remove();
+    // The button went with its row, so the focus goes back to the sheet rather than to nothing.
+    leftPanelBody.focus();
+    const left = leftPanelBody.querySelectorAll(".frag-row").length;
+    if (left) leftPanelMeta.textContent = counted(left, "leftover");
+    else paintLeftovers([]);
+    footNote(removeReceipt(receipt, label));
+  });
+  row.appendChild(button);
+  return row;
+}
+
+/** The whole list, grouped by what kind of thing was left behind. */
+function paintLeftovers(items) {
+  leftPanelMeta.textContent = items.length ? counted(items.length, "leftover") : "";
+  const parts = [];
+  for (const [kind, heading] of Object.entries(LEFT_KINDS)) {
+    const rows = items.filter((item) => item.kind === kind);
+    if (!rows.length) continue;
+    const box = el("div", "act-kv");
+    for (const item of rows) box.appendChild(fragmentRow(item));
+    parts.push(panelBlock(heading, box));
+  }
+  if (!parts.length) {
+    const none = el("div", "gone");
+    none.textContent = "nothing is left over in this workspace: every folder and branch here belongs to a thread on the board";
+    parts.push(none);
+  }
+  leftPanelBody.replaceChildren(...parts);
+}
+
+async function openLeftoversSheet(opener) {
+  leftOpener = opener || leftBtn;
+  leftPanelName.textContent = "leftovers";
+  leftPanelMeta.textContent = "";
+  const looking = el("div", "gone");
+  looking.textContent = "looking for what is left over…";
+  leftPanelBody.replaceChildren(looking);
+  leftPanel.hidden = false;
+  leftPanel.focus();
+  let items;
+  try {
+    const response = await fetch(`/fragments?${auth}`);
+    if (!response.ok) throw new Error((await response.text()).trim().slice(0, 80) || response.statusText);
+    items = (await response.json()).items ?? [];
+  } catch (error) {
+    // A daemon older than this route answers 404: one footer line, and the board stays as it was.
+    closeLeftoversSheet();
+    footNote(`could not look for leftovers: ${error.message || error}`, true);
+    return;
+  }
+  if (leftPanel.hidden) return;
+  paintLeftovers(items);
+}
+
+function closeLeftoversSheet() {
+  if (leftPanel.hidden) return;
+  leftPanel.hidden = true;
+  leftPanelBody.replaceChildren();
+  (leftOpener || leftBtn)?.focus();
+  leftOpener = null;
+}
+
+leftBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
+  void openLeftoversSheet(leftBtn);
+});
+leftPanelClose.addEventListener("click", closeLeftoversSheet);
+leftPanel.addEventListener("click", (event) => {
+  if (event.target === leftPanel) closeLeftoversSheet();
+});
+leftPanel.addEventListener("keydown", (event) => {
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeLeftoversSheet();
+    return;
+  }
+  // The sheet holds the keyboard while it is open. The rows are the third stop, so every leftover can be
+  // cleared from the keyboard.
+  if (event.key === "Tab") {
+    event.preventDefault();
+    const stops = [leftPanelClose, leftPanelBody, ...leftPanelBody.querySelectorAll(".sheet-btn")].filter((stop) => !stop.disabled);
+    const at = stops.indexOf(document.activeElement);
+    const step = event.shiftKey ? stops.length - 1 : 1;
+    stops[at < 0 ? (event.shiftKey ? stops.length - 1 : 0) : (at + step) % stops.length].focus();
+  }
+});
+
 configBtn.addEventListener("click", () => {
   closePick();
   const on = configPanel.hidden;
@@ -7728,7 +8090,9 @@ document.addEventListener("keydown", (event) => {
   if (sheet) {
     event.preventDefault();
     if (sheet === actPanel) closeActPanel();
-    else closeCleanSheet();
+    else if (sheet === cleanPanel) closeCleanSheet();
+    else if (sheet === leftPanel) closeLeftoversSheet();
+    else if (sheet === removePanel) closeRemoveSheet();
     return;
   }
   if (!document.querySelector(".card.active")) return;
