@@ -28,6 +28,19 @@ export const MAX_TITLE_CHARS = 200;
 export const ASK_TIMEOUT_MS = 5 * 60_000;
 
 
+/** A child that has reported is spent, and its card goes this long after the answer is read. */
+export const CHILD_CLOSE_DELAY_MS = 20_000;
+
+
+/**
+ * How many children the board put away are filed with it. They are the shape `putAwayByBoard` describes — a
+ * hidden child carrying `closedAt` and the thread that spawned it — and own no cards, so they stay in
+ * `board.threads` for the rail to offer back, and a board that spawns all day would file them for ever.
+ * Newest are kept: the one the human wants back is the one they closed last.
+ */
+export const MAX_PUT_AWAY_CHILDREN = 40;
+
+
 /** One card asks at most this many questions: more than five tabs is a form, not a question. */
 export const MAX_ASK_QUESTIONS = 5;
 

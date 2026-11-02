@@ -13,6 +13,7 @@ import { MODEL, PROVIDER, THINKING_LEVELS } from "./models.ts";
 import { ROLE_NAMES } from "./child/roles.ts";
 import { MODE_NAMES, PATH_NAMES } from "./child/modes.ts";
 import { sweepTrees } from "./cards.ts";
+import { MAX_PUT_AWAY_CHILDREN } from "./limits.ts";
 
 
 
@@ -279,6 +280,35 @@ export function restoredPlainCard(raw) {
 
 
 
+/**
+ * The shape the board files away: a spawned child's thread, hidden and carrying `closedAt`, kept for the
+ * rail to offer back. A thread the human started and one they closed by hand carry `hidden` and `closedAt`
+ * too, and are neither counted against `MAX_PUT_AWAY_CHILDREN` nor dropped by it — `parentThread` is what
+ * tells the two apart. It is written once because the cap a session enforces and the cap a load enforces
+ * have to count the same rows: a thread counted but not droppable is a thread and its turns lost.
+ */
+export function putAwayByBoard(thread) {
+	return Boolean(thread?.hidden && thread?.closedAt && thread?.parentThread);
+}
+
+
+
+/**
+ * A hidden thread with nothing left to draw it through is dropped, and one the rail still lists is not.
+ *
+ * A card and the child that answers for it belong together, and a saved file can part them, so a hidden
+ * thread that owned no card would come back to a board that can never show it. A thread carrying
+ * `closedAt` is the exception: it is in the rail's closed list, which is the one place the human can
+ * bring it back from, and a child the board put away by itself has no cards and no other record.
+ */
+export function pruneHiddenThreads(board) {
+	for (const thread of [...board.threads.values()]) {
+		if (thread.hidden && !thread.closedAt && !ownedCards(board, thread.id).length) board.threads.delete(thread.id);
+	}
+}
+
+
+
 /** Load a workspace's board into memory, or hand back the one already there. */
 export function boardFor(workspace) {
 	const existing = boards.get(workspace.id);
@@ -322,7 +352,18 @@ export function boardFor(workspace) {
 		);
 	}
 	if (saved && saved.version === STATE_VERSION && Array.isArray(saved.threads)) {
-		for (const raw of saved.threads.slice(-MAX_THREADS)) {
+		// A child the board put away is filed with the board it was put away on: it carries `closedAt`, owns no
+		// cards and is only there for the rail to offer back. Its own cap keeps the newest of them, and keeping
+		// them out of the board's ceiling is what stops them from pushing the human's threads out of the file
+		// as they accumulate. What counts is the one shape `putAwayByBoard` describes, so the human's own closed
+		// threads are neither cut by this cap nor taken from the file with their turns.
+		const filed = [
+			...saved.threads.filter((raw) => !putAwayByBoard(raw)).slice(-MAX_THREADS),
+			// Newest by close, which is what the cap promises: a child spawned early and put away last is not the
+			// first to go just because it was written to the file first.
+			...saved.threads.filter(putAwayByBoard).sort((a, b) => a.closedAt - b.closedAt).slice(-MAX_PUT_AWAY_CHILDREN),
+		];
+		for (const raw of filed) {
 			const thread = restoredThread(raw, workspace.folder);
 			if (thread && !board.threads.has(thread.id)) board.threads.set(thread.id, thread);
 		}
@@ -337,9 +378,7 @@ export function boardFor(workspace) {
 		}
 		// A card and the child that answers for it belong together, and pruning can part them. Repair it
 		// here rather than let a card quietly re-fork because a thread id in it means nothing.
-		for (const thread of [...board.threads.values()]) {
-			if (thread.hidden && !ownedCards(board, thread.id).length) board.threads.delete(thread.id);
-		}
+		pruneHiddenThreads(board);
 		// The tree is the board's record, so a thread points at that object rather than a copy of it.
 		for (const thread of board.threads.values()) {
 			const held = thread.worktree?.path ? board.trees.find((tree) => tree.path === thread.worktree.path) : null;

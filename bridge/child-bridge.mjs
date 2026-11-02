@@ -358,7 +358,7 @@ const closeTool = defineTool({
 	name: "board_close",
 	label: "Close a card",
 	description:
-		"Close a card that is spent, to keep the board readable. A finished child's card, a superseded option, a question that no longer matters. Only close a card you are certain no other card refers to and that plays no part in the work still going: this cannot be undone from here. A pinned card cannot be closed. When several cards have gone stale, say so and offer to clean the board rather than closing them unasked.",
+		"Close a card that is spent, to keep the board readable. A superseded option, a question that no longer matters. A child you spawned needs no close: the board puts its card away itself once you have its answer. Only close a card you are certain no other card refers to and that plays no part in the work still going: this cannot be undone from here. A pinned card cannot be closed, and never the card you answer on. When several cards have gone stale, say so and offer to clean the board rather than closing them unasked.",
 	parameters: Type.Object({
 		card: Type.String({ description: "The card's key, or its id." }),
 	}),

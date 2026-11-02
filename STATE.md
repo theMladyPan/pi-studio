@@ -219,6 +219,12 @@ commit's own account rather than on a check run now, the section below says so.
   nobody closed it. Boards written before `closedAt` existed carry only `hidden`, so a hidden thread with
   no card behind it is read as one the human closed. A closed *note* is still gone — its text lives on
   the card, and the card is what `POST /close` deletes.
+- **A child puts its own card away.** A child whose answer has been read is spent, so the board takes its
+  card off the board a few seconds later. Hidden and not closed: nothing is killed and no worktree is
+  swept, so what it did is still there to assemble, and the rail lists it with the other cards put away
+  where a click brings it back. A card the human pinned, a run that was stopped, failed or timed out, and
+  a child they wrote to again all stay where they are. Once that rail holds more rows than its cap allows,
+  the oldest put-away card on it is retired and the newest stay.
 - **A run is stopped or killed where it is read, and only there.** The thread's own activity section
   carries the one control: `■` asks the child to abort, and the same control becomes `⊗` — kill —
   when the stop does not land. It was on the card's header too, with the same stop-then-kill state

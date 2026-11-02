@@ -133,6 +133,10 @@ export function prompt(board, thread, text, target = null) {
 	// A stop pressed before the child got going has nothing to abort yet; `onStop` remembers it and the
 	// first event of the run repeats it.
 	thread.abortWanted = false;
+	// A timeout belongs to the run it cut. The flag is what keeps a cut run's answer from being put away,
+	// and it is cleared with the rest of the per-run state so that one timeout does not disable the put-away
+	// for the life of the daemon.
+	thread.timedOut = false;
 	// A new run starts with nothing said yet, whatever the last one left behind: no narration, no
 	// answer, and no half-arrived block.
 	thread.streamInterim = [];
