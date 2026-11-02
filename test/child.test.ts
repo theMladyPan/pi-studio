@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { childArgv } from "../server/child/argv.ts";
+import { ensureChild } from "../server/child/run.ts";
 import { describeTool, firstLine, headline, resultText } from "../server/child/describe.ts";
 import { boardPrompt, worktreePrompt } from "../server/child/prompts.ts";
 import { BRIDGE } from "../server/paths.ts";
@@ -153,4 +157,80 @@ test("the board's card settings reach the prompt, and a default board reads as n
 	// A board on the defaults says the same thing as a board that stored nothing, so an old board file is
 	// the same prompt as a new one.
 	assert.equal(boardPrompt({ ...board, config: {} }, thread), plain);
+});
+
+const git = (folder: string, ...args: string[]) => execFileSync("git", ["-C", folder, ...args], { encoding: "utf8" }).trim();
+
+/** A throwaway repository with one commit on `dev`. Never the human's. */
+function scratchRepo() {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-child-git-"));
+	git(folder, "init", "-b", "dev");
+	git(folder, "config", "user.email", "test@example.invalid");
+	git(folder, "config", "user.name", "test");
+	writeFileSync(join(folder, "readme.md"), "hello\n");
+	git(folder, "add", ".");
+	git(folder, "commit", "-m", "first");
+	return folder;
+}
+
+/**
+ * A `pi` that is not pi: it writes down the folder it was started in, then waits on stdin so the daemon
+ * never sees a child that died mid-write. It is a string rather than a file of its own because
+ * `node --test` runs every file it finds under `test/`.
+ */
+const STUB_PI = String.raw`
+const { writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+writeFileSync(join(__dirname, "cwd.txt"), process.cwd());
+process.stdin.resume();
+process.stdin.on("end", () => process.exit(0));
+`;
+
+/** Write that stub where the daemon looks for pi, so no real child is ever started. */
+function stubPi(root: string) {
+	const version = "0.0.0-test";
+	const packageDir = join(root, "releases", version, "node_modules", "@earendil-works", "pi-coding-agent");
+	const bundle = join(packageDir, "dist", "bundle");
+	mkdirSync(bundle, { recursive: true });
+	writeFileSync(join(root, "current-version"), `${version}\n`);
+	// The install carries its own manifest, so the stub is read as CommonJS whatever folder it was made in.
+	writeFileSync(join(packageDir, "package.json"), `${JSON.stringify({ name: "@earendil-works/pi-coding-agent", type: "commonjs" })}\n`);
+	writeFileSync(join(bundle, "cli.js"), STUB_PI);
+	return { root, cwdFile: join(bundle, "cwd.txt") };
+}
+
+/** The folder the child was started in, once it has written it down. */
+async function startedIn(file: string) {
+	for (let tries = 0; tries < 100; tries++) {
+		if (existsSync(file)) return readFileSync(file, "utf8");
+		await new Promise((done) => setTimeout(done, 50));
+	}
+	throw new Error(`the stub child never wrote ${file}`);
+}
+
+test("a child with no tree of its own is given one before it starts", async () => {
+	const repo = scratchRepo();
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-child-")));
+	// The only pi this process may start is the stub.
+	const was: string | undefined = process.env.PI_MANAGED_INSTALL_ROOT;
+	process.env.PI_MANAGED_INSTALL_ROOT = stub.root;
+	let started: any;
+	try {
+		const board: any = { id: "b1", folder: repo, name: "scratch", config: {}, children: new Map(), trees: [], threads: new Map() };
+		// A thread back from undo: its tree was retired, so the record it works from is gone.
+		const thread: any = { id: "abcdef123456", title: "a thread", folder: repo, provider: "p", model: "m" };
+		board.threads.set(thread.id, thread);
+		started = ensureChild(board, thread);
+		const cwd = await startedIn(stub.cwdFile);
+		assert.notEqual(cwd, repo, "the child was started in the folder the human works in");
+		// The folder it was started in is the tree the thread now records, in the board's own tree folder.
+		assert.equal(cwd, thread.worktree?.path, `the child was started in ${cwd}, not its tree`);
+		assert.match(cwd, /\.agents[\\/]abcdef12$/);
+	} finally {
+		started?.stdin?.end();
+		started?.kill();
+		if (was === undefined) delete process.env.PI_MANAGED_INSTALL_ROOT;
+		else process.env.PI_MANAGED_INSTALL_ROOT = was;
+		for (const gone of [repo, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
 });
