@@ -164,6 +164,7 @@ test("a branch merged into dev is spent, so its tree goes", () => {
 		const { board, tree } = treeWithChildCommit(repo);
 		git(repo, "merge", "--no-ff", childBranch, "-m", "merge the child");
 		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
 		assert.equal(retired.removed, true, `the merged tree was kept: ${JSON.stringify(retired)}`);
 		assert.equal(existsSync(tree.path), false);
 		assert.ok(!git(repo, "branch", "--list", childBranch).includes(childBranch), "the merged branch is still there");
@@ -179,6 +180,7 @@ test("a branch fast-forwarded into dev is spent, so its tree goes", () => {
 		const { board, tree } = treeWithChildCommit(repo);
 		git(repo, "merge", "--ff-only", childBranch);
 		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
 		assert.equal(retired.removed, true, `the fast-forwarded tree was kept: ${JSON.stringify(retired)}`);
 		assert.equal(existsSync(tree.path), false);
 		assert.equal(git(repo, "branch", "--list", childBranch), "");
@@ -196,6 +198,7 @@ test("a branch dev was rebased onto is spent, so its tree goes", () => {
 		// the branch inside dev under the same ids.
 		git(repo, "rebase", childBranch);
 		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
 		assert.equal(retired.removed, true, `the rebased tree was kept: ${JSON.stringify(retired)}`);
 		assert.equal(existsSync(tree.path), false);
 		assert.equal(git(repo, "branch", "--list", childBranch), "");
@@ -215,6 +218,7 @@ test("a branch cherry-picked onto a dev that moved on is spent, so its tree goes
 		git(repo, "cherry-pick", git(repo, "rev-parse", childBranch));
 		assert.notEqual(git(repo, "rev-parse", childBranch), git(repo, "rev-parse", "dev"), "the ids should differ");
 		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
 		assert.equal(retired.removed, true, `the cherry-picked tree was kept: ${JSON.stringify(retired)}`);
 		assert.equal(existsSync(tree.path), false);
 		assert.equal(git(repo, "branch", "--list", childBranch), "");
@@ -235,6 +239,7 @@ test("a branch squashed into one commit on dev is kept, because no proof covers 
 		git(repo, "merge", "--squash", childBranch);
 		git(repo, "commit", "-m", "the child, squashed");
 		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
 		assert.equal(retired.removed, undefined, `a squashed branch was removed: ${JSON.stringify(retired)}`);
 		assert.equal(retired.kept, "2 commit(s) not in dev");
 		assert.ok(existsSync(tree.path));
@@ -249,6 +254,7 @@ test("a branch with an unmerged commit is kept, and the reason names dev", () =>
 	try {
 		const { board, tree } = treeWithChildCommit(repo);
 		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
 		assert.equal(retired.removed, undefined, `an unmerged branch was removed: ${JSON.stringify(retired)}`);
 		assert.match(retired.kept, /commit/, `the reason says nothing about commits: ${retired.kept}`);
 		assert.match(retired.kept, /dev/, `the reason does not name dev: ${retired.kept}`);
@@ -268,6 +274,7 @@ test("a branch another local branch holds, with dev untouched, is spent", () => 
 		git(repo, "worktree", "add", "-b", "side", side, "dev");
 		git(side, "merge", "--no-ff", childBranch, "-m", "merge the child into side");
 		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
 		assert.equal(retired.removed, true, `a branch held by side was kept: ${JSON.stringify(retired)}`);
 		assert.equal(existsSync(tree.path), false);
 		assert.equal(git(repo, "branch", "--list", childBranch), "");
@@ -285,6 +292,7 @@ test("a tree with an uncommitted edit is kept, and the reason says so", () => {
 		git(repo, "merge", "--no-ff", childBranch, "-m", "merge the child");
 		writeFileSync(join(tree.path, "half-done.txt"), "half\n");
 		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
 		assert.equal(retired.removed, undefined, `a dirty tree was removed: ${JSON.stringify(retired)}`);
 		assert.match(retired.kept, /uncommitted change/, `the reason does not name the edit: ${retired.kept}`);
 		assert.ok(existsSync(tree.path));
@@ -301,11 +309,163 @@ test("a detached tree whose commit a local branch holds is spent, one whose comm
 		writeFileSync(join(tree.path, "loose.txt"), "loose\n");
 		git(tree.path, "add", ".");
 		git(tree.path, "commit", "-m", "a commit without a branch");
-		assert.equal(retireWorktree(board, tree).kept, "1 commit(s) not in dev");
+		const first = retireWorktree(board, tree);
+		assert.ok(first, "the tree was not read at all");
+		assert.equal(first.kept, "1 commit(s) not in dev");
 		git(repo, "branch", "somewhere", git(tree.path, "rev-parse", "HEAD"));
 		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
 		assert.equal(retired.removed, true, `a detached tree a branch holds was kept: ${JSON.stringify(retired)}`);
 		assert.equal(existsSync(tree.path), false);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a branch whose only unaccounted commit is a merge is kept, and the reason names both counts", () => {
+	const repo = scratchRepo();
+	try {
+		const { board, tree } = treeWithChildCommit(repo);
+		// Cut before dev gets the child's patch, so merging side brings nothing equivalent into the child.
+		git(repo, "branch", "side");
+		git(repo, "merge", "--no-ff", "feat/parent", "-m", "merge the parent");
+		// The child's own commit arrives on dev as an equivalent patch, so git cherry prints it with `-`.
+		git(repo, "cherry-pick", git(repo, "rev-parse", childBranch));
+		// A side branch dev already holds by id, so its commit is not one the child's branch adds.
+		git(repo, "checkout", "-q", "side");
+		writeFileSync(join(repo, "readme.md"), "side\n");
+		git(repo, "commit", "-am", "side edits the readme");
+		git(repo, "checkout", "-q", "dev");
+		git(repo, "merge", "--no-ff", "side", "-m", "merge side");
+		// The child merges side and writes the readme by hand: that content lives in the merge commit alone,
+		// and git cherry never looks at a merge commit.
+		git(tree.path, "merge", "--no-ff", "--no-commit", "side");
+		writeFileSync(join(tree.path, "readme.md"), "resolved by hand\n");
+		git(tree.path, "add", ".");
+		git(tree.path, "commit", "-m", "merge side, readme resolved by hand");
+		assert.equal(git(repo, "cherry", "dev", childBranch).split("\n").filter((line) => line.startsWith("+")).length, 0);
+		assert.equal(git(repo, "rev-list", "--count", `dev..${childBranch}`), "2");
+		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
+		assert.equal(retired.removed, undefined, `a branch holding a merge commit was removed: ${JSON.stringify(retired)}`);
+		assert.match(String(retired.kept), /\b2\b/, `the reason does not name the commit count: ${retired.kept}`);
+		assert.match(String(retired.kept), /\b1\b/, `the reason does not name the cherry count: ${retired.kept}`);
+		assert.ok(existsSync(tree.path));
+		assert.ok(git(repo, "branch", "--list", childBranch).includes(childBranch), "the branch holding the merge is gone");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a branch whose name is also a tag, held by no other local branch, is kept", () => {
+	const repo = scratchRepo();
+	try {
+		const { board, tree } = treeWithChildCommit(repo);
+		// With a tag of the same name, `%(refname:short)` prints the branch itself as `heads/feat/child`.
+		git(repo, "tag", childBranch, "dev");
+		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
+		assert.equal(retired.removed, undefined, `a branch shadowed by a tag was removed: ${JSON.stringify(retired)}`);
+		assert.match(String(retired.kept), /commit\(s\) not in dev/);
+		assert.ok(existsSync(tree.path));
+		assert.ok(git(repo, "branch", "--list", childBranch).includes(childBranch), "the branch shadowed by a tag is gone");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a tag named like the base branch does not stand in for it", () => {
+	const repo = scratchRepo();
+	try {
+		const board = { folder: repo, name: "scratch", children: new Map(), threads: new Map(), trees: [] };
+		const tree = ensureWorktree(board, { id: "thread-tagged-dev", title: "a change", folder: repo });
+		assert.ok(tree.path, `no worktree made: ${JSON.stringify(tree)}`);
+		assert.equal(tree.base, "dev");
+		git(tree.path, "checkout", "-b", "feat/tagged");
+		writeFileSync(join(tree.path, "tagged.txt"), "tagged\n");
+		git(tree.path, "add", ".");
+		git(tree.path, "commit", "-m", "work dev never got");
+		tree.branch = "feat/tagged";
+		// A tag `dev` on the branch's tip makes a bare `dev` mean the branch itself to git cherry and rev-list.
+		git(repo, "tag", "dev", "refs/heads/feat/tagged");
+		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
+		assert.equal(retired.removed, undefined, `a tag named dev let the branch go: ${JSON.stringify(retired)}`);
+		assert.equal(retired.kept, "1 commit(s) not in dev");
+		assert.ok(existsSync(tree.path));
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a tree whose recorded branch was renamed is kept, and the reason names the branch it is on", () => {
+	const repo = scratchRepo();
+	try {
+		const { board, tree } = treeWithChildCommit(repo);
+		git(tree.path, "branch", "-m", childBranch, "feat/renamed");
+		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
+		assert.equal(retired.removed, undefined, `a renamed branch's tree was removed: ${JSON.stringify(retired)}`);
+		assert.match(String(retired.kept), /feat\/renamed/, `the reason does not name the branch: ${retired.kept}`);
+		assert.ok(existsSync(tree.path));
+		assert.ok(board.trees.some((record: any) => record.path === tree.path), "the record went while the tree stayed");
+		assert.ok(git(repo, "branch", "--list", "feat/renamed").includes("feat/renamed"), "the renamed branch is gone");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a merged tree with ignored files is removed, and the entry counts them", () => {
+	const repo = scratchRepo();
+	try {
+		const { board, tree } = treeWithChildCommit(repo);
+		git(repo, "merge", "--no-ff", childBranch, "-m", "merge the child");
+		writeFileSync(join(repo, ".git", "info", "exclude"), "*.log\n");
+		writeFileSync(join(tree.path, "one.log"), "one\n");
+		writeFileSync(join(tree.path, "two.log"), "two\n");
+		assert.equal(git(tree.path, "status", "--porcelain"), "", "ignored files should not read as changes");
+		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
+		assert.equal(retired.removed, true, `ignored files kept the tree: ${JSON.stringify(retired)}`);
+		assert.ok("ignoredPaths" in retired, `the entry does not count the ignored files: ${JSON.stringify(retired)}`);
+		assert.equal(retired.ignoredPaths, 2);
+		assert.equal(existsSync(tree.path), false);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a detached tree whose folder is gone drops its record", () => {
+	const repo = scratchRepo();
+	try {
+		const board = { folder: repo, name: "scratch", children: new Map(), threads: new Map(), trees: [] };
+		const tree = ensureWorktree(board, { id: "thread-detached-gone", title: "no branch", folder: repo });
+		assert.ok(tree.path, `no worktree made: ${JSON.stringify(tree)}`);
+		rmSync(tree.path, { recursive: true, force: true });
+		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
+		assert.equal(retired.removed, true, `a vanished detached tree was kept: ${JSON.stringify(retired)}`);
+		assert.match(String(retired.note), /folder/);
+		assert.equal(board.trees.length, 0, "the record of a vanished tree stayed");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a thread whose tree was deleted by hand gets a fresh one, and the stale record goes", () => {
+	const repo = scratchRepo();
+	try {
+		const board = { folder: repo, name: "scratch", children: new Map(), threads: new Map(), trees: [] as any[] };
+		const thread = { id: "thread-restored-1", title: "a restored thread", folder: repo };
+		const stale = ensureWorktree(board, thread);
+		assert.ok(stale.path, `no worktree made: ${JSON.stringify(stale)}`);
+		rmSync(stale.path, { recursive: true, force: true });
+		const fresh = ensureWorktree(board, thread);
+		assert.notEqual(fresh, stale, "the stale record came back");
+		assert.ok(fresh.path, `no fresh worktree made: ${JSON.stringify(fresh)}`);
+		assert.ok(existsSync(fresh.path), "the fresh tree is not on disk");
+		assert.equal(board.trees.includes(stale), false, "the stale record is still on the board");
+		assert.deepEqual(board.trees, [fresh]);
 	} finally {
 		rmSync(repo, { recursive: true, force: true });
 	}

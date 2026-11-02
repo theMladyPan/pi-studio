@@ -119,8 +119,8 @@ commit's own account rather than on a check run now, the section below says so.
   base is a child that committed without branching, where the work is reachable from the reflog alone
   and a sweep would read the tree as empty: the board cuts `<type>/<slug>-<id>` there itself, taking
   the type and the slug from the commit subject with its own `feat:` prefix removed, `wip` when that
-  subject says nothing. `retireWorktree` asks the same question in the other direction, counting
-  `base..HEAD` inside a tree with no branch and reporting such a tree as `detached at <base>`. A card
+  subject says nothing. `retireWorktree` asks about such a tree from the other side: it goes when a
+  local branch holds the HEAD inside it, and is otherwise reported as `detached at <base>`. A card
   whose tree is still detached prints `detached on <base>` in its muted worktree line.
 - **A thread moved into a tree takes its session with it.** pi resolves `--session <id>` in the folder
   the child is started in, so once the child runs in a worktree its session is a session of another
@@ -133,12 +133,15 @@ commit's own account rather than on a check run now, the section below says so.
   thread is gone` reason stays as it was. This is why a thread created before worktrees existed keeps
   its conversation when its first message makes the tree.
 - **`clean` is the only thing that deletes a tree.** It retires the worktree of a thread that is gone
-  when `git status` finds no uncommitted change in it (ignored files do not count) and the branch has
-  no commit its base does not have, and reports the rest — a tree with work in it is named in the
-  response with the reason it was kept, never removed. A count git cannot read (a base branch that was
-  renamed or deleted) is treated as unknown, so nothing is deleted on a guess. The record of a tree
-  belongs to the board rather than to the thread, in `board.trees`, so closing a thread card or
-  clearing the board leaves the tree sweepable instead of orphaned.
+  when `git status` finds no uncommitted change in it and its commits stay reachable: another local
+  branch contains the branch, or `git cherry` against the integration branch prints no `+` line and
+  has a line for every commit `rev-list` counts between the two, which a merge commit never gets. Refs
+  reach git as `refs/heads/<name>`, so a tag of the same name cannot answer for a branch. Ignored files
+  do not keep a tree; how many went with it is reported on the entry. The rest is reported — a tree
+  with work in it is named in the response with the reason it was kept, never removed. A count git
+  cannot read (a base branch that was renamed or deleted) is treated as unknown, so nothing is deleted
+  on a guess. The record of a tree belongs to the board rather than to the thread, in `board.trees`, so
+  closing a thread card or clearing the board leaves the tree sweepable instead of orphaned.
 - **An answer arrives as it is written.** `message_update` from the child carries `text_delta`, and
   the daemon buffers it per content block, puts it on the turn in flight and re-broadcasts the card
   that holds that turn — the note when a note is being answered, the thread's own card otherwise — at
