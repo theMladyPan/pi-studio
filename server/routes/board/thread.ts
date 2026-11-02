@@ -15,7 +15,7 @@ import { homeCard } from "./message.ts";
 import { ROLE_NAMES, ROLE_THINKING, roleSystemPrompt } from "../../child/roles.ts";
 import { MODE_NAMES, PATH_NAMES, promptText } from "../../child/modes.ts";
 import { runSpawn } from "../../child/spawn.ts";
-import { killChild, threadForRuntime } from "./lifecycle.ts";
+import { autoCloseChild, killChild, threadForRuntime } from "./lifecycle.ts";
 import { predecessorId } from "./content.ts";
 import { THINKING_LEVELS } from "../../models.ts";
 
@@ -178,6 +178,10 @@ export async function onThreadSpawn(req, res, board, caller = { human: true }) {
 	clearInterval(keep);
 	if (gone || res.writableEnded) return;
 	res.end(JSON.stringify(result));
+	// The answer is in the caller's context now, so the card is a spent one and the board puts it away a
+	// moment later — hidden, never killed, so the tree it worked in is still there to assemble. A run that
+	// timed out, failed or was stopped is not this: nobody read an answer out of it.
+	if (result.status === "done") autoCloseChild(board, thread);
 }
 
 
