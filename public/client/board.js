@@ -7320,11 +7320,11 @@ function markAt(at) {
 }
 
 /** The listing for one token. A non-200 shuts the list and leaves what was typed alone. */
-async function loadAtPick(token) {
+async function loadAtPick(tok) {
   const seq = (atSeq += 1);
-  const query = new URLSearchParams({ token, path: token.dir.replace(/\/+$/, "") });
+  const query = new URLSearchParams({ token, path: tok.dir.replace(/\/+$/, "") });
   if (workspace) query.set("workspace", workspace);
-  if (token.frag) query.set("q", token.frag);
+  if (tok.frag) query.set("q", tok.frag);
   try {
     const response = await fetch(`/browse?${query}`);
     if (seq !== atSeq) return;
