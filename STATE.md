@@ -727,15 +727,8 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
 
 ## Next, in order
 
-1. A workspace entry that no longer resolves: offer to forget it.
-2. Fork a thread.
-3. Brainstorm how to organize subagents on a board — potentially replace `delegate`.
-4. HTML artifacts: a card that renders a whole html file, not only source text.
-5. Home screen redesign — the crossroads (`/`, `welcome.html`/`welcome.css`/`welcome.js`).
-6. A debug view of the raw stream from a pi child: the stdout lines `handleChildLine` parses, line by
-   line and unfiltered, beside the 1000-character `stderrTail` that is kept today.
-7. Retire the board in the pi extensions repo. The `dashboard` extension duplicates this app, which is
-   why children exclude it by name; once this one is the only board it can go.
+`TODO.md` is the one list of what is open, in three groups: a fix, a feature, a chore. Nothing is
+repeated here, so a second list cannot drift from it.
 
 ## Rules
 
