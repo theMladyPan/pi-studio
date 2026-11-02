@@ -65,3 +65,18 @@ export const SPAWN_ABORT_GRACE_MS = 5_000;
 
 /** What a spawned child may say back. The master reads it in its own context, so it has a ceiling. */
 export const SPAWN_REPLY_CHARS = 20_000;
+
+
+/**
+ * A `!command` in the composer is run on the human's own machine and the field waits for it, so it is held to
+ * a minute: long enough for a build or a test run, short enough that a command reading input or waiting on
+ * nothing ends as a report rather than as a field that never comes back.
+ */
+export const SHELL_TIMEOUT_MS = 60_000;
+
+
+/**
+ * What a `!command` may put on the board. The output is a card and then a quote inside the next prompt, so it
+ * is a glance at what the command said and not a copy of everything it printed.
+ */
+export const SHELL_OUTPUT_CHARS = 20_000;

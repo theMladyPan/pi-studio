@@ -5266,6 +5266,8 @@ function makeComposer(entry) {
     forkNext: false,
     // The thread whose compaction is in flight, so the meter says so until the figures come back.
     compacting: "",
+    /** The `!command` this field handed to the daemon, while it runs: the hint says so until it answers. */
+    shellRunning: "",
     /** The cards this message names beside the one it is written in. */
     named: [],
     /** Images pasted into this field and paths picked for it: both travel with the message. */
@@ -5371,13 +5373,15 @@ function paintHint(inst) {
   inst.hintEl.classList.remove("bad");
   inst.hintEl.textContent = !linkUp
     ? "offline"
-    : !running
-      ? "sends now"
-      : inst.sendMode === "steer"
-        ? "interrupts the run"
-        : forkable && inst.forkNext
-          ? "asks a new thread"
-          : "waits for this run to finish";
+    : inst.shellRunning
+      ? `running !${inst.shellRunning.slice(0, 32)}`
+      : !running
+        ? "sends now"
+        : inst.sendMode === "steer"
+          ? "interrupts the run"
+          : forkable && inst.forkNext
+            ? "asks a new thread"
+            : "waits for this run to finish";
 }
 
 /** Every field on the board, because a run boundary changes what all of them would do. */
@@ -7566,6 +7570,10 @@ async function sendMessage(inst = activeComposer) {
   const draft = inst.msg.value;
   const typed = draft.trim();
   if (!typed && inst.images.length === 0 && inst.picked.size === 0) return;
+  // A `!` at the very front of a one-line draft is the shell, the way it is in a console pi. A draft with a
+  // newline in it is prose that happens to start with `!` — nobody types a two-line command — and stays a
+  // message, and a space before the `!` is a message too, so "!important" in a sentence is never run.
+  if (draft.startsWith("!") && !draft.includes("\n")) return runCommand(inst, draft, draft.slice(1).trim());
   const text = inst.picked.size === 0 ? typed : `${typed}${typed ? "\n\n" : ""}${pickedPathsText()}`;
   // What this message carries, so a pick or a keystroke made while it travels is still there.
   const sentPaths = [...inst.picked.keys()];
@@ -7642,6 +7650,93 @@ async function sendMessage(inst = activeComposer) {
       ? "board connection lost — reload the page"
       : `failed: ${error.message || error}`;
   } finally {
+    inst.send.disabled = false;
+  }
+}
+
+/**
+ * The last thing the command said, which is where the reason for an exit code usually is, on one line of
+ * the hint.
+ */
+function lastSaid(output) {
+  const lines = String(output ?? "")
+    .split("\n")
+    .filter((line) => line.trim());
+  return (lines[lines.length - 1] ?? "no output").trim().slice(0, 60);
+}
+
+/**
+ * Names a card the daemon has just written, once the stream has drawn it. A chip is built out of the card the
+ * board holds, and `paintRefs` drops an id it cannot find, so naming the id before it arrives would leave the
+ * message with nothing to carry.
+ */
+function nameCardWhenDrawn(inst, id) {
+  if (!id) return;
+  let tries = 0;
+  const wait = () => {
+    const entry = byId.get(id);
+    if (entry) {
+      addReference(inst, entry);
+      return;
+    }
+    if (tries++ < 60) setTimeout(wait, 50);
+    else console.error("pi-studio: the card the command wrote never arrived");
+  };
+  wait();
+}
+
+/**
+ * A `!command` from the field: the daemon runs it where this thread works and writes what it printed onto the
+ * board as a card, and naming that card on the next message is the whole port. A message that names a card has
+ * it quoted into the prompt ahead of the human's own words — the prepend a console pi does for its `!` line —
+ * so there is no other plumbing and nothing is sent twice.
+ *
+ * A command is not a message to an agent, so the queue and steer choice does not reach it: it runs now, whether
+ * or not a run is in flight, and the only thing that waits is this field's own button.
+ */
+async function runCommand(inst, draft, command) {
+  if (!command) {
+    hintLine("nothing to run after !", true, inst);
+    return;
+  }
+  const card = cardOf(inst);
+  inst.send.disabled = true;
+  // The hint line is where a field says what it is doing, so a command that runs for a minute says so there
+  // instead of leaving the field looking frozen. `shellRunning` is what keeps the words on screen through a
+  // repaint, and a run boundary repaints every field.
+  inst.shellRunning = command;
+  paintHint(inst);
+  try {
+    const response = await fetch(`/shell?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // The card the field belongs to is where the command is run from: its thread's tree, or the board's own
+      // folder when the field is the one on a board with no thread card.
+      body: JSON.stringify({ command, cardId: card?.id }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    const ran = await response.json();
+    // What ran leaves the field the way a sent message does, and only if nothing was typed while it ran. A
+    // command that failed keeps its words, because the next thing the human does with it is fix it.
+    const failed = ran.timedOut || ran.exitCode !== 0;
+    if (!failed && inst.msg.value === draft) inst.msg.value = "";
+    if (failed) {
+      const why = ran.timedOut
+        ? "stopped at the time limit"
+        : ran.exitCode === null || ran.exitCode === undefined
+          ? "the command did not start"
+          : `exit ${ran.exitCode}`;
+      hintLine(`${why} · ${lastSaid(ran.output)}`, true, inst);
+      return;
+    }
+    // The card carries the output on the board, and the chip is what carries it into the next message.
+    nameCardWhenDrawn(inst, ran.cardId);
+    hintLine(`!${command.slice(0, 32)} · on the board`, false, inst);
+  } catch (error) {
+    const gone = error instanceof TypeError; // fetch rejects like this when nothing answers
+    hintLine(gone ? "board connection lost — reload the page" : `could not run it: ${error.message || error}`, true, inst);
+  } finally {
+    inst.shellRunning = "";
     inst.send.disabled = false;
   }
 }

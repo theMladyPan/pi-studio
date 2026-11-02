@@ -28,6 +28,7 @@ import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/boa
 import { onPrompt, onPromptWrite, onPrompts } from "./routes/board/prompts.ts";
 import { onSkill } from "./routes/board/skill.ts";
 import { onClean, onClose, onKill, onNew, onReopen, onStop, onUndo } from "./routes/board/lifecycle.ts";
+import { onShell } from "./routes/board/shell.ts";
 
 
 /** Opening a browser is what a desktop app does; a service run asks for `--no-open`. */
@@ -379,6 +380,8 @@ export const server = createServer((req, res) => {
 				"/compact": onCompact,
 				"/clean": onClean,
 				"/new": onNew,
+				// A command the human typed after `!`. Never in THREAD_ROUTES above: a shell is the human's.
+				"/shell": onShell,
 			};
 			const handler = routing[url.pathname];
 			if (handler) {

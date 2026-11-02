@@ -1364,3 +1364,134 @@ test("a prompt file's own bytes go back through POST /prompt, and the repository
 		rmSync(folder, { recursive: true, force: true });
 	}
 });
+
+test("a `!command` runs where the thread works, and the next message carries what it printed", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-shell-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-shell-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		writeFileSync(join(folder, "a-listing.txt"), "one\ntwo\n");
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+
+		// A plain command answers with what it printed, and leaves a card behind.
+		const ran = await postTo(daemon, board.id, "/shell", { command: "ls", cardId: threadId });
+		assert.equal(ran.status, 200, ran.body);
+		const said = JSON.parse(ran.body);
+		assert.equal(said.exitCode, 0);
+		assert.equal(said.timedOut, false);
+		assert.equal(said.truncated, false);
+		assert.match(said.output, /a-listing\.txt/, "the command did not run in the board's folder");
+		assert.ok(said.cardId, "no card came back");
+		// A command is not work: no tree is cut for an `ls`.
+		assert.equal(existsSync(join(folder, ".agents")), false, "running a command made a worktree");
+
+		const note = await cardState(daemon, board.id, said.cardId);
+		assert.ok(note, "the command's card never reached the board");
+		assert.equal(note.type, "note");
+		assert.match(note.markdown, /\$ ls/);
+		assert.match(note.markdown, /a-listing\.txt/);
+		assert.doesNotMatch(note.markdown, /exit /, "a command that succeeded was marked as a failure");
+
+		// Naming that card is the whole prepend: the child is told what the command printed, ahead of the
+		// words the human typed, without the message being rewritten anywhere.
+		const asked = await postTo(daemon, board.id, "/message", { cardId: threadId, refs: [said.cardId], text: "what is in here" });
+		assert.equal(asked.status, 200, asked.body);
+		await settledThread(daemon, board.id, threadId, 1);
+		const prompt = framesOf(stub).filter((frame: any) => frame.type === "prompt")[0]?.message ?? "";
+		assert.match(prompt, /a-listing\.txt/, "the command's output never reached the child");
+		assert.match(prompt, /what is in here/, "the words the human typed did not reach the child");
+		assert.ok(
+			prompt.indexOf("a-listing.txt") < prompt.indexOf("what is in here"),
+			"the output was not in front of the message it was meant to inform",
+		);
+
+		// A command that fails is not a refusal: it ran, and the exit code comes back in the body the field
+		// reads its hint from, with the card carrying the same words.
+		const failed = await postTo(daemon, board.id, "/shell", { command: "exit 7", cardId: threadId });
+		assert.equal(failed.status, 200, failed.body);
+		const sad = JSON.parse(failed.body);
+		assert.equal(sad.exitCode, 7);
+		assert.match((await cardState(daemon, board.id, sad.cardId)).markdown, /exit 7/);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a `!command` that prints more than the ceiling is cut on the card and says where", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-shell-cut-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-shell-cut-work-"));
+	const daemon = await boot(stateHome);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		// A pipe as well as a big output, because a whole shell line is what the human typed.
+		const ran = await postTo(daemon, board.id, "/shell", { command: "head -c 30000 /dev/zero | tr '\\0' 'x'", cardId: threadId });
+		assert.equal(ran.status, 200, ran.body);
+		const said = JSON.parse(ran.body);
+		assert.equal(said.truncated, true, "a command that printed 30k characters was not cut");
+		assert.ok(said.output.length < 21_000, `the output was not cut: ${said.output.length} characters`);
+		assert.match(said.output, /\[cut: the output stopped at 20000 characters\]/);
+		const note = await cardState(daemon, board.id, said.cardId);
+		assert.match(note.markdown, /\[cut: the output stopped at 20000 characters\]/, "the card does not say its output was cut");
+
+		// Nothing to run is refused where it is typed, and nothing is left on the board for it.
+		const empty = await postTo(daemon, board.id, "/shell", { command: "   ", cardId: threadId });
+		assert.equal(empty.status, 400);
+		assert.equal(empty.body, "empty command");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a `!command` that outlives its limit is stopped with everything it started", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-shell-stop-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-shell-stop-work-"));
+	// The limit is a policy constant of a minute; the checks shorten it through the environment rather than
+	// sit one out.
+	const daemon = await boot(stateHome, { PI_STUDIO_SHELL_TIMEOUT_MS: "300" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		// A command that forks. Killing only the shell in front of it would leave the sleeper holding the pipes
+		// open, and this promise would settle when the sleeper finished rather than when the limit ran out —
+		// which is what the clock below measures.
+		const started = Date.now();
+		const ran = await postTo(daemon, board.id, "/shell", { command: "sleep 5 & wait", cardId: threadId });
+		const took = Date.now() - started;
+		assert.equal(ran.status, 200, ran.body);
+		const said = JSON.parse(ran.body);
+		assert.equal(said.timedOut, true, "a command that outlived its limit was not reported as stopped");
+		assert.equal(said.exitCode, null);
+		assert.ok(took < 3000, `the command was still running ${took}ms after a 300ms limit`);
+		assert.match((await cardState(daemon, board.id, said.cardId)).markdown, /stopped at the/);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a thread's token cannot reach the shell route, whatever it writes in the body", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-shell-token-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-shell-token-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" })).status, 200);
+		const child = await childEnvOf(daemon, stub.envFile);
+
+		// The route is not in THREAD_ROUTES, so the refusal comes before the body is read: a thread has no shell.
+		const ran = await postAs(daemon, child.token, board.id, "/shell", { command: "touch a-thread-was-here", cardId: threadId });
+		assert.equal(ran.status, 403);
+		assert.equal(ran.body, "a thread may not use that");
+		assert.equal(existsSync(join(folder, "a-thread-was-here")), false, "a thread ran a command through the board");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
