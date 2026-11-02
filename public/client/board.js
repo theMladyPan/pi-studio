@@ -7343,8 +7343,11 @@ async function loadAtPick(token) {
 function openAtPick(inst, token) {
   atInst = inst;
   atToken = token;
-  // A fresh listing starts unarmed, so Enter never takes what the list happened to open on.
+  // The previous folder's rows go before the fetch, so Enter cannot take one while this listing is
+  // still travelling. Nothing is armed until a reply lands, and Enter with no row shuts the list.
+  atRows = [];
   atAt = -1;
+  atList.replaceChildren();
   atPick.hidden = false;
   placeAtPick();
   void loadAtPick(token);
@@ -7501,6 +7504,9 @@ async function sendMessage(inst = activeComposer) {
     paintRefs(inst);
     paintReferenceRings();
     closePicker();
+    // The send button keeps the keyboard inside the field, so a list left open would float over the
+    // field the send just emptied until the next keystroke, Enter or blur.
+    closeAtPick();
     // A fork is one send's choice, so the next comment goes to the thread of the card again.
     inst.forkNext = false;
     if (made?.id) {
