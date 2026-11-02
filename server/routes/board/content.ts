@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { workdirOf } from "../../worktrees/make.ts";
+import { workspaceById } from "../../workspaces.ts";
 import { start } from "../../main.ts";
 import { homedir } from "node:os";
 
@@ -129,11 +130,17 @@ export async function onNote(req, res, board) {
 
 
 
+/** Whether a resolved path is the folder itself or something under it. */
+function insideFolder(root, target) {
+	return target === root || target.startsWith(`${root}/`);
+}
+
+
 /** Read a file inside the workspace, refusing anything that leaves it. */
 export function readInsideWorkspace(folder, wanted) {
 	const target = resolve(folder, String(wanted ?? ""));
 	const root = resolve(folder);
-	if (target !== root && !target.startsWith(`${root}/`)) {
+	if (!insideFolder(root, target)) {
 		throw new Error(`${wanted} is outside the workspace`);
 	}
 	const stat = statSync(target, { throwIfNoEntry: false });
@@ -259,13 +266,48 @@ export async function onRename(req, res, board) {
 
 
 
-/** The composer's file picker walks folders and answers with paths, never with file contents. */
+/**
+ * Where a workspace-scoped listing may stand: `asked` read against `folder` and only against it, so an
+ * empty or `/` path is the folder itself. The check is made on what the path resolves to rather than on
+ * what was typed, because a link inside the folder can still point out of it. `null` is a refusal.
+ */
+function folderInsideWorkspace(folder, asked) {
+	try {
+		const root = realpathSync(folder);
+		let dir = realpathSync(resolve(root, String(asked ?? "").replace(/^\/+/, "")));
+		if (!insideFolder(root, dir)) return null;
+		let named = "";
+		if (!statSync(dir).isDirectory()) {
+			named = basename(dir);
+			dir = dirname(dir);
+		}
+		return { root, dir, named };
+	} catch {
+		return null;
+	}
+}
+
+
+/**
+ * The composer's file picker walks folders and answers with paths, never with file contents. With a
+ * `workspace` it walks that board's folder alone, so what it offers is what the board can attach.
+ */
 export function onBrowse(url, res) {
 	const start = process.cwd();
+	const scoped = url.searchParams.has("workspace");
 	const asked = url.searchParams.get("path") ?? "";
+	let root = start;
 	let dir = start;
 	let named = "";
-	if (asked) {
+	if (scoped) {
+		const workspace = workspaceById(url.searchParams.get("workspace") ?? "");
+		if (!workspace) return void fail(res, 409, "no such workspace");
+		const inside = folderInsideWorkspace(workspace.folder, asked);
+		if (!inside) return void fail(res, 404, `no such folder: ${asked}`);
+		root = inside.root;
+		dir = inside.dir;
+		named = inside.named;
+	} else if (asked) {
 		const expanded = asked === "~" ? homedir() : asked.startsWith("~/") ? join(homedir(), asked.slice(2)) : resolve(start, asked);
 		try {
 			dir = realpathSync(expanded);
@@ -302,7 +344,7 @@ export function onBrowse(url, res) {
 		path: dir,
 		parent: dirname(dir),
 		home: homedir(),
-		cwd: start,
+		cwd: root,
 		entries: entries.slice(0, BROWSE_LIMIT),
 		total: entries.length,
 		truncated: entries.length > BROWSE_LIMIT,
