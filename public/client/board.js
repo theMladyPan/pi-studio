@@ -3377,11 +3377,11 @@ addEventListener("keyup", (event) => {
 addEventListener("blur", () => heldModifier(false));
 
 // The middle button is the workspace grab, so it works over anything the canvas holds: a card, the
-// rail, the composer. The one exception is the detail panel, which is a dialog rather than part
+// rail, the composer. The one exception is a detail panel, which is a dialog rather than part
 // of the surface and reads better when a stray middle drag does not slide the board behind it.
 document.addEventListener("pointerdown", (event) => {
   if (event.button !== 1 || !(event.target instanceof Element)) return;
-  if (event.target.closest("#actDetail")) return;
+  if (event.target.closest(".sheet")) return;
   // Chromium opens its autoscroll compass on a middle press and would keep the pointer for it.
   event.preventDefault();
   beginPan(event);
@@ -4846,6 +4846,7 @@ actPanel.addEventListener("click", (event) => {
 actPanel.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
+    event.stopPropagation();
     closeActPanel();
     return;
   }
@@ -6755,6 +6756,114 @@ async function postBoardAction(path) {
   }
 }
 
+// ---------- the clean summary ---------------------------------------------
+// One clean can report a dozen worktrees, and the footer is one line: the whole answer opens in a sheet
+// shaped like the row detail one, and the footer keeps only the receipt.
+const cleanPanel = document.getElementById("cleanDetail");
+const cleanPanelName = document.getElementById("cleanDetailName");
+const cleanPanelMeta = document.getElementById("cleanDetailMeta");
+const cleanPanelBody = document.getElementById("cleanDetailBody");
+const cleanPanelClose = document.getElementById("cleanDetailClose");
+
+/** A number and the word beside it, as the rest of the board words its counts. */
+const counted = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/**
+ * The whole answer to a clean: one row per worktree that went, one per worktree the sweep would not
+ * touch, then the threads and rail rows it forgot. A section with nothing in it is left out, so a clean
+ * that took one worktree does not fill the sheet with empty headings.
+ */
+function openCleanSheet({ kept, removed, dead, rows }) {
+  cleanPanelName.textContent = [
+    removed.length ? `${counted(removed.length, "worktree")} removed` : "",
+    kept.length ? `${kept.length} kept` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  cleanPanelMeta.textContent = [dead ? counted(dead, "dead thread") : "", rows ? counted(rows, "rail row") : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const parts = [];
+  const add = (node) => {
+    if (node) parts.push(node);
+  };
+  // What the sweep knows and the folder no longer shows: the ignored files that went with a tree, and a
+  // branch git would not delete. Both are said in plain words, because the human may still want either
+  // one back.
+  add(
+    panelBlock(
+      "what went",
+      panelFields(
+        removed.map((tree) => {
+          const beside = [
+            tree.ignoredPaths ? counted(tree.ignoredPaths, "ignored file") : "",
+            tree.branchKept ? "branch left behind" : "",
+          ]
+            .filter(Boolean)
+            .join(", ");
+          return [tree.branch || tree.path, beside || tree.note || "removed"];
+        }),
+      ),
+    ),
+  );
+  // The reason is the sweep's own sentence, passed through as it came: the tree holds work, and only the
+  // human can decide what happens to it.
+  const stayed = panelFields(kept.map((tree) => [tree.branch || tree.path, tree.kept]));
+  if (stayed) {
+    const warning = el("div", "gone");
+    warning.textContent = "these hold work only you can decide about";
+    stayed.appendChild(warning);
+    add(panelBlock("what stayed", stayed));
+  }
+  add(
+    panelBlock(
+      "the rest",
+      panelFields([
+        [dead ? "threads" : "", dead ? `${counted(dead, "dead thread")} forgotten` : ""],
+        [rows ? "rows" : "", rows ? `${counted(rows, "rail row")} dropped` : ""],
+      ]),
+    ),
+  );
+  cleanPanelBody.replaceChildren(...parts);
+  cleanPanel.hidden = false;
+  // The sheet itself takes the focus, so a second Enter goes nowhere instead of closing what just
+  // opened. Tab walks in from here.
+  cleanPanel.focus();
+}
+
+function closeCleanSheet() {
+  if (cleanPanel.hidden) return;
+  cleanPanel.hidden = true;
+  cleanPanelBody.replaceChildren();
+  // Cleaning is a click on the clean button, so the focus goes back to it while the footer keeps the
+  // receipt of what the click did.
+  cleanBtn.focus();
+}
+
+cleanPanelClose.addEventListener("click", closeCleanSheet);
+cleanPanel.addEventListener("click", (event) => {
+  if (event.target === cleanPanel) closeCleanSheet();
+});
+cleanPanel.addEventListener("keydown", (event) => {
+  // The sheet covers the board, so a board shortcut behind it would act on what is out of reach. The
+  // key stops at the sheet, which saves every board handler its own check.
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeCleanSheet();
+    return;
+  }
+  // The sheet holds the keyboard while it is open, so tab cannot walk the board behind it. Two stops are
+  // inside: the close button and the body, and tab cycles between them both ways.
+  if (event.key === "Tab") {
+    event.preventDefault();
+    const stops = [cleanPanelClose, cleanPanelBody];
+    const at = stops.indexOf(document.activeElement);
+    const step = event.shiftKey ? stops.length - 1 : 1;
+    stops[at < 0 ? (event.shiftKey ? stops.length - 1 : 0) : (at + step) % stops.length].focus();
+  }
+});
+
 cleanBtn.addEventListener("click", async () => {
   const result = await postBoardAction("clean");
   if (!result) return;
@@ -6762,34 +6871,17 @@ cleanBtn.addEventListener("click", async () => {
   // the human is the only one who can decide what happens to it.
   const kept = (result.trees ?? []).filter((tree) => tree.kept);
   const removed = (result.trees ?? []).filter((tree) => tree.removed);
-  const swept = removed.length;
-  // What the sweep knows and the folder no longer shows: how many ignored files went with the trees it
-  // removed, and a branch git would not delete. Said here in plain words, because the human is the only
-  // one who can still act on either.
-  const carried = removed.reduce((sum, tree) => sum + (tree.ignoredPaths ?? 0), 0);
-  const survived = removed.filter((tree) => tree.branchKept).map((tree) => tree.branch);
-  const went = [
-    carried ? `${carried} ignored file${carried === 1 ? "" : "s"} went with the removed worktree${swept === 1 ? "" : "s"}` : "",
-    survived.length
-      ? `${survived.length === 1 ? "the branch" : "the branches"} ${survived.join(", ")} ${survived.length === 1 ? "is" : "are"} still there`
-      : "",
-  ]
-    .filter(Boolean)
-    .join(", ");
-  if (kept.length) {
-    const sweptNote = result.removed.length ? `${result.removed.length} dead thread${result.removed.length > 1 ? "s" : ""}, ` : "";
-    hintLine(
-      `${sweptNote}kept ${kept.length} worktree${kept.length > 1 ? "s" : ""}: ${kept.map((tree) => `${tree.branch} (${tree.kept})`).join(", ")}${went ? `, ${went}` : ""}`,
-    );
+  const dead = (result.removed ?? []).length;
+  const rows = Number(result.rows) || 0;
+  if (!removed.length && !kept.length && !dead) {
+    footNote("nothing to clean");
     return;
   }
-  hintLine(
-    result.removed.length
-      ? `cleaned ${result.removed.length} dead thread${result.removed.length > 1 ? "s" : ""}, ${swept} worktree${swept === 1 ? "" : "s"} and ${result.rows} rows${went ? `, ${went}` : ""}`
-      : swept
-        ? `removed ${swept} unused worktree${swept > 1 ? "s" : ""}${went ? `, ${went}` : ""}`
-        : "nothing to clean",
-  );
+  openCleanSheet({ kept, removed, dead, rows });
+  // The sheet covers the board, so the footer keeps the receipt alone: what the click did, in one
+  // clause short enough for a strip that shares its line with the board's own figures.
+  const went = [removed.length ? counted(removed.length, "worktree") : "", dead ? counted(dead, "thread") : ""].filter(Boolean);
+  footNote(went.length ? `cleaned ${went.join(" and ")}` : `${counted(kept.length, "worktree")} kept`);
 });
 
 newBtn.addEventListener("click", async () => {
@@ -7616,6 +7708,13 @@ stopBtn.addEventListener("click", async () => {
     stopBtn.textContent = "stop";
   }
 });
+
+/**
+ * The sheet that is up, if one is: the activity detail and the clean receipt are dialogs drawn over the
+ * board. A key press belongs to the sheet while it is open, and to nothing behind it.
+ */
+const openSheet = () => document.querySelector(".sheet:not([hidden])");
+
 // The selection is a reading position, so Escape gives it up: the board stops dimming and the wheel
 // goes back to moving the board. A panel or an editor takes Escape first and stops it there.
 document.addEventListener("keydown", (event) => {
@@ -7623,6 +7722,15 @@ document.addEventListener("keydown", (event) => {
   // The `@` list is its own surface and takes Escape first, so shutting it does not also drop
   // the card being read.
   if (!atPick.hidden) return;
+  // A click on the sheet's padding leaves the focus on the body, so the sheet's own handler never sees
+  // the press: it is closed here, which also keeps it from giving up the card it hides.
+  const sheet = openSheet();
+  if (sheet) {
+    event.preventDefault();
+    if (sheet === actPanel) closeActPanel();
+    else closeCleanSheet();
+    return;
+  }
   if (!document.querySelector(".card.active")) return;
   selectCard(null);
 });
@@ -7633,9 +7741,11 @@ document.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
   if ((key !== "r" && key !== "q" && key !== "p") || event.metaKey || event.ctrlKey || event.altKey) return;
   if (typingSomewhere()) return;
-  // The panel covers the board, so its closing key wins over the card it hides.
-  if (!actPanel.hidden) {
-    if (key === "q") {
+  // The panel covers the board, so its closing key wins over the card it hides. The other sheet has no
+  // closing key of its own, so every board key waits behind it.
+  const sheet = openSheet();
+  if (sheet) {
+    if (key === "q" && sheet === actPanel) {
       event.preventDefault();
       closeActPanel();
     }
@@ -7667,7 +7777,7 @@ document.addEventListener("keydown", (event) => {
 // back the one that went by mistake. A field keeps its own undo, so half-typed text is never replaced.
 document.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() !== "z" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
-  if (typingSomewhere() || !atPick.hidden) return;
+  if (typingSomewhere() || !atPick.hidden || openSheet()) return;
   event.preventDefault();
   undoClose();
 });
@@ -7677,7 +7787,7 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey || !/^[1-6]$/.test(event.key)) return;
   if (typingSomewhere()) return;
-  if (!actPanel.hidden || !atPick.hidden) return;
+  if (openSheet() || !atPick.hidden) return;
   const record = openQuestion();
   if (!record) return;
   // The option buttons carry their own click handler, so this reuses the whole answer path.
@@ -7695,7 +7805,7 @@ document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (typingSomewhere()) return;
   // The picker is its own surface: a board shortcut behind it would move what is out of reach.
-  if (!picker.hidden || !actPanel.hidden || !atPick.hidden) return;
+  if (!picker.hidden || openSheet() || !atPick.hidden) return;
   if (event.key === "f") {
     event.preventDefault();
     fitAll();

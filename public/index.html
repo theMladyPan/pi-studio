@@ -450,11 +450,19 @@
   #footer { position: fixed; left: var(--rail, 0); right: 0; bottom: 0; z-index: 40; display: flex;
     align-items: center; gap: 14px; height: 24px; padding: 0 12px; background: #0d1117;
     border-top: 1px solid var(--border); }
-  #footer .stat { font: 11px var(--mono); color: var(--muted); }
+  /* The strip is one line tall, so nothing on it wraps: a figure too wide for its share is cut with an
+     ellipsis rather than folded over the board, and `min-width: 0` lets it give up that share at all. */
+  #footer .stat { font: 11px var(--mono); color: var(--muted); min-width: 0; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
   #footer .stat:empty { display: none; }
   #footer .stat em { color: var(--text); font-style: normal; }
   /* A note that reports a failure carries the same red the composer's own hint does. */
   #footer .stat.bad { color: var(--red); }
+  /* The receipt answers the last click, so it keeps the width its own words ask for: the figures beside
+     it give up their tails first, and the spacer holds only the slack that is left over. A receipt is
+     cut only when its words alone are wider than the strip, and then at the strip's edge. */
+  #footer #footHint { flex: 0 0 auto; max-width: 100%; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; }
   #footer .grow { flex: 1; }
   body.rail-off #footer { left: 0; }
   header .stat em { color: var(--text); font-style: normal; }
@@ -846,56 +854,56 @@
   #atList .p-item.dir .p-name { color: var(--accent); }
   #atList .p-empty { padding: 12px; color: var(--muted); font: 11px var(--mono); text-align: center; }
 
-  /* What a rail row hides: a sheet over the whole board, so nothing it covers is clickable while
-     it is open. The body is the one scroll container, because a long output or thought is what
+  /* What a rail row or a clean hides: a sheet over the whole board, so nothing it covers is clickable
+     while it is open. The body is the one scroll container, because a long output or thought is what
      the panel is for. */
-  #actDetail { position: fixed; inset: 0; z-index: 2200; padding: 40px 24px;
+  .sheet { position: fixed; inset: 0; z-index: 2200; padding: 40px 24px;
     background: rgba(1, 4, 9, .66); display: flex; align-items: center; justify-content: center; }
-  #actDetail[hidden] { display: none; }
-  #actDetail .panel { display: flex; flex-direction: column; width: min(880px, 100%);
+  .sheet[hidden] { display: none; }
+  .sheet .panel { display: flex; flex-direction: column; width: min(880px, 100%);
     max-height: 100%; overflow: hidden; background: var(--card);
     border: 1px solid var(--border-bright); border-radius: 10px;
     box-shadow: 0 18px 40px rgba(0,0,0,.55); }
-  #actDetail .panel-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  .sheet .panel-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
     flex: none; background: var(--card-head); border-bottom: 1px solid var(--border);
     font: 12px var(--mono); }
-  #actDetail .name { color: var(--text); font-weight: 600; }
-  #actDetail .meta { color: var(--muted); font-size: 11px; margin-left: auto; }
-  #actDetail .panel-head .close { flex: none; }
-  #actDetailBody { overflow: auto; min-height: 0; padding: 10px;
+  .sheet .name { color: var(--text); font-weight: 600; }
+  .sheet .meta { color: var(--muted); font-size: 11px; margin-left: auto; }
+  .sheet .panel-head .close { flex: none; }
+  .sheet-body { overflow: auto; min-height: 0; padding: 10px;
     display: flex; flex-direction: column; gap: 10px; }
-  #actDetail section { display: flex; flex-direction: column; gap: 4px; }
-  #actDetail h4 { margin: 0; color: var(--muted); font: 11px var(--mono);
+  .sheet section { display: flex; flex-direction: column; gap: 4px; }
+  .sheet h4 { margin: 0; color: var(--muted); font: 11px var(--mono);
     text-transform: uppercase; letter-spacing: .6px; }
-  #actDetail pre { margin: 0; padding: 8px; border: 1px solid var(--border); border-radius: 6px;
+  .sheet pre { margin: 0; padding: 8px; border: 1px solid var(--border); border-radius: 6px;
     background: #0d1117; color: #c9d1d9; font: 11px/1.45 var(--mono);
     white-space: pre-wrap; overflow-wrap: anywhere; }
-  #actDetail .cut { color: var(--amber); font: 11px var(--mono); }
-  #actDetail .gone { color: var(--muted); font: 11px var(--mono); }
+  .sheet .cut { color: var(--amber); font: 11px var(--mono); }
+  .sheet .gone { color: var(--muted); font: 11px var(--mono); }
   /* The parts of a call a renderer lays out: an argument list, code with a gutter, a diff, a picture. */
-  #actDetail .act-kv { display: flex; flex-direction: column; gap: 2px; font: 11px var(--mono); }
-  #actDetail .act-row { display: flex; gap: 8px; }
-  #actDetail .act-row .k { flex: none; min-width: 60px; color: var(--muted); }
-  #actDetail .act-row .v { color: #c9d1d9; overflow-wrap: anywhere; }
-  #actDetail .act-code { border: 1px solid var(--border); border-radius: 6px; background: #0d1117;
+  .sheet .act-kv { display: flex; flex-direction: column; gap: 2px; font: 11px var(--mono); }
+  .sheet .act-row { display: flex; gap: 8px; }
+  .sheet .act-row .k { flex: none; min-width: 60px; color: var(--muted); }
+  .sheet .act-row .v { color: #c9d1d9; overflow-wrap: anywhere; }
+  .sheet .act-code { border: 1px solid var(--border); border-radius: 6px; background: #0d1117;
     max-height: 46vh; overflow: auto; padding: 6px 0; font: 11px/1.45 var(--mono); }
-  #actDetail .act-line { display: flex; gap: 8px; padding: 0 8px; }
-  #actDetail .act-line .n { flex: none; width: 34px; text-align: right; color: #484f58; user-select: none; }
-  #actDetail .act-line .t { white-space: pre; color: #c9d1d9; }
-  #actDetail .act-diff .act-line.add { background: rgba(63, 185, 80, .12); }
-  #actDetail .act-diff .act-line.del { background: rgba(248, 81, 73, .12); }
-  #actDetail .act-diff .act-line.hunk { color: #8b949e; }
-  #actDetail .act-img { max-width: 100%; border: 1px solid var(--border); border-radius: 6px; background: #0d1117; }
-  #actDetail .act-options { margin: 0; padding-left: 18px; color: #c9d1d9; font-size: 12.5px; }
-  #actDetail .act-prose { white-space: pre-wrap; overflow-wrap: anywhere; color: #c9d1d9;
+  .sheet .act-line { display: flex; gap: 8px; padding: 0 8px; }
+  .sheet .act-line .n { flex: none; width: 34px; text-align: right; color: #484f58; user-select: none; }
+  .sheet .act-line .t { white-space: pre; color: #c9d1d9; }
+  .sheet .act-diff .act-line.add { background: rgba(63, 185, 80, .12); }
+  .sheet .act-diff .act-line.del { background: rgba(248, 81, 73, .12); }
+  .sheet .act-diff .act-line.hunk { color: #8b949e; }
+  .sheet .act-img { max-width: 100%; border: 1px solid var(--border); border-radius: 6px; background: #0d1117; }
+  .sheet .act-options { margin: 0; padding-left: 18px; color: #c9d1d9; font-size: 12.5px; }
+  .sheet .act-prose { white-space: pre-wrap; overflow-wrap: anywhere; color: #c9d1d9;
     font-size: 12.5px; line-height: 1.5; }
-  #actDetail .act-note { font-size: 13px; color: #c9d1d9; }
-  #actDetail .act-note .svg-wrap { margin: 8px 0; background: #0d1117; border: 1px solid var(--border);
+  .sheet .act-note { font-size: 13px; color: #c9d1d9; }
+  .sheet .act-note .svg-wrap { margin: 8px 0; background: #0d1117; border: 1px solid var(--border);
     border-radius: 6px; padding: 8px; }
-  #actDetail .act-note .svg-wrap svg { max-width: 100%; height: auto; display: block; }
-  #actDetail .act-note .diagram-wrap { overflow-x: auto; }
-  #actDetail .act-note .diagram-wrap svg { max-width: none; }
-  #actDetail .act-note .diagram-error { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+  .sheet .act-note .svg-wrap svg { max-width: 100%; height: auto; display: block; }
+  .sheet .act-note .diagram-wrap { overflow-x: auto; }
+  .sheet .act-note .diagram-wrap svg { max-width: none; }
+  .sheet .act-note .diagram-error { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
 
   /* sticky card */
   .sticky-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
@@ -1147,7 +1155,7 @@
 </div>
 
 <!-- The full text behind one activity row: its arguments, log, output, thought or answer. -->
-<div id="actDetail" role="dialog" aria-modal="true" aria-labelledby="actDetailName" tabindex="-1" hidden>
+<div id="actDetail" class="sheet" role="dialog" aria-modal="true" aria-labelledby="actDetailName" tabindex="-1" hidden>
   <div class="panel">
     <div class="panel-head">
       <span class="name" id="actDetailName"></span>
@@ -1155,7 +1163,21 @@
       <button class="close" id="actDetailClose" title="close (esc)">×</button>
     </div>
     <!-- Focusable so a keyboard user can scroll past the first screen; it is the second tab stop. -->
-    <div id="actDetailBody" tabindex="0"></div>
+    <div id="actDetailBody" class="sheet-body" tabindex="0"></div>
+  </div>
+</div>
+
+<!-- What one clean did: the worktrees it removed, the ones it would not touch and why, and the threads
+     and rail rows it forgot. A summary of worktrees is too long for the one line the footer has. -->
+<div id="cleanDetail" class="sheet" role="dialog" aria-modal="true" aria-labelledby="cleanDetailName" tabindex="-1" hidden>
+  <div class="panel">
+    <div class="panel-head">
+      <span class="name" id="cleanDetailName"></span>
+      <span class="meta" id="cleanDetailMeta"></span>
+      <button class="close" id="cleanDetailClose" title="close (esc)">×</button>
+    </div>
+    <!-- Focusable so a keyboard user can scroll past the first screen; it is the second tab stop. -->
+    <div id="cleanDetailBody" class="sheet-body" tabindex="0"></div>
   </div>
 </div>
 
