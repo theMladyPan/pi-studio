@@ -6,7 +6,7 @@
 import { existsSync, realpathSync, rmdirSync } from "node:fs";
 import { baseRef, gitIn, mainRepoOf, repoOf } from "../git/repo.ts";
 import { basename, dirname, resolve } from "node:path";
-import { AGENTS_DIR, headBranch } from "./make.ts";
+import { AGENTS_DIR } from "./make.ts";
 
 
 
@@ -34,19 +34,23 @@ export function retireWorktree(board, tree) {
 		// A tree somebody deleted by hand is already gone; its registration in .git/worktrees is not.
 		gitIn(repo, ["worktree", "prune"]);
 	}
-	// The branch the record names is gone. With the folder gone too the record has nothing left to
-	// protect, and without this check the unreadable count below would report a phantom tree for ever.
-	// A folder still on disk was renamed out from under the record: the work is on whatever the tree
-	// stands on now, so that branch is what the proofs below are asked about.
-	let recorded = "";
-	if (branch && !gitIn(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok) {
-		if (!existsSync(tree.path)) {
-			forget(board, tree);
-			return { path: tree.path, branch: label, removed: true, note: "the branch is already gone" };
+	// The branch the tree stands on is read from the disk whenever the folder is there, so the record's
+	// branch is advisory: a tree that left the recorded branch, renamed it or went detached and committed
+	// holds its work on whatever HEAD is now, and a proof about the recorded name says nothing about that
+	// work while the folder removal below takes it with the tree. With the folder gone the record is all
+	// that is left, and a recorded branch that is gone too has nothing left to protect; without this check
+	// the unreadable count below would report a phantom tree for ever.
+	let recorded = null;
+	if (existsSync(tree.path)) {
+		const head = branchOn(tree.path);
+		if (head !== branch) {
+			recorded = branch;
+			branch = head;
+			label = branch || `detached at ${tree.base}`;
 		}
-		recorded = branch;
-		branch = headBranch(tree.path);
-		label = branch || `detached at ${tree.base}`;
+	} else if (branch && !gitIn(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok) {
+		forget(board, tree);
+		return { path: tree.path, branch: label, removed: true, note: "the branch is already gone" };
 	}
 	// A detached tree whose folder is gone has no name and no HEAD left to ask about, so its commits are
 	// already beyond reach and the record is all that remains of it.
@@ -55,21 +59,14 @@ export function retireWorktree(board, tree) {
 		return { path: tree.path, branch: label, removed: true, note: "the folder is already gone" };
 	}
 	// Every reason below names the branch the tree really stands on when the record says otherwise.
-	const why = (reason) => (recorded ? `${reason}; the tree is on ${branch || "a detached HEAD"}, recorded as ${recorded}` : reason);
+	const why = (reason) =>
+		recorded === null ? reason : `${reason}; the tree is on ${branch || "a detached HEAD"}, recorded as ${recorded || "detached"}`;
 	// The branch the work would have been integrated into, named in every sentence below.
 	const up = baseRef(repo);
-	// The branch the tree really stands on, which is the record's only until the record stops matching
-	// what is on disk. Read before any proof, because a proof about it is what the guard below refuses.
-	const standing = branch || (existsSync(tree.path) ? headBranch(tree.path) : "");
-	// The integration branch is the reference every other proof is measured against, so deleting it is
-	// never a cleanup. A tree standing on it holds the one name the whole board is judged by: the branch
-	// always contains itself, any branch carrying its tip answers the containment proof, and `up !== branch`
-	// quietly skips the cherry proof, so the sweep would read such a tree as spent and take dev with it.
-	// Said here, ahead of every proof and of the deletion below, so no reason text and no renamed branch
-	// can reach `git branch -D` with that name.
-	if (up && standing === up) {
-		return { path: tree.path, branch: label, kept: why(`standing on ${up}, which is the branch its work is measured against`) };
-	}
+	// Said ahead of every proof and of the deletion below, so no reason text and no renamed branch can
+	// reach `git branch -D` with a trunk's name.
+	const trunk = branch ? trunkReason(repo, up, branch) : "";
+	if (trunk) return { path: tree.path, branch: label, kept: why(trunk) };
 	// The work is integrated when one of two proofs holds, and the tree then holds nothing of its own. A
 	// branch a merge, a fast-forward or a rebase put into another branch is contained in it; a branch
 	// cherry-picked in carries the same patches under other ids. Both are asked of the main checkout,
@@ -86,7 +83,7 @@ export function retireWorktree(board, tree) {
 		// Commits cherry-picked into the integration branch have no id in common with it, so a "+" line
 		// is the only thing that says the work is missing. A squashed branch leaves no equivalent commit
 		// at all, which is why such a tree keeps rather than guessed away.
-		if (!integrated && up && up !== branch) {
+		if (!integrated) {
 			const equivalent = gitIn(repo, ["cherry", `refs/heads/${up}`, `refs/heads/${branch}`], 10_000);
 			if (!equivalent.ok) {
 				return { path: tree.path, branch: label, kept: why(`could not read git cherry ${up} ${branch}: ${equivalent.err.split("\n")[0] || "no reason given"}`) };
@@ -101,7 +98,9 @@ export function retireWorktree(board, tree) {
 				if (count !== lines.length) {
 					return { path: tree.path, branch: label, kept: why(`${between.out} commit(s) not in ${up}, of which git cherry compared ${lines.length}`) };
 				}
-				integrated = true;
+				// No commit compared is no proof: a branch standing on its base prints no line either, and it
+				// may be the only ref naming the commit it stands on.
+				integrated = count > 0;
 			}
 		}
 	} else if (existsSync(tree.path)) {
@@ -129,6 +128,12 @@ export function retireWorktree(board, tree) {
 		if (commits > 0) {
 			const where = up && up !== branch ? up : "any local branch";
 			return { path: tree.path, branch: label, kept: why(`${commits} commit(s) not in ${where}`) };
+		}
+		// A named branch goes only on a proof. One with nothing past its base may still be the only ref
+		// naming the commit it stands on, as a spawned child's branch on its parent's commit is. A detached
+		// tree on its base goes on: no commit of its own exists, and it has no name to delete.
+		if (branch) {
+			return { path: tree.path, branch: label, kept: why(`0 commit(s) past ${tree.base}, and no other local branch holds ${branch}`) };
 		}
 	}
 	let ignoredPaths = 0;
@@ -166,6 +171,38 @@ export function retireWorktree(board, tree) {
 		...(ignoredPaths ? { ignoredPaths } : {}),
 		...(branchGone.ok ? {} : { branchKept: branchGone.err.split("\n")[0] || "git refused" }),
 	};
+}
+
+
+
+/**
+ * The branch a checkout stands on, or "" while it is detached or unreadable. Read as the full ref:
+ * `rev-parse --abbrev-ref` answers `heads/<name>` when a tag shares the name, which is no branch at all.
+ */
+function branchOn(path) {
+	const head = gitIn(path, ["symbolic-ref", "--quiet", "HEAD"]);
+	return head.ok && head.out.startsWith("refs/heads/") ? head.out.slice("refs/heads/".length) : "";
+}
+
+
+
+/** Names a repository's trunk goes by, which no sweep deletes whatever a proof says about them. */
+const TRUNK_NAMES = new Set(["dev", "main", "master", "trunk", "develop", "default"]);
+
+
+
+/**
+ * Why a branch is a trunk the sweep must keep, or "" when it is a thread's branch. The sweep takes a
+ * thread's branch, never a trunk: every proof is measured against the integration branch, so the branch
+ * itself, a branch carrying its tip, or the one the main checkout stands on always reads as spent. With
+ * no integration branch at all nothing can be measured, so nothing named is deleted.
+ */
+function trunkReason(repo, up, branch) {
+	if (!up) return `no integration branch to measure ${branch} against`;
+	if (branch === up) return `standing on ${up}, which is the branch its work is measured against`;
+	if (TRUNK_NAMES.has(branch)) return `standing on ${branch}, a trunk name the sweep never deletes`;
+	if (branch === branchOn(repo)) return `standing on ${branch}, which the main checkout has checked out`;
+	return "";
 }
 
 
