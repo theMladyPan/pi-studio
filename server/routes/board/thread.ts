@@ -36,7 +36,11 @@ function threadSpec(board, body, caller) {
 	// One level: the human's threads spawn children, and a child spawns nothing.
 	const depth = parent ? (parent.depth ?? 0) + 1 : 0;
 	if (depth > 1) return { error: "a thread spawned by an agent may not spawn another" };
-	if (board.threads.size >= MAX_THREADS) return { error: `this board holds ${MAX_THREADS} threads` };
+	// A child the board put away is still in `board.threads`, and one is left there for every answer read,
+	// so only the threads that are drawn count against the ceiling. A board full of put-away children is a
+	// board with room in it, and the cap on those children is `MAX_PUT_AWAY_CHILDREN`.
+	const drawn = [...board.threads.values()].filter((thread) => !thread.hidden).length;
+	if (drawn >= MAX_THREADS) return { error: `this board holds ${MAX_THREADS} threads` };
 	// Predecessors are what the board draws arrows from, so a misspelled id is a mistake to report
 	// rather than something to drop quietly. A key stands for a card the way a `[[key]]` does, so
 	// `after: ["load-shape"]` is an arrow too.

@@ -13,6 +13,7 @@ import { MODEL, PROVIDER, THINKING_LEVELS } from "./models.ts";
 import { ROLE_NAMES } from "./child/roles.ts";
 import { MODE_NAMES, PATH_NAMES } from "./child/modes.ts";
 import { sweepTrees } from "./cards.ts";
+import { MAX_PUT_AWAY_CHILDREN } from "./limits.ts";
 
 
 
@@ -338,7 +339,16 @@ export function boardFor(workspace) {
 		);
 	}
 	if (saved && saved.version === STATE_VERSION && Array.isArray(saved.threads)) {
-		for (const raw of saved.threads.slice(-MAX_THREADS)) {
+		// A child the board put away is filed with the board it was put away on: it carries `closedAt`, owns no
+		// cards and is only there for the rail to offer back. Its own cap keeps the newest of them, and keeping
+		// them out of the board's ceiling is what stops them from pushing the human's threads out of the file
+		// as they accumulate.
+		const putAway = (raw) => raw?.hidden && raw?.closedAt;
+		const filed = [
+			...saved.threads.filter((raw) => !putAway(raw)).slice(-MAX_THREADS),
+			...saved.threads.filter(putAway).slice(-MAX_PUT_AWAY_CHILDREN),
+		];
+		for (const raw of filed) {
 			const thread = restoredThread(raw, workspace.folder);
 			if (thread && !board.threads.has(thread.id)) board.threads.set(thread.id, thread);
 		}

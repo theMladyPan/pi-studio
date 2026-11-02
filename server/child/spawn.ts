@@ -28,6 +28,10 @@ export async function runSpawn(board, thread, task, limits, kill) {
 	let killTimer;
 	const timer = setTimeout(() => {
 		limits.timedOut = true;
+		// The board reads the thread, not the spawn's local limits, when it decides whether an answer may
+		// be put away: a timeout that lands after the last `turn_end` leaves the turn reading `answered`,
+		// and this flag is what still says the run was cut.
+		thread.timedOut = true;
 		// Abort first: a child that is only asked to stop still reports what it had.
 		thread.abortWanted = true;
 		try {
