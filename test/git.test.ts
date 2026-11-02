@@ -285,6 +285,31 @@ test("a branch another local branch holds, with dev untouched, is spent", () => 
 	}
 });
 
+test("a tree standing on dev itself is kept, and dev keeps its name", () => {
+	const repo = scratchRepo();
+	try {
+		const board = { folder: repo, name: "scratch", children: new Map(), threads: new Map(), trees: [] as any[] };
+		const tree = ensureWorktree(board, { id: "thread-on-dev-1", title: "a change", folder: repo });
+		assert.ok(tree.path, `no worktree made: ${JSON.stringify(tree)}`);
+		// The main checkout lets go of dev so the tree can stand on it, as a child that checks the base
+		// out to work on it does; the board then reads the branch off the tree and records it.
+		git(repo, "checkout", "-q", "--detach");
+		git(tree.path, "checkout", "-q", "dev");
+		tree.branch = "dev";
+		// Another local branch holds dev's tip, which is the containment proof the sweep trusted.
+		git(repo, "branch", "side", "dev");
+		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
+		assert.equal(retired.removed, undefined, `a tree standing on dev was removed: ${JSON.stringify(retired)}`);
+		assert.match(String(retired.kept), /standing on dev/, `the reason does not name dev: ${retired.kept}`);
+		assert.ok(existsSync(tree.path), "the folder of the tree standing on dev is gone");
+		assert.notEqual(git(repo, "branch", "--list", "dev"), "", "the integration branch lost its name");
+		assert.ok(board.trees.some((record: any) => record.path === tree.path), "the record went while the tree stayed");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("a tree with an uncommitted edit is kept, and the reason says so", () => {
 	const repo = scratchRepo();
 	try {
