@@ -7019,11 +7019,16 @@ function paintRemoveSheet(preview) {
   removeName = preview.thread?.title || removeName;
   removePanelName.textContent = removeName;
   removePanelMeta.textContent = preview.branch || preview.path || "no folder";
-  // One sentence for the whole of it: what goes, and the fact that nothing comes back.
+  // One sentence for the whole of it: what goes, and the fact that nothing comes back. The branch is named
+  // only when the thread has one, the way the risk block below keeps its branch clauses.
   const warning = el("div", "act-note");
-  warning.textContent = tree
-    ? "This removes the card, the conversation on it, the folder the thread worked in and its branch. Nothing is kept, so there is no undo."
-    : "This removes the card and the conversation on it. Nothing is kept, so there is no undo.";
+  warning.textContent = preview.path
+    ? preview.branch
+      ? "This removes the card, the conversation on it, the folder the thread worked in and its branch. Nothing is kept, so there is no undo."
+      : "This removes the card, the conversation on it and the folder the thread worked in. Nothing is kept, so there is no undo."
+    : preview.branch
+      ? "This removes the card, the conversation on it and its branch. Nothing is kept, so there is no undo."
+      : "This removes the card and the conversation on it. Nothing is kept, so there is no undo.";
   const parts = [warning];
   // The counts in words: the work sitting in the folder, the files git deletes without a word, and the work
   // that never left the branch. The two clauses that talk about the branch are only said when there is one:
