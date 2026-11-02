@@ -831,6 +831,21 @@
   #pickError[hidden] { display: none; }
   #pickCount { flex: 1; font: 11px var(--mono); color: var(--muted); }
 
+  /* The `@` list: the same panel and the same rows as the picker above, hung off the field that is
+     being typed in. It is one element for the whole board, reused by every field. */
+  #atPick { position: fixed; z-index: 2000; display: flex; flex-direction: column;
+    padding: 6px; background: rgba(13,17,23,.98); border: 1px solid var(--border-bright);
+    border-radius: 10px; box-shadow: 0 18px 40px rgba(0,0,0,.55); }
+  #atPick[hidden] { display: none; }
+  #atList { max-height: 230px; overflow: auto; display: flex; flex-direction: column; gap: 1px; }
+  #atList .p-item { display: flex; align-items: center; gap: 7px; padding: 3px 6px; width: 100%;
+    font: 12px var(--mono); color: var(--text); background: none; border: 0; text-align: left;
+    cursor: pointer; }
+  #atList .p-item:hover, #atList .p-item.hl { background: #161b22; }
+  #atList .p-item .p-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #atList .p-item.dir .p-name { color: var(--accent); }
+  #atList .p-empty { padding: 12px; color: var(--muted); font: 11px var(--mono); text-align: center; }
+
   /* What a rail row hides: a sheet over the whole board, so nothing it covers is clickable while
      it is open. The body is the one scroll container, because a long output or thought is what
      the panel is for. */
@@ -1089,6 +1104,10 @@
 <div id="runtimePick" hidden>
   <input id="runtimeSearch" type="text" placeholder="search models…" autocomplete="off" spellcheck="false" />
   <div id="runtimeList"></div>
+</div>
+
+<div id="atPick" role="dialog" aria-label="files in this workspace" hidden>
+  <div id="atList"></div>
 </div>
 
 <div id="viewport">
