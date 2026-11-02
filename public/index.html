@@ -450,14 +450,19 @@
   #footer { position: fixed; left: var(--rail, 0); right: 0; bottom: 0; z-index: 40; display: flex;
     align-items: center; gap: 14px; height: 24px; padding: 0 12px; background: #0d1117;
     border-top: 1px solid var(--border); }
-  #footer .stat { font: 11px var(--mono); color: var(--muted); }
+  /* The strip is one line tall, so nothing on it wraps: a figure too wide for its share is cut with an
+     ellipsis rather than folded over the board, and `min-width: 0` lets it give up that share at all. */
+  #footer .stat { font: 11px var(--mono); color: var(--muted); min-width: 0; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
   #footer .stat:empty { display: none; }
   #footer .stat em { color: var(--text); font-style: normal; }
   /* A note that reports a failure carries the same red the composer's own hint does. */
   #footer .stat.bad { color: var(--red); }
-  /* A receipt can outgrow the strip, and the strip is one line tall: the tail is cut with an ellipsis
-     rather than wrapped over the board. A short receipt still reads whole. */
-  #footHint { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The receipt answers the last click, so it keeps the width its own words ask for: the figures beside
+     it give up their tails first, and the spacer holds only the slack that is left over. A receipt is
+     cut only when its words alone are wider than the strip, and then at the strip's edge. */
+  #footer #footHint { flex: 0 0 auto; max-width: 100%; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; }
   #footer .grow { flex: 1; }
   body.rail-off #footer { left: 0; }
   header .stat em { color: var(--text); font-style: normal; }
