@@ -447,6 +447,33 @@ commit's own account rather than on a check run now, the section below says so.
 - **Persistence**: board saved on a 500 ms debounce and flushed on stop and on a workspace switch;
   a restart reopens the last workspace.
 - `GET /browse` for the composer's file picker. Token gate on every data route (403 without it).
+- **Every thread card carries its own field, and it is always there.** One `.composer` is built per
+  thread card from the `<template id="composerTpl">` in `index.html`, and holds its own text, pasted
+  images, picked paths, model and thinking chips and context meter, so two cards share nothing. A note,
+  a source and a question grow none: they are read through the thread above them. The caret goes into a
+  field by clicking it, by the `↩` in the card's head, or with `r` — and Escape gives the keyboard back
+  to the board while the words stay where they were written. The card whose field has the keyboard wears
+  the amber ring (`.card:has(.composer:focus-within)`); a folded card shows only its head, so the field
+  is hidden with the body and comes back with it. A panel or an editor takes Escape first and stops it
+  there, so closing one costs neither the selection nor the draft.
+- **One message can name several cards.** `r` on a selected card names it in a field instead of moving
+  the field: a thread card takes the caret to its own field, and any other card joins the message being
+  written, or the message of the thread that answers it when nothing is focused. The named cards sit as
+  chips above the field, each dropped on its own with an ×, and travel on `POST /message` as `refs`,
+  which the daemon quotes into the prompt with the same `cardPreamble` it uses for the card being
+  answered. That is how a card is put in front of a thread other than the one that made it. A named card
+  that a thread already answers offers `fork`, which asks a new thread about it. Sending spends the
+  names with the words, and a card that has left the board drops out of the row.
+- **`t` starts a thread.** The key is the `+` button's twin — the same request, the same wait for the
+  card to arrive, the field put in it — and it stays quiet while a card is selected, because a reading
+  position keeps the letters, and on a board with one session behind it, which has no threads to
+  start. The empty board names both ways in: `press + or t to start a thread`.
+- **A card is a handle.** Press and drag anywhere on a card moves it; press the background and the
+  board pans; ctrl+drag inside a card selects its text. Controls keep their own press: header buttons,
+  the field inside a card, links, checkboxes, editable fields and the resize corner.
+- **A reload in development.** The daemon reuses the port it printed last, so `npm run dev`
+  (`node --watch server.ts --no-open`) restarts behind the URL a tab is already on, and the tab
+  reconnects to a snapshot by itself. Client files need only a browser reload.
 
 ## Client
 
@@ -688,57 +715,20 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
 
 ## Does not work yet
 
-- Forking a *thread* is not built: `fork` on a thread card does nothing (the button is hidden there),
-  because a real fork has to copy the session file and mark the copy `forkedFrom`.
-- Feeding a card into a thread other than the one that made it is designed and not built.
+- Forking a *thread* is not built: `fork` on a thread card does nothing, and the button is hidden
+  there, because the fork the client offers answers only for a plain card that already has a thread
+  behind it. A real thread fork has to copy the session file and mark the copy `forkedFrom`, and no
+  code reads or writes that field.
 - Rail rows carry what the sheet draws and no usage totals beside it, and a picture lives only while
   the daemon does: a screenshot row from a board that has been restarted says the picture is not kept.
 - A workspace whose folder has been deleted or moved says `folder missing` at the crossroads, with its
   open button disabled and `that folder no longer exists` where the hint goes, but there is no way to
-  forget the entry and it stays in the list.
-
-- **Two verbs for tidying.** `clean` forgets the activity of threads that are gone or dead, the dead
-  threads themselves with their children, and the ownership their cards still pointed at, so a note
-  left behind starts a fresh child when asked again. It also removes the worktree and branch of a gone
-  thread when the tree has no uncommitted change and no commit the base does not have, and names the
-  trees it kept and why. `new` empties the board and keeps the workspace and its settings; because it
-  throws work away, the button turns into `sure?` and the second press inside four seconds is the
-  answer. Both answer by sending a snapshot, which every open tab already knows how to replay.
-- **The selection decides the wheel and the dimming.** A selected card is the reading position: the
-  wheel scrolls that card wherever the pointer is, and cards of other threads drop to 70% opacity
-  (`board.config.dimOthers`). With nothing selected the wheel pans the board and every card is equal.
-  Escape gives the selection up.
-- **Every thread card carries its own field, and it is always there.** One `.composer` is built per
-  thread card from the `<template id="composerTpl">` in `index.html`, and holds its own text, pasted
-  images, picked paths, model and thinking chips and context meter, so two cards share nothing. A note,
-  a source and a question grow none: they are read through the thread above them. The caret goes into a
-  field by clicking it, by the `↩` in the card's head, or with `r` — and Escape gives the keyboard back
-  to the board while the words stay where they were written. The card whose field has the keyboard wears
-  the amber ring (`.card:has(.composer:focus-within)`); a folded card shows only its head, so the field
-  is hidden with the body and comes back with it. A panel or an editor takes Escape first and stops it
-  there, so closing one costs neither the selection nor the draft.
-- **One message can name several cards.** `r` on a selected card names it in a field instead of moving
-  the field: a thread card takes the caret to its own field, and any other card joins the message being
-  written, or the message of the thread that answers it when nothing is focused. The named cards sit as
-  chips above the field, each dropped on its own with an ×, and travel on `POST /message` as `refs`,
-  which the daemon quotes into the prompt with the same `cardPreamble` it uses for the card being
-  answered. A named card that a thread already answers offers `fork`, which asks a new thread about it.
-  Sending spends the names with the words, and a card that has left the board drops out of the row.
-- **`t` starts a thread.** The key is the `+` button's twin — the same request, the same wait for the
-  card to arrive, the field put in it — and it stays quiet while a card is selected, because a reading
-  position keeps the letters, and on a board with one session behind it, which has no threads to
-  start. The empty board names both ways in: `press + or t to start a thread`.
-- **A card is a handle.** Press and drag anywhere on a card moves it; press the background and the
-  board pans; ctrl+drag inside a card selects its text. Controls keep their own press: header buttons,
-  the field inside a card, links, checkboxes, editable fields and the resize corner.
-- **A reload in development.** The daemon reuses the port it printed last, so `npm run dev`
-  (`node --watch server.ts --no-open`) restarts behind the URL a tab is already on, and the tab
-  reconnects to a snapshot by itself. Client files need only a browser reload.
+  forget the entry and it stays in the list. There is no route that removes a workspace at all.
 
 ## Next, in order
 
 1. A workspace entry that no longer resolves: offer to forget it.
-2. Fork a thread, then feeding a card into another thread.
+2. Fork a thread.
 3. Brainstorm how to organize subagents on a board — potentially replace `delegate`.
 4. HTML artifacts: a card that renders a whole html file, not only source text.
 5. Home screen redesign — the crossroads (`/`, `welcome.html`/`welcome.css`/`welcome.js`).

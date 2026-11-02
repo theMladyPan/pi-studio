@@ -1,13 +1,13 @@
 # React, Vue, Vite, TypeScript — analysis
 
-Written against `dev` at `99e38e9` beside `MODULARIZATION.md`. Nothing implemented. This is a
-decision document, not a plan of record: the one thing I would ask you to approve is the ordering at
-the bottom.
+Written against `dev` at `99e38e9` beside `MODULARIZATION.md`, and re-read against `dev` at `72a0a3d`.
+Nothing implemented. This is a decision document, not a plan of record: the one thing I would ask you to
+approve is the ordering at the bottom — and two of those four steps have since happened.
 
 ## The answer, up front
 
 - **React or Vue: no, not now.** The client is not a component tree, and a migration would rewrite
-  5305 lines with no regression net in exchange for no user-visible gain.
+  7807 lines with no regression net in exchange for no user-visible gain.
 - **Vite: only if a build step ever becomes acceptable.** It buys HMR and TypeScript emit and costs
   the promise the README leads with, that there is nothing to install.
 - **TypeScript: yes, as a checker, not as a build.** `tsc --noEmit` over the existing `.js` with
@@ -20,11 +20,12 @@ the split first and the framework second pays for the same work twice.
 
 ## What the client actually is
 
-Measurements from `public/board.js` as it stands:
+Measurements from `public/client/board.js` as it stands (7807 lines at `72a0a3d`; the counts below are
+the ones taken at `99e38e9`, when the file was 5305):
 
 | | count |
 |---|---:|
-| lines | 5305 |
+| lines | 5305, and 7807 now |
 | functions | 197 |
 | `addEventListener` calls | 114 |
 | `getElementById` | 93 |
@@ -79,12 +80,13 @@ graph that survives hundreds of files, and a proxy for `/events` during developm
 
 Costs, concretely, in this repository:
 
-- `npm install` becomes mandatory, and `node_modules` appears where today `node server.mjs` is the
+- `npm install` becomes mandatory, and `node_modules` appears where today `node server.ts` is the
   whole requirement;
 - `bin/pi-studio` must serve built assets, so either `dist/` is committed (a stale-build class of bug
   appears: "which build am I running?") or the wrapper builds on start (a first run that needs the
   network);
-- the daemon's four-path static allowlist (`server.mjs:3695`) becomes a real static handler over
+- the daemon's static allowlist (`server/main.ts`, the `/client/` prefix rule) becomes a real static
+  handler over
   `dist/`, with cache headers to design;
 - two ports in development, and the SSE route proxied, which is where dev-only bugs come from.
 
@@ -125,12 +127,17 @@ undone in a week.
 ## What I would do, in order
 
 1. `MODULARIZATION.md` step 0: the state-folder override and a boot smoke test. Without it nothing
-   below can be checked.
-2. `tsc --noEmit` over `.js` with `checkJs`, added as `npm run check` alongside `node --check`. This is
-   the safety net the split lacks, and it is cheaper than the first module move.
-3. The split, daemon first, one commit per section.
+   below can be checked. **Done** — `--state` / `PI_STUDIO_STATE`, and `bin/smoke.mjs` boots a daemon on
+   a scratch folder.
+2. `tsc --noEmit`, added to `npm run check` alongside `node --check`. This is the safety net the split
+   lacks, and it is cheaper than the first module move. **Done** — `typescript` and `@types/node` are
+   devDependencies, `tsconfig.node.json` is `strict`, and `check` runs `tsc`. What is left is the other
+   half of this step: 30 of the 39 daemon files still carry `@ts-nocheck`, so the net covers nine of them.
+3. The split, daemon first, one commit per section. **Done for the daemon**; the client half is still
+   deferred, and the file has grown from 5305 lines to 7807 while it waited.
 4. Revisit this document. By then the module boundaries are real, and a framework decision is a choice
-   about the client alone rather than about the whole app.
+   about the client alone rather than about the whole app. This is the step that is now open: the client
+   has crossed the 8k line this document names as its own trigger.
 
 ## What would change my mind
 
@@ -148,6 +155,7 @@ Until one of those is true, a framework is a rewrite whose first customer is the
 ## Open questions for you
 
 - Is "nothing to install" a promise you want to keep? It is the one line in the README that shapes
-  every option here.
-- Would you accept a check step (`tsc --noEmit`) in `npm run check` even though it adds a
-  `devDependency`? It is the only way to get types without touching the runtime.
+  every option here. Half answered in practice: the daemon still needs no install, `check` does, and
+  `precheck` says so in one line before it fails.
+- ~~Would you accept a check step in `npm run check` even though it adds a `devDependency`?~~ Taken: it
+  is there, with `typescript` as a devDependency, and the daemon is untouched by it.

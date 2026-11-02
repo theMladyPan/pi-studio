@@ -1,23 +1,26 @@
 # Breaking the two monoliths into modules
 
-**Status, 2026-10-29: the daemon half is done; the client half is deferred until further notice.**
+**Status, 2026-10-29, numbers re-measured on `dev` at `72a0a3d`: the daemon half is done; the client half
+is deferred until further notice.**
 Where this stands, and
 what to read instead of the plan below:
 
 | | state | where |
 |---|---|---|
-| the daemon | **done and merged** | `server.ts` plus 28 modules under `server/`, one commit per group, merged to `dev` at `78e6ca8` |
-| its checks and tests | **done** | `npm run check` = `node --check`, `bin/check-imports.mjs`, `tsc`, `node --test` (34 tests), `bin/smoke.mjs` (19 route checks) |
-| the client | **one module**: `public/client/board.js`, 5322 lines, loaded by `index.html` as `type="module"` and served by one `/client/**/*.js` rule | `f600268` |
-| the client's split | **deferred, not started** | see "The client, when someone picks it up" below |
-| `@ts-nocheck` on 26 of 28 daemon modules | **open** | 44 diagnostics under a loose config; stripping the pragmas and gating them is the next real win |
+| the daemon | **done and merged** | `server.ts` (nine lines) plus 39 modules under `server/`, one commit per group, merged to `dev` at `78e6ca8` |
+| its checks and tests | **done** | `npm run check` = `node --check`, `bin/check-imports.mjs`, `tsc`, `node --test` (115 tests), `bin/smoke.mjs` (45 checks) |
+| the client | **one module**: `public/client/board.js`, 7807 lines, loaded by `index.html` as `type="module"` and served by one `/client/**/*.js` rule | `f600268` |
+| the client's split | **deferred, not started**, and the file has grown by half since it was costed | see "The client, when someone picks it up" below |
+| `@ts-nocheck` on 30 of 39 daemon modules | **open** | 557 diagnostics under `strict`, 75 under a loose config; stripping the pragmas and gating them is the next real win |
 
 `PORT-PLAN.md` is the record of the daemon port: its target layout, the order of work, the review that
 reshaped it, and the status section written when it landed.
 
 ## The client, when someone picks it up
 
-Do not start from the plan below. It was measured with text greps, and the parser disagreed with it:
+Do not start from the plan below. It was measured with text greps against a 5305-line file, and the
+parser disagreed with it. The file is 7807 lines now, so every count here is a floor rather than a
+measurement: re-measure before choosing a route.
 
 | plan said | measured |
 |---|---:|
