@@ -4,7 +4,7 @@ The one list of what is open. `STATE.md` says what works; this says what does no
 says what it is, what it would touch, and what has to be settled before it can start. Line numbers are
 `dev` at `72a0a3d`.
 
-Fifteen entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
+Sixteen entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
 something the board cannot do yet, **chore** is work on the code itself.
 
 Three decisions have to be answered by you before some of these can start, and each is named in the
@@ -72,6 +72,27 @@ not equivalent: a plain hover on the strip (`pointer-events: auto`) swallows dra
 test keeps the board usable and costs a short delay. Hover is also not a modality everyone has, so the
 accessible read (the strip's own summary label, or a strip that can take focus) has to be kept.
 
+**Voice, on a card.** The `voice` extension drove the console by speech, and it was retired from the
+extensions repository rather than ported, because every one of its hooks checked `ctx.mode === "tui"`
+and `ctx.hasUI`: a thread runs `--mode rpc`, so a board version is a rebuild. What it did is worth
+having back. It dictated into the editor from `arecord` at 16 kHz mono, with an energy gate on 100 ms
+frames, an utterance closed by 700 ms of quiet or cut every 6.5 s so the words appeared while you were
+still talking, and 200 ms of speech cut whatever was being read out. It had the agent write one short
+breadcrumb per tool batch and spoke each sentence as it streamed, so the voice overlapped the tools
+instead of following them, then spoke a 40-word wrap-up when the run settled — what changed, and the
+one question worth answering next. `humanizeForSpeech` read `src/config/settings.py` as "settings py in
+src config folder", `alt+s`/`alt+x`/`alt+l` and `/voice` drove it, English and Slovak came from one
+setting, and speech in and out went to `gemini-3.8-flash` and `gemini-3.8-flash-tts`. The last tree is
+branch `archive/voice-mode` (`06d5868`) in the extensions repository. Here the text is already on the
+wire — a child's `text_delta` reaches the daemon (`server/thought.ts:342`) — and the breadcrumb is a
+system-prompt section, which the daemon already writes per role
+(`server/child/roles.ts`). Touches the card composer, the child's stream, the settings document for the
+key and the language, and a control to read one thread aloud. To settle: whether the microphone stays
+in the daemon with `arecord` or moves into the page with `MediaRecorder` sending bytes here, which
+would drop the ALSA dependency and the record-device question with it; where `GEMINI_API_KEY` lives,
+in the daemon's environment or in a board's settings; and whether speech is one switch for the board or
+per thread, because several children answer at once and a voice that reads all of them is a mess.
+
 **How subagents should be organised on a board.** An idea to settle before it becomes a task: it may
 replace the `delegate` tool. The three flows a boss runs today are drawn in
 `docs/boss-and-subagents.md`.
@@ -97,9 +118,10 @@ what broke four files.
 documents and every route are tested against a stub child (115 tests). What is left needs a real agent:
 a whole conversation, an abort mid-answer, and a session resumed after a restart.
 
-**Retire the older board in the extensions repository.** The `dashboard` extension duplicates this app,
-which is why every child excludes it by name (`server/models.ts:239`). Once this board is the only one,
-the exclusion and the extension both go.
+**Retire the older board in the extensions repository.** Done on the extensions side: the `dashboard`
+extension and its roadmap are deleted (`6662647`), kept on branch `archive/dashboard-extension`. What is
+left here is the name, `dashboard` in `CHILD_EXCLUDE` (`server/models.ts:239`), which can go once the
+extension is gone from every workstation.
 
 ## Not open
 
