@@ -6761,17 +6761,33 @@ cleanBtn.addEventListener("click", async () => {
   // A tree the sweep would not touch is the one thing here that needs saying: it holds work, and
   // the human is the only one who can decide what happens to it.
   const kept = (result.trees ?? []).filter((tree) => tree.kept);
-  const swept = (result.trees ?? []).filter((tree) => tree.removed).length;
+  const removed = (result.trees ?? []).filter((tree) => tree.removed);
+  const swept = removed.length;
+  // What the sweep knows and the folder no longer shows: how many ignored files went with the trees it
+  // removed, and a branch git would not delete. Said here in plain words, because the human is the only
+  // one who can still act on either.
+  const carried = removed.reduce((sum, tree) => sum + (tree.ignoredPaths ?? 0), 0);
+  const survived = removed.filter((tree) => tree.branchKept).map((tree) => tree.branch);
+  const went = [
+    carried ? `${carried} ignored file${carried === 1 ? "" : "s"} went with the removed worktree${swept === 1 ? "" : "s"}` : "",
+    survived.length
+      ? `${survived.length === 1 ? "the branch" : "the branches"} ${survived.join(", ")} ${survived.length === 1 ? "is" : "are"} still there`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
   if (kept.length) {
     const sweptNote = result.removed.length ? `${result.removed.length} dead thread${result.removed.length > 1 ? "s" : ""}, ` : "";
-    hintLine(`${sweptNote}kept ${kept.length} worktree${kept.length > 1 ? "s" : ""}: ${kept.map((tree) => `${tree.branch} (${tree.kept})`).join(", ")}`);
+    hintLine(
+      `${sweptNote}kept ${kept.length} worktree${kept.length > 1 ? "s" : ""}: ${kept.map((tree) => `${tree.branch} (${tree.kept})`).join(", ")}${went ? `, ${went}` : ""}`,
+    );
     return;
   }
   hintLine(
     result.removed.length
-      ? `cleaned ${result.removed.length} dead thread${result.removed.length > 1 ? "s" : ""}, ${swept} worktree${swept === 1 ? "" : "s"} and ${result.rows} rows`
+      ? `cleaned ${result.removed.length} dead thread${result.removed.length > 1 ? "s" : ""}, ${swept} worktree${swept === 1 ? "" : "s"} and ${result.rows} rows${went ? `, ${went}` : ""}`
       : swept
-        ? `removed ${swept} unused worktree${swept > 1 ? "s" : ""}`
+        ? `removed ${swept} unused worktree${swept > 1 ? "s" : ""}${went ? `, ${went}` : ""}`
         : "nothing to clean",
   );
 });

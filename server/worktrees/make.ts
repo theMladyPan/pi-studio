@@ -4,7 +4,7 @@
  * it is cut from.
  */
 import { baseRef, gitIn, repoOf } from "../git/repo.ts";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { existsSync } from "node:fs";
 
 
@@ -68,6 +68,14 @@ export function shortId(thread) {
  * what the card can point at when the human wants to see the work.
  */
 export function ensureWorktree(board, thread) {
+	// A tree deleted by hand leaves a record pointing nowhere, and a thread run from it would fall back to
+	// the human's own checkout. The record goes, and the thread gets a fresh tree like a new one would.
+	const stale = thread.worktree?.path && !existsSync(thread.worktree.path) ? thread.worktree.path : "";
+	if (stale) {
+		const at = board.trees.findIndex((candidate) => candidate.path === stale);
+		if (at !== -1) board.trees.splice(at, 1);
+		thread.worktree = undefined;
+	}
 	if (thread.worktree) return thread.worktree;
 	const repo = repoOf(thread.folder ?? board.folder);
 	if (!repo) {
@@ -86,6 +94,17 @@ export function ensureWorktree(board, thread) {
 	}
 	const short = shortId(thread);
 	const path = join(repo, AGENTS_DIR, short);
+	// The deleted tree can still be registered in .git/worktrees under this very path, and git refuses to add
+	// a tree there until that registration goes. Only this path's registration is removed: a prune is
+	// repository-wide and takes every other stale registration with it, a worktree a human moved by hand
+	// included, and that registration is the only thing keeping the commit it stands on reachable.
+	if (stale && registeredAt(repo, stale)) {
+		const removed = gitIn(repo, ["worktree", "remove", stale], 10_000);
+		if (!removed.ok) {
+			thread.worktree = { skipped: `git worktree remove failed: ${removed.err.split("\n")[0] || "no reason given"}` };
+			return thread.worktree;
+		}
+	}
 	// Detached on purpose. A branch is a name for work, and the work is not known until the child has
 	// read the code: a name invented from the request is one the work has to be renamed out of later,
 	// and a request that is only a question never earns a branch at all.
@@ -110,6 +129,22 @@ export function ensureWorktree(board, thread) {
 	board.trees.push(tree);
 	thread.worktree = tree;
 	return tree;
+}
+
+
+
+/**
+ * Whether git still keeps a registration for `path`, read from `git worktree list --porcelain -z`. A folder
+ * deleted by hand leaves its registration in `.git/worktrees` behind, and `git worktree add` refuses that
+ * path while it is there. A list that cannot be read answers false: the add below reports its own refusal.
+ */
+function registeredAt(repo, path) {
+	const list = gitIn(repo, ["worktree", "list", "--porcelain", "-z"]);
+	if (!list.ok) return false;
+	const wanted = resolve(path);
+	return list.out
+		.split("\0")
+		.some((field) => field.startsWith("worktree ") && resolve(field.slice("worktree ".length)) === wanted);
 }
 
 

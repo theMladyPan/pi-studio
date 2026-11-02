@@ -182,6 +182,44 @@ export function boardMeta(board) {
 
 
 /**
+ * Every path a thread still on the board is working in. A loaded record can lose its `thread` field — the
+ * loader takes one without it and still links it to a restored thread — so a live tree must never depend
+ * on that field being there.
+ */
+function liveTreePaths(board) {
+	const paths = new Set();
+	for (const thread of board.threads.values()) {
+		if (thread.worktree?.path) paths.add(thread.worktree.path);
+	}
+	return paths;
+}
+
+
+
+/**
+ * Retire every tree no live thread is working in, and report the ones that were kept. The record is the
+ * board's, not the thread's, so a closed or cleared thread is swept too; a tree whose thread is still on
+ * the board is left alone, because its child may be running in it right now and a sweep must never run
+ * beside a child.
+ */
+export function sweepTrees(board) {
+	const trees = [];
+	const live = liveTreePaths(board);
+	// A tree whose thread is gone is retired only when it holds nothing unmerged; the rest is reported.
+	for (const tree of [...board.trees]) {
+		if (tree.thread && board.threads.has(tree.thread)) continue;
+		// The thread's own worktree field is the proof that outlives a record: a thread still on the board
+		// is working in this tree whether or not the record still names it.
+		if (live.has(tree.path)) continue;
+		const retired = retireWorktree(board, tree);
+		if (retired) trees.push(retired);
+	}
+	return trees;
+}
+
+
+
+/**
  * Clean: forget what belongs to threads that are gone or dead. A dead thread's card goes too — it
  * cannot answer again, and its logs are the part of the rail nobody reads twice. What such a thread
  * owned stays on the board, owned by nobody, so its next comment starts a fresh child.
@@ -189,7 +227,6 @@ export function boardMeta(board) {
 export function cleanBoard(board) {
 	const alive = liveThreadIds(board);
 	const removed = [];
-	const trees = [];
 	for (const thread of [...board.threads.values()]) {
 		if (thread.status !== "dead") continue;
 		removed.push(thread.id);
@@ -197,13 +234,7 @@ export function cleanBoard(board) {
 		board.children.get(thread.id)?.kill("SIGKILL");
 		board.children.delete(thread.id);
 	}
-	// A tree whose thread is gone is retired only when it holds nothing unmerged; the rest is reported.
-	// The record is the board's, not the thread's, so a closed or cleared thread is swept too.
-	for (const tree of [...board.trees]) {
-		if (tree.thread && board.threads.has(tree.thread)) continue;
-		const retired = retireWorktree(board, tree);
-		if (retired) trees.push(retired);
-	}
+	const trees = sweepTrees(board);
 	for (const card of board.cards.values()) {
 		if (card.ownerThread && !alive.has(card.ownerThread)) delete card.ownerThread;
 	}
