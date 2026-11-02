@@ -7707,6 +7707,13 @@ stopBtn.addEventListener("click", async () => {
     stopBtn.textContent = "stop";
   }
 });
+
+/**
+ * The sheet that is up, if one is: the activity detail and the clean receipt are dialogs drawn over the
+ * board. A key press belongs to the sheet while it is open, and to nothing behind it.
+ */
+const openSheet = () => document.querySelector(".sheet:not([hidden])");
+
 // The selection is a reading position, so Escape gives it up: the board stops dimming and the wheel
 // goes back to moving the board. A panel or an editor takes Escape first and stops it there.
 document.addEventListener("keydown", (event) => {
@@ -7714,6 +7721,15 @@ document.addEventListener("keydown", (event) => {
   // The `@` list is its own surface and takes Escape first, so shutting it does not also drop
   // the card being read.
   if (!atPick.hidden) return;
+  // A click on the sheet's padding leaves the focus on the body, so the sheet's own handler never sees
+  // the press: it is closed here, which also keeps it from giving up the card it hides.
+  const sheet = openSheet();
+  if (sheet) {
+    event.preventDefault();
+    if (sheet === actPanel) closeActPanel();
+    else closeCleanSheet();
+    return;
+  }
   if (!document.querySelector(".card.active")) return;
   selectCard(null);
 });
@@ -7724,9 +7740,11 @@ document.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
   if ((key !== "r" && key !== "q" && key !== "p") || event.metaKey || event.ctrlKey || event.altKey) return;
   if (typingSomewhere()) return;
-  // The panel covers the board, so its closing key wins over the card it hides.
-  if (!actPanel.hidden) {
-    if (key === "q") {
+  // The panel covers the board, so its closing key wins over the card it hides. The other sheet has no
+  // closing key of its own, so every board key waits behind it.
+  const sheet = openSheet();
+  if (sheet) {
+    if (key === "q" && sheet === actPanel) {
       event.preventDefault();
       closeActPanel();
     }
@@ -7758,7 +7776,7 @@ document.addEventListener("keydown", (event) => {
 // back the one that went by mistake. A field keeps its own undo, so half-typed text is never replaced.
 document.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() !== "z" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
-  if (typingSomewhere() || !atPick.hidden) return;
+  if (typingSomewhere() || !atPick.hidden || openSheet()) return;
   event.preventDefault();
   undoClose();
 });
@@ -7768,7 +7786,7 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey || !/^[1-6]$/.test(event.key)) return;
   if (typingSomewhere()) return;
-  if (!actPanel.hidden || !atPick.hidden) return;
+  if (openSheet() || !atPick.hidden) return;
   const record = openQuestion();
   if (!record) return;
   // The option buttons carry their own click handler, so this reuses the whole answer path.
@@ -7786,7 +7804,7 @@ document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (typingSomewhere()) return;
   // The picker is its own surface: a board shortcut behind it would move what is out of reach.
-  if (!picker.hidden || !actPanel.hidden || !atPick.hidden) return;
+  if (!picker.hidden || openSheet() || !atPick.hidden) return;
   if (event.key === "f") {
     event.preventDefault();
     fitAll();
