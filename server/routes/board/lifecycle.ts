@@ -11,8 +11,10 @@ import { answer, fail, readJson } from "../../http.ts";
 import { field } from "./thread.ts";
 import { randomUUID } from "node:crypto";
 import { cleanBoard, clearBoard, plainCardFor, stopQueue, sweepTrees } from "../../cards.ts";
+import { existsSync } from "node:fs";
 import { finished } from "../../waiters.ts";
 import { settleRows } from "../../thought.ts";
+import { settleTreeBranch } from "../../worktrees/name.ts";
 
 
 
@@ -35,6 +37,12 @@ export function closeThread(board, thread) {
 	board.threads.delete(thread.id);
 	// A thread that goes takes its place in the closed list with it.
 	nudgeClosed(board);
+	// The record is settled against the tree before anything is swept: a child that cut its own branch and
+	// committed after `agent_settled` last ran is still recorded under the branch before that one — usually
+	// one already merged — and a detached tree is recorded with no branch at all. Settling names the branch
+	// the tree is actually on, or gives a detached tree's commits a name, which is what keeps a closed
+	// thread's work visible to the proof the sweep runs.
+	settleTreeBranch(board, thread);
 	// With the child gone, the thread's tree may be retired — and only a tree whose work is provably
 	// already in the branch goes, so a thread closed mid-work keeps its tree, and `ctrl+z` still brings
 	// back a thread whose unfinished work was never touched.
@@ -289,6 +297,10 @@ export async function onUndo(req, res, board) {
 			return void answer(res, 200, { restored: entry.card.id });
 		}
 		const thread = entry.thread;
+		// The sweep that ran on close may have retired this thread's tree, so the record it kept points at a
+		// folder that is gone. The restored thread carries that record no longer, so its next run cuts a
+		// fresh tree rather than falling back to the board's folder, which is the human's own checkout.
+		if (thread.worktree?.path && !existsSync(thread.worktree.path)) delete thread.worktree;
 		// A hidden thread was never off the board, so it comes back where it was; one whose child was
 		// killed was deleted, and the session file it kept means the next message resumes the work.
 		if (thread.hidden) {
