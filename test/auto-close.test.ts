@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { Readable } from "node:stream";
 import { closedCards } from "../server/bus.ts";
 import { CHILD_CLOSE_DELAY_MS } from "../server/limits.ts";
-import { autoCloseChild, autoCloseRefusal } from "../server/routes/board/lifecycle.ts";
+import { autoCloseChild, autoCloseRefusal, onClose, onUndo } from "../server/routes/board/lifecycle.ts";
 import { pruneHiddenThreads } from "../server/store.ts";
 import { handleChildLine } from "../server/thought.ts";
 
@@ -130,6 +131,16 @@ test("a closed parent leaves no put-away behind, and a thread the human started 
 	assert.match(autoCloseRefusal(other.board, mine), /human started/);
 });
 
+/**
+ * A request as the close and undo routes read one, and a response that keeps nothing: the route is what
+ * is under test here, not the wire it answers on.
+ */
+function wire(body: any) {
+	const req: any = Readable.from([Buffer.from(JSON.stringify(body))]);
+	const res: any = { writeHead() {}, end() {} };
+	return { req, res };
+}
+
 /** The line a child sends when its run is over, which is where the put-away is now queued. */
 const SETTLED = JSON.stringify({ type: "agent_settled" });
 
@@ -161,6 +172,63 @@ test("a run that was stopped or failed is never put away, however much it said",
 	handleChildLine(board, child, SETTLED);
 	t.mock.timers.tick(CHILD_CLOSE_DELAY_MS * 2);
 	assert.equal(child.hidden, undefined, "a turn that never answered");
+});
+
+test("closing an ordinary note leaves the put-away child where the rail can reach it", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const { board, child } = family();
+	autoCloseChild(board, child);
+	t.mock.timers.tick(CHILD_CLOSE_DELAY_MS);
+	assert.equal(child.hidden, true);
+	// A spawned child owns no cards, which is exactly the shape a hidden thread takes when its last card
+	// went with it — so the close of an unrelated note must not read it as one to throw away.
+	const note = { id: "note-1", title: "a note", type: "note", at: Date.now() };
+	board.cards.set(note.id, note);
+	const closed = wire({ cardId: note.id });
+	await onClose(closed.req, closed.res, board, { human: true });
+	assert.equal(board.cards.get(note.id), undefined, "the note the human closed is gone");
+	assert.equal(board.threads.get(child.id), child, "the child is still there to bring back");
+	assert.deepEqual(
+		closedCards(board).map((row) => row.id),
+		[child.id],
+		"and still listed by the closed rail",
+	);
+	assert.deepEqual(
+		board.trash.map((entry: any) => entry.kind),
+		["card"],
+		"undo holds the note, and nothing was put away on the human's behalf",
+	);
+});
+
+test("a child closed by hand and brought back inside the window keeps its card", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const { board, child } = family();
+	autoCloseChild(board, child);
+	t.mock.timers.tick(CHILD_CLOSE_DELAY_MS - 15_000);
+	// The human closes the child before the put-away fires, then presses ctrl+z to have it back.
+	const closed = wire({ cardId: child.id });
+	await onClose(closed.req, closed.res, board, { human: true });
+	const undone = wire({});
+	await onUndo(undone.req, undone.res, board);
+	assert.equal(board.threads.get(child.id), child, "ctrl+z put the card back");
+	assert.equal(child.hidden, undefined);
+	// The deadline of the put-away the child's answer queued has come and gone.
+	t.mock.timers.tick(CHILD_CLOSE_DELAY_MS);
+	assert.equal(child.hidden, undefined, "the card the human brought back stays on the board");
+	assert.equal(child.closedAt, undefined);
+});
+
+test("a run the board timed out is never put away, even when its turn reads answered", (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const { board, child } = family();
+	// The timeout landed after the last `turn_end`, so the turn is `answered` and the flag the spawn set is
+	// the only record left that this run was cut rather than finished.
+	child.timedOut = true;
+	handleChildLine(board, child, SETTLED);
+	t.mock.timers.tick(CHILD_CLOSE_DELAY_MS * 2);
+	assert.equal(child.hidden, undefined, "a timed-out run");
+	assert.equal(child.closedAt, undefined, "a timed-out run");
+	assert.match(autoCloseRefusal(board, child), /timed out/);
 });
 
 test("a hidden child the rail still lists survives a restart, and one it does not is dropped", () => {

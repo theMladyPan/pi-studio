@@ -26,6 +26,10 @@ import { settleTreeBranch } from "../../worktrees/name.ts";
  */
 /** The child goes with its last card. Nothing can reach a thread the board cannot draw. */
 export function closeThread(board, thread) {
+	// A close of any kind disarms the put-away a finished answer queued. A card the human closes and then
+	// brings back must not vanish when the first close's clock runs out, and `onKill` kills without closing,
+	// so this is the one place every close passes through.
+	cancelAutoClose(thread);
 	// The child is ended, not merely asked to leave: it is working in a tree, and a tree whose thread
 	// is gone is what `clean` may sweep. A run still writing there would write into nothing.
 	killChild(board, thread);
@@ -81,7 +85,8 @@ export function killChild(board, thread) {
 	const child = board.children.get(thread.id);
 	if (!child) return false;
 	// A child that died is not one whose answer is being read, and a kill leaves the thread idle: the
-	// put-away a finished answer queued must not fire on it.
+	// put-away a finished answer queued must not fire on it. A close disarms it in `closeThread`; this is
+	// the kill that leaves the thread in place, which is what `onKill` asks for.
 	cancelAutoClose(thread);
 	// The child stops being this thread's voice before it is killed, so its death is not the run failing.
 	board.children.delete(thread.id);
@@ -129,9 +134,11 @@ export function forgetCard(board, cardId) {
 			thread.answering = { cardId, turn: -1 };
 		}
 	}
-	// A child lives while it has a card, so a hidden one that has just lost its last card goes with it.
+	// A child lives while it has a card, so a hidden one that has just lost its last card goes with it —
+	// unless the board put it away on its own. That one carries `closedAt`, is in the rail's closed list
+	// and owns no cards by design, which is the same rule `pruneHiddenThreads` applies to a saved board.
 	for (const thread of [...board.threads.values()]) {
-		if (thread.hidden && !ownedCards(board, thread.id).length) closeThread(board, thread);
+		if (thread.hidden && !thread.closedAt && !ownedCards(board, thread.id).length) closeThread(board, thread);
 	}
 }
 
@@ -190,9 +197,9 @@ const closeTimers = new WeakMap();
  *
  * The rule is "the answer arrived and nobody is using it". A thread the human started is theirs to keep;
  * a pinned card is one they keep in sight; a child that is not idle is being spoken to or working again;
- * and one whose card is already gone, or whose parent has closed, has nothing left to tidy. It is asked
- * twice — when the close is queued and again when the timer fires — so a message, a stop, a kill or a
- * close in between needs no bookkeeping of its own.
+ * a run the board cut short is not an answer; and one whose card is already gone, or whose parent has
+ * closed, has nothing left to tidy. It is asked twice — when the close is queued and again when the timer
+ * fires — so a message, a stop, a kill or a close in between needs no bookkeeping of its own.
  */
 export function autoCloseRefusal(board, thread) {
 	if (!thread) return "no such thread";
@@ -203,6 +210,10 @@ export function autoCloseRefusal(board, thread) {
 	if (thread.status !== "idle") return "the child is not finished";
 	if (thread.answering) return "the child is answering";
 	if (thread.queued?.length) return "the child has work waiting";
+	// A run the board timed out is not an answer, however much of the last turn arrived before the abort: a
+	// timeout that lands after the last `turn_end` leaves it reading `answered`, and the parent is told the
+	// run timed out, so the card has to stay where that is read.
+	if (thread.timedOut) return "that run timed out";
 	const parent = board.threads.get(thread.parentThread);
 	if (!parent || parent.hidden) return "the thread that spawned it is closed";
 	return "";

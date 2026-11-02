@@ -32,6 +32,14 @@ export const ASK_TIMEOUT_MS = 5 * 60_000;
 export const CHILD_CLOSE_DELAY_MS = 20_000;
 
 
+/**
+ * How many children the board put away are filed with it. They carry `closedAt` and own no cards, so they
+ * stay in `board.threads` for the rail to offer back, and a board that spawns all day would file them for
+ * ever. Newest are kept: the one the human wants back is the one they closed last.
+ */
+export const MAX_PUT_AWAY_CHILDREN = 40;
+
+
 /** One card asks at most this many questions: more than five tabs is a form, not a question. */
 export const MAX_ASK_QUESTIONS = 5;
 
