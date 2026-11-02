@@ -97,6 +97,27 @@ test("a tree whose thread is still on the board is left alone", () => {
 	}
 });
 
+test("a tree whose record lost its thread is left alone while a live thread works in it", () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const { thread, tree } = treeWithBranch(board, "live-2", "feat/live-2");
+		// A saved record can lose the field that names its thread; the loader takes it and still links it
+		// to the restored thread, so the thread's own worktree is what the sweep has to trust.
+		delete (tree as any).thread;
+		board.threads.set(thread.id, { ...thread, worktree: tree, at: Date.now(), turns: [], status: "idle" });
+		// Merged and clean, so nothing but the live thread stands between it and the sweep.
+		git(repo, "merge", "--no-ff", "-m", "merge feat/live-2", "feat/live-2");
+
+		assert.deepEqual(sweepTrees(board), []);
+		assert.ok(existsSync(tree.path), "a live thread's tree was retired out from under it");
+		assert.equal(board.trees.length, 1, "the board forgot a tree a live thread is working in");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+
 test("a tree whose thread is gone and whose branch is merged is retired", () => {
 	const repo = scratchRepo();
 	try {
