@@ -24,6 +24,9 @@ import { join } from "node:path";
 
 /** The thread's child, started on first use. One child per thread, reused until it exits. */
 export function ensureChild(board, thread) {
+	// Every child starts with a tree of its own, whatever brought it here: a thread whose tree was retired
+	// must never fall back to the folder the human works in.
+	ensureWorktree(board, thread);
 	const existing = board.children.get(thread.id);
 	if (existing && existing.exitCode === null && existing.stdin?.writable) return existing;
 	const cli = piCli();
