@@ -180,18 +180,19 @@ export function retireWorktree(board, tree) {
 
 
 /**
- * The registration of the worktree at `path`, read from `git worktree list --porcelain`: its path, the
- * commit its HEAD names and the branch it stands on ("" when detached). A registration outlives a folder
- * deleted by hand, so this is what a missing tree is judged by. Answers `{}` when no registration names
- * the path and null when the list cannot be read.
+ * Every worktree git has registered, read from `git worktree list --porcelain`: each one's path, the commit
+ * its HEAD names and the branch it stands on ("" when detached). The main checkout is one of them. A
+ * registration outlives a folder deleted by hand, so this is what a missing tree is judged by. Null when
+ * the list cannot be read.
  */
-function registration(repo, path) {
+export function registrations(repo) {
 	const list = gitIn(repo, ["worktree", "list", "--porcelain", "-z"]);
 	if (!list.ok) return null;
+	const entries = [];
 	let entry = null;
 	for (const field of list.out.split("\0")) {
 		if (field.startsWith("worktree ")) {
-			if (entry && sameFolder(entry.path, path)) return entry;
+			if (entry) entries.push(entry);
 			entry = { path: field.slice("worktree ".length), head: "", branch: "" };
 		} else if (entry && field.startsWith("HEAD ")) {
 			entry.head = /^0+$/.test(field.slice(5)) ? "" : field.slice(5);
@@ -199,7 +200,91 @@ function registration(repo, path) {
 			entry.branch = field.slice("branch refs/heads/".length);
 		}
 	}
-	return entry && sameFolder(entry.path, path) ? entry : {};
+	if (entry) entries.push(entry);
+	return entries;
+}
+
+
+
+/**
+ * The registration of the worktree at `path`, or `{}` when no registration names it, or null when the list
+ * cannot be read.
+ */
+function registration(repo, path) {
+	const entries = registrations(repo);
+	if (!entries) return null;
+	return entries.find((entry) => sameFolder(entry.path, path)) ?? {};
+}
+
+
+
+/** The repository a tree record belongs to, or "" when there is none to act in any more. */
+export function treeRepo(board, tree) {
+	if (!tree?.path) return "";
+	return (existsSync(tree.path) ? mainRepoOf(tree.path) : "") || tree.repo || repoOf(board.folder);
+}
+
+
+
+/** The branch a tree really stands on, read from the disk: the record's own name may be stale. */
+export function treeBranch(repo, tree) {
+	if (!tree?.path || !repo) return "";
+	if (existsSync(tree.path)) return branchOn(tree.path);
+	return registration(repo, tree.path)?.branch ?? "";
+}
+
+
+
+/**
+ * A tree gone whatever it holds: the trash action keeps nothing, so no proof is asked for here. `--force`
+ * is what tells git to drop a folder that still holds uncommitted or untracked work. The record goes only
+ * when the folder and its registration are gone, so a failed removal stays where the human can see it.
+ */
+export function discardTree(board, tree) {
+	if (!tree?.path) return { ok: true, note: "there was no folder to remove" };
+	const present = existsSync(tree.path);
+	const repo = treeRepo(board, tree);
+	if (!repo) return { ok: false, note: "that folder belongs to no repository any more" };
+	if (present || registration(repo, tree.path)?.path) {
+		const removed = gitIn(repo, ["worktree", "remove", "--force", tree.path], 10_000);
+		if (!removed.ok) return { ok: false, note: removed.err.split("\n")[0] || "git refused to remove the folder" };
+	}
+	if (present && basename(dirname(tree.path)) !== AGENTS_DIR) {
+		// The older `<agent>/<slug>` layout leaves an empty folder behind; `rmdir` refuses one that still holds
+		// another thread's tree, which is the answer wanted here too.
+		try {
+			rmdirSync(dirname(tree.path));
+		} catch {
+			// Something else lives there, or it is already gone.
+		}
+	}
+	forget(board, tree);
+	return { ok: true, note: present ? "the folder was removed" : "the folder was already gone" };
+}
+
+
+
+/**
+ * Why a branch may not be deleted by a forced removal, or "" when it may. A trunk's name is never deleted:
+ * every proof the sweep makes is measured against the integration branch, so `dev`, `main` and the one the
+ * main checkout stands on would always read as spent.
+ */
+export function branchRefusal(repo, branch) {
+	if (!branch) return "";
+	if (!repo) return "that folder belongs to no repository any more";
+	return trunkReason(repo, baseRef(repo), branch);
+}
+
+
+
+/** The same, acted on: the ref goes whatever it points at, and a trunk is still reported rather than taken. */
+export function discardBranch(repo, branch) {
+	if (!branch) return { ok: true, note: "there was no branch to delete" };
+	const refused = branchRefusal(repo, branch);
+	if (refused) return { ok: false, note: refused };
+	const gone = gitIn(repo, ["update-ref", "-d", `refs/heads/${branch}`], 10_000);
+	if (!gone.ok) return { ok: false, note: gone.err.split("\n")[0] || "git refused to delete the branch" };
+	return { ok: true, note: "the branch was deleted" };
 }
 
 

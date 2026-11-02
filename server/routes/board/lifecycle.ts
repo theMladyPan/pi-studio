@@ -12,10 +12,14 @@ import { answer, fail, readJson } from "../../http.ts";
 import { field } from "./thread.ts";
 import { randomUUID } from "node:crypto";
 import { cleanBoard, clearBoard, plainCardFor, stopQueue, sweepTrees } from "../../cards.ts";
-import { existsSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import { finished } from "../../waiters.ts";
-import { settleRows } from "../../thought.ts";
+import { liveThoughts, settleRows } from "../../thought.ts";
 import { settleTreeBranch } from "../../worktrees/name.ts";
+import { discardBranch, discardTree, treeBranch, treeRepo } from "../../worktrees/retire.ts";
+import { fragmentsOf, removeFragment, removePreview, stepsNote, treeOf } from "../../worktrees/fragments.ts";
+import { sessionFile } from "../../session.ts";
+import { repoOf } from "../../git/repo.ts";
 
 
 
@@ -485,6 +489,130 @@ export async function onKill(req, res, board) {
 	if (!thread) return void fail(res, 404, "no thread answers this card");
 	if (!killChild(board, thread)) return void fail(res, 409, "this thread has no child running");
 	answer(res, 200, { killed: thread.id });
+}
+
+
+
+/**
+ * The thread a trash action is about. A card id and a thread id are the same thing to the board — the card
+ * a thread draws carries its id — so both are taken, and both refusals say which one failed to answer.
+ */
+function trashTarget(board, asked) {
+	const thread = asked ? threadForRuntime(board, asked) : undefined;
+	if (thread) return { thread };
+	return { refusal: asked && (board.cards.has(asked) || board.threads.has(asked)) ? "no thread answers this card" : "no such card" };
+}
+
+
+
+/** What removing this card's thread would take: the branch, the folder and the work still in it. */
+export async function onRemovePreview(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const { thread, refusal } = trashTarget(board, field(body.card, 100));
+	if (refusal) return void fail(res, 404, refusal);
+	answer(res, 200, removePreview(board, thread));
+}
+
+
+
+/**
+ * Take a thread away whole: the child, the card and its thread, the transcript, the folder and the branch,
+ * in that order. Nothing is kept and nothing is put where `ctrl+z` looks, which is why the client shows the
+ * diff of `/remove/preview` before it asks for this. A step that fails is reported and the next one still
+ * runs, so one locked file does not leave the other four behind; the branch goes only once its folder is
+ * gone, because a branch deleted under a folder that would not go takes the name of the work with it.
+ */
+export async function onRemove(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const { thread, refusal } = trashTarget(board, field(body.card, 100));
+	if (refusal) return void fail(res, 404, refusal);
+	// The branch and the folder are read before anything is killed or deleted: the folder is where both are.
+	const tree = treeOf(board, thread);
+	const repo = tree ? treeRepo(board, tree) : repoOf(board.folder);
+	const branch = (tree ? treeBranch(repo, tree) : "") || tree?.branch || "";
+	const path = tree?.path ?? "";
+	const steps = [];
+	cancelAutoClose(thread);
+	const stopped = killChild(board, thread);
+	try {
+		board.children.get(thread.id)?.stdin?.end();
+	} catch {
+		// The child is already gone, which is what this wanted.
+	}
+	board.children.delete(thread.id);
+	steps.push({ what: "child", ok: true, note: stopped ? "the child was stopped" : "no child was running" });
+	// The cards it answered for go with it, and the rail's rows too: a row left behind reads as a thread the
+	// human can open, and there is nothing there to open.
+	const owned = ownedCards(board, thread.id);
+	for (const gone of owned) {
+		board.cards.delete(gone.id);
+		forgetCard(board, gone.id);
+	}
+	board.threads.delete(thread.id);
+	// An entry the trash already holds would put the thread back on `ctrl+z`, and this removal is final.
+	board.trash = (Array.isArray(board.trash) ? board.trash : []).filter(
+		(entry) => entry.thread?.id !== thread.id && entry.card?.ownerThread !== thread.id,
+	);
+	const dropped = board.activity.filter((row) => row.thread?.id !== thread.id);
+	for (const row of board.activity) if (row.thread?.id === thread.id) liveThoughts.delete(row.id);
+	board.activity = dropped;
+	steps.push({ what: "card", ok: true, note: owned.length ? `the thread was dropped with ${owned.length} card(s)` : "the thread was dropped" });
+	const file = thread.sessionId ? sessionFile({ id: board.id }, thread.sessionId) : "";
+	steps.push(file ? unlinkStep(file) : { what: "session", ok: true, note: thread.sessionId ? "the transcript was already gone" : "this thread never had a transcript" });
+	const folder = discardTree(board, tree);
+	steps.push({ what: "tree", ...folder });
+	// The branch goes only once the folder is really gone: deleted under a folder git would not remove, its
+	// name is the one thing that still points at the work.
+	if (folder.ok) steps.push({ what: "branch", ...discardBranch(repo, branch) });
+	// The strip draws the trees, so a removal is a redraw rather than one card leaving: `resync` reads git again.
+	resync(board);
+	nudgeWelcome();
+	scheduleSave(board);
+	answer(res, 200, {
+		thread: { id: thread.id, title: thread.title },
+		branch: branch || null,
+		path: path || null,
+		steps,
+		note: stepsNote(steps),
+	});
+}
+
+
+
+/** The transcript gone, or the reason it is still there. */
+function unlinkStep(file) {
+	try {
+		unlinkSync(file);
+		return { what: "session", ok: true, note: "the transcript was deleted" };
+	} catch (error) {
+		return { what: "session", ok: false, note: `the transcript could not be deleted: ${error.message}` };
+	}
+}
+
+
+
+/** What earlier trash actions left behind: worktrees, folders and branches no thread answers for. */
+export async function onFragments(req, res, board) {
+	req.resume();
+	answer(res, 200, { items: fragmentsOf(board) });
+}
+
+
+
+/** Clear one of those leftovers, and report the steps the same way a thread removal does. */
+export async function onFragmentRemove(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const asked = { kind: String(body.kind ?? ""), path: body.path ? String(body.path) : "", branch: body.branch ? String(body.branch) : "" };
+	const result = removeFragment(board, asked);
+	if (!result) return void fail(res, 404, "no such fragment");
+	// The record of a tree that just went has to leave the board's file with it.
+	scheduleSave(board);
+	resync(board);
+	nudgeWelcome();
+	answer(res, 200, result);
 }
 
 

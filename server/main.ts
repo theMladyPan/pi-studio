@@ -27,7 +27,7 @@ import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.
 import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
 import { onPrompt, onPromptWrite, onPrompts } from "./routes/board/prompts.ts";
 import { onSkill } from "./routes/board/skill.ts";
-import { onClean, onClose, onKill, onNew, onReopen, onStop, onUndo } from "./routes/board/lifecycle.ts";
+import { onClean, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onUndo } from "./routes/board/lifecycle.ts";
 import { onShell } from "./routes/board/shell.ts";
 
 
@@ -334,6 +334,14 @@ export const server = createServer((req, res) => {
 			});
 			return;
 		}
+		// What earlier trash actions left behind: a worktree, a folder or a branch no thread answers for. Read
+		// per call, because it is git's answer and not the board's.
+		if (req.method === "GET" && url.pathname === "/fragments") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			onFragments(req, res, board);
+			return;
+		}
 		// This board's settings as one document: the tree the panel draws, the value each control holds, and
 		// the route a change goes back through. Read per call, so a prompt file added while the daemon runs
 		// is a leaf the panel offers without a restart.
@@ -382,6 +390,10 @@ export const server = createServer((req, res) => {
 				"/new": onNew,
 				// A command the human typed after `!`. Never in THREAD_ROUTES above: a shell is the human's.
 				"/shell": onShell,
+				// Removing a thread and its work is the human's, so none of these four is in THREAD_ROUTES.
+				"/remove/preview": onRemovePreview,
+				"/remove": onRemove,
+				"/fragments/remove": onFragmentRemove,
 			};
 			const handler = routing[url.pathname];
 			if (handler) {
