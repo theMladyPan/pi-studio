@@ -4846,6 +4846,7 @@ actPanel.addEventListener("click", (event) => {
 actPanel.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
+    event.stopPropagation();
     closeActPanel();
     return;
   }
