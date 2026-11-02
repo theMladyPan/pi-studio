@@ -29,11 +29,19 @@ export const WORK_TYPES = [
 
 
 
+/**
+ * The kind a title with no keyword of its own is given. It is a type a thread's branches really carry, so
+ * anything that reads those names back has to know it, and reads it here rather than writing it twice.
+ */
+export const DEFAULT_WORK_TYPE = "feat";
+
+
+
 /** The kind of change a title reads like, so a branch says what it carries. */
 export function workType(title, wanted) {
 	if (WORK_TYPES.some(([type]) => type === wanted)) return wanted;
 	const words = String(title ?? "").toLowerCase();
-	return WORK_TYPES.find(([, pattern]) => pattern.test(words))?.[0] ?? "feat";
+	return WORK_TYPES.find(([, pattern]) => pattern.test(words))?.[0] ?? DEFAULT_WORK_TYPE;
 }
 
 

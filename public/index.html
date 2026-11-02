@@ -912,14 +912,12 @@
   .sheet .act-note .diagram-wrap svg { max-width: none; }
   .sheet .act-note .diagram-error { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
   /* The answers of a sheet that asks before it acts, in the same strip as the panel's head. The second
-     press of the red one is the confirmation, so `armed` means here what it means in the header. */
+     press of the red one is the confirmation, so `armed` means here what it means in the header: these
+     presses wear the header's own button, and the one clause that differs from it is the padding, said
+     beside the header's rule below. */
   .sheet .sheet-actions { display: flex; gap: 8px; justify-content: flex-end; flex: none;
     padding: 8px 10px; border-top: 1px solid var(--border); background: var(--card-head); }
-  .sheet .sheet-btn { font: 11px var(--mono); color: var(--muted); background: #161b22;
-    border: 1px solid var(--border); border-radius: 5px; padding: 3px 10px; cursor: pointer; }
-  .sheet .sheet-btn:hover { color: var(--text); border-color: var(--border-bright); }
   .sheet .sheet-btn:disabled { cursor: default; opacity: .55; }
-  .sheet .sheet-btn.armed { color: #f85149; border-color: rgba(248,81,73,.5); }
   /* A leftover row: the name on the left, what the board knows about it on the right, then its press. */
   .sheet .frag-row .v { flex: 1; text-align: right; }
 
@@ -940,14 +938,17 @@
   .sticky-worktree .tree-warn { color: #d29922; flex: none; }
   .sticky-worktree.skipped { color: var(--muted); opacity: .8; }
   header .grow { flex: 1; }
-  header button { font: 12px var(--mono); color: var(--muted); background: #161b22;
+  header button, .sheet .sheet-btn { font: 12px var(--mono); color: var(--muted); background: #161b22;
     border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
-  header button:hover { color: var(--text); border-color: var(--border-bright); }
+  header button:hover, .sheet .sheet-btn:hover { color: var(--text); border-color: var(--border-bright); }
+  /* A press that answers a sheet stands in a strip rather than the header, so its padding is the one
+     thing that differs from the header's own button. */
+  .sheet .sheet-btn { padding: 3px 10px; }
   /* A selected card is the conversation being read, so the other threads step back rather than
      disappear: still legible, plainly not what you are looking at. */
   .card.dim { opacity: .7; }
-  /* The second press of `new` is the confirmation, so the button says so. */
-  header button.armed { color: #f85149; border-color: rgba(248, 81, 73, .5); }
+  /* The second press of a press that acts is the confirmation, so the button says so. */
+  header button.armed, .sheet .sheet-btn.armed { color: #f85149; border-color: rgba(248, 81, 73, .5); }
   /* This board's settings. A tree the daemon describes, drawn here: a group folds to one line that sums
      what is inside it, so the panel stays as tall as the human means it to be. A leaf is a label and its
      value on one line, the value in the accent. A panel that has to be read closely is a panel nobody

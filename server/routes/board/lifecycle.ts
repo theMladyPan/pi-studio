@@ -520,7 +520,8 @@ export async function onRemovePreview(req, res, board) {
  * Take a thread away whole: the child, the card and its thread, the transcript, the folder and the branch,
  * in that order. Nothing is kept and nothing is put where `ctrl+z` looks, which is why the client shows the
  * diff of `/remove/preview` before it asks for this. A step that fails is reported and the next one still
- * runs, so one locked file does not leave the other four behind.
+ * runs, so one locked file does not leave the other four behind; the branch goes only once its folder is
+ * gone, because a branch deleted under a folder that would not go takes the name of the work with it.
  */
 export async function onRemove(req, res, board) {
 	const body = await readJson(req, res);
@@ -561,7 +562,9 @@ export async function onRemove(req, res, board) {
 	const file = thread.sessionId ? sessionFile({ id: board.id }, thread.sessionId) : "";
 	steps.push(file ? unlinkStep(file) : { what: "session", ok: true, note: thread.sessionId ? "the transcript was already gone" : "this thread never had a transcript" });
 	steps.push({ what: "tree", ...discardTree(board, tree) });
-	steps.push({ what: "branch", ...discardBranch(repo, branch) });
+	// The branch goes only once the folder is really gone: deleted under a folder git would not remove, its
+	// name is the one thing that still points at the work.
+	if (steps.at(-1).ok) steps.push({ what: "branch", ...discardBranch(repo, branch) });
 	// The strip draws the trees, so a removal is a redraw rather than one card leaving: `resync` reads git again.
 	resync(board);
 	nudgeWelcome();

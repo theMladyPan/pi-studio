@@ -178,6 +178,47 @@ test("the preview shows the branch, the folder and the work, and the diff of wha
 	}
 });
 
+test("a folder holding one new file names it, because git has no diff to draw for it", async () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const { thread, tree } = startThread(board, "1111aaaa", "feat/1111-work-1111aaaa");
+		// One file git has never seen: `status` counts it, `git diff HEAD` cannot show it.
+		writeFileSync(join(tree.path, "fresh.md"), "never added\n");
+		const res = scratchRes();
+		await onRemovePreview(jsonRequest({ card: thread.id }), res, board);
+		assert.equal(res.status, 200, res.body);
+		const seen = answered(res);
+		assert.equal(seen.dirty, 1);
+		assert.equal(seen.diff, "", "git drew a diff for a file it has never seen");
+		assert.equal(seen.note, null);
+		assert.deepEqual(seen.new, ["fresh.md"], "the sheet is left with a count and nothing to draw");
+		assert.equal(seen.ignored, 0);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a preview counts the ignored files the forced removal takes with the folder", async () => {
+	const repo = scratchRepo();
+	try {
+		// The rule lives in the repository's own exclude file, so the ignore is nobody's uncommitted change.
+		writeFileSync(join(repo, ".git", "info", "exclude"), "*.log\n");
+		const board = scratchBoard(repo);
+		const { thread, tree } = startThread(board, "2222aaaa", "feat/2222-work-2222aaaa");
+		writeFileSync(join(tree.path, "installed.log"), "a dependency nobody wants to see\n");
+		const res = scratchRes();
+		await onRemovePreview(jsonRequest({ card: thread.id }), res, board);
+		assert.equal(res.status, 200, res.body);
+		const seen = answered(res);
+		assert.equal(seen.dirty, 0, "an ignored file is not an uncommitted change");
+		assert.deepEqual(seen.new, []);
+		assert.equal(seen.ignored, 1, "the folder says it holds nothing while git is about to drop a file");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("a card the board never had is refused, and so is one with no thread behind it", async () => {
 	const repo = scratchRepo();
 	try {
@@ -209,6 +250,8 @@ test("the fragments are a remembered room, a forgotten folder and a stranded bra
 		const orphan = join(repo, ".agents", "eeee5555");
 		git(repo, "worktree", "add", "--detach", orphan, "dev");
 		git(orphan, "checkout", "-b", "fix/eeee-work-eeee5555");
+		// Work in it nobody has committed, which the row has to say before it offers to clear the folder.
+		writeFileSync(join(orphan, "forgotten.md"), "nobody merged this\n");
 		// A branch with no thread left to hold it, and no folder either.
 		git(repo, "branch", "test/ffff-work-ffff6666", "dev");
 
@@ -219,13 +262,17 @@ test("the fragments are a remembered room, a forgotten folder and a stranded bra
 		const kept = items.find((item: any) => item.kind === "tree");
 		assert.equal(kept.path, tree.path);
 		assert.equal(kept.label, "feat/dddd-work-dddd4444");
-		assert.match(kept.note, /commit\(s\) are not in/);
+		assert.match(kept.note, /1 commit that is not in/);
 		const lost = items.find((item: any) => item.kind === "orphan");
 		assert.equal(lost.path, orphan);
 		assert.equal(lost.branch, "fix/eeee-work-eeee5555");
+		assert.match(lost.note, /1 uncommitted change/, "a folder holding work is offered with no warning");
+		assert.equal(lost.work, true);
 		const stranded = items.find((item: any) => item.kind === "branch");
 		assert.equal(stranded.label, "test/ffff-work-ffff6666");
 		assert.equal(stranded.path, null);
+		// A branch still on its base holds nothing, so the sheet files it under what holds nothing.
+		assert.equal(stranded.work, false);
 		// A folder on the list carries its branch, so the name is never offered twice.
 		assert.equal(items.filter((item: any) => item.branch === "fix/eeee-work-eeee5555").length, 1);
 	} finally {
@@ -258,6 +305,46 @@ test("a remembered room goes with its record, its folder and its branch", async 
 		rmSync(repo, { recursive: true, force: true });
 	}
 });
+test("a branch of the type a title with no keyword is given is a leftover like any other", async () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		// `feat` is what `workType` answers for a title with no keyword of its own, so it is a type a
+		// thread's branches really carry and one the list has to know.
+		git(repo, "branch", "feat/aaaa-aaaa1111", "dev");
+		const listed = scratchRes();
+		await onFragments(jsonRequest({}), listed, board);
+		const items = answered(listed).items;
+		const stranded = items.find((item: any) => item.label === "feat/aaaa-aaaa1111");
+		assert.ok(stranded, `the list does not see it: ${items.map((item: any) => item.label).join(", ")}`);
+		assert.equal(stranded.kind, "branch");
+		const res = scratchRes();
+		await onFragmentRemove(jsonRequest({ kind: "branch", branch: "feat/aaaa-aaaa1111", path: null }), res, board);
+		assert.equal(res.status, 200, res.body);
+		assert.ok(answered(res).steps.every((step: any) => step.ok), JSON.stringify(answered(res).steps));
+		assert.equal(hasBranch(repo, "feat/aaaa-aaaa1111"), false, "the branch outlived the press that cleared it");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a thread `ctrl+z` still restores is not offered as a leftover", async () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const { thread, tree } = startThread(board, "3333aaaa", "feat/3333-work-3333aaaa");
+		// A close takes the thread off the board and keeps it whole for `ctrl+z`, folder and branch with it.
+		board.threads.delete(thread.id);
+		board.trash.push({ at: Date.now(), kind: "thread", thread });
+		const res = scratchRes();
+		await onFragments(jsonRequest({}), res, board);
+		assert.deepEqual(answered(res).items, [], "the list offers to destroy what the undo has promised back");
+		assert.ok(existsSync(tree.path), "the preview touched a folder the trash still holds");
+		assert.equal(hasBranch(repo, "feat/3333-work-3333aaaa"), true);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
 
 
 test("a trunk is never on the list and is never deleted", async () => {
@@ -280,6 +367,50 @@ test("a trunk is never on the list and is never deleted", async () => {
 		rmSync(repo, { recursive: true, force: true });
 	}
 });
+
+test("a folder git will not remove keeps its branch, on the trash and on the leftovers press", async () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const { thread, tree } = startThread(board, "5555aaaa", "feat/5555-work-5555aaaa");
+		// Forced honestly: a locked worktree is one git refuses to remove with the single `--force` that
+		// `discardTree` runs (it wants `-f -f`), so the folder step fails without pretending anything
+		// about permissions or about the disk.
+		git(repo, "worktree", "lock", "--reason", "held by the test", tree.path);
+		const res = scratchRes();
+		await onRemove(jsonRequest({ card: thread.id }), res, board);
+		assert.equal(res.status, 200, res.body);
+		const said = answered(res);
+		assert.equal(said.steps.find((step: any) => step.what === "tree").ok, false, JSON.stringify(said.steps));
+		assert.equal(
+			said.steps.some((step: any) => step.what === "branch"),
+			false,
+			"the branch was asked for after its folder would not go",
+		);
+		assert.equal(hasBranch(repo, "feat/5555-work-5555aaaa"), true, "the branch went under a folder that stayed");
+		assert.ok(existsSync(tree.path), "the folder went after all");
+		assert.match(said.note, /locked/);
+
+		// The leftovers press takes the same route, and the folder that would not go is still on its list.
+		const listed = scratchRes();
+		await onFragments(jsonRequest({}), listed, board);
+		const item = answered(listed).items.find((candidate: any) => candidate.kind === "tree");
+		assert.ok(item, "the folder that would not go is not on the leftovers list");
+		const again = scratchRes();
+		await onFragmentRemove(jsonRequest({ kind: "tree", path: item.path, branch: item.branch }), again, board);
+		const cleared = answered(again);
+		assert.equal(cleared.steps.find((step: any) => step.what === "tree").ok, false, JSON.stringify(cleared.steps));
+		assert.equal(
+			cleared.steps.some((step: any) => step.what === "branch"),
+			false,
+			"the leftovers press asked for the branch after its folder would not go",
+		);
+		assert.equal(hasBranch(repo, "feat/5555-work-5555aaaa"), true, "the leftovers press deleted the branch anyway");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 
 test("removing one fragment clears that one and leaves the rest", async () => {
 	const repo = scratchRepo();

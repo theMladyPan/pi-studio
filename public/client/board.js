@@ -2011,7 +2011,7 @@ function makeCard(data, quiet = false) {
     <button class="min" title="minimize this card" aria-label="minimize this card">▾</button>
     <button class="reply" title="ask a follow-up about this card" aria-label="ask a follow-up about this card">↩</button>
     <button class="edit" title="edit this note" aria-label="edit this note">✎</button>
-    ${kind === "sticky" ? `<button type="button" class="trash" title="remove this thread, the folder it worked in and its branch" aria-label="remove this thread with its folder and its branch">${TRASH_GLYPH}</button>` : ""}
+    ${kind === "sticky" ? `<button type="button" class="trash" title="remove this thread, its conversation, and any folder and branch it worked in" aria-label="remove this thread">${TRASH_GLYPH}</button>` : ""}
     <button class="close" title="close" aria-label="close">×</button>`;
   // One scroll column holds the note and its follow-ups, so a long card has one scrollbar.
   const scroll = el("div", "card-scroll");
@@ -6759,7 +6759,6 @@ async function openLeaf(field, row) {
 // button turns into a question and the second click is the answer.
 const cleanBtn = document.getElementById("cleanBtn");
 const newBtn = document.getElementById("newBtn");
-let newArmed = 0;
 
 async function postBoardAction(path) {
   try {
@@ -6900,22 +6899,9 @@ cleanBtn.addEventListener("click", async () => {
   footNote(went.length ? `cleaned ${went.join(" and ")}` : `${counted(kept.length, "worktree")} kept`);
 });
 
-newBtn.addEventListener("click", async () => {
-  const now = Date.now();
-  if (now - newArmed > 4000) {
-    newArmed = now;
-    newBtn.textContent = "sure?";
-    newBtn.classList.add("armed");
-    setTimeout(() => {
-      if (Date.now() - newArmed < 4000) return;
-      newBtn.textContent = "new";
-      newBtn.classList.remove("armed");
-    }, 4200);
-    return;
-  }
-  newArmed = 0;
-  newBtn.textContent = "new";
-  newBtn.classList.remove("armed");
+// The second press of `new` is the confirmation, in the same four seconds and with the same `armed` as
+// every other press that has to be asked twice.
+armedPress(newBtn, "new", async () => {
   const result = await postBoardAction("new");
   if (!result) return;
   // The board arrives as a fresh snapshot, so there is nothing to clear here.
@@ -6959,14 +6945,18 @@ async function postRemove(path, body, what) {
 
 /**
  * The board's one confirmation: the first press turns the button into a question for four seconds and
- * the second press is the answer. `new` keeps its own counter for the same window; both wear `armed`, so
- * red means the same thing wherever it is pressed.
+ * the second press is the answer. A button that carries a label of its own, the way each leftover's press
+ * names what it clears, keeps it for the reset and says the question while it is armed, so a reader who
+ * cannot see the word change hears it too.
  */
 function armedPress(button, label, act) {
   let armedAt = 0;
+  const named = button.getAttribute("aria-label");
   const reset = () => {
     armedAt = 0;
     button.textContent = label;
+    if (named === null) button.removeAttribute("aria-label");
+    else button.setAttribute("aria-label", named);
     button.classList.remove("armed");
   };
   button.addEventListener("click", (event) => {
@@ -6975,6 +6965,7 @@ function armedPress(button, label, act) {
     if (now - armedAt > 4000) {
       armedAt = now;
       button.textContent = "sure?";
+      button.setAttribute("aria-label", named === null ? "sure? press again to confirm" : `sure? ${named}`);
       button.classList.add("armed");
       setTimeout(() => {
         if (Date.now() - armedAt >= 4000) reset();
@@ -7034,17 +7025,25 @@ function paintRemoveSheet(preview) {
     ? "This removes the card, the conversation on it, the folder the thread worked in and its branch. Nothing is kept, so there is no undo."
     : "This removes the card and the conversation on it. Nothing is kept, so there is no undo.";
   const parts = [warning];
-  // The two counts in words: the work sitting in the folder, and the work that never left the branch.
+  // The counts in words: the work sitting in the folder, the files git deletes without a word, and the work
+  // that never left the branch. The two clauses that talk about the branch are only said when there is one:
+  // a folder before its first commit is detached, and a sentence about a branch it does not have is noise.
   if (tree) {
+    const ignored = Number(preview.ignored) || 0;
     const risk = el("div", "act-prose");
     risk.textContent = [
       dirty ? `${counted(dirty, "uncommitted file")} in the folder would go` : "the folder holds nothing uncommitted",
+      ignored ? `${counted(ignored, "ignored file")} would go with the folder, and no diff can show ${ignored === 1 ? "it" : "them"}` : "",
       commits
         ? `${counted(commits, "commit")} never reached ${base || "another branch"}`
-        : base
-          ? `no commit on the branch is missing from ${base}`
-          : "no commit on the branch is waiting for another",
-    ].join("\n");
+        : preview.branch
+          ? base
+            ? `no commit on the branch is missing from ${base}`
+            : "no commit on the branch is waiting for another"
+          : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
     parts.push(panelBlock("the work at risk", risk));
   }
   // The daemon's own line about this removal, when it has one: it is the only thing that can say why a
@@ -7060,7 +7059,26 @@ function paintRemoveSheet(preview) {
     const block = panelBlock("the changes that would go", panelDiff(preview.diff));
     if (preview.trunc) block.appendChild(el("div", "cut")).textContent = "cut short: the folder holds more changes than this";
     parts.push(block);
-  } else if (tree && !preview.note) {
+  }
+  // A file git has never seen has no diff to draw, so the sheet names it. Without this a folder holding one
+  // new file counts it above and then says it is clean below, which is the wrong way round on a press that
+  // cannot be undone.
+  const fresh = Array.isArray(preview.new) ? preview.new : [];
+  const newCount = Array.isArray(preview.new) ? fresh.length : Number(preview.new) || 0;
+  if (newCount) {
+    const names = el("div", "act-kv");
+    for (const name of fresh.length ? fresh : [counted(newCount, "file")]) {
+      const row = el("div", "act-row");
+      row.appendChild(el("span", "v"));
+      row.children[0].textContent = String(name);
+      names.appendChild(row);
+    }
+    const said = el("div", "gone");
+    said.textContent = "these files are new, so git has no diff to draw for them";
+    const block = panelBlock("the new files that would go", names);
+    block.appendChild(said);
+    parts.push(block);
+  } else if (tree && !preview.note && !dirty) {
     const none = el("div", "gone");
     none.textContent = "the folder is clean, so there is no diff to show";
     parts.push(panelBlock("the changes that would go", none));
@@ -7111,12 +7129,15 @@ async function removeThread() {
   const name = removeName;
   removeGo.disabled = true;
   const receipt = await postRemove("remove", { card }, "remove it");
-  closeRemoveSheet();
-  if (!receipt) return;
   // The card leaves this board at once: the daemon broadcasts the removal to every other tab, and a tab
-  // that asked does not wait for the echo of its own press.
+  // that asked does not wait for the echo of its own press. It leaves before the sheet closes, because the
+  // trash the sheet was opened from sits on it: a focus handed back to that button lands on nothing. The
+  // leftovers button survives, and it is where what the removal could not take is read.
   const entry = byId.get(card);
   if (entry) dropCard(entry);
+  removeOpener = leftBtn;
+  closeRemoveSheet();
+  if (!receipt) return;
   footNote(removeReceipt(receipt, name));
 }
 
@@ -7148,12 +7169,11 @@ const leftPanelClose = document.getElementById("leftDetailClose");
 const leftBtn = document.getElementById("leftBtn");
 let leftOpener = null;
 
-/** What each kind of leftover is, in words a reader who does not read code can follow. */
-const LEFT_KINDS = {
-  tree: "folders the board still remembers",
-  orphan: "folders the board forgot",
-  branch: "branches no thread answers for",
-};
+/**
+ * The two headings the list is read under. A human can act on what holds work and what holds none, and on
+ * nothing else: which module of the board remembers a folder is bookkeeping no press on this sheet changes.
+ */
+const LEFT_HEADINGS = ["what holds work", "what holds nothing"];
 
 /** One leftover: its name on the left, what the board knows about it on the right, then its own press. */
 function fragmentRow(item) {
@@ -7191,12 +7211,12 @@ function fragmentRow(item) {
   return row;
 }
 
-/** The whole list, grouped by what kind of thing was left behind. */
+/** The whole list, in the two groups a human can act on: what still holds work, and what holds none. */
 function paintLeftovers(items) {
   leftPanelMeta.textContent = items.length ? counted(items.length, "leftover") : "";
   const parts = [];
-  for (const [kind, heading] of Object.entries(LEFT_KINDS)) {
-    const rows = items.filter((item) => item.kind === kind);
+  for (const [at, heading] of LEFT_HEADINGS.entries()) {
+    const rows = items.filter((item) => Boolean(item.work) === (at === 0));
     if (!rows.length) continue;
     const box = el("div", "act-kv");
     for (const item of rows) box.appendChild(fragmentRow(item));

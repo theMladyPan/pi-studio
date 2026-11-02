@@ -1,12 +1,11 @@
-// @ts-nocheck -- lifted byte for byte; annotating it is its own commit.
 /**
  * What a trash action would take, and what earlier ones left behind: the leftovers a board can still see
- * are worktrees, folders and branches that belonged to threads nothing answers for any more.
+ * are folders and branches that belonged to threads nothing answers for any more.
  */
 import { existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
-import { gitIn, repoOf } from "../git/repo.ts";
-import { AGENTS_DIR, WORK_TYPES } from "./make.ts";
+import { baseRef, gitIn, repoOf } from "../git/repo.ts";
+import { AGENTS_DIR, DEFAULT_WORK_TYPE, WORK_TYPES } from "./make.ts";
 import { branchRefusal, discardBranch, discardTree, registrations, sameFolder, treeBranch, treeRepo } from "./retire.ts";
 
 
@@ -14,29 +13,89 @@ import { branchRefusal, discardBranch, discardTree, registrations, sameFolder, t
 /** How much of a diff the preview hands the browser: enough to read, small enough to draw at once. */
 export const PREVIEW_DIFF_CHARS = 8000;
 
+/** How many of a folder's new files the preview names, one per line: past this its count is the answer. */
+export const PREVIEW_NEW_FILES = 20;
 
-const TYPES = WORK_TYPES.map(([type]) => type).join("|");
+
+
+/** The tree record a board keeps for a thread's folder: its own pointer, or the board's record for it. */
+type TreeRecord = { path: string; branch?: string; base?: string; repo?: string; thread?: string };
+
+/** A thread as these reads see it: its id, the title a sheet shows, and the folder it works in. */
+type ThreadLike = { id: string; title?: string; worktree?: TreeRecord };
+
+/** The board as these reads see it: its folder, the threads it answers for, its trees and its trash. */
+type BoardLike = {
+	folder: string;
+	threads: Map<string, unknown>;
+	trees: TreeRecord[];
+	trash?: { kind?: string; thread?: ThreadLike | null }[];
+};
+
+/** One step of a removal, as the receipt the client draws reads it. */
+type Step = { what: string; ok: boolean; note?: string };
+
+/** One thing the board can still clear away, and what clearing it would take. */
+type Fragment = {
+	kind: string;
+	label: string;
+	note: string;
+	path: string | null;
+	branch: string | null;
+	work: boolean;
+};
+
+
+
+const TYPES = [...WORK_TYPES.map(([type]) => type), DEFAULT_WORK_TYPE].join("|");
 
 /**
  * A branch in the shape a thread's branches take: `<type>/<slug>-<8hex>`, the eight hex being the start of
- * the thread's own id. Anything else is a branch a human made, which no sweep of this board touches.
+ * the thread's own id. Anything else is a branch a human made, which no sweep of this board touches. The
+ * types are the ones a branch is given, the default among them, because a title with no keyword of its own
+ * is given that one and its branches are as real as any other.
  */
 const THREAD_BRANCH = new RegExp(`^(?:${TYPES})/[a-z0-9-]+-([0-9a-f]{8})$`);
 
 
 
+/** A number and the word beside it, in the wording the board's sheets already count with. */
+function counted(n: number, word: string): string {
+	return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+
+
 /** The tree record a thread works in: its own pointer, or the board's record for it. */
-export function treeOf(board, thread) {
+export function treeOf(board: BoardLike, thread?: ThreadLike | null): TreeRecord | undefined {
 	if (thread?.worktree?.path) return thread.worktree;
 	return board.trees.find((tree) => tree.thread === thread?.id);
 }
 
 
 
-/** What a step that failed says, as one sentence for the caller: "" when every step went through. */
-export function stepsNote(steps) {
+/** What a step that failed says, as one sentence for the caller: null when every step went through. */
+export function stepsNote(steps: Step[]): string | null {
 	const failed = steps.filter((step) => !step.ok);
 	return failed.length ? failed.map((step) => `${step.what}: ${step.note}`).join("; ") : null;
+}
+
+
+
+/** How many paths a folder holds uncommitted, untracked ones among them: `git status` counts both. */
+function changesIn(path: string): number {
+	if (!existsSync(path)) return 0;
+	const status = gitIn(path, ["status", "--porcelain"], 10_000);
+	return status.ok ? status.out.split("\n").filter(Boolean).length : 0;
+}
+
+
+
+/** How many commits a ref holds past a base, read in a folder that can see both. */
+function commitsPast(at: string, base: string, ref: string): number {
+	if (!base) return 0;
+	const read = gitIn(at, ["rev-list", "--count", `${base}..${ref}`], 10_000);
+	return read.ok ? Number(read.out) || 0 : 0;
 }
 
 
@@ -45,7 +104,7 @@ export function stepsNote(steps) {
  * What removing a thread would take, so the human reads the work before it goes: the branch, the folder,
  * how much is uncommitted in it, how much is on the branch alone, and the patch itself. Nothing is touched.
  */
-export function removePreview(board, thread) {
+export function removePreview(board: BoardLike, thread: ThreadLike) {
 	const tree = treeOf(board, thread);
 	const repo = tree ? treeRepo(board, tree) : repoOf(board.folder);
 	const path = tree?.path ?? "";
@@ -54,11 +113,20 @@ export function removePreview(board, thread) {
 	const branch = (tree ? treeBranch(repo, tree) : "") || tree?.branch || "";
 	const base = tree?.base ?? "";
 	let dirty = 0;
+	let fresh: string[] = [];
+	let ignored = 0;
 	let commits = 0;
 	let raw = "";
 	if (present) {
 		const status = gitIn(path, ["status", "--porcelain"], 10_000);
-		dirty = status.ok ? status.out.split("\n").filter(Boolean).length : 0;
+		const lines = status.ok ? status.out.split("\n").filter(Boolean) : [];
+		dirty = lines.length;
+		// A file git has never seen is a change `git diff HEAD` cannot draw, so its name is what the sheet
+		// has to say: a count of changes with an empty diff under it reads as a folder holding nothing.
+		fresh = lines.filter((line) => line.startsWith("?? ")).map((line) => line.slice(3));
+		// `--ignored=matching` is the only place git lists the files its own removal deletes without asking.
+		const also = gitIn(path, ["status", "--porcelain", "--ignored=matching"], 10_000);
+		ignored = also.ok ? also.out.split("\n").filter((line) => line.startsWith("!! ")).length : 0;
 	}
 	if (base) {
 		// The tree's own HEAD is what its commits hang on while it is on disk; a deleted folder leaves only
@@ -68,12 +136,11 @@ export function removePreview(board, thread) {
 		commits = read?.ok ? Number(read.out) || 0 : 0;
 	}
 	// A dirty room is what the human is about to lose, so its working tree is the diff; a clean one shows the
-	// commits of its own that the base does not have. `git diff` never lists an untracked file, which is why
-	// the count above is the number the human goes by.
+	// commits of its own that the base does not have.
 	if (present && dirty) raw = gitIn(path, ["diff", "HEAD"], 10_000).out;
 	else if (present && commits) raw = gitIn(path, ["diff", `${base}..HEAD`], 10_000).out;
 	const note = !path
-		? "this thread has no worktree of its own"
+		? "this thread has no folder of its own"
 		: !present
 			? "the folder is already gone, so only its record and its branch would go"
 			: branchRefusal(repo, branch) || null;
@@ -84,6 +151,9 @@ export function removePreview(board, thread) {
 		path: path || null,
 		dirty,
 		commits,
+		// The new files the diff above cannot show: each name alone while they fit, their count when not.
+		new: fresh.length > PREVIEW_NEW_FILES ? fresh.length : fresh,
+		ignored,
 		diff: raw.slice(0, PREVIEW_DIFF_CHARS),
 		trunc: raw.length > PREVIEW_DIFF_CHARS,
 		note,
@@ -92,34 +162,50 @@ export function removePreview(board, thread) {
 
 
 
+/** What `ctrl+z` would still put back whole, folder and branch with it: nothing the trash holds is left over. */
+function restorable(board: BoardLike): Set<string> {
+	const back = new Set<string>();
+	for (const entry of Array.isArray(board.trash) ? board.trash : []) {
+		if (entry?.kind === "thread" && entry.thread?.id) back.add(String(entry.thread.id));
+	}
+	return back;
+}
+
+
+
 /**
- * What the board can still clear away: a record whose thread is gone and whose tree git still has, a folder
- * under `.agents` that git has as a worktree and the board never recorded, and a thread's branch with no
- * thread left to hold it. A trunk is never one of them, and neither is a branch a human named.
+ * What the board can still clear away: a record whose thread is gone and whose folder git still has, a folder
+ * in `.agents` that git holds and the board never recorded, and a thread's branch with no thread left to hold
+ * it. A trunk is never one of them, and neither is a branch a human named.
  */
-export function fragmentsOf(board) {
+export function fragmentsOf(board: BoardLike): Fragment[] {
 	const repo = repoOf(board.folder);
 	if (!repo) return [];
 	const registered = registrations(repo) ?? [];
 	// A branch belongs to a folder item when that folder is still standing: the folder goes first and takes
 	// its branch with it, so listing the name again would offer to remove a thing twice.
-	const covered = new Set(board.trees.map((tree) => tree.branch).filter(Boolean));
+	const covered = new Set<string>(board.trees.map((tree) => tree.branch).filter((name): name is string => Boolean(name)));
 	for (const entry of registered) if (entry.branch && existsSync(entry.path)) covered.add(entry.branch);
 	const live = new Set([...board.threads.keys()].map((id) => String(id).slice(0, 8)));
-	const items = [];
+	const back = restorable(board);
+	const items: Fragment[] = [];
 	for (const tree of board.trees) {
 		if (tree.thread && board.threads.has(tree.thread)) continue;
 		if (!registered.some((entry) => sameFolder(entry.path, tree.path))) continue;
 		const branch = treeBranch(repo, tree) || tree.branch || "";
 		// The name the disk answers with is the one that goes with the folder, recorded or not.
 		if (branch) covered.add(branch);
+		// A thread the trash still holds comes back whole on `ctrl+z`, and its folder with it. Clearing it
+		// here would take a folder the board has promised to put back, so it is not a leftover at all.
+		if (tree.thread && back.has(String(tree.thread))) continue;
 		const why = whyKept(tree);
 		items.push({
 			kind: "tree",
 			label: branch || basename(tree.path),
-			note: `the worktree of a thread the board no longer has${why ? `, and ${why}` : ", which no sweep has taken yet"}`,
+			note: `the folder of a thread the board no longer has${why ? `, and ${why}` : ", which no sweep has taken yet"}`,
 			path: tree.path,
 			branch: branch || null,
+			work: Boolean(why),
 		});
 	}
 	const kept = join(repo, AGENTS_DIR) + sep;
@@ -127,24 +213,30 @@ export function fragmentsOf(board) {
 		// The main checkout is a registration of its own, and a tree outside `.agents` is where a human put it.
 		if (sameFolder(entry.path, repo) || !resolve(entry.path).startsWith(kept)) continue;
 		if (board.trees.some((tree) => sameFolder(tree.path, entry.path))) continue;
+		const why = whyKept({ path: entry.path });
 		items.push({
 			kind: "orphan",
 			label: entry.branch || basename(entry.path),
-			note: "a folder under .agents that git has as a worktree and the board has no record of",
+			note: `a folder the board has no record of${why ? `, and ${why}` : ", which no sweep has taken yet"}`,
 			path: entry.path,
 			branch: entry.branch || null,
+			work: Boolean(why),
 		});
 	}
 	const named = gitIn(repo, ["for-each-ref", "refs/heads", "--format=%(refname:short)"], 10_000);
+	const from = baseRef(repo);
 	for (const name of (named.ok ? named.out.split("\n") : []).map((line) => line.trim()).filter(Boolean)) {
 		const suffix = name.match(THREAD_BRANCH)?.[1];
 		if (!suffix || live.has(suffix) || covered.has(name)) continue;
+		const ahead = commitsPast(repo, from, name);
+		const why = ahead ? `it holds ${counted(ahead, "commit")} that ${ahead === 1 ? "is" : "are"} not in ${from}` : "";
 		items.push({
 			kind: "branch",
 			label: name,
-			note: "a branch named after a thread the board no longer has",
+			note: `a branch named after a thread the board no longer has${why ? `, and ${why}` : ""}`,
 			path: null,
 			branch: name,
+			work: Boolean(why),
 		});
 	}
 	return items;
@@ -154,20 +246,22 @@ export function fragmentsOf(board) {
 
 /**
  * Remove one item of that list, and only that one. A folder goes with the branch it stands on, in that
- * order, so a failed removal still leaves the name where the human can find it.
+ * order, so a failed removal still leaves the name where the human can find it. The branch is only asked
+ * for once the folder is really gone: a branch deleted under a folder git would not remove leaves the work
+ * with no name to reach it by.
  */
-export function removeFragment(board, asked) {
+export function removeFragment(board: BoardLike, asked: { kind: string; path: string; branch: string }) {
 	const item = fragmentsOf(board).find((candidate) => sameFragment(candidate, asked));
 	if (!item) return null;
 	const repo = repoOf(board.folder);
-	const steps = [];
+	const steps: Step[] = [];
 	if (item.kind === "branch") {
 		steps.push({ what: "branch", ...discardBranch(repo, item.branch) });
 	} else {
 		const tree = { path: item.path, branch: item.branch ?? "", repo };
 		const record = board.trees.find((held) => sameFolder(held.path, item.path)) ?? tree;
 		steps.push({ what: "tree", ...discardTree(board, record) });
-		steps.push({ what: "branch", ...discardBranch(repo, item.branch) });
+		if (steps[0].ok) steps.push({ what: "branch", ...discardBranch(repo, item.branch) });
 	}
 	return { branch: item.branch, path: item.path, steps, note: stepsNote(steps) };
 }
@@ -175,7 +269,7 @@ export function removeFragment(board, asked) {
 
 
 /** The item a request names: by the folder when it has one, else by the branch. */
-function sameFragment(item, asked) {
+function sameFragment(item: Fragment, asked: { kind: string; path: string; branch: string }): boolean {
 	if (item.kind !== asked.kind) return false;
 	if (asked.path) return sameFolder(item.path, asked.path);
 	return Boolean(asked.branch) && item.branch === asked.branch;
@@ -183,14 +277,10 @@ function sameFragment(item, asked) {
 
 
 
-/** Why a sweep left this tree standing: the work in it nobody has merged, said as one short phrase. */
-function whyKept(tree) {
-	if (!existsSync(tree.path)) return "";
-	const status = gitIn(tree.path, ["status", "--porcelain"], 10_000);
-	const changes = status.ok ? status.out.split("\n").filter(Boolean).length : 0;
-	if (changes) return `it holds ${changes} uncommitted change(s)`;
-	if (!tree.base) return "";
-	const ahead = gitIn(tree.path, ["rev-list", "--count", `${tree.base}..HEAD`]);
-	const commits = ahead.ok ? Number(ahead.out) || 0 : 0;
-	return commits ? `${commits} commit(s) are not in ${tree.base}` : "";
+/** Why a sweep left this folder standing: the work nobody has merged, said as one short phrase. */
+function whyKept(tree: TreeRecord): string {
+	const changes = changesIn(tree.path);
+	if (changes) return `it holds ${counted(changes, "uncommitted change")}`;
+	const commits = commitsPast(tree.path, tree.base ?? "", "HEAD");
+	return commits ? `it holds ${counted(commits, "commit")} that ${commits === 1 ? "is" : "are"} not in ${tree.base}` : "";
 }
