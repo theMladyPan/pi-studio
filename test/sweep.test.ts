@@ -3,8 +3,10 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { test } from "node:test";
 import { cleanBoard, sweepTrees } from "../server/cards.ts";
+import { closeThread, onClose, onUndo } from "../server/routes/board/lifecycle.ts";
 import { ensureWorktree } from "../server/worktrees/make.ts";
 
 const git = (folder: string, ...args: string[]) =>
@@ -36,8 +38,28 @@ function scratchBoard(repo: string) {
 		trees: [] as any[],
 		trash: [],
 		saveTimer: null as any,
+		// No tab is listening: a route's broadcast goes to nobody rather than to undefined.
+		clients: new Set(),
 	};
 }
+
+/** A response a route can answer on, holding what it said so a test can read the status back. */
+function scratchRes() {
+	const res: { status: number; body: string; writeHead: (status: number) => void; end: (body: string) => void } = {
+		status: 0,
+		body: "",
+		writeHead(status) {
+			res.status = status;
+		},
+		end(body) {
+			res.body = body;
+		},
+	};
+	return res;
+}
+
+/** A request carrying the JSON body a route reads, as the wire would hand it over. */
+const jsonRequest = (body: unknown) => Readable.from([Buffer.from(JSON.stringify(body))]);
 
 /** The save a sweep schedules is dropped: this board is a literal, not a folder of JSON. */
 function unschedule(board: { saveTimer: any }) {
@@ -114,6 +136,76 @@ test("a tree with an unmerged commit is kept, and says why", () => {
 		rmSync(repo, { recursive: true, force: true });
 	}
 });
+
+test("a thread closed while its tree is on a branch the record does not name keeps the tree, named", () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const thread = { id: "moved-1", title: "a thread moved-1", folder: repo, at: Date.now(), turns: [], status: "running" };
+		const tree = ensureWorktree(board, thread);
+		assert.ok(tree.path, `no worktree made: ${JSON.stringify(tree)}`);
+		// The first branch the child cut, merged into `dev` while the thread was still running.
+		git(tree.path, "checkout", "-b", "feat/first");
+		writeFileSync(join(tree.path, "first.md"), "first\n");
+		git(tree.path, "add", ".");
+		git(tree.path, "commit", "-m", "feat: first work");
+		git(repo, "merge", "--no-ff", "-m", "merge feat/first", "feat/first");
+		// The branch the child moved to next, which nothing but the tree knows about.
+		git(tree.path, "checkout", "-b", "fix/second");
+		writeFileSync(join(tree.path, "second.md"), "second\n");
+		git(tree.path, "add", ".");
+		git(tree.path, "commit", "-m", "fix: second work");
+		// What the record said when `agent_settled` last ran: the merged branch, not this one.
+		tree.branch = "feat/first";
+		board.threads.set(thread.id, { ...thread });
+
+		closeThread(board, thread);
+
+		assert.ok(existsSync(tree.path), "the tree holding the child's branch was removed");
+		assert.equal(board.trees.length, 1, "the board forgot a tree it kept");
+		assert.equal(board.trees[0].branch, "fix/second", `the record names ${board.trees[0].branch}`);
+		assert.notEqual(git(repo, "branch", "--list", "fix/second"), "", "the branch the work is on was deleted");
+		unschedule(board);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+
+test("a thread whose tree folder is gone comes back from undo with no worktree record", async () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const thread = { id: "gone-1", title: "a thread gone-1", at: Date.now(), turns: [], status: "idle" };
+		const tree = ensureWorktree(board, thread);
+		assert.ok(tree.path, `no worktree made: ${JSON.stringify(tree)}`);
+		git(tree.path, "checkout", "-b", "feat/gone");
+		writeFileSync(join(tree.path, "gone.md"), "gone\n");
+		git(tree.path, "add", ".");
+		git(tree.path, "commit", "-m", "feat: gone work");
+		tree.branch = "feat/gone";
+		board.threads.set(thread.id, thread);
+		// The folder is deleted by hand, so the record the close puts in the trash points at nothing.
+		rmSync(tree.path, { recursive: true, force: true });
+
+		const closed = scratchRes();
+		await onClose(jsonRequest({ cardId: thread.id }), closed, board, { human: true });
+		assert.equal(closed.status, 200, `the close was refused: ${closed.body}`);
+		assert.equal(board.threads.has(thread.id), false, "the closed thread is still on the board");
+		assert.equal(board.trash.length, 1, `nothing was remembered for undo: ${JSON.stringify(board.trash)}`);
+
+		const undone = scratchRes();
+		await onUndo({ resume() {} }, undone, board);
+		assert.equal(undone.status, 200, `the undo was refused: ${undone.body}`);
+		const back = board.threads.get(thread.id);
+		assert.ok(back, "the closed thread did not come back");
+		assert.equal(back.worktree, undefined, `the restored thread still points at ${JSON.stringify(back.worktree)}`);
+		unschedule(board);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 
 test("clean still answers with the same three fields, and sweeps a dead thread's tree", () => {
 	const repo = scratchRepo();

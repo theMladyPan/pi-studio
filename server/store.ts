@@ -356,6 +356,9 @@ export function boardFor(workspace) {
 	try {
 		if (sweepTrees(board).length) scheduleSave(board);
 	} catch (error) {
+		// The sweep may already have spliced records out of `board.trees` before it threw, so the board in
+		// memory is no longer what the file says. A save is scheduled to bring the two back together.
+		scheduleSave(board);
 		console.error(`pi-studio: the startup sweep of ${board.name} failed: ${error.message}`);
 	}
 	return board;
