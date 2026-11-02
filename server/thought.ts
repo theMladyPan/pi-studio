@@ -4,6 +4,7 @@
  * one line reader that turns a child's JSON into those rows.
  */
 import { refreshOwned } from "./routes/board/message.ts";
+import { autoCloseChild } from "./routes/board/lifecycle.ts";
 import { start } from "./main.ts";
 import { addRow, card, patchRow, threadRef, update, updateCard } from "./bus.ts";
 import { randomUUID } from "node:crypto";
@@ -505,6 +506,13 @@ export function handleChildLine(board, thread, line) {
 		}
 		// Nothing else is queued, so the run is over for anyone waiting on it.
 		finished(thread);
+		// The answer is in its reader's hands the moment this run resolves, so a child whose run ended as an
+		// answer is a spent card and the board puts it away a moment later — hidden, never killed, so the
+		// tree it worked in is still there to assemble. A turn that was stopped or failed is not an answer,
+		// however much of it arrived: an abort, a timeout and an error all leave the turn reading `stopped`,
+		// which is the distinction the spawn route drew with `result.status === "done"`.
+		const { turn: ended } = liveTurn(board, thread);
+		if (ended?.status === "answered") autoCloseChild(board, thread);
 		// What the run spent is only known to the child, so it is asked before stdin closes. The close
 		// waits for the answer.
 		const child = board.children.get(thread.id);
