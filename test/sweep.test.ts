@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { test } from "node:test";
 import { cleanBoard, sweepTrees } from "../server/cards.ts";
@@ -79,6 +79,41 @@ function treeWithBranch(board: any, id: string, branch: string) {
 	tree.branch = branch;
 	return { thread, tree };
 }
+
+test("a fresh tree for one thread leaves a worktree a human moved by hand registered", () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const gone = { id: "stale-1", title: "a thread stale-1", folder: repo };
+		const hand = { id: "moved-by-hand-2", title: "a thread moved-by-hand-2", folder: repo };
+		const stale = ensureWorktree(board, gone);
+		const moved = ensureWorktree(board, hand);
+		assert.ok(stale.path, `no worktree made: ${JSON.stringify(stale)}`);
+		assert.ok(moved.path, `no worktree made: ${JSON.stringify(moved)}`);
+		// One folder deleted by hand, the other moved by hand. The move leaves git's registration naming
+		// the path the tree came from, and that registration is the only thing keeping its commit reachable.
+		rmSync(stale.path, { recursive: true, force: true });
+		const elsewhere = join(dirname(moved.path), "moved-by-hand");
+		execFileSync("mv", [moved.path, elsewhere]);
+
+		// The thread whose folder is gone asks for its tree again, at that same path.
+		const fresh = ensureWorktree(board, gone);
+		assert.equal(fresh.skipped, undefined, `the tree could not be made: ${fresh.skipped}`);
+		assert.ok(existsSync(fresh.path), "no fresh tree was made");
+
+		// The moved tree is still a git worktree standing where the human put it, and git still holds the
+		// registration of it that makes the commit it stands on reachable.
+		assert.ok(git(elsewhere, "rev-parse", "--show-toplevel").endsWith("/moved-by-hand"), "the moved tree is no git worktree any more");
+		assert.match(git(elsewhere, "rev-parse", "HEAD"), /^[0-9a-f]{40}$/, "the commit the moved tree stands on could not be read");
+		const listed = git(repo, "worktree", "list", "--porcelain")
+			.split("\n")
+			.filter((line) => line.startsWith("worktree "));
+		assert.ok(listed.includes(`worktree ${moved.path}`), `the moved tree lost its registration:\n${listed.join("\n")}`);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 
 test("a tree whose thread is still on the board is left alone", () => {
 	const repo = scratchRepo();
