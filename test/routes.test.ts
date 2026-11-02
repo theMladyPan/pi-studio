@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -114,6 +114,64 @@ test("the daemon boots, opens a workspace, and answers for its board", async () 
 	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a workspace-scoped browser lists its folder, refuses the way out, and knows no other board", async () => {
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-browse-"));
+	// The state folder is the daemon's own, so the board's folder is a folder inside it and the files the
+	// daemon writes are not part of what a listing shows.
+	const folder = join(state, "proj");
+	mkdirSync(join(folder, "docs"), { recursive: true });
+	const real = realpathSync(folder);
+	writeFileSync(join(folder, "docs", "note.md"), "# note\n");
+	writeFileSync(join(folder, "readme.md"), "readme\n");
+	const daemon = await boot(state);
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		assert.equal(opened.status, 200);
+		const board = JSON.parse(opened.body).board;
+		assert.ok(board?.id, "no board came back");
+
+		// No `path` is the folder itself, and the answer says so in `cwd` rather than in the daemon's own.
+		const root = await get(daemon, `/browse?token=${daemon.token}&workspace=${board.id}`);
+		assert.equal(root.status, 200, root.body);
+		const listing = JSON.parse(root.body);
+		assert.equal(listing.cwd, real);
+		assert.equal(listing.path, real);
+		assert.deepEqual(
+			listing.entries.map((one: any) => [one.name, one.dir]),
+			[
+				["docs", true],
+				["readme.md", false],
+			],
+		);
+
+		// The same folder asked for by a relative path, and `/` meaning the root again.
+		const sub = await get(daemon, `/browse?token=${daemon.token}&workspace=${board.id}&path=docs`);
+		assert.equal(sub.status, 200, sub.body);
+		const inside = JSON.parse(sub.body);
+		assert.equal(inside.path, join(real, "docs"));
+		assert.deepEqual(
+			inside.entries.map((one: any) => [one.name, one.dir]),
+			[["note.md", false]],
+		);
+		const slash = await get(daemon, `/browse?token=${daemon.token}&workspace=${board.id}&path=/`);
+		assert.equal(slash.status, 200, slash.body);
+		assert.equal(JSON.parse(slash.body).path, real);
+
+		// Nothing above the folder is shown, however the path is written.
+		for (const escape of ["../../", "..", "../"]) {
+			const out = await get(daemon, `/browse?token=${daemon.token}&workspace=${board.id}&path=${encodeURIComponent(escape)}`);
+			assert.equal(out.status, 404, `${escape} answered ${out.status}: ${out.body}`);
+		}
+
+		const unknown = await get(daemon, `/browse?token=${daemon.token}&workspace=nope`);
+		assert.equal(unknown.status, 409);
+		assert.match(unknown.body, /no such workspace/);
+	} finally {
+		daemon.child.kill();
+		rmSync(state, { recursive: true, force: true });
 	}
 });
 

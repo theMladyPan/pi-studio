@@ -5289,8 +5289,13 @@ function wireComposer(inst) {
     // A press on one of the field's own buttons is not a leaving: the chips it names stay ringed.
     if (event.relatedTarget && inst.root.contains(event.relatedTarget)) return;
     paintReferenceRings();
+    // A field that gave the keyboard away takes its `@` list with it; what was typed stays.
+    if (atInst === inst) closeAtPick();
   });
   inst.msg.addEventListener("keydown", (event) => {
+    // The `@` list owns the keys it puts on screen: Enter takes its row, Escape shuts it without
+    // giving the keyboard back, and neither may reach the send and blur below.
+    if (atPickKey(inst, event)) return;
     if (event.key === "Escape") {
       // The field keeps what was written: Escape gives the keyboard back to the board, and the ×
       // on a reference is what drops it.
@@ -5304,6 +5309,7 @@ function wireComposer(inst) {
       void sendMessage(inst);
     }
   });
+  inst.msg.addEventListener("input", () => typedInAtPick(inst));
   inst.msg.addEventListener("paste", (event) => {
     const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
     if (files.length === 0) return;
@@ -7210,6 +7216,226 @@ document.addEventListener(
   true,
 );
 
+// ---------- the `@` list in a field ------------------------------------------
+// Typing `@` at the start of a word opens the folder the token names, and a row takes the path
+// into the text as the human typed it. One element serves every field: whatever `@` was last typed
+// in owns it, and the board moves it there.
+const atPick = document.getElementById("atPick");
+const atList = document.getElementById("atList");
+/** The field the list is serving, and the token under its caret: `{ start, end, dir, frag }`. */
+let atInst = null;
+let atToken = null;
+let atRows = [];
+let atAt = -1;
+/** Every listing bumps this, so a slow reply cannot land on top of a newer one. */
+let atSeq = 0;
+/**
+ * Where a dismissed list was typed. Escape and Enter shut the list and keep the text, and the token
+ * under the caret is still the one they shut, so this is what stops the next keystroke reopening it.
+ * A new `@` starts at another offset, or follows no token at all, which is how typing gets a list back.
+ */
+let atMute = null;
+
+/**
+ * The `@` token the caret sits in, or null. `@` counts only at the start of a word: `foo@bar` is an
+ * address rather than a path, and the list has nothing to say about it.
+ */
+function atTokenAt(area) {
+  const caret = area.selectionStart;
+  if (caret !== area.selectionEnd) return null;
+  // A caret inside a word is not at the end of the token the list would replace, and taking a row
+  // from there would leave the rest of the word behind.
+  if (caret < area.value.length && !/\s/.test(area.value[caret])) return null;
+  const before = area.value.slice(0, caret);
+  const match = /(^|\s)@(\S*)$/.exec(before);
+  if (!match) return null;
+  const body = match[2];
+  const cut = body.lastIndexOf("/");
+  return {
+    start: caret - body.length - 1,
+    end: caret,
+    // What the human typed before the last slash, kept as typed so the row inserts that prefix.
+    dir: cut < 0 ? "" : body.slice(0, cut + 1),
+    frag: cut < 0 ? body : body.slice(cut + 1),
+  };
+}
+
+/** The list hangs off the field's top edge, the same way the picker does, so it never covers the text. */
+function placeAtPick() {
+  if (!atInst) return;
+  const box = atInst.root.getBoundingClientRect();
+  const width = Math.min(430, window.innerWidth - 28);
+  atPick.style.width = `${width}px`;
+  const left = Math.min(Math.max(14, box.left + 14), window.innerWidth - width - 14);
+  atPick.style.left = `${left}px`;
+  atPick.style.bottom = `${Math.max(14, window.innerHeight - box.top + 8)}px`;
+}
+
+function closeAtPick() {
+  atPick.hidden = true;
+  // Whatever is still in flight belongs to a list that is gone.
+  atSeq += 1;
+  atList.replaceChildren();
+  atInst = null;
+  atToken = null;
+  atRows = [];
+  atAt = -1;
+}
+
+/** Paint the rows the last listing brought back, plus one muted row when a folder holds nothing. */
+function drawAtPick() {
+  atList.replaceChildren();
+  if (atRows.length === 0) {
+    const none = el("div", "p-empty");
+    none.textContent = "no files";
+    atList.appendChild(none);
+    return;
+  }
+  atRows.forEach((entry, index) => {
+    const row = el("button", `p-item${entry.dir ? " dir" : ""}`);
+    row.type = "button";
+    // The field keeps the keyboard, so a row is never a tab stop and never takes focus.
+    row.tabIndex = -1;
+    row.title = entry.path || entry.name;
+    const name = el("span", "p-name");
+    name.textContent = entry.dir ? `${entry.name}/` : entry.name;
+    row.append(name);
+    // On the press, not the click: taking the row must not first hand the selection to the button,
+    // because the caret it replaces the text at is the one the field is holding.
+    row.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      takeAtRow(entry);
+    });
+    row.addEventListener("pointerenter", () => markAt(index));
+    atList.appendChild(row);
+  });
+  markAt(atAt);
+}
+
+/** Paint the row the arrows are on without rebuilding the list under the pointer. */
+function markAt(at) {
+  atAt = at;
+  [...atList.children].forEach((row, index) => row.classList.toggle("hl", index === at));
+  atList.children[at]?.scrollIntoView({ block: "nearest" });
+}
+
+/** The listing for one token. A non-200 shuts the list and leaves what was typed alone. */
+async function loadAtPick(tok) {
+  const seq = (atSeq += 1);
+  const query = new URLSearchParams({ token, path: tok.dir.replace(/\/+$/, "") });
+  if (workspace) query.set("workspace", workspace);
+  if (tok.frag) query.set("q", tok.frag);
+  try {
+    const response = await fetch(`/browse?${query}`);
+    if (seq !== atSeq) return;
+    if (!response.ok) return closeAtPick();
+    const data = await response.json();
+    if (seq !== atSeq) return;
+    atRows = Array.isArray(data.entries) ? data.entries : [];
+    drawAtPick();
+  } catch {
+    if (seq !== atSeq) return;
+    closeAtPick();
+  }
+}
+
+/** Show the list for the token under the field's caret, or shut it when there is no token. */
+function openAtPick(inst, token) {
+  atInst = inst;
+  atToken = token;
+  // The previous folder's rows go before the fetch, so Enter cannot take one while this listing is
+  // still travelling. Nothing is armed until a reply lands, and Enter with no row shuts the list.
+  atRows = [];
+  atAt = -1;
+  atList.replaceChildren();
+  atPick.hidden = false;
+  placeAtPick();
+  void loadAtPick(token);
+}
+
+/** A keystroke in the field: the list follows the token, and a dismissed one stays shut. */
+function typedInAtPick(inst) {
+  const token = atTokenAt(inst.msg);
+  if (!token) {
+    atMute = null;
+    if (atInst === inst) closeAtPick();
+    return;
+  }
+  if (atMute && atMute.inst === inst && atMute.start === token.start) return;
+  atMute = null;
+  openAtPick(inst, token);
+}
+
+/**
+ * Take one row into the text: a folder opens in the list, a file is named and the list closes. The
+ * text is the path as the human typed it — the directory prefix plus the name — because that is
+ * what the agent's own tools read from the workspace root.
+ */
+function takeAtRow(entry) {
+  if (!atInst || !atToken) return;
+  const inst = atInst;
+  // The caret is the authority: a click in the text since the last keystroke moves it without a
+  // keystroke, and a path written at a stale offset lands in the wrong place.
+  const token = atTokenAt(inst.msg);
+  if (!token || token.start !== atToken.start) return closeAtPick();
+  if (entry.dir) {
+    inst.msg.setRangeText(`@${token.dir}${entry.name}/`, token.start, token.end, "end");
+    inst.msg.focus();
+    // Drilling in is what the token now says, so the list follows the text it just wrote.
+    const drilled = atTokenAt(inst.msg);
+    if (drilled) openAtPick(inst, drilled);
+    else closeAtPick();
+    return;
+  }
+  inst.msg.setRangeText(`@${token.dir}${entry.name} `, token.start, token.end, "end");
+  inst.msg.focus();
+  // The space ends the token, so the next `@` is a new one and nothing reopens the list by itself.
+  closeAtPick();
+}
+
+/**
+ * The keys the open list owns. True means it took the keystroke, so the field does not send with it
+ * and does not give the keyboard back.
+ */
+function atPickKey(inst, event) {
+  if (atPick.hidden || atInst !== inst || !atToken) return false;
+  const key = event.key;
+  if (key === "ArrowDown" || key === "ArrowUp") {
+    event.preventDefault();
+    event.stopPropagation();
+    if (atRows.length === 0) return true;
+    const step = key === "ArrowDown" ? 1 : -1;
+    const next = atAt < 0 ? (step > 0 ? 0 : atRows.length - 1) : (atAt + step + atRows.length) % atRows.length;
+    markAt(next);
+    return true;
+  }
+  if (key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    // The text stays as it is and the field keeps the keyboard: shutting a list is not leaving it.
+    atMute = { inst, start: atToken.start };
+    closeAtPick();
+    return true;
+  }
+  if (key !== "Enter" && key !== "Tab") return false;
+  event.preventDefault();
+  event.stopPropagation();
+  const taken = atRows[atAt < 0 ? 0 : atAt];
+  if (taken) {
+    takeAtRow(taken);
+    return true;
+  }
+  // Nothing to take: the key shuts the list rather than sending a message that names no file.
+  atMute = { inst, start: atToken.start };
+  closeAtPick();
+  return true;
+}
+
+window.addEventListener("resize", () => {
+  if (!atPick.hidden) placeAtPick();
+});
+
+// ---------- sending ------------------------------------------------------
 /** Paths travel as text, which the agent's own file tools read directly. */
 function pickedPathsText() {
   const lines = [...pickPaths()].map(([path, meta]) => `${path}${meta.dir ? "/" : ""}`);
@@ -7278,6 +7504,9 @@ async function sendMessage(inst = activeComposer) {
     paintRefs(inst);
     paintReferenceRings();
     closePicker();
+    // The send button keeps the keyboard inside the field, so a list left open would float over the
+    // field the send just emptied until the next keystroke, Enter or blur.
+    closeAtPick();
     // A fork is one send's choice, so the next comment goes to the thread of the card again.
     inst.forkNext = false;
     if (made?.id) {
@@ -7366,6 +7595,9 @@ stopBtn.addEventListener("click", async () => {
 // goes back to moving the board. A panel or an editor takes Escape first and stops it there.
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  // The `@` list is its own surface and takes Escape first, so shutting it does not also drop
+  // the card being read.
+  if (!atPick.hidden) return;
   if (!document.querySelector(".card.active")) return;
   selectCard(null);
 });
@@ -7385,7 +7617,7 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   // The picker is its own surface: a board shortcut behind it would act on what is out of reach.
-  if (!picker.hidden) return;
+  if (!picker.hidden || !atPick.hidden) return;
   const active = document.querySelector(".card.active");
   const record = active ? byId.get(active.dataset.id) : null;
   if (!record) return;
@@ -7410,7 +7642,7 @@ document.addEventListener("keydown", (event) => {
 // back the one that went by mistake. A field keeps its own undo, so half-typed text is never replaced.
 document.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() !== "z" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
-  if (typingSomewhere()) return;
+  if (typingSomewhere() || !atPick.hidden) return;
   event.preventDefault();
   undoClose();
 });
@@ -7420,7 +7652,7 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey || !/^[1-6]$/.test(event.key)) return;
   if (typingSomewhere()) return;
-  if (!actPanel.hidden) return;
+  if (!actPanel.hidden || !atPick.hidden) return;
   const record = openQuestion();
   if (!record) return;
   // The option buttons carry their own click handler, so this reuses the whole answer path.
@@ -7438,7 +7670,7 @@ document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (typingSomewhere()) return;
   // The picker is its own surface: a board shortcut behind it would move what is out of reach.
-  if (!picker.hidden || !actPanel.hidden) return;
+  if (!picker.hidden || !actPanel.hidden || !atPick.hidden) return;
   if (event.key === "f") {
     event.preventDefault();
     fitAll();
