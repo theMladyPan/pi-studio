@@ -340,7 +340,7 @@ test("the trim leaves the human's own closed thread alone", (t) => {
 	assert.equal(board.threads.get("old-0"), undefined, "and the trim still ran");
 });
 
-test("the closed rail never lists more rows than the cap after a trim", (t) => {
+test("the closed rail never lists more put-away children than the cap after a trim", (t) => {
 	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const { board, child } = family();
 	const now = Date.now();
@@ -354,9 +354,12 @@ test("the closed rail never lists more rows than the cap after a trim", (t) => {
 	fullRail(board);
 	autoCloseChild(board, child);
 	t.mock.timers.tick(CHILD_CLOSE_DELAY_MS);
+	// The cap counts the rows the board filed and no others: the human's own closed thread is a row the rail
+	// draws without being room the cap may spend, so it is left out of the count.
+	const filedRows = closedCards(board).filter((row) => board.threads.get(row.id)?.parentThread);
 	assert.ok(
-		closedCards(board).length <= MAX_PUT_AWAY_CHILDREN,
-		`the rail lists ${closedCards(board).length} rows for a cap of ${MAX_PUT_AWAY_CHILDREN}`,
+		filedRows.length <= MAX_PUT_AWAY_CHILDREN,
+		`the rail lists ${filedRows.length} put-away children for a cap of ${MAX_PUT_AWAY_CHILDREN}`,
 	);
 	assert.equal(board.threads.get(keeper.id), keeper, "the row that owns a card is still drawn through it");
 	assert.equal(board.threads.get(mine.id), mine, "and the human's own thread is still there");

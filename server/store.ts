@@ -281,6 +281,19 @@ export function restoredPlainCard(raw) {
 
 
 /**
+ * The shape the board files away: a spawned child's thread, hidden and carrying `closedAt`, kept for the
+ * rail to offer back. A thread the human started and one they closed by hand carry `hidden` and `closedAt`
+ * too, and are neither counted against `MAX_PUT_AWAY_CHILDREN` nor dropped by it — `parentThread` is what
+ * tells the two apart. It is written once because the cap a session enforces and the cap a load enforces
+ * have to count the same rows: a thread counted but not droppable is a thread and its turns lost.
+ */
+export function putAwayByBoard(thread) {
+	return Boolean(thread?.hidden && thread?.closedAt && thread?.parentThread);
+}
+
+
+
+/**
  * A hidden thread with nothing left to draw it through is dropped, and one the rail still lists is not.
  *
  * A card and the child that answers for it belong together, and a saved file can part them, so a hidden
@@ -342,13 +355,13 @@ export function boardFor(workspace) {
 		// A child the board put away is filed with the board it was put away on: it carries `closedAt`, owns no
 		// cards and is only there for the rail to offer back. Its own cap keeps the newest of them, and keeping
 		// them out of the board's ceiling is what stops them from pushing the human's threads out of the file
-		// as they accumulate.
-		const putAway = (raw) => raw?.hidden && raw?.closedAt;
+		// as they accumulate. What counts is the one shape `putAwayByBoard` describes, so the human's own closed
+		// threads are neither cut by this cap nor taken from the file with their turns.
 		const filed = [
-			...saved.threads.filter((raw) => !putAway(raw)).slice(-MAX_THREADS),
+			...saved.threads.filter((raw) => !putAwayByBoard(raw)).slice(-MAX_THREADS),
 			// Newest by close, which is what the cap promises: a child spawned early and put away last is not the
 			// first to go just because it was written to the file first.
-			...saved.threads.filter(putAway).sort((a, b) => a.closedAt - b.closedAt).slice(-MAX_PUT_AWAY_CHILDREN),
+			...saved.threads.filter(putAwayByBoard).sort((a, b) => a.closedAt - b.closedAt).slice(-MAX_PUT_AWAY_CHILDREN),
 		];
 		for (const raw of filed) {
 			const thread = restoredThread(raw, workspace.folder);
