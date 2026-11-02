@@ -5,6 +5,7 @@
  */
 import { liveTurn, stopStream } from "../../child/run.ts";
 import { broadcast, card, closedCards, nudgeWelcome, resync, update, updateCard } from "../../bus.ts";
+import { CHILD_CLOSE_DELAY_MS } from "../../limits.ts";
 import { MAX_PLAIN_CARDS, scheduleSave } from "../../store.ts";
 import { ownedCards, refreshOwned } from "./message.ts";
 import { answer, fail, readJson } from "../../http.ts";
@@ -79,6 +80,9 @@ function rememberClosed(board, entry) {
 export function killChild(board, thread) {
 	const child = board.children.get(thread.id);
 	if (!child) return false;
+	// A child that died is not one whose answer is being read, and a kill leaves the thread idle: the
+	// put-away a finished answer queued must not fire on it.
+	cancelAutoClose(thread);
 	// The child stops being this thread's voice before it is killed, so its death is not the run failing.
 	board.children.delete(thread.id);
 	const { turn, card: asked } = liveTurn(board, thread);
@@ -152,6 +156,87 @@ export function makeRoom(board) {
 /** What the rail draws under "closed", told to every tab. */
 export function nudgeClosed(board) {
 	broadcast(board, { type: "closed", closed: closedCards(board) });
+}
+
+
+
+/**
+ * Take a thread's card off the board and keep the thread: its session, its turns and its worktree stay
+ * where they are, and `closedAt` puts it in the rail's closed list where a click draws it again. Nothing
+ * is killed and nothing is swept, so the work of a thread that goes this way is still there to assemble.
+ */
+function hideClosedCard(board, thread) {
+	thread.hidden = true;
+	thread.closedAt = Date.now();
+	broadcast(board, { type: "remove", id: thread.id });
+	refreshOwned(board, thread);
+	nudgeClosed(board);
+	scheduleSave(board);
+	nudgeWelcome();
+}
+
+
+
+/**
+ * The put-away a child is waiting for, kept off the thread itself: `/state` serialises whole threads, and
+ * a Node timer is a circular object that would make that request throw.
+ */
+const closeTimers = new WeakMap();
+
+
+
+/**
+ * Why this child's card may not be put away on its own, or "" when it may.
+ *
+ * The rule is "the answer arrived and nobody is using it". A thread the human started is theirs to keep;
+ * a pinned card is one they keep in sight; a child that is not idle is being spoken to or working again;
+ * and one whose card is already gone, or whose parent has closed, has nothing left to tidy. It is asked
+ * twice — when the close is queued and again when the timer fires — so a message, a stop, a kill or a
+ * close in between needs no bookkeeping of its own.
+ */
+export function autoCloseRefusal(board, thread) {
+	if (!thread) return "no such thread";
+	if (!thread.parentThread) return "a thread the human started is not put away on its own";
+	if (board.threads.get(thread.id) !== thread) return "this card is already closed";
+	if (thread.hidden) return "this card is already closed";
+	if (thread.pinned === true) return "that card is pinned";
+	if (thread.status !== "idle") return "the child is not finished";
+	if (thread.answering) return "the child is answering";
+	if (thread.queued?.length) return "the child has work waiting";
+	const parent = board.threads.get(thread.parentThread);
+	if (!parent || parent.hidden) return "the thread that spawned it is closed";
+	return "";
+}
+
+
+
+/** A queued put-away belongs to a moment that has passed, and is worth nothing. */
+export function cancelAutoClose(thread) {
+	const pending = closeTimers.get(thread);
+	if (pending) clearTimeout(pending);
+	closeTimers.delete(thread);
+}
+
+
+
+/**
+ * Queue the put-away of a child whose answer has been read: hidden a short moment later, never deleted.
+ *
+ * A parent that spawns six children was left with six spent cards, and the prompt that asked it to close
+ * them was advice rather than a rule. The board does it here, and only the card goes: `closeThread` would
+ * kill the child and `sweepTrees` could retire its worktree, and both are wrong for a child the human has
+ * not assembled yet. A spawned child writes no cards of its own, so hiding is all a close can be here.
+ */
+export function autoCloseChild(board, thread) {
+	if (autoCloseRefusal(board, thread)) return;
+	cancelAutoClose(thread);
+	const pending = setTimeout(() => {
+		closeTimers.delete(thread);
+		if (autoCloseRefusal(board, thread)) return;
+		hideClosedCard(board, thread);
+	}, CHILD_CLOSE_DELAY_MS);
+	pending.unref?.();
+	closeTimers.set(thread, pending);
 }
 
 
@@ -235,11 +320,7 @@ export async function onClose(req, res, board, caller = { human: false }) {
 	// so one that still answers notes keeps running where those notes are read. The last card ends it.
 	const kept = ownedCards(board, thread.id);
 	if (kept.length) {
-		thread.hidden = true;
-		thread.closedAt = Date.now();
-		broadcast(board, { type: "remove", id });
-		refreshOwned(board, thread);
-		nudgeClosed(board);
+		hideClosedCard(board, thread);
 	} else {
 		closeThread(board, thread);
 		broadcast(board, { type: "remove", id });
