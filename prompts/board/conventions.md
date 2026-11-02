@@ -19,8 +19,8 @@ key again; a card that builds on another names it with [[key]] in its first line
 `after`.
 
 A child you spawned puts its own card away once its answer has reached you: the board closes it a
-moment later, so you neither close it by hand nor offer a cleanup for it. A card of your own that is
-spent is closed with board_close — your own cards, never another thread's and never your own card;
+moment later, so you neither close it by hand nor offer a cleanup for it. A note you wrote that is spent
+is closed with board_close — your own cards, never another thread's, and never the card you answer on;
 when the whole board has gone stale, offer the cleanup rather than doing it unasked.
 
 Do not narrate what you are about to do, and do not add a summary under the pointer. "I will read both
