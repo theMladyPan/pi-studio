@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { Readable } from "node:stream";
 import { closedCards } from "../server/bus.ts";
 import { CHILD_CLOSE_DELAY_MS, MAX_PUT_AWAY_CHILDREN } from "../server/limits.ts";
-import { autoCloseChild, autoCloseRefusal, onClose, onReopen, onUndo } from "../server/routes/board/lifecycle.ts";
+import { autoCloseChild, autoCloseRefusal, forgetCard, killChild, onClose, onReopen, onUndo } from "../server/routes/board/lifecycle.ts";
 import { pruneHiddenThreads } from "../server/store.ts";
 import { handleChildLine } from "../server/thought.ts";
 
@@ -287,6 +287,90 @@ test("a session keeps no more put-away children than a restart would", (t) => {
 	assert.ok(board.threads.has(`old-${MAX_PUT_AWAY_CHILDREN - 1}`), "the ones the human saw last stay");
 	assert.ok(board.threads.has(child.id), "and the one just put away is on the rail");
 	assert.deepEqual(board.trash, [], "trimming is not a close the human can undo");
+});
+
+/** A child the board put away on an earlier day: hidden, closed, and owning nothing. */
+function filed(id: string, closedAt: number) {
+	return { id, title: "a child from yesterday", status: "idle", parentThread: "master-1", hidden: true, closedAt, turns: [] };
+}
+
+/** The rail filled to the cap with children put away before this session started. */
+function fullRail(board: any) {
+	for (let at = 0; at < MAX_PUT_AWAY_CHILDREN; at += 1) board.threads.set(`old-${at}`, filed(`old-${at}`, 1_000 + at));
+}
+
+test("the trim never reaches a child that is hidden, closed and still working", (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const { board, child } = family();
+	// The human closes the card of a child that owns a note while that child is working: `onClose` has no
+	// status guard, so the thread takes `hidden` and `closedAt` and keeps its note.
+	const busy: any = { ...filed("busy-1", 1), status: "running" };
+	board.threads.set(busy.id, busy);
+	board.cards.set("note-1", { id: "note-1", type: "note", title: "a note", ownerThread: busy.id, at: Date.now() });
+	// The note then goes — the board's plain-card ceiling evicts it — and `forgetCard` spares the thread because
+	// it carries `closedAt`. What the trim now sees is a child that is cardless, hidden, closed and working.
+	board.cards.delete("note-1");
+	forgetCard(board, "note-1");
+	let ended = 0;
+	board.children.set(busy.id, {
+		stdin: { end: () => (ended += 1) },
+		kill: () => assert.fail("a child that is still working is not killed by a trim"),
+	});
+	fullRail(board);
+	// The next put-away arrives, which is what asks the board to trim the rail.
+	autoCloseChild(board, child);
+	t.mock.timers.tick(CHILD_CLOSE_DELAY_MS);
+	assert.equal(board.threads.get(busy.id), busy, "a child still working stays where the rail can reach it");
+	assert.equal(ended, 0, "and its stdin is not closed under it");
+	assert.ok(board.children.has(busy.id), "and its process is still the board's");
+	assert.equal(board.threads.get("old-0"), undefined, "the trim did run");
+});
+
+test("the trim leaves the human's own closed thread alone", (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const { board, child } = family();
+	// A thread the human started, closed by hand after its cards went: it carries `closedAt` like a put-away
+	// child, and it is the oldest row on the rail, so the trim reaches it first.
+	const mine: any = { id: "mine-1", title: "my own", status: "idle", hidden: true, closedAt: 1, turns: [] };
+	board.threads.set(mine.id, mine);
+	fullRail(board);
+	autoCloseChild(board, child);
+	t.mock.timers.tick(CHILD_CLOSE_DELAY_MS);
+	assert.equal(board.threads.get(mine.id), mine, "a thread the human started is theirs to keep");
+	assert.equal(board.threads.get("old-0"), undefined, "and the trim still ran");
+});
+
+test("the closed rail never lists more rows than the cap after a trim", (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const { board, child } = family();
+	const now = Date.now();
+	// A closed child that still owns a card, and one the human started: both are rows on the rail, and neither
+	// is one the trim may retire. They sit newer than the ones it retires, so its room comes from those.
+	const keeper: any = filed("keeper-1", now - 100);
+	board.threads.set(keeper.id, keeper);
+	board.cards.set("note-9", { id: "note-9", type: "note", title: "a note", ownerThread: keeper.id, at: now });
+	const mine: any = { id: "mine-1", title: "my own", status: "idle", hidden: true, closedAt: now - 50, turns: [] };
+	board.threads.set(mine.id, mine);
+	fullRail(board);
+	autoCloseChild(board, child);
+	t.mock.timers.tick(CHILD_CLOSE_DELAY_MS);
+	assert.ok(
+		closedCards(board).length <= MAX_PUT_AWAY_CHILDREN,
+		`the rail lists ${closedCards(board).length} rows for a cap of ${MAX_PUT_AWAY_CHILDREN}`,
+	);
+	assert.equal(board.threads.get(keeper.id), keeper, "the row that owns a card is still drawn through it");
+	assert.equal(board.threads.get(mine.id), mine, "and the human's own thread is still there");
+});
+
+test("a kill on a child that has already exited still disarms the put-away", (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const { board, child } = family();
+	autoCloseChild(board, child);
+	// The run is over and its process has exited, which is the ordinary shape a second after the answer. There
+	// is nothing to kill, and the kill must still take the queued put-away with it.
+	assert.equal(killChild(board, child), false, "there was no process left to kill");
+	t.mock.timers.tick(CHILD_CLOSE_DELAY_MS);
+	assert.equal(child.hidden, undefined, "the card stays where the human is reading it");
 });
 
 test("an agent cannot close a card the board has already put away", async (t) => {

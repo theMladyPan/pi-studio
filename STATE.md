@@ -223,7 +223,8 @@ commit's own account rather than on a check run now, the section below says so.
   card off the board a few seconds later. Hidden and not closed: nothing is killed and no worktree is
   swept, so what it did is still there to assemble, and the rail lists it with the other cards put away
   where a click brings it back. A card the human pinned, a run that was stopped, failed or timed out, and
-  a child they wrote to again all stay where they are.
+  a child they wrote to again all stay where they are. Once that rail holds more rows than its cap allows,
+  the oldest put-away card on it is retired and the newest stay.
 - **A run is stopped or killed where it is read, and only there.** The thread's own activity section
   carries the one control: `■` asks the child to abort, and the same control becomes `⊗` — kill —
   when the stop does not land. It was on the card's header too, with the same stop-then-kill state
