@@ -7067,20 +7067,21 @@ function paintRemoveSheet(preview) {
   }
   // A file git has never seen has no diff to draw, so the sheet names it. Without this a folder holding one
   // new file counts it above and then says it is clean below, which is the wrong way round on a press that
-  // cannot be undone.
+  // cannot be undone. A name with a folder behind it is here too, which is why the words say files and
+  // folders rather than calling a directory a file.
   const fresh = Array.isArray(preview.new) ? preview.new : [];
   const newCount = Array.isArray(preview.new) ? fresh.length : Number(preview.new) || 0;
   if (newCount) {
     const names = el("div", "act-kv");
-    for (const name of fresh.length ? fresh : [counted(newCount, "file")]) {
+    for (const name of fresh.length ? fresh : [counted(newCount, "new item")]) {
       const row = el("div", "act-row");
       row.appendChild(el("span", "v"));
       row.children[0].textContent = String(name);
       names.appendChild(row);
     }
     const said = el("div", "gone");
-    said.textContent = "these files are new, so git has no diff to draw for them";
-    const block = panelBlock("the new files that would go", names);
+    said.textContent = "git has never seen these, so it has no diff to draw for them";
+    const block = panelBlock("the new files and folders that would go", names);
     block.appendChild(said);
     parts.push(block);
   } else if (tree && !preview.note && !dirty) {
@@ -7134,6 +7135,12 @@ async function removeThread() {
   const name = removeName;
   removeGo.disabled = true;
   const receipt = await postRemove("remove", { card }, "remove it");
+  // A removal the daemon refused leaves the thread alive, so the card stays where it is and the footer's
+  // own line says why. The focus goes back to the trash the sheet was opened from, which still sits on it.
+  if (!receipt) {
+    closeRemoveSheet();
+    return;
+  }
   // The card leaves this board at once: the daemon broadcasts the removal to every other tab, and a tab
   // that asked does not wait for the echo of its own press. It leaves before the sheet closes, because the
   // trash the sheet was opened from sits on it: a focus handed back to that button lands on nothing. The
@@ -7142,7 +7149,6 @@ async function removeThread() {
   if (entry) dropCard(entry);
   removeOpener = leftBtn;
   closeRemoveSheet();
-  if (!receipt) return;
   footNote(removeReceipt(receipt, name));
 }
 

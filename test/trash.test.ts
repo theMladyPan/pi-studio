@@ -199,6 +199,25 @@ test("a folder holding one new file names it, because git has no diff to draw fo
 	}
 });
 
+test("a new file whose name holds a space or a letter outside ascii arrives as it is on disk", async () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const { thread, tree } = startThread(board, "9999cccc", "fix/9999-work-9999cccc");
+		// `git status` quotes a name with a space in it and escapes one outside ascii, and the sheet draws
+		// what it is given: a quoted name is a file the human cannot find.
+		writeFileSync(join(tree.path, "my file.md"), "a space in the name\n");
+		writeFileSync(join(tree.path, "naïve.md"), "a letter outside ascii\n");
+		const res = scratchRes();
+		await onRemovePreview(jsonRequest({ card: thread.id }), res, board);
+		assert.equal(res.status, 200, res.body);
+		const seen = answered(res);
+		assert.deepEqual([...seen.new].sort(), ["my file.md", "naïve.md"].sort(), "git handed the sheet its own quoting");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("a preview counts the ignored files the forced removal takes with the folder", async () => {
 	const repo = scratchRepo();
 	try {
@@ -280,6 +299,26 @@ test("the fragments are a remembered room, a forgotten folder and a stranded bra
 	}
 });
 
+test("a forgotten folder holding one unmerged commit says it holds that commit", async () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const orphan = join(repo, ".agents", "abcd7777");
+		git(repo, "worktree", "add", "--detach", orphan, "dev");
+		writeFileSync(join(orphan, "forgotten.md"), "one commit nobody merged\n");
+		git(orphan, "add", ".");
+		git(orphan, "commit", "-m", "nobody merged this");
+		const res = scratchRes();
+		await onFragments(jsonRequest({}), res, board);
+		const lost = answered(res).items.find((item: any) => item.path === orphan);
+		assert.ok(lost, "the forgotten folder is not on the list at all");
+		assert.equal(lost.work, true, "a folder holding an unmerged commit is filed under what holds nothing");
+		assert.match(lost.note, /1 commit that is not in dev/);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("a remembered room goes with its record, its folder and its branch", async () => {
 	const repo = scratchRepo();
 	try {
@@ -341,6 +380,32 @@ test("a thread `ctrl+z` still restores is not offered as a leftover", async () =
 		assert.deepEqual(answered(res).items, [], "the list offers to destroy what the undo has promised back");
 		assert.ok(existsSync(tree.path), "the preview touched a folder the trash still holds");
 		assert.equal(hasBranch(repo, "feat/3333-work-3333aaaa"), true);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+
+test("a thread `ctrl+z` still restores keeps its branch when its folder and registration are gone", async () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const { thread, tree } = startThread(board, "4444bbbb", "feat/4444-work-4444bbbb");
+		// The folder and its registration go, and the record never learned the branch: the shape a child
+		// that cut its own branch leaves behind when its folder is taken away under it.
+		git(repo, "worktree", "remove", "--force", tree.path);
+		delete tree.branch;
+		// The close keeps the thread whole for `ctrl+z`, and its branch is the one thing still on disk.
+		board.threads.delete(thread.id);
+		board.trash.push({ at: Date.now(), kind: "thread", thread });
+		const res = scratchRes();
+		await onFragments(jsonRequest({}), res, board);
+		assert.equal(
+			answered(res).items.some((item: any) => item.branch === "feat/4444-work-4444bbbb"),
+			false,
+			"the list offers to break the undo it has promised",
+		);
+		assert.equal(hasBranch(repo, "feat/4444-work-4444bbbb"), true);
 	} finally {
 		rmSync(repo, { recursive: true, force: true });
 	}

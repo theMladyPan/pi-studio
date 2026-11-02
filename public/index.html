@@ -913,8 +913,8 @@
   .sheet .act-note .diagram-error { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
   /* The answers of a sheet that asks before it acts, in the same strip as the panel's head. The second
      press of the red one is the confirmation, so `armed` means here what it means in the header: these
-     presses wear the header's own button, and the one clause that differs from it is the padding, said
-     beside the header's rule below. */
+     presses wear the header's own button, and the clauses that differ from it are said beside the header's
+     rule below. */
   .sheet .sheet-actions { display: flex; gap: 8px; justify-content: flex-end; flex: none;
     padding: 8px 10px; border-top: 1px solid var(--border); background: var(--card-head); }
   .sheet .sheet-btn:disabled { cursor: default; opacity: .55; }
@@ -941,9 +941,9 @@
   header button, .sheet .sheet-btn { font: 12px var(--mono); color: var(--muted); background: #161b22;
     border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
   header button:hover, .sheet .sheet-btn:hover { color: var(--text); border-color: var(--border-bright); }
-  /* A press that answers a sheet stands in a strip rather than the header, so its padding is the one
-     thing that differs from the header's own button. */
-  .sheet .sheet-btn { padding: 3px 10px; }
+  /* A press that answers a sheet stands in a strip rather than the header, so its own size, its radius and
+     its padding are the clauses that differ from the header's own button. */
+  .sheet .sheet-btn { font: 11px var(--mono); border-radius: 5px; padding: 3px 10px; }
   /* A selected card is the conversation being read, so the other threads step back rather than
      disappear: still legible, plainly not what you are looking at. */
   .card.dim { opacity: .7; }

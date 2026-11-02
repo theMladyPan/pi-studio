@@ -118,8 +118,16 @@ export function removePreview(board: BoardLike, thread: ThreadLike) {
 	let commits = 0;
 	let raw = "";
 	if (present) {
-		const status = gitIn(path, ["status", "--porcelain"], 10_000);
-		const lines = status.ok ? status.out.split("\n").filter(Boolean) : [];
+		// `-z` is the only form that hands a name back as it is on disk: the line form quotes one holding a
+		// space and escapes one outside ascii, and the sheet draws what it is given.
+		const status = gitIn(path, ["status", "--porcelain", "-z"], 10_000);
+		const fields = status.ok ? status.out.split("\0").filter(Boolean) : [];
+		const lines: string[] = [];
+		for (let at = 0; at < fields.length; at += 1) {
+			lines.push(fields[at]);
+			// A rename or a copy names its source in the field after it, which is no change of its own.
+			if (/[RC]/.test(fields[at].slice(0, 2))) at += 1;
+		}
 		dirty = lines.length;
 		// A file git has never seen is a change `git diff HEAD` cannot draw, so its name is what the sheet
 		// has to say: a count of changes with an empty diff under it reads as a folder holding nothing.
@@ -186,8 +194,13 @@ export function fragmentsOf(board: BoardLike): Fragment[] {
 	// its branch with it, so listing the name again would offer to remove a thing twice.
 	const covered = new Set<string>(board.trees.map((tree) => tree.branch).filter((name): name is string => Boolean(name)));
 	for (const entry of registered) if (entry.branch && existsSync(entry.path)) covered.add(entry.branch);
-	const live = new Set([...board.threads.keys()].map((id) => String(id).slice(0, 8)));
+	// The base a folder's own commits are counted past: the branch its work would merge into, read once.
+	const from = baseRef(repo);
 	const back = restorable(board);
+	// A thread the trash still holds keeps its branch off this list as well as its folder: a child that cut
+	// its own branch never taught the tree record the name, so this loop is the last place a branch the undo
+	// has promised back could still be offered for removal.
+	const live = new Set([...board.threads.keys(), ...back].map((id) => String(id).slice(0, 8)));
 	const items: Fragment[] = [];
 	for (const tree of board.trees) {
 		if (tree.thread && board.threads.has(tree.thread)) continue;
@@ -213,7 +226,9 @@ export function fragmentsOf(board: BoardLike): Fragment[] {
 		// The main checkout is a registration of its own, and a tree outside `.agents` is where a human put it.
 		if (sameFolder(entry.path, repo) || !resolve(entry.path).startsWith(kept)) continue;
 		if (board.trees.some((tree) => sameFolder(tree.path, entry.path))) continue;
-		const why = whyKept({ path: entry.path });
+		// The folder's commits are counted past the base its work would merge into. A repository that cannot
+		// name one leaves the count unreadable, and unreadable is not a folder holding nothing.
+		const why = whyKept({ path: entry.path, base: from }) || (from ? "" : "whose commits the board cannot count");
 		items.push({
 			kind: "orphan",
 			label: entry.branch || basename(entry.path),
@@ -224,7 +239,6 @@ export function fragmentsOf(board: BoardLike): Fragment[] {
 		});
 	}
 	const named = gitIn(repo, ["for-each-ref", "refs/heads", "--format=%(refname:short)"], 10_000);
-	const from = baseRef(repo);
 	for (const name of (named.ok ? named.out.split("\n") : []).map((line) => line.trim()).filter(Boolean)) {
 		const suffix = name.match(THREAD_BRANCH)?.[1];
 		if (!suffix || live.has(suffix) || covered.has(name)) continue;

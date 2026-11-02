@@ -561,10 +561,11 @@ export async function onRemove(req, res, board) {
 	steps.push({ what: "card", ok: true, note: owned.length ? `the thread was dropped with ${owned.length} card(s)` : "the thread was dropped" });
 	const file = thread.sessionId ? sessionFile({ id: board.id }, thread.sessionId) : "";
 	steps.push(file ? unlinkStep(file) : { what: "session", ok: true, note: thread.sessionId ? "the transcript was already gone" : "this thread never had a transcript" });
-	steps.push({ what: "tree", ...discardTree(board, tree) });
+	const folder = discardTree(board, tree);
+	steps.push({ what: "tree", ...folder });
 	// The branch goes only once the folder is really gone: deleted under a folder git would not remove, its
 	// name is the one thing that still points at the work.
-	if (steps.at(-1).ok) steps.push({ what: "branch", ...discardBranch(repo, branch) });
+	if (folder.ok) steps.push({ what: "branch", ...discardBranch(repo, branch) });
 	// The strip draws the trees, so a removal is a redraw rather than one card leaving: `resync` reads git again.
 	resync(board);
 	nudgeWelcome();
