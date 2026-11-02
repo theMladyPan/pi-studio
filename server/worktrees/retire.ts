@@ -58,6 +58,18 @@ export function retireWorktree(board, tree) {
 	const why = (reason) => (recorded ? `${reason}; the tree is on ${branch || "a detached HEAD"}, recorded as ${recorded}` : reason);
 	// The branch the work would have been integrated into, named in every sentence below.
 	const up = baseRef(repo);
+	// The branch the tree really stands on, which is the record's only until the record stops matching
+	// what is on disk. Read before any proof, because a proof about it is what the guard below refuses.
+	const standing = branch || (existsSync(tree.path) ? headBranch(tree.path) : "");
+	// The integration branch is the reference every other proof is measured against, so deleting it is
+	// never a cleanup. A tree standing on it holds the one name the whole board is judged by: the branch
+	// always contains itself, any branch carrying its tip answers the containment proof, and `up !== branch`
+	// quietly skips the cherry proof, so the sweep would read such a tree as spent and take dev with it.
+	// Said here, ahead of every proof and of the deletion below, so no reason text and no renamed branch
+	// can reach `git branch -D` with that name.
+	if (up && standing === up) {
+		return { path: tree.path, branch: label, kept: why(`standing on ${up}, which is the branch its work is measured against`) };
+	}
 	// The work is integrated when one of two proofs holds, and the tree then holds nothing of its own. A
 	// branch a merge, a fast-forward or a rebase put into another branch is contained in it; a branch
 	// cherry-picked in carries the same patches under other ids. Both are asked of the main checkout,
