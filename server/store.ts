@@ -12,6 +12,7 @@ import { answer, fail } from "./http.ts";
 import { MODEL, PROVIDER, THINKING_LEVELS } from "./models.ts";
 import { ROLE_NAMES } from "./child/roles.ts";
 import { MODE_NAMES, PATH_NAMES } from "./child/modes.ts";
+import { sweepTrees } from "./cards.ts";
 
 
 
@@ -349,6 +350,14 @@ export function boardFor(workspace) {
 		}
 	}
 	boards.set(board.id, board);
+	// The startup sweep. A board is built the first time something opens it, and no child of it exists
+	// yet, so every tree its file still names is one no live thread is working in. A sweep that throws
+	// must not cost the board its load, so the board is handed back either way.
+	try {
+		if (sweepTrees(board).length) scheduleSave(board);
+	} catch (error) {
+		console.error(`pi-studio: the startup sweep of ${board.name} failed: ${error.message}`);
+	}
 	return board;
 }
 

@@ -10,7 +10,7 @@ import { ownedCards, refreshOwned } from "./message.ts";
 import { answer, fail, readJson } from "../../http.ts";
 import { field } from "./thread.ts";
 import { randomUUID } from "node:crypto";
-import { cleanBoard, clearBoard, plainCardFor, stopQueue } from "../../cards.ts";
+import { cleanBoard, clearBoard, plainCardFor, stopQueue, sweepTrees } from "../../cards.ts";
 import { finished } from "../../waiters.ts";
 import { settleRows } from "../../thought.ts";
 
@@ -35,6 +35,11 @@ export function closeThread(board, thread) {
 	board.threads.delete(thread.id);
 	// A thread that goes takes its place in the closed list with it.
 	nudgeClosed(board);
+	// With the child gone, the thread's tree may be retired — and only a tree whose work is provably
+	// already in the branch goes, so a thread closed mid-work keeps its tree, and `ctrl+z` still brings
+	// back a thread whose unfinished work was never touched.
+	sweepTrees(board);
+	scheduleSave(board);
 }
 
 
