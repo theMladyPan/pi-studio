@@ -3377,11 +3377,11 @@ addEventListener("keyup", (event) => {
 addEventListener("blur", () => heldModifier(false));
 
 // The middle button is the workspace grab, so it works over anything the canvas holds: a card, the
-// rail, the composer. The one exception is the detail panel, which is a dialog rather than part
+// rail, the composer. The one exception is a detail panel, which is a dialog rather than part
 // of the surface and reads better when a stray middle drag does not slide the board behind it.
 document.addEventListener("pointerdown", (event) => {
   if (event.button !== 1 || !(event.target instanceof Element)) return;
-  if (event.target.closest("#actDetail")) return;
+  if (event.target.closest(".sheet")) return;
   // Chromium opens its autoscroll compass on a middle press and would keep the pointer for it.
   event.preventDefault();
   beginPan(event);
@@ -6755,6 +6755,114 @@ async function postBoardAction(path) {
   }
 }
 
+// ---------- the clean summary ---------------------------------------------
+// One clean can report a dozen worktrees, and the footer is one line: the whole answer opens in a sheet
+// shaped like the row detail one, and the footer keeps only the receipt.
+const cleanPanel = document.getElementById("cleanDetail");
+const cleanPanelName = document.getElementById("cleanDetailName");
+const cleanPanelMeta = document.getElementById("cleanDetailMeta");
+const cleanPanelBody = document.getElementById("cleanDetailBody");
+const cleanPanelClose = document.getElementById("cleanDetailClose");
+
+/** A number and the word beside it, as the rest of the board words its counts. */
+const counted = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/**
+ * The whole answer to a clean: one row per worktree that went, one per worktree the sweep would not
+ * touch, then the threads and rail rows it forgot. A section with nothing in it is left out, so a clean
+ * that took one worktree does not fill the sheet with empty headings.
+ */
+function openCleanSheet({ kept, removed, dead, rows }) {
+  cleanPanelName.textContent = [
+    removed.length ? `${counted(removed.length, "worktree")} removed` : "",
+    kept.length ? `${kept.length} kept` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  cleanPanelMeta.textContent = [dead ? counted(dead, "dead thread") : "", rows ? counted(rows, "rail row") : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const parts = [];
+  const add = (node) => {
+    if (node) parts.push(node);
+  };
+  // What the sweep knows and the folder no longer shows: the ignored files that went with a tree, and a
+  // branch git would not delete. Both are said in plain words, because the human may still want either
+  // one back.
+  add(
+    panelBlock(
+      "what went",
+      panelFields(
+        removed.map((tree) => {
+          const beside = [
+            tree.ignoredPaths ? counted(tree.ignoredPaths, "ignored file") : "",
+            tree.branchKept ? "branch left behind" : "",
+          ]
+            .filter(Boolean)
+            .join(", ");
+          return [tree.branch || tree.path, beside || tree.note || "removed"];
+        }),
+      ),
+    ),
+  );
+  // The reason is the sweep's own sentence, passed through as it came: the tree holds work, and only the
+  // human can decide what happens to it.
+  const stayed = panelFields(kept.map((tree) => [tree.branch || tree.path, tree.kept]));
+  if (stayed) {
+    const warning = el("div", "gone");
+    warning.textContent = "these hold work only you can decide about";
+    stayed.appendChild(warning);
+    add(panelBlock("what stayed", stayed));
+  }
+  add(
+    panelBlock(
+      "the rest",
+      panelFields([
+        [dead ? "threads" : "", dead ? `${counted(dead, "dead thread")} forgotten` : ""],
+        [rows ? "rows" : "", rows ? `${counted(rows, "rail row")} dropped` : ""],
+      ]),
+    ),
+  );
+  cleanPanelBody.replaceChildren(...parts);
+  cleanPanel.hidden = false;
+  // The sheet itself takes the focus, so a second Enter goes nowhere instead of closing what just
+  // opened. Tab walks in from here.
+  cleanPanel.focus();
+}
+
+function closeCleanSheet() {
+  if (cleanPanel.hidden) return;
+  cleanPanel.hidden = true;
+  cleanPanelBody.replaceChildren();
+  // Cleaning is a click on the clean button, so the focus goes back to it while the footer keeps the
+  // receipt of what the click did.
+  cleanBtn.focus();
+}
+
+cleanPanelClose.addEventListener("click", closeCleanSheet);
+cleanPanel.addEventListener("click", (event) => {
+  if (event.target === cleanPanel) closeCleanSheet();
+});
+cleanPanel.addEventListener("keydown", (event) => {
+  // The sheet covers the board, so a board shortcut behind it would act on what is out of reach. The
+  // key stops at the sheet, which saves every board handler its own check.
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeCleanSheet();
+    return;
+  }
+  // The sheet holds the keyboard while it is open, so tab cannot walk the board behind it. Two stops are
+  // inside: the close button and the body, and tab cycles between them both ways.
+  if (event.key === "Tab") {
+    event.preventDefault();
+    const stops = [cleanPanelClose, cleanPanelBody];
+    const at = stops.indexOf(document.activeElement);
+    const step = event.shiftKey ? stops.length - 1 : 1;
+    stops[at < 0 ? (event.shiftKey ? stops.length - 1 : 0) : (at + step) % stops.length].focus();
+  }
+});
+
 cleanBtn.addEventListener("click", async () => {
   const result = await postBoardAction("clean");
   if (!result) return;
@@ -6762,34 +6870,17 @@ cleanBtn.addEventListener("click", async () => {
   // the human is the only one who can decide what happens to it.
   const kept = (result.trees ?? []).filter((tree) => tree.kept);
   const removed = (result.trees ?? []).filter((tree) => tree.removed);
-  const swept = removed.length;
-  // What the sweep knows and the folder no longer shows: how many ignored files went with the trees it
-  // removed, and a branch git would not delete. Said here in plain words, because the human is the only
-  // one who can still act on either.
-  const carried = removed.reduce((sum, tree) => sum + (tree.ignoredPaths ?? 0), 0);
-  const survived = removed.filter((tree) => tree.branchKept).map((tree) => tree.branch);
-  const went = [
-    carried ? `${carried} ignored file${carried === 1 ? "" : "s"} went with the removed worktree${swept === 1 ? "" : "s"}` : "",
-    survived.length
-      ? `${survived.length === 1 ? "the branch" : "the branches"} ${survived.join(", ")} ${survived.length === 1 ? "is" : "are"} still there`
-      : "",
-  ]
-    .filter(Boolean)
-    .join(", ");
-  if (kept.length) {
-    const sweptNote = result.removed.length ? `${result.removed.length} dead thread${result.removed.length > 1 ? "s" : ""}, ` : "";
-    hintLine(
-      `${sweptNote}kept ${kept.length} worktree${kept.length > 1 ? "s" : ""}: ${kept.map((tree) => `${tree.branch} (${tree.kept})`).join(", ")}${went ? `, ${went}` : ""}`,
-    );
+  const dead = (result.removed ?? []).length;
+  const rows = Number(result.rows) || 0;
+  if (!removed.length && !kept.length && !dead) {
+    footNote("nothing to clean");
     return;
   }
-  hintLine(
-    result.removed.length
-      ? `cleaned ${result.removed.length} dead thread${result.removed.length > 1 ? "s" : ""}, ${swept} worktree${swept === 1 ? "" : "s"} and ${result.rows} rows${went ? `, ${went}` : ""}`
-      : swept
-        ? `removed ${swept} unused worktree${swept > 1 ? "s" : ""}${went ? `, ${went}` : ""}`
-        : "nothing to clean",
-  );
+  openCleanSheet({ kept, removed, dead, rows });
+  // The sheet covers the board, so the footer keeps the receipt alone: what the click did, in one
+  // clause short enough for a strip that shares its line with the board's own figures.
+  const went = [removed.length ? counted(removed.length, "worktree") : "", dead ? counted(dead, "thread") : ""].filter(Boolean);
+  footNote(went.length ? `cleaned ${went.join(" and ")}` : `${counted(kept.length, "worktree")} kept`);
 });
 
 newBtn.addEventListener("click", async () => {
