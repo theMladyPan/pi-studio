@@ -93,11 +93,11 @@ bin/pi-studio     the wrapper: one word to start it
 bin/smoke.mjs     boot two daemons against scratch folders and hit the routes a change can break
 bin/check-imports.mjs  every import resolves, and every client module is served
 test/             node --test: the restore paths, git, worktrees, the child, the routes
-PORT-PLAN.md      how the daemon was split, and what of the client split is still open
-STATE.md          what works, what does not, and what is next
+TODO.md           the one list of what is open: a fix, a feature, a chore
+STATE.md          what works, and what does not work yet
 ```
 
 ## What it does not do yet
 
-Cards a thread draws for you (notes, sources, questions), rail payloads, usage totals, images, and
-per-thread stop. `STATE.md` keeps that list current.
+Usage totals beside a rail row's detail sheet, and a screenshot's picture after the daemon restarts.
+`TODO.md` keeps the whole list of what is open, and `STATE.md` says what works.
