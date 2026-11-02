@@ -346,7 +346,9 @@ export function boardFor(workspace) {
 		const putAway = (raw) => raw?.hidden && raw?.closedAt;
 		const filed = [
 			...saved.threads.filter((raw) => !putAway(raw)).slice(-MAX_THREADS),
-			...saved.threads.filter(putAway).slice(-MAX_PUT_AWAY_CHILDREN),
+			// Newest by close, which is what the cap promises: a child spawned early and put away last is not the
+			// first to go just because it was written to the file first.
+			...saved.threads.filter(putAway).sort((a, b) => a.closedAt - b.closedAt).slice(-MAX_PUT_AWAY_CHILDREN),
 		];
 		for (const raw of filed) {
 			const thread = restoredThread(raw, workspace.folder);

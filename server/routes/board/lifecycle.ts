@@ -5,7 +5,7 @@
  */
 import { liveTurn, stopStream } from "../../child/run.ts";
 import { broadcast, card, closedCards, nudgeWelcome, resync, update, updateCard } from "../../bus.ts";
-import { CHILD_CLOSE_DELAY_MS } from "../../limits.ts";
+import { CHILD_CLOSE_DELAY_MS, MAX_PUT_AWAY_CHILDREN } from "../../limits.ts";
 import { MAX_PLAIN_CARDS, scheduleSave } from "../../store.ts";
 import { ownedCards, refreshOwned } from "./message.ts";
 import { answer, fail, readJson } from "../../http.ts";
@@ -27,8 +27,9 @@ import { settleTreeBranch } from "../../worktrees/name.ts";
 /** The child goes with its last card. Nothing can reach a thread the board cannot draw. */
 export function closeThread(board, thread) {
 	// A close of any kind disarms the put-away a finished answer queued. A card the human closes and then
-	// brings back must not vanish when the first close's clock runs out, and `onKill` kills without closing,
-	// so this is the one place every close passes through.
+	// brings back must not vanish when the first close's clock runs out. This covers the close that ends the
+	// thread; `onKill` kills without closing and disarms in `killChild`; and the close that keeps its thread,
+	// the one `onClose` takes for a child that owns cards, disarms in `hideClosedCard`.
 	cancelAutoClose(thread);
 	// The child is ended, not merely asked to leave: it is working in a tree, and a tree whose thread
 	// is gone is what `clean` may sweep. A run still writing there would write into nothing.
@@ -173,13 +174,48 @@ export function nudgeClosed(board) {
  * is killed and nothing is swept, so the work of a thread that goes this way is still there to assemble.
  */
 function hideClosedCard(board, thread) {
+	// The put-away a finished answer queued belongs to a moment that has passed, and the close this card is
+	// going through may be undone from the rail: a card the human brings back must not vanish when the first
+	// clock runs out. It is a no-op when the timer itself is the caller.
+	cancelAutoClose(thread);
 	thread.hidden = true;
 	thread.closedAt = Date.now();
 	broadcast(board, { type: "remove", id: thread.id });
 	refreshOwned(board, thread);
+	trimPutAway(board);
 	nudgeClosed(board);
 	scheduleSave(board);
 	nudgeWelcome();
+}
+
+
+
+/**
+ * Hold the rail's closed list to the same ceiling a restart applies. The cap on put-away children is
+ * enforced at load, and a daemon that ran all day would file them without one until the next start — at
+ * which point the rows the human saw last were the ones that went. So the oldest goes here, when the
+ * newest arrives, and a session and a restart agree on what is still offerable.
+ *
+ * Only a cardless one is retired: that is the shape the cap counts, and a thread that still owns a card is
+ * drawn through it, so its record has to stay.
+ */
+function trimPutAway(board) {
+	const away = [...board.threads.values()].filter(
+		(thread) => thread.hidden && thread.closedAt && !ownedCards(board, thread.id).length,
+	);
+	if (away.length <= MAX_PUT_AWAY_CHILDREN) return;
+	away.sort((a, b) => a.closedAt - b.closedAt);
+	for (const old of away.slice(0, away.length - MAX_PUT_AWAY_CHILDREN)) {
+		// The record goes and nothing is killed: only a child that had finished is here, and one still holding
+		// a process exits when its stdin closes, which is the end a restart gives it by not finding it at all.
+		try {
+			board.children.get(old.id)?.stdin?.end();
+		} catch {
+			// Already gone, which is what this wanted.
+		}
+		board.children.delete(old.id);
+		board.threads.delete(old.id);
+	}
 }
 
 
@@ -289,6 +325,10 @@ function cardByKey(board, key, own) {
  */
 function closeRefusal(plain, thread, own) {
 	if (thread) {
+		// A card the board already put away is in the rail's closed list, and closing it again would take that
+		// entry with it: `closeThread` deletes the thread, so the one place the human can bring it back from
+		// would be gone. There is nothing left to close.
+		if (thread.hidden) return "this card is already closed";
 		if (thread.id === own) return "a thread cannot close its own card";
 		return thread.parentThread === own ? "" : "a thread closes only a thread it spawned";
 	}

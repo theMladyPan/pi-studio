@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Readable } from "node:stream";
 import { closedCards } from "../server/bus.ts";
-import { CHILD_CLOSE_DELAY_MS } from "../server/limits.ts";
-import { autoCloseChild, autoCloseRefusal, onClose, onUndo } from "../server/routes/board/lifecycle.ts";
+import { CHILD_CLOSE_DELAY_MS, MAX_PUT_AWAY_CHILDREN } from "../server/limits.ts";
+import { autoCloseChild, autoCloseRefusal, onClose, onReopen, onUndo } from "../server/routes/board/lifecycle.ts";
 import { pruneHiddenThreads } from "../server/store.ts";
 import { handleChildLine } from "../server/thought.ts";
 
@@ -218,6 +218,36 @@ test("a child closed by hand and brought back inside the window keeps its card",
 	assert.equal(child.closedAt, undefined);
 });
 
+test("a child that owns a note keeps its card when a close and a reopen land inside the window", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const { board, child } = family();
+	// A child that wrote a note of its own keeps its thread through a close, so `onClose` takes the branch
+	// that hides the card rather than the one that ends the thread — which is exactly the branch the queued
+	// put-away used to survive.
+	board.cards.set("note-1", {
+		id: "note-1",
+		type: "note",
+		title: "a note",
+		markdown: "the answer",
+		ownerThread: child.id,
+		at: Date.now(),
+	});
+	autoCloseChild(board, child);
+	t.mock.timers.tick(5_000);
+	const closed = wire({ cardId: child.id });
+	await onClose(closed.req, closed.res, board, { human: true });
+	assert.equal(child.hidden, true, "the close took the card off the board");
+	t.mock.timers.tick(5_000);
+	// The human has it back from the rail, a quarter of the way into the window the answer started.
+	const reopened = wire({ cardId: child.id });
+	await onReopen(reopened.req, reopened.res, board);
+	assert.equal(child.hidden, false, "the human brought the card back");
+	// The deadline of the put-away the child's answer queued has come and gone.
+	t.mock.timers.tick(CHILD_CLOSE_DELAY_MS);
+	assert.equal(child.hidden, false, "the card the human brought back stays on the board");
+	assert.equal(child.closedAt, undefined);
+});
+
 test("a run the board timed out is never put away, even when its turn reads answered", (t) => {
 	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const { board, child } = family();
@@ -229,6 +259,51 @@ test("a run the board timed out is never put away, even when its turn reads answ
 	assert.equal(child.hidden, undefined, "a timed-out run");
 	assert.equal(child.closedAt, undefined, "a timed-out run");
 	assert.match(autoCloseRefusal(board, child), /timed out/);
+});
+
+test("a session keeps no more put-away children than a restart would", (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const { board, child } = family();
+	// The board yesterday left one more put-away child than the cap allows, oldest first. Nothing trims them
+	// while the daemon runs, so a session that spawns all day files them for ever.
+	for (let at = 0; at < MAX_PUT_AWAY_CHILDREN; at += 1) {
+		const old = {
+			id: `old-${at}`,
+			title: "a child from yesterday",
+			status: "idle",
+			parentThread: "master-1",
+			hidden: true,
+			closedAt: 1_000 + at,
+			turns: [],
+		};
+		board.threads.set(old.id, old);
+	}
+	autoCloseChild(board, child);
+	t.mock.timers.tick(CHILD_CLOSE_DELAY_MS);
+	assert.equal(child.hidden, true);
+	const away = [...board.threads.values()].filter((thread: any) => thread.hidden && thread.closedAt);
+	assert.equal(away.length, MAX_PUT_AWAY_CHILDREN, "the cap holds while the daemon runs");
+	assert.equal(board.threads.get("old-0"), undefined, "the child put away first is the one the rail loses");
+	assert.ok(board.threads.has(`old-${MAX_PUT_AWAY_CHILDREN - 1}`), "the ones the human saw last stay");
+	assert.ok(board.threads.has(child.id), "and the one just put away is on the rail");
+	assert.deepEqual(board.trash, [], "trimming is not a close the human can undo");
+});
+
+test("an agent cannot close a card the board has already put away", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const { board, parent, child } = family();
+	autoCloseChild(board, child);
+	t.mock.timers.tick(CHILD_CLOSE_DELAY_MS);
+	assert.equal(child.hidden, true);
+	// The parent tidies up after its child, and there is nothing left to close: the card is in the rail's
+	// closed list, and `closeThread` would take the thread with it and lose the one way back.
+	const res: any = { writeHead(status: number) { this.status = status; }, end(body: string) { this.body = body; } };
+	const req: any = Readable.from([Buffer.from(JSON.stringify({ cardId: child.id }))]);
+	await onClose(req, res, board, { human: false, thread: parent } as any);
+	assert.equal(res.status, 409);
+	assert.equal(res.body, "this card is already closed");
+	assert.equal(board.threads.get(child.id), child, "the rail still offers it back");
+	assert.equal(board.children.size, 0, "and nothing was killed");
 });
 
 test("a hidden child the rail still lists survives a restart, and one it does not is dropped", () => {
