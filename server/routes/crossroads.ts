@@ -1,8 +1,10 @@
 // @ts-nocheck -- lifted byte for byte; annotating it is its own commit.
 /**
- * The crossroads: the workspaces that exist, the defaults a new one starts with, and the folder picker.
+ * The crossroads: the workspaces that exist, the defaults a new one starts with, and the folder and file
+ * pickers.
  */
 import { answer, fail, readJson } from "../http.ts";
+import { CONTROL_CHARS, MAX_EDITOR_CHARS } from "../limits.ts";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
@@ -95,6 +97,19 @@ export async function onDefaults(req, res) {
 			return void fail(res, 400, `a child's work comes back by one of ${CHILD_INTEGRATION.join(", ")}`);
 		next.childIntegration = body.childIntegration;
 	}
+	// The program a code card's file opens in: one program found on PATH or the path to the binary, spawned
+	// as `editor file`. An argument list in the value is the mistake this refuses, because `code --wait`
+	// would be spawned as a file of that name; a path may hold a space only where it is a file that exists,
+	// which is what the file dialog hands back. Empty clears it.
+	if (body.editor !== undefined) {
+		if (typeof body.editor !== "string") return void fail(res, 400, "an editor is a program name or the path to one");
+		const editor = body.editor.trim();
+		if (CONTROL_CHARS.test(editor)) return void fail(res, 400, "an editor is a program name or the path to one");
+		if (editor.length > MAX_EDITOR_CHARS) return void fail(res, 400, `an editor is at most ${MAX_EDITOR_CHARS} characters`);
+		if (/\s/.test(editor) && !(editor.includes("/") && existsSync(editor)))
+			return void fail(res, 400, "an editor is one program, not a command line with arguments");
+		next.editor = editor;
+	}
 	if (typeof body.provider === "string" && typeof body.model === "string") {
 		const { models } = await modelCatalog();
 		if (!models.some((one) => one.provider === body.provider && one.model === body.model)) {
@@ -149,5 +164,28 @@ export function onPickFolder(res) {
 		// Cancelling a dialog is a decision, not a failure.
 		if (code !== 0 || !folder) return void answer(res, 200, { cancelled: true });
 		answer(res, 200, { folder });
+	});
+}
+
+
+
+/** The same dialog, opened on a file: the path to a program is the one thing a human cannot type twice. */
+export function onPickFile(res) {
+	let child;
+	try {
+		child = spawn("zenity", ["--file-selection", "--title=Choose a text editor"], { stdio: ["ignore", "pipe", "ignore"] });
+	} catch {
+		return void fail(res, 501, "no file dialog on this machine");
+	}
+	let out = "";
+	child.stdout.on("data", (chunk) => {
+		out += String(chunk);
+	});
+	child.on("error", () => fail(res, 501, "no file dialog on this machine"));
+	child.on("close", (code) => {
+		const file = out.trim().split("\n")[0];
+		// Cancelling a dialog is a decision, not a failure.
+		if (code !== 0 || !file) return void answer(res, 200, { cancelled: true });
+		answer(res, 200, { file });
 	});
 }

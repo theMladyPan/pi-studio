@@ -17,6 +17,7 @@ const defaults = {
 	provider: "klotilda",
 	model: "deepseek-ai/DeepSeek-V4.1-Flash-1017",
 	thinking: "high",
+	editor: "/usr/bin/code",
 	path: "simple",
 	childIntegration: "cherry-pick",
 	dimOthers: false,
@@ -92,15 +93,16 @@ test("the defaults document is five groups in the order the panel draws them", (
 	);
 });
 
-test("the two scopes build one tree: the same five groups, the same thirteen leaves, the same words", () => {
+test("the two scopes build one tree: the same five groups, the same fourteen leaves, the same words", () => {
 	assert.equal(boardDocument.version, document.version);
 	assert.deepEqual(withoutWrites(boardDocument.groups), withoutWrites(document.groups));
-	// Thirteen setting leaves: four for the thread, two for the tools, six for the cards, one for the canvas.
+	// Fourteen setting leaves: five for the thread, two for the tools, six for the cards, one for the canvas.
 	assert.deepEqual(
 		settingLeaves.map((field) => field.id),
 		[
 			"model",
 			"thinking",
+			"editor",
 			"path",
 			"childIntegration",
 			"toolsOff",
@@ -114,12 +116,13 @@ test("the two scopes build one tree: the same five groups, the same thirteen lea
 			"dimOthers",
 		],
 	);
-	assert.equal(settingLeaves.length, 13);
+	assert.equal(settingLeaves.length, 14);
 	assert.deepEqual(
 		settingLeaves.map((field) => field.label),
 		[
 			"model",
 			"thinking",
+			"text editor",
 			"boss flow",
 			"a child's work comes back by",
 			"built-in",
@@ -142,8 +145,9 @@ test("every setting leaf of the defaults writes to /defaults, and nothing else",
 	for (const field of settingLeaves) {
 		assert.ok(field.write, `${field.id} has no write`);
 		assert.equal(field.write.route, "/defaults", `${field.id} writes to ${field.write.route}`);
-		// A toggle is flipped where it stands, so it names no picker; everything else opens a list.
-		if (field.type === "toggle") continue;
+		// A toggle is flipped where it stands, so it names no picker; everything else opens a list, except
+		// the editor, which is typed and filled in from the machine's own file dialog (`browse`).
+		if (field.type === "toggle" || field.browse) continue;
 		assert.ok(
 			["model", "thinking", "path", "childIntegration", "tools", "verbosity", "audience", "code", "math", "charts", "refs"].includes(
 				field.pick,
@@ -155,6 +159,9 @@ test("every setting leaf of the defaults writes to /defaults, and nothing else",
 	assert.equal(byId.model.source, "/models");
 	assert.equal(byId.toolsOff.source, "/tools");
 	assert.equal(byId.extensionsOff.source, "/tools");
+	// The editor opens no picker of the daemon's own: it is typed, and the machine's dialog fills it in.
+	assert.equal(byId.editor.pick, undefined);
+	assert.equal(byId.editor.browse, "/pick-file");
 });
 
 test("the model leaf splits at the first slash, and one key carries the value everywhere else", () => {
@@ -187,7 +194,11 @@ test("the board's document differs from the defaults' in the route a change goes
 	assert.equal(boardById.thinking.write.route, "/thinking");
 	// A board's `/thinking` reads `level`; the value is the same one, under the key its route reads.
 	assert.deepEqual(boardById.thinking.write.body, { level: "@value" });
-	for (const field of settingLeaves.filter((one) => one.id !== "model" && one.id !== "thinking")) {
+	// The editor is one program for the whole studio, so a board's page writes it where it is kept: a board
+	// has no copy of it, and its own `/config` would answer without the key.
+	assert.equal(boardById.editor.write.route, "/defaults");
+	assert.deepEqual(boardById.editor.write.body, { editor: "@value" });
+	for (const field of settingLeaves.filter((one) => !["model", "thinking", "editor"].includes(one.id))) {
 		assert.equal(boardById[field.id].write.route, "/config", `${field.id} writes to ${boardById[field.id].write.route}`);
 		assert.deepEqual(boardById[field.id].write.body, field.write.body, `${field.id} changed its body with its route`);
 	}
@@ -229,6 +240,7 @@ test("every leaf carries a value, and the defaults object the caller passed is w
 	for (const leaf of leavesOf(document.groups)) assert.notEqual(leaf.value, undefined, `${leaf.id} has no value`);
 	assert.equal(byId.model.value, `${defaults.provider}/${defaults.model}`);
 	assert.equal(byId.thinking.value, "high");
+	assert.equal(byId.editor.value, "/usr/bin/code");
 	assert.equal(byId.path.value, "simple");
 	assert.equal(byId.childIntegration.value, "cherry-pick");
 	assert.equal(byId.dimOthers.value, false);
@@ -252,6 +264,8 @@ test("a value nobody chose reads as the default rather than as an empty control"
 	const fresh = settingsDocument({ scope: "defaults", values: {}, ...LINES });
 	const freshById = Object.fromEntries(leavesOf(fresh.groups).map((field) => [field.id, field]));
 	assert.equal(freshById.thinking.value, "off");
+	// Nobody has chosen an editor yet, and an empty control with a placeholder is how that reads.
+	assert.equal(freshById.editor.value, "");
 	assert.equal(freshById.path.value, "auto");
 	assert.equal(freshById.childIntegration.value, "merge");
 	assert.equal(freshById.dimOthers.value, true);

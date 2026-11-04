@@ -315,6 +315,68 @@ test("the crossroads defaults can be changed and are read back", async () => {
 
 		const refused = await post(daemon, "/defaults", { thinking: "shouting" });
 		assert.equal(refused.status, 400);
+
+		// The text editor is a default like the rest: one program, saved with them and read back.
+		const chosen = await post(daemon, "/defaults", { editor: "  /usr/bin/code  " });
+		assert.equal(chosen.status, 200, chosen.body.slice(0, 200));
+		assert.equal(JSON.parse(chosen.body).defaults.editor, "/usr/bin/code", "the editor was not trimmed and kept");
+		assert.equal(JSON.parse(readFileSync(join(folder, "workspaces.json"), "utf8")).defaults.editor, "/usr/bin/code");
+		assert.equal(JSON.parse((await get(daemon, `/defaults?token=${daemon.token}`)).body).defaults.editor, "/usr/bin/code");
+		// One program, not a command line: an argument list would be spawned as a file of that name.
+		assert.equal((await post(daemon, "/defaults", { editor: "code --wait" })).status, 400);
+		// An empty value is how a human clears it, and the defaults answer with nothing rather than dropping it.
+		const cleared = await post(daemon, "/defaults", { editor: "" });
+		assert.equal(cleared.status, 200);
+		assert.equal(JSON.parse(cleared.body).defaults.editor, "");
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a code card's file is opened in the editor the crossroads holds, and refused when it cannot be", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-open-"));
+	writeFileSync(join(folder, "note.ts"), "export const note = 1;\n");
+	const daemon = await boot(folder);
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		assert.equal(opened.status, 200);
+		const board = JSON.parse(opened.body).board;
+		const source = await postTo(daemon, board.id, "/card/source", { path: "note.ts" });
+		assert.equal(source.status, 200, source.body.slice(0, 200));
+		const cardId = JSON.parse(source.body).cardId;
+
+		// Nobody has chosen an editor yet, and the refusal says where to choose one.
+		const unset = await postTo(daemon, board.id, "/card/open", { cardId });
+		assert.equal(unset.status, 409);
+		assert.equal(unset.body, "no text editor is set yet: choose one on the settings page");
+
+		// A program name node cannot find on the search path starts nothing, and says so.
+		assert.equal((await post(daemon, "/defaults", { editor: "pi-studio-no-such-editor" })).status, 200);
+		const missing = await postTo(daemon, board.id, "/card/open", { cardId });
+		assert.equal(missing.status, 409);
+		assert.match(missing.body, /could not start pi-studio-no-such-editor/);
+
+		// A card whose file is gone is refused before anything is launched: `true` is a program that runs and
+		// opens nothing, so the branch under test is the file rather than the editor.
+		assert.equal((await post(daemon, "/defaults", { editor: "true" })).status, 200);
+		rmSync(join(folder, "note.ts"));
+		const gone = await postTo(daemon, board.id, "/card/open", { cardId });
+		assert.equal(gone.status, 409);
+		assert.match(gone.body, /not a file on disk any more/);
+
+		// A note is not a file, so there is nothing to open.
+		const note = JSON.parse((await postTo(daemon, board.id, "/card/note", { markdown: "a note" })).body).cardId;
+		assert.equal((await postTo(daemon, board.id, "/card/open", { cardId: note })).status, 409);
+		assert.equal((await postTo(daemon, board.id, "/card/open", { cardId: "nope" })).status, 409);
+
+		// An editor that is there and runs answers with the file it was handed. `true` exits at once, so what
+		// this checks is the launch, not the program.
+		writeFileSync(join(folder, "note.ts"), "export const note = 2;\n");
+		const again = JSON.parse((await postTo(daemon, board.id, "/card/source", { path: "note.ts" })).body).cardId;
+		const launched = await postTo(daemon, board.id, "/card/open", { cardId: again });
+		assert.equal(launched.status, 200, launched.body.slice(0, 200));
+		assert.deepEqual(JSON.parse(launched.body), { opened: true, file: join(realpathSync(folder), "note.ts") });
 	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });

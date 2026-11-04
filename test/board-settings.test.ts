@@ -88,13 +88,14 @@ test("the document is five groups in the order the panel draws them", () => {
 	);
 });
 
-test("the tree holds thirteen setting leaves and each one is a control a human can change", () => {
-	// Thirteen: four for the thread, two for the tools, six for the cards, one for the canvas.
+test("the tree holds fourteen setting leaves and each one is a control a human can change", () => {
+	// Fourteen: five for the thread, two for the tools, six for the cards, one for the canvas.
 	assert.deepEqual(
 		settingLeaves.map((field) => field.id),
 		[
 			"model",
 			"thinking",
+			"editor",
 			"path",
 			"childIntegration",
 			"toolsOff",
@@ -108,10 +109,10 @@ test("the tree holds thirteen setting leaves and each one is a control a human c
 			"dimOthers",
 		],
 	);
-	assert.equal(settingLeaves.length, 13);
+	assert.equal(settingLeaves.length, 14);
 	assert.deepEqual(
 		settingLeaves.map((field) => field.type),
-		["combo", "select", "select", "select", "list", "list", "select", "select", "select", "select", "select", "select", "toggle"],
+		["combo", "select", "combo", "select", "select", "list", "list", "select", "select", "select", "select", "select", "select", "toggle"],
 	);
 	// A setting a later build dropped is not quietly back, and neither is a group nobody draws.
 	const whole = JSON.stringify(document);
@@ -121,9 +122,11 @@ test("the tree holds thirteen setting leaves and each one is a control a human c
 test("every setting names its picker and the route a change goes back through", () => {
 	for (const field of settingLeaves) {
 		assert.ok(field.write, `${field.id} has no write`);
-		assert.ok(["/model", "/thinking", "/config"].includes(field.write.route), `${field.id} writes to ${field.write.route}`);
-		// A toggle is flipped where it stands, so it names no picker; everything else opens a list.
-		if (field.type === "toggle") continue;
+		// The editor is studio-wide, so a board's page writes it to the crossroads' defaults with the rest.
+		assert.ok(["/model", "/thinking", "/defaults", "/config"].includes(field.write.route), `${field.id} writes to ${field.write.route}`);
+		// A toggle is flipped where it stands, so it names no picker; everything else opens a list, except
+		// the editor, which is typed and filled in from the machine's own file dialog (`browse`).
+		if (field.type === "toggle" || field.browse) continue;
 		assert.ok(
 			["model", "thinking", "path", "childIntegration", "tools", "verbosity", "audience", "code", "math", "charts", "refs"].includes(
 				field.pick,
@@ -223,6 +226,7 @@ test("every leaf carries a value, and the board's own choices are the ones the p
 		[
 			"model",
 			"thinking",
+			"text editor",
 			"boss flow",
 			"a child's work comes back by",
 			"built-in",

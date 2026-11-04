@@ -9,9 +9,9 @@
  * point at real files exist.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** The repository root: this file is one directory inside it. */
@@ -109,6 +109,26 @@ export function buildHash(): string {
 
 export function randomToken() {
 	return createHash("sha256").update(`${process.pid}-${Date.now()}-${Math.random()}`).digest("hex").slice(0, 32);
+}
+
+/**
+ * Where a program name lands on this machine's search path, or "" while no entry holds it. The rule is the
+ * one the `!` completion walks by: a real file, and executable; a link counts as what it resolves to.
+ */
+export function programOnPath(name: string): string {
+	if (!name) return "";
+	for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+		if (!dir) continue;
+		const full = join(dir, name);
+		try {
+			if (!statSync(full).isFile()) continue;
+			accessSync(full, constants.X_OK);
+		} catch {
+			continue;
+		}
+		return full;
+	}
+	return "";
 }
 
 /** A folder keeps its identity across restarts, which is what makes "continue" mean continue. */

@@ -15,9 +15,10 @@ import { randomUUID } from "node:crypto";
 import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
 import { accessSync, constants, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { workdirOf } from "../../worktrees/make.ts";
-import { workspaceById } from "../../workspaces.ts";
+import { activeHomeDefaults, workspaceById } from "../../workspaces.ts";
 import { start } from "../../main.ts";
 import { homedir } from "node:os";
+import { spawn } from "node:child_process";
 
 
 
@@ -262,6 +263,68 @@ export async function onRename(req, res, board) {
 	thread.title = title;
 	update(board, thread);
 	answer(res, 200, { cardId: thread.id, card: cardFor(thread, board) });
+}
+
+
+
+/**
+ * Open a code card's file in the editor the human set on the crossroads. The program is spawned with the
+ * file and nothing else, so what it does with it is its own business.
+ *
+ * This route is not in `THREAD_ROUTES`: launching a program on the human's desktop is the human's, and a
+ * child that could do it could start anything on this machine.
+ */
+export async function onOpenCard(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const id = field(body.cardId, 200);
+	if (!id) return void fail(res, 400, "cardId is required");
+	const held = board.cards.get(id);
+	if (!held) return void fail(res, 409, "no such card");
+	if (held.type !== "source") return void fail(res, 409, "only a code card holds a file to open");
+	// The path was written against the tree the card was read in, and that tree may be gone: `ownerThread` is
+	// the thread that read it, which is what `onSource` resolved the path against. `threadRoot` is only the
+	// card it hangs under — and may name a card rather than a thread — so it is the second choice.
+	const owner = board.threads.get(held.ownerThread ?? held.threadRoot ?? "");
+	const folder = owner ? workdirOf(board, owner) : board.folder;
+	const root = resolve(folder);
+	const file = resolve(root, String(held.path ?? ""));
+	if (!insideFolder(root, file)) return void fail(res, 409, `${held.path} is outside the workspace`);
+	let stat;
+	try {
+		stat = statSync(file, { throwIfNoEntry: false });
+	} catch {
+		stat = undefined;
+	}
+	if (!stat?.isFile()) return void fail(res, 409, `${held.path} is not a file on disk any more`);
+	const editor = activeHomeDefaults().editor;
+	if (!editor) return void fail(res, 409, "no text editor is set yet: choose one on the settings page");
+	// A value with a slash names the binary itself, and a binary nobody can run is a setting that cannot
+	// work. A bare name is left to node, which searches the same PATH a shell would.
+	if (editor.includes("/")) {
+		try {
+			accessSync(editor, constants.X_OK);
+		} catch {
+			return void fail(res, 409, `${editor} is not a program this machine can run`);
+		}
+	}
+	let child;
+	try {
+		child = spawn(editor, [file], { detached: true, stdio: "ignore" });
+	} catch (error) {
+		return void fail(res, 409, `could not start ${editor}: ${error.message || error}`);
+	}
+	// A program that is not there answers on `error` rather than by throwing, so the answer to the human
+	// arrives from whichever event lands first — and only once, whichever it is.
+	let answered = false;
+	const once = (say) => {
+		if (answered) return;
+		answered = true;
+		say();
+	};
+	child.on("error", (error) => once(() => fail(res, 409, `could not start ${editor}: ${error.message || error}`)));
+	child.on("spawn", () => once(() => answer(res, 200, { opened: true, file })));
+	child.unref();
 }
 
 
