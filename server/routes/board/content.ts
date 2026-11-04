@@ -20,7 +20,6 @@ import { activeHomeDefaults, workspaceById } from "../../workspaces.ts";
 import { start } from "../../main.ts";
 import { homedir } from "node:os";
 import { commandShell } from "../../command-shell.ts";
-import { spawn } from "node:child_process";
 
 
 
