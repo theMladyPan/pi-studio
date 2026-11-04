@@ -221,13 +221,10 @@ test("the programs a `!` command can name are read from the daemon's own search 
 		assert.deepEqual(JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=fixture-t`)).body).programs, []);
 		assert.deepEqual(JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=nowhere`)).body).programs, []);
 
-		// `!` and Tab with no word yet asks for `prefix=`, which takes the short way through the path. The folder
-		// and the file nobody made executable stay out of it, and the answer keeps its shape.
+		// `!` and Tab with no word yet asks for `prefix=`, which takes the short way through the path. It
+		// still answers with the programs alone: the folder and the file nobody made executable stay out.
 		const bare = JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=`)).body);
-		assert.ok(bare.programs.includes("fixture-run"), bare.programs);
-		assert.ok(!bare.programs.includes("fixture-dir") && !bare.programs.includes("fixture-text"), bare.programs);
-		assert.equal(bare.total, bare.programs.length);
-		assert.equal(bare.truncated, false);
+		assert.deepEqual(bare, { programs: ["fixture-run"], total: 1, truncated: false }, bare.programs);
 	} finally {
 		daemon.child.kill();
 		rmSync(state, { recursive: true, force: true });
@@ -325,6 +322,28 @@ test("a `!` line whose `SHELL` is missing falls back, and still lists the search
 		for (const gone of [state, folder]) rmSync(gone, { recursive: true, force: true });
 	}
 });
+
+test(
+	"a `SHELL` that names nothing falls back to bash, whose own names are then offered",
+	{ skip: BASH ? false : "no /bin/bash here" },
+	async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-shell-order-"));
+		// The fallback names bash before `/bin/sh`, and this says which of the two answered: `compgen` and `shopt`
+		// are bash's own and no search path holds them, while a daemon that fell through to `/bin/sh` has no table
+		// to ask at all and offers neither. Each daemon resolves the shell in its own process, so the cache in
+		// `command-shell.ts` is per-daemon here; its re-ask branch is not what this checks.
+		const daemon = await boot(state, { SHELL: "/nonexistent/not-a-shell" });
+		try {
+			for (const name of ["compgen", "shopt"]) {
+				const asked = JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=${name}`)).body);
+				assert.ok(asked.programs.includes(name), `${name}: ${JSON.stringify(asked)}`);
+			}
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	},
+);
 
 test(
 	"a `!command` runs under the shell the app resolved, not under `/bin/sh`",

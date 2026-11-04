@@ -387,17 +387,20 @@ function printedNames(out, prefix) {
  * How each shell is asked for the names of its own: the script, run as `-c`, with the prefix as `$1`.
  *
  * bash answers with `compgen -b` and not `-A command`, because the latter prints the language's keywords too
- * and `fi` is a syntax error rather than a command to complete. zsh has no `compgen`, and `$commands` holds
- * only what it found on the search path — its builtins live in `$builtins` — so both tables are printed. The
- * pattern is `${p}*` without `${~p}`, so a word holding a metacharacter is matched as characters; whichever
- * line the shell still prints that does not start with the word is dropped below.
+ * and `fi` is a syntax error rather than a command to complete. zsh has no `compgen`, and its builtins live in
+ * `$builtins`. `$commands` is not printed: it is the search path again — 3744 of its 3749 names here are ones
+ * the walk below already reports — and the five it adds are `local`, which `$builtins` holds too, and four
+ * names zsh cannot run: a link to a directory (`/usr/bin/X11`), a file this user cannot execute (`dumpcap`),
+ * a link to nothing and a directory. `zsh -c X11` answers `permission denied`, rc 126.
+ * The pattern is `${p}*` without `${~p}`, so a word holding a metacharacter is matched as characters;
+ * whichever line the shell still prints that does not start with the word is dropped below.
  *
  * A shell not named here has no such table to ask: `/bin/sh`, which on this host is dash, is walked and
  * nothing else, which is what it had before there was anything to ask.
  */
 const OWN_NAMES = {
 	bash: 'compgen -b -- "$1"',
-	zsh: 'p="$1"; print -l ${(M)${(ko)commands}:#${p}*} ${(M)${(ko)builtins}:#${p}*}',
+	zsh: 'p="$1"; print -l ${(M)${(ko)builtins}:#${p}*}',
 };
 
 /**
@@ -421,7 +424,8 @@ const OWN_NAMES = {
  */
 function shellNames(prefix) {
 	const shell = commandShell();
-	const asks = OWN_NAMES[basename(shell)];
+	// The name of the shell that really runs, so `/bin/sh` being a link to bash finds bash's own table.
+	const asks = OWN_NAMES[basename(realpathSync(shell))];
 	if (!asks) return Promise.resolve([]);
 	return new Promise((done) => {
 		let settled = false;
