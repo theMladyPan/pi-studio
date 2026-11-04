@@ -2484,11 +2484,18 @@ function startCardDrag(card, event) {
     removeEventListener("pointerup", up);
     for (const spot of from) {
       spot.card.classList.remove("dragging");
+      const x = Math.round(parseFloat(spot.card.style.left));
+      const y = Math.round(parseFloat(spot.card.style.top));
+      // The selection carries cards the drag never carried, and the clamp can absorb the whole
+      // travel, so a card whose place the board already holds is neither moved nor written.
+      const before = spot.card.dataset.rect ? rectOf(spot.card) : null;
+      if (before && before.x === x && before.y === y) continue;
+      // A folded card measures as its header only, so its stored height is the one to unfold into.
       const rect = {
-        x: Math.round(parseFloat(spot.card.style.left)),
-        y: Math.round(parseFloat(spot.card.style.top)),
+        x,
+        y,
         w: spot.card.offsetWidth,
-        h: spot.card.offsetHeight,
+        h: spot.card.classList.contains("mini") && before ? before.h : spot.card.offsetHeight,
       };
       placeCard(spot.entry, rect);
       void saveLayout(spot.entry.id, rect);
@@ -3486,6 +3493,8 @@ function beginMarquee(event) {
   const base = [...selectedIds];
   let box = null;
   const move = (ev) => {
+    // A release the page never heard about would otherwise leave the rectangle on the board.
+    if (!ev.buttons) return up();
     const to = boardPoint(ev);
     const left = Math.min(from.x, to.x);
     const top = Math.min(from.y, to.y);
