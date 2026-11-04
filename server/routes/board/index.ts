@@ -1,9 +1,9 @@
 /**
  * What a thread knows about the board before it reads the message it was sent: the cards already there,
- * in one line.
+ * one bullet each.
  *
  * A thread that cannot see the board writes a card that duplicates one already on it, or opens a second
- * card where the first one wanted a revision. The line is short and always prepended, so the board is a
+ * card where the first one wanted a revision. The block is short and always prepended, so the board is a
  * fact the thread starts with rather than a lookup it may forget to make.
  */
 
@@ -14,7 +14,7 @@ const PLAIN = new Set(["note", "source"]);
 const MAX_ENTRIES = 40;
 
 /**
- * The longest the line may be. It rides on every message, so a board nobody tidied is paid for once per
+ * The longest the block may be. It rides on every message, so a board nobody tidied is paid for once per
  * turn; past this the oldest entries are dropped, which keeps the newest cards named rather than the
  * first forty ever made.
  */
@@ -39,13 +39,16 @@ function entryOf(card: IndexCard): string {
 	return `${name} — ${title} (${card.type})`;
 }
 
-/** The whole line, brackets included: one line, comma separated, so it reads as a list and not as prose. */
-function line(entries: string[]): string {
-	return `[cards on this board: ${entries.join(", ")}]`;
+/**
+ * The whole block, bracketed and one bullet to a card, so a model reads a list rather than a sentence it
+ * may take for an instruction. The label is the board's own, the same way `[user message]` is the human's.
+ */
+function block(entries: string[]): string {
+	return `[board state]\n${entries.map((one) => `- ${one}`).join("\n")}`;
 }
 
 /**
- * The line a thread's message is prefixed with, or "" when the board holds no plain card: a board with
+ * The block a thread's message is prefixed with, or "" when the board holds no plain card: a board with
  * nothing on it says nothing, rather than saying it has nothing.
  */
 export function cardIndex(board: { cards?: Map<string, IndexCard> } | null | undefined): string {
@@ -57,6 +60,6 @@ export function cardIndex(board: { cards?: Map<string, IndexCard> } | null | und
 		.map(entryOf)
 		.filter(Boolean)
 		.slice(0, MAX_ENTRIES);
-	while (entries.length && line(entries).length > MAX_CHARS) entries.pop();
-	return entries.length ? `${line(entries)}\n` : "";
+	while (entries.length && block(entries).length > MAX_CHARS) entries.pop();
+	return entries.length ? `${block(entries)}\n` : "";
 }
