@@ -395,8 +395,9 @@ commit's own account rather than on a check run now, the section below says so.
   in the board file, so a tree left behind by `new` can still be swept by a later `clean`. Both answer
   with a snapshot, which the client already replays, so every open tab rebuilds. `POST /thread/clean-closed`
   is the same guarantee asked about the Closed panel, and `POST /thread/collect` is its agent side: a
-  thread retires the closed children it spawned, and the route is the one thread route that deletes a
-  tree, so it refuses its own card the way `/close` does.
+  thread retires the closed children it spawned. `/close` sweeps trees too, so the difference is not that
+  a thread route deletes one: collect is the one thread route that retires a tree its caller does not
+  stand in, which is why it refuses its own card the way `/close` does.
 - **Usage is asked for, then shown twice.** A pi child keeps its own numbers, so at every settle the
   daemon sends `{"type":"get_session_stats"}` and holds the child's stdin open until the answer
   arrives — `stdin.end()` before it threw the last run's cost away. `thread.stats` keeps input,

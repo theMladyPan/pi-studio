@@ -4366,10 +4366,12 @@ function applyClosed(rows) {
 
 /**
  * Cleaning the closed list is safe by the daemon's own reckoning: a thread goes only once the work in its
- * folder and its branch is provably somewhere else, so the press does not ask first. What it kept is the one
- * thing worth reading, and the answer's shape is the sweep's own, so it opens in the same sheet.
+ * folder and its branch is provably somewhere else. One press still frees several conversations at once, so
+ * it asks first, the way the bin on a single row does. What it kept is the one thing worth reading, and the
+ * answer's shape is the sweep's own, so it opens in the same sheet.
  */
-railClosedClean.addEventListener("click", async () => {
+armedPress(railClosedClean, "clean", async () => {
+  // A press the daemon is already answering takes no second one: two cleans would race for the same trees.
   if (railClosedClean.disabled) return;
   railClosedClean.disabled = true;
   try {
@@ -6855,6 +6857,21 @@ let cleanedOpener = null;
 const counted = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /**
+ * The reasons a sweep gives that are not about the work a tree holds: a folder that is no repository any
+ * more, a read git refused, a registration that names no commit, a repo with no integration branch to
+ * measure against, and a child still writing in the tree. Everything else is about the work, so a sentence
+ * this list does not know keeps the warning rather than dropping it.
+ */
+const KEPT_NOT_ABOUT_WORK = [
+  "not a repository",
+  "could not",
+  "its registration names no commit",
+  "no integration branch",
+  "its child is still running",
+];
+const keptHoldsWork = (reason) => !KEPT_NOT_ABOUT_WORK.some((said) => String(reason ?? "").includes(said));
+
+/**
  * The whole answer to a clean: one row per worktree that went, one per worktree the sweep would not
  * touch, then the threads and rail rows it forgot. A section with nothing in it is left out, so a clean
  * that took one worktree does not fill the sheet with empty headings.
@@ -6874,9 +6891,9 @@ function openCleanSheet({ kept, removed, dead, rows, noun = "worktree" }, opener
   const add = (node) => {
     if (node) parts.push(node);
   };
-  // What the sweep knows and the folder no longer shows: the ignored files that went with a tree, and a
-  // branch git would not delete. Both are said in plain words, because the human may still want either
-  // one back.
+  // What the sweep knows and the folder no longer shows: the ignored files and the cards that went with a
+  // tree without a diff to show either, and a branch git would not delete. All three are said in plain
+  // words, because the human may still want them back.
   add(
     panelBlock(
       "what went",
@@ -6884,6 +6901,7 @@ function openCleanSheet({ kept, removed, dead, rows, noun = "worktree" }, opener
         removed.map((tree) => {
           const beside = [
             tree.ignoredPaths ? counted(tree.ignoredPaths, "ignored file") : "",
+            tree.cards ? counted(tree.cards, "card") : "",
             tree.branchKept ? "branch left behind" : "",
           ]
             .filter(Boolean)
@@ -6893,15 +6911,13 @@ function openCleanSheet({ kept, removed, dead, rows, noun = "worktree" }, opener
       ),
     ),
   );
-  // The reason is the sweep's own sentence, passed through as it came: the tree holds work, and only the
-  // human can decide what happens to it.
-  const stayed = panelFields(kept.map((tree) => [tree.branch || tree.path, tree.kept]));
-  if (stayed) {
-    const warning = el("div", "gone");
-    warning.textContent = "these hold work only you can decide about";
-    stayed.appendChild(warning);
-    add(panelBlock("what stayed", stayed));
-  }
+  // The reason is the sweep's own sentence, passed through as it came, and it is the whole of the row's line:
+  // a row can be kept because its child is still running or because git could not be read, and neither is work
+  // the human has to decide about. So the sentence about work rides on the rows whose reason is about work,
+  // rather than heading every row here.
+  const held = (reason) => (reason && keptHoldsWork(reason) ? `${reason} · this holds work only you can decide about` : reason);
+  const stayed = panelFields(kept.map((tree) => [tree.branch || tree.path, held(tree.kept)]));
+  add(panelBlock("what stayed", stayed));
   add(
     panelBlock(
       "the rest",

@@ -582,7 +582,18 @@ export function removeThreadWhole(board, thread, mode = "force", options = {}) {
 	resync(board);
 	nudgeWelcome();
 	scheduleSave(board);
-	return { thread: { id: thread.id, title: thread.title }, branch: branch || null, path: path || null, steps, note: stepsNote(steps) ?? retiredNote };
+	// `cards` and `ignoredPaths` are what the removal took without a diff to show it: the cards the thread
+	// answered for, which a closed thread still carries, and the ignored files `git worktree remove` deletes
+	// without asking. A caller that reports the removal reads both, because nothing else on the board says them.
+	return {
+		thread: { id: thread.id, title: thread.title },
+		branch: branch || null,
+		path: path || null,
+		cards: owned.length,
+		...(retired?.ignoredPaths ? { ignoredPaths: retired.ignoredPaths } : {}),
+		steps,
+		note: stepsNote(steps) ?? retiredNote,
+	};
 }
 
 
@@ -628,7 +639,7 @@ function retireClosed(board, pick, options) {
 		const gone = removeThreadWhole(board, thread, "retire", options);
 		if (gone.kept) kept.push({ id: thread.id, title: thread.title, path: gone.path, branch: gone.branch, reason: gone.kept });
 		// A thread with no tree record has nothing to prove, so it is simply dropped.
-		else removed.push({ id: thread.id, title: thread.title, path: gone.path, branch: gone.branch, note: gone.note });
+		else removed.push({ id: thread.id, title: thread.title, path: gone.path, branch: gone.branch, cards: gone.cards, ignoredPaths: gone.ignoredPaths, note: gone.note });
 	}
 	return { removed, kept };
 }

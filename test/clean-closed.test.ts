@@ -220,6 +220,57 @@ test("a closed thread whose child is still running is left alone, however spent 
 	}
 });
 
+test("a closed thread whose tree holds only ignored files goes, and the answer names them", async () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const { thread, tree } = closedThread(board, "1f1f0001", "feat/ignored-work-1f1f0001");
+		// An ignored folder is something `git worktree remove` deletes without asking and no diff can show, so
+		// the answer has to name it: nothing else on the board says it went.
+		writeFileSync(join(tree.path, ".gitignore"), "node_modules/\n");
+		git(tree.path, "add", ".gitignore");
+		git(tree.path, "commit", "-m", "ignore the installed deps");
+		mkdirSync(join(tree.path, "node_modules", "dep"), { recursive: true });
+		writeFileSync(join(tree.path, "node_modules", "dep", "index.js"), "module.exports = 1;\n");
+		git(repo, "merge", "--ff-only", "feat/ignored-work-1f1f0001");
+
+		const res = scratchRes();
+		await onCleanClosed(jsonRequest({}), res, board);
+		assert.equal(res.status, 200, res.body);
+		const said = answered(res);
+		assert.deepEqual(said.kept, [], `nothing was expected to stay: ${res.body}`);
+		assert.equal(said.removed.length, 1, res.body);
+		assert.equal(said.removed[0].id, thread.id);
+		assert.ok(said.removed[0].ignoredPaths > 0, `the answer does not name the ignored files that went: ${res.body}`);
+		assert.equal(existsSync(tree.path), false, "the folder is still on disk");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a closed thread that owns cards goes, and the answer carries how many went with it", async () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const { thread } = closedThread(board, "2a2a0002", "feat/owned-work-2a2a0002");
+		// A thread closed while it owns cards is only hidden, so its cards are still on the board and still
+		// readable. The removal deletes them, and the answer has to say how many went with the thread.
+		for (const id of ["card-one", "card-two"]) board.cards.set(id, { id, title: id, ownerThread: thread.id });
+		git(repo, "merge", "--ff-only", "feat/owned-work-2a2a0002");
+
+		const res = scratchRes();
+		await onCleanClosed(jsonRequest({}), res, board);
+		assert.equal(res.status, 200, res.body);
+		const said = answered(res);
+		assert.deepEqual(said.kept, [], `nothing was expected to stay: ${res.body}`);
+		assert.equal(said.removed.length, 1, res.body);
+		assert.equal(said.removed[0].cards, 2, `the answer does not say the cards went with the thread: ${res.body}`);
+		assert.equal(board.cards.size, 0, "a card of the removed thread is still on the board");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("a closed thread that never had a tree is simply dropped", async () => {
 	const repo = scratchRepo();
 	try {

@@ -392,7 +392,7 @@ export const server = createServer((req, res) => {
 				"/new": onNew,
 				// A command the human typed after `!`. Never in THREAD_ROUTES above: a shell is the human's.
 				"/shell": onShell,
-				// Removing a thread and its work is the human's, so none of these four is in THREAD_ROUTES.
+				// Removing a thread and its work is the human's, so none of these is in THREAD_ROUTES.
 				"/remove/preview": onRemovePreview,
 				"/remove": onRemove,
 				"/fragments/remove": onFragmentRemove,
