@@ -17,7 +17,7 @@ import { closedCards } from "./bus.ts";
 import { gitPicture, refreshGit, unwatchGit, watchGit } from "./git/graph.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
 import { onDefaults, onOpenWorkspace, onPickFolder, onSettingsDefaults } from "./routes/crossroads.ts";
-import { onBrowse, onEdit, onNote, onRename, onSource } from "./routes/board/content.ts";
+import { onBrowse, onEdit, onNote, onPrograms, onRename, onSource } from "./routes/board/content.ts";
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
@@ -242,6 +242,12 @@ export const server = createServer((req, res) => {
 		}
 		if (req.method === "GET" && url.pathname === "/browse") {
 			onBrowse(url, res);
+			return;
+		}
+		// The programs a `!` command can name. It is a GET like `/browse`, so `threadRefusal` keeps it to
+		// the human: a thread names a command through the shell route, which is not in `THREAD_ROUTES`.
+		if (req.method === "GET" && url.pathname === "/programs") {
+			onPrograms(url, res);
 			return;
 		}
 		// The row itself is the payload: a tool row keeps its arguments and its output, a reply keeps

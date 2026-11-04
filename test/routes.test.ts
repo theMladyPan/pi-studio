@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -184,6 +184,41 @@ test("a workspace-scoped browser lists its folder, refuses the way out, and know
 		const unknown = await get(daemon, `/browse?token=${daemon.token}&workspace=nope`);
 		assert.equal(unknown.status, 409);
 		assert.match(unknown.body, /no such workspace/);
+	} finally {
+		daemon.child.kill();
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("the programs a `!` command can name are read from the daemon's own search path", async () => {
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-programs-"));
+	const first = join(state, "bin-a");
+	const second = join(state, "bin-b");
+	mkdirSync(first);
+	mkdirSync(second);
+	// The same program on both search-path entries, a file nobody made executable, a folder, and the name
+	// of a program that is not there at all: only the first is a program a command can run.
+	writeFileSync(join(first, "fixture-run"), "#!/bin/sh\n", { mode: 0o755 });
+	writeFileSync(join(second, "fixture-run"), "#!/bin/sh\n", { mode: 0o755 });
+	writeFileSync(join(first, "fixture-text"), "plain\n", { mode: 0o644 });
+	mkdirSync(join(first, "fixture-dir"));
+	// A search-path entry that does not exist is the ordinary case and must not spoil the listing.
+	const daemon = await boot(state, { PATH: [first, join(state, "missing"), second].join(delimiter) });
+	try {
+		const listed = await get(daemon, `/programs?token=${daemon.token}&prefix=fixture`);
+		assert.equal(listed.status, 200, listed.body);
+		assert.deepEqual(JSON.parse(listed.body).programs, ["fixture-run"], listed.body);
+
+		// The prefix is the word the human typed so far, and one that names nothing answers with nothing.
+		assert.deepEqual(JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=fixture-t`)).body).programs, []);
+		assert.deepEqual(JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=nowhere`)).body).programs, []);
+
+		// `!` and Tab with no word yet asks for `prefix=`, which takes the short way through the path. It
+		// still answers with the programs alone: the folder and the file nobody made executable stay out.
+		const bare = JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=`)).body);
+		assert.deepEqual(bare.programs, ["fixture-run"], bare.programs);
+		assert.equal(bare.total, 1);
+		assert.equal(bare.truncated, false);
 	} finally {
 		daemon.child.kill();
 		rmSync(state, { recursive: true, force: true });

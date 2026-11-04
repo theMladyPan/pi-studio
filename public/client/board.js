@@ -5567,6 +5567,9 @@ function wireComposer(inst) {
     // The `@` list owns the keys it puts on screen: Enter takes its row, Escape shuts it without
     // giving the keyboard back, and neither may reach the send and blur below.
     if (atPickKey(inst, event)) return;
+    // A `!` command is a terminal: a Tab that stands in one asks for a suggestion, and a Tab anywhere
+    // else keeps the browser's meaning of walking the field along.
+    if (tabInBang(inst, event)) return;
     if (event.key === "Escape") {
       // The field keeps what was written: Escape gives the keyboard back to the board, and the ×
       // on a reference is what drops it.
@@ -8133,29 +8136,34 @@ function markAt(at) {
   atList.children[at]?.scrollIntoView({ block: "nearest" });
 }
 
-/** The listing for one token. A non-200 shuts the list and leaves what was typed alone. */
-async function loadAtPick(tok) {
-  const seq = (atSeq += 1);
+/**
+ * The `/browse` query for one token: the folder it names, and, for a `!` command, the tree the command
+ * runs in. A command runs where its thread works, so what it can see is listed from there, and `.agents`
+ * — the folder the human actually types — is offered rather than kept out of sight the way the picker
+ * keeps it out of a plain listing.
+ */
+function atQuery(inst, tok) {
   const query = new URLSearchParams({ token, path: tok.dir.replace(/\/+$/, "") });
   if (workspace) query.set("workspace", workspace);
   if (tok.frag) query.set("q", tok.frag);
   if (tok.bang) {
-    // A command runs in its thread's tree, so what it can see is listed from there, and `.agents` — the
-    // folder the human actually types — is offered rather than kept out of sight the way the picker does.
-    const card = cardOf(atInst);
+    const card = cardOf(inst);
     if (card) query.set("card", card.id);
     query.set("dots", "1");
   }
+  return query;
+}
+
+/** The listing for one token. A non-200 shuts the list and leaves what was typed alone. */
+async function loadAtPick(tok) {
+  const seq = (atSeq += 1);
   try {
-    const response = await fetch(`/browse?${query}`);
+    const response = await fetch(`/browse?${atQuery(atInst, tok)}`);
     if (seq !== atSeq) return;
     if (!response.ok) return closeAtPick();
     const data = await response.json();
     if (seq !== atSeq) return;
     atRows = Array.isArray(data.entries) ? data.entries : [];
-    // A command word that names no file — `ls`, `-la`, `status` — leaves nothing to offer, and a box
-    // saying "no files" over the composer is noise the human never asked for. The list stays shut.
-    if (atRows.length === 0 && tok.bang) return closeAtPick();
     atPick.hidden = false;
     drawAtPick();
   } catch {
@@ -8164,11 +8172,8 @@ async function loadAtPick(tok) {
   }
 }
 
-/** Show the list for the token under the field's caret, or shut it when there is no token. */
+/** Show the list for an `@` token under the field's caret, with nothing armed until the rows land. */
 function openAtPick(inst, token) {
-  // A `!` command has nothing to complete before its word holds a character: an empty word would list
-  // the whole root, and the human has named no path yet. From the first character on the list is back.
-  if (token.bang && !token.frag && !token.dir) return closeAtPick();
   atInst = inst;
   atToken = token;
   // The previous folder's rows go before the fetch, so Enter cannot take one while this listing is
@@ -8176,14 +8181,12 @@ function openAtPick(inst, token) {
   atRows = [];
   atAt = -1;
   atList.replaceChildren();
-  // A bang completion shows itself on its first row, so a command word with nothing to complete never
-  // paints an empty box; until then Enter still sends the command rather than taking a row.
-  atPick.hidden = Boolean(token.bang);
+  atPick.hidden = false;
   placeAtPick();
   void loadAtPick(token);
 }
 
-/** A keystroke in the field: the list follows the token, and a dismissed one stays shut. */
+/** A keystroke in the field: the list follows an `@` token, and a dismissed one stays shut. */
 function typedInAtPick(inst) {
   const token = atTokenAt(inst.msg);
   if (!token) {
@@ -8191,9 +8194,96 @@ function typedInAtPick(inst) {
     if (atInst === inst) closeAtPick();
     return;
   }
+  // A `!` command is a terminal: typing one shows nothing, and Tab is the only key that asks for a
+  // suggestion, so a list that is up goes as soon as the word it was asked about changes.
+  if (token.bang) {
+    atMute = null;
+    // A keystroke answers on its own, and a Tab still asking about the word it left owns nothing:
+    // without this a late reply writes an older match over the characters typed since.
+    atSeq += 1;
+    if (atInst === inst) closeAtPick();
+    return;
+  }
   if (atMute && atMute.inst === inst && atMute.start === token.start) return;
   atMute = null;
   openAtPick(inst, token);
+}
+
+/**
+ * The rows a `!` command completes the word under its caret with. The first word of a command is the
+ * program it runs, which the shell looks for on its search path as well as in the tree the command
+ * stands in, so a script sitting in that tree is offered beside `ls`. Every later word is a path in
+ * that tree, listed the way the picker lists them.
+ *
+ * A name is offered only when it starts with the fragment the human typed, because Tab writes over the
+ * word that asked for it: a match that merely contains the fragment would replace text it never matched.
+ */
+async function bangRowsFor(inst, tok) {
+  const frag = tok.frag.toLowerCase();
+  // A command's program is its first word, and a word with a folder in front of it names a path instead.
+  const first = !tok.dir && /^\s*$/.test(inst.msg.value.slice(1, tok.start));
+  const asked = [fetch(`/browse?${atQuery(inst, tok)}`)];
+  if (first) asked.push(fetch(`/programs?${new URLSearchParams({ token, prefix: tok.frag })}`));
+  const replies = await Promise.all(asked);
+  const paths = replies[0].ok ? await replies[0].json() : {};
+  const programs = replies[1]?.ok ? await replies[1].json() : {};
+  const starts = (name) => !frag || String(name).toLowerCase().startsWith(frag);
+  const rows = (Array.isArray(paths.entries) ? paths.entries : []).filter((entry) => starts(entry.name));
+  // A folder and a program of the same name are one candidate, and the folder is the one kept: it is
+  // what a second Tab walks into.
+  const named = new Set(rows.map((entry) => entry.name));
+  for (const name of Array.isArray(programs.programs) ? programs.programs : []) {
+    if (named.has(name) || !starts(name)) continue;
+    named.add(name);
+    rows.push({ name, path: name, dir: false, program: true });
+  }
+  return rows;
+}
+
+/**
+ * The answer Tab asked for: one name is written into the word and nothing is drawn, several are listed
+ * above the field with no row armed, and none leaves the line as it stands.
+ */
+async function askBang(inst, token) {
+  const seq = (atSeq += 1);
+  let rows = [];
+  try {
+    rows = await bangRowsFor(inst, token);
+  } catch {
+    return;
+  }
+  // A keystroke, a fill or a closed list since the question was asked owns the field now.
+  if (seq !== atSeq) return;
+  const now = atTokenAt(inst.msg);
+  if (!now || !now.bang || now.start !== token.start) return;
+  if (rows.length === 0) return;
+  if (rows.length === 1) {
+    atInst = inst;
+    atToken = token;
+    takeAtRow(rows[0]);
+    return;
+  }
+  atInst = inst;
+  atToken = token;
+  atAt = -1;
+  atRows = rows;
+  placeAtPick();
+  atPick.hidden = false;
+  drawAtPick();
+}
+
+/**
+ * Tab in a `!` command, the way a terminal answers it. True means the keystroke was a command's, so the
+ * field keeps it and no Tab character goes into the text.
+ */
+function tabInBang(inst, event) {
+  if (event.key !== "Tab" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return false;
+  const token = atTokenAt(inst.msg);
+  if (!token || !token.bang) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  void askBang(inst, token);
+  return true;
 }
 
 /**
@@ -8214,9 +8304,10 @@ function takeAtRow(entry) {
   if (entry.dir) {
     inst.msg.setRangeText(`${lead}${token.dir}${entry.name}/`, token.start, token.end, "end");
     inst.msg.focus();
-    // Drilling in is what the token now says, so the list follows the text it just wrote.
+    // Drilling in is what the token now says, so the list follows the text it just wrote. A `!` command
+    // walks into the folder on its next Tab instead, the way a terminal does, so its list stays shut.
     const drilled = atTokenAt(inst.msg);
-    if (drilled) openAtPick(inst, drilled);
+    if (drilled && !drilled.bang) openAtPick(inst, drilled);
     else closeAtPick();
     return;
   }
