@@ -753,16 +753,22 @@
     button.title = `pick a file with the machine's own dialog (POST ${field.browse})`;
     button.addEventListener("click", async () => {
       clearFieldError(entry);
+      // The daemon's own sentence is the whole story when it refused ("no file dialog on this machine"), so
+      // the row's words are only for a failure that arrived without one.
+      let said = "";
       try {
         const response = await fetch(`${field.browse}?${qs()}`, { method: "POST" });
-        if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
+        if (!response.ok) {
+          said = (await response.text()).slice(0, 160) || response.statusText;
+          throw new Error(said);
+        }
         const data = await response.json();
         if (data.cancelled) return;
         input.value = data.file;
         input.focus();
         await commitWrite(entry, input.value.trim());
       } catch (error) {
-        showFieldError(entry, `no file dialog: ${error.message || error}`);
+        showFieldError(entry, said || `no file dialog: ${error.message || error}`);
       }
     });
     return button;

@@ -3461,10 +3461,13 @@ viewport.addEventListener("wheel", (event) => {
     // that has nothing left to give in this direction hands the wheel to the next holder inside the
     // same card, so a code view that ends and the messages under it are read in one gesture.
     const holders = selected ? [selected.querySelector(".code-scroll"), selected.querySelector(".card-scroll")] : [];
+    const overflows = (box) => Boolean(box) && box.scrollHeight - box.clientHeight > 1;
     const moves = (box) =>
-      box.scrollHeight - box.clientHeight > 1 &&
-      (step < 0 ? box.scrollTop > 1 : box.scrollHeight - box.clientHeight - box.scrollTop > 1);
-    const scroller = editorAt(event.target) ?? holders.find((box) => box && moves(box));
+      overflows(box) && (step < 0 ? box.scrollTop > 1 : box.scrollHeight - box.clientHeight - box.scrollTop > 1);
+    // The direction only picks which holder inside the card takes the wheel. A card that holds anything
+    // which overflows keeps the wheel even at its end, as it always did, so only a card with nothing to
+    // scroll lets the turn through to the board.
+    const scroller = editorAt(event.target) ?? holders.find(moves) ?? holders.find(overflows);
     if (scroller) {
       event.preventDefault();
       scroller.scrollTop += step;
@@ -7099,16 +7102,22 @@ function browsePick(field, input) {
   button.textContent = "browse…";
   button.title = `pick a file with the machine's own dialog (POST ${field.browse})`;
   button.addEventListener("click", async () => {
+    // The daemon's own sentence is the whole story when it refused ("no file dialog on this machine"), so
+    // the panel's words are only for a failure that arrived without one.
+    let said = "";
     try {
       const response = await fetch(`${field.browse}?${auth}`, { method: "POST" });
-      if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
+      if (!response.ok) {
+        said = (await response.text()).slice(0, 160) || response.statusText;
+        throw new Error(said);
+      }
       const data = await response.json();
       if (data.cancelled) return;
       input.value = data.file;
       input.focus();
       await writeLeaf(field, input.value.trim());
     } catch (error) {
-      hintLine(`no file dialog: ${error.message || error}`, true);
+      hintLine(said || `no file dialog: ${error.message || error}`, true);
     }
   });
   return button;
