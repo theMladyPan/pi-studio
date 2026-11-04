@@ -4311,14 +4311,18 @@ function clearRailCards() {
 const railClosed = document.getElementById("railClosed");
 const railClosedHead = document.getElementById("railClosedHead");
 const railClosedCount = document.getElementById("railClosedCount");
+const railClosedClean = document.getElementById("railClosedClean");
 
 /** Redrawn whole: the list is short, and the server only says it when it changes. */
 function applyClosed(rows) {
   railClosed.replaceChildren();
   for (const row of Array.isArray(rows) ? rows : []) {
-    const button = el("button", "rail-card");
+    // The row is a wrapper rather than a button, because it now carries two presses and a button cannot
+    // hold one. The reopen press fills the wrapper, so the row reads and clicks as it always did.
+    const wrap = el("div", "rail-card");
+    wrap.dataset.id = row.id;
+    const button = el("button", "rail-open");
     button.type = "button";
-    button.dataset.id = row.id;
     const name = row.title || "thread";
     const turns = Number(row.turns) || 0;
     const dot = el("span", "dot");
@@ -4332,10 +4336,71 @@ function applyClosed(rows) {
     button.title = `${name} · closed ${agoText(Date.now() - (Number(row.closedAt) || Date.now()))} ago · ${turns} turn${turns === 1 ? "" : "s"} · click to put it back`;
     button.setAttribute("aria-label", `reopen the card ${name}`);
     button.addEventListener("click", () => reopenCard(row, name));
-    railClosed.appendChild(button);
+    // The trash is the only press in this list that destroys work: the thread, its conversation, the folder
+    // it worked in and its branch all go. So it asks first, in the same four seconds as every such press,
+    // and it names what it takes for a reader who never sees the tooltip.
+    const glyph = el("span");
+    glyph.innerHTML = TRASH_GLYPH;
+    const trash = el("button", "rail-trash");
+    trash.type = "button";
+    trash.title = `delete this thread, its worktree and its branch`;
+    trash.setAttribute("aria-label", `delete the thread ${name}, its worktree and its branch`);
+    trash.appendChild(glyph);
+    armedPress(trash, glyph, async () => {
+      // The list is redrawn whole, so the press that is mid-flight is the one thing on it that is still
+      // happening: it takes no second press until the daemon has answered.
+      if (trash.disabled) return;
+      trash.disabled = true;
+      const receipt = await postRemove("remove", { card: row.id }, "remove it");
+      // A removal the daemon refused leaves the thread alive, and the footer already says why: the row takes
+      // a press again. A row that went takes its button with it on the next snapshot.
+      if (!receipt) trash.disabled = false;
+      else footNote(removeReceipt(receipt, name));
+    });
+    wrap.append(button, trash);
+    railClosed.appendChild(wrap);
   }
   railClosedHead.hidden = railClosed.childElementCount === 0;
   railClosedCount.textContent = railClosed.childElementCount ? String(railClosed.childElementCount) : "";
+}
+
+/**
+ * Cleaning the closed list is safe by the daemon's own reckoning: a thread goes only once the work in its
+ * folder and its branch is provably somewhere else, so the press does not ask first. What it kept is the one
+ * thing worth reading, and the answer's shape is the sweep's own, so it opens in the same sheet.
+ */
+railClosedClean.addEventListener("click", async () => {
+  if (railClosedClean.disabled) return;
+  railClosedClean.disabled = true;
+  try {
+    const result = await postBoardAction("thread/clean-closed");
+    if (result) sayClosedClean(result);
+  } finally {
+    railClosedClean.disabled = false;
+  }
+});
+
+/** The whole answer in the sheet the footer's clean already opens, and the counts alone in the footer. */
+function sayClosedClean(result) {
+  const freed = Array.isArray(result.removed) ? result.removed : [];
+  const stayed = Array.isArray(result.kept) ? result.kept : [];
+  if (!freed.length && !stayed.length) {
+    footNote("no closed thread to clean");
+    return;
+  }
+  // The rows are the thread's rather than a worktree's, so the name each one is read under is its title and
+  // a thread the sweep would not touch is read under the reason it gave, which is its own sentence.
+  const named = (row) => ({ ...row, branch: row.title || row.branch || row.path });
+  openCleanSheet(
+    {
+      noun: "thread",
+      removed: freed.map(named),
+      kept: stayed.map((row) => ({ ...named(row), kept: row.reason })),
+    },
+    railClosedClean,
+  );
+  const went = freed.length ? `freed ${counted(freed.length, "thread")}` : "";
+  footNote([went, stayed.length ? `${stayed.length} kept` : ""].filter(Boolean).join(" · "));
 }
 
 /**
@@ -6783,6 +6848,8 @@ const cleanPanelName = document.getElementById("cleanDetailName");
 const cleanPanelMeta = document.getElementById("cleanDetailMeta");
 const cleanPanelBody = document.getElementById("cleanDetailBody");
 const cleanPanelClose = document.getElementById("cleanDetailClose");
+/** The press the open sheet belongs to, for a focus that goes back where it came from. */
+let cleanedOpener = null;
 
 /** A number and the word beside it, as the rest of the board words its counts. */
 const counted = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -6792,9 +6859,10 @@ const counted = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
  * touch, then the threads and rail rows it forgot. A section with nothing in it is left out, so a clean
  * that took one worktree does not fill the sheet with empty headings.
  */
-function openCleanSheet({ kept, removed, dead, rows }) {
+function openCleanSheet({ kept, removed, dead, rows, noun = "worktree" }, opener = cleanBtn) {
+  cleanedOpener = opener;
   cleanPanelName.textContent = [
-    removed.length ? `${counted(removed.length, "worktree")} removed` : "",
+    removed.length ? `${counted(removed.length, noun)} removed` : "",
     kept.length ? `${kept.length} kept` : "",
   ]
     .filter(Boolean)
@@ -6854,9 +6922,11 @@ function closeCleanSheet() {
   if (cleanPanel.hidden) return;
   cleanPanel.hidden = true;
   cleanPanelBody.replaceChildren();
-  // Cleaning is a click on the clean button, so the focus goes back to it while the footer keeps the
-  // receipt of what the click did.
-  cleanBtn.focus();
+  // Cleaning is a click on a clean button, so the focus goes back to the one that was pressed: the rail's
+  // own press can have gone with the rows it freed, and then the footer's button is the same press.
+  const back = cleanedOpener && cleanedOpener.offsetParent !== null ? cleanedOpener : cleanBtn;
+  cleanedOpener = null;
+  back.focus();
 }
 
 cleanPanelClose.addEventListener("click", closeCleanSheet);
@@ -6951,14 +7021,15 @@ async function postRemove(path, body, what) {
  * The board's one confirmation: the first press turns the button into a question for four seconds and
  * the second press is the answer. A button that carries a label of its own, the way each leftover's press
  * names what it clears, keeps it for the reset and says the question while it is armed, so a reader who
- * cannot see the word change hears it too.
+ * cannot see the word change hears it too. A label is what the button says, so it may also be the glyph
+ * the button draws: text goes back as text and a node as itself.
  */
 function armedPress(button, label, act) {
   let armedAt = 0;
   const named = button.getAttribute("aria-label");
   const reset = () => {
     armedAt = 0;
-    button.textContent = label;
+    button.replaceChildren(label);
     if (named === null) button.removeAttribute("aria-label");
     else button.setAttribute("aria-label", named);
     button.classList.remove("armed");
