@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { settingsDocument } from "../server/settings-document.ts";
+import { boardSettingsValues, settingsDocument } from "../server/settings-document.ts";
 import { PATH_NAMES, PROMPT_FOLDERS, promptFiles } from "../server/child/modes.ts";
 import { CARD_AUDIENCE, CARD_LEVELS, CARD_VERBOSITY } from "../server/card-settings.ts";
 import { CHILD_INTEGRATION } from "../server/integration.ts";
@@ -240,4 +240,24 @@ test("every leaf carries a value, and the board's own choices are the ones the p
 			"dim others",
 		],
 	);
+});
+
+test("the text editor leaf reads the studio's value, because a board keeps no copy of it", () => {
+	/** The board's page with the editor the crossroads holds, which is where the one program is kept. */
+	const editorOf = (studio: { editor?: string }) =>
+		Object.fromEntries(
+			leavesOf(
+				settingsDocument({
+					scope: "board",
+					values: boardSettingsValues(config, studio),
+					title: "this board",
+					subtitle: "pi-studio · /home/stanke/projekty/pi-studio",
+					foot: "new threads only · a run in flight is untouched",
+				}).groups,
+			).map((field) => [field.id, field]),
+		).editor.value;
+	// The board's own config says nothing about the editor, so the value it draws is the studio's own.
+	assert.equal(editorOf({ editor: "/usr/bin/code" }), "/usr/bin/code");
+	// Nobody has chosen one yet: an empty control with a placeholder is how that reads, on both pages.
+	assert.equal(editorOf({}), "");
 });

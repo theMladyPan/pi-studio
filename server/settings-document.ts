@@ -125,6 +125,16 @@ type SettingsValues = Partial<{
 	showReferences: string;
 }>;
 
+/**
+ * The values a board's page draws: its own config, with the one studio-wide value filled in. `editor` is
+ * kept on the crossroads' defaults and has no home on a board, so it is read from there at the moment the
+ * document is built; copied into the board's config it would be a copy that goes stale the day the default
+ * changes. `""` is "nobody chose one yet", which is what the control's placeholder is for.
+ */
+export function boardSettingsValues(chosen: SettingsValues, studio: SettingsValues): SettingsValues {
+	return { ...chosen, editor: studio.editor ?? "" };
+}
+
 /** What a caller knows and the document has to say: which scope, which values, and the three lines. */
 type SettingsInput = {
 	scope: "defaults" | "board";

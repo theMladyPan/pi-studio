@@ -202,8 +202,9 @@ export function activeHomeDefaults() {
 		toolsOff: homeDefaults.toolsOff ?? [],
 		extensionsOff: homeDefaults.extensionsOff ?? [],
 		path: homeDefaults.path ?? "auto",
-		// Studio-wide rather than per board: every board opens a code card's file in the same program.
-		editor: homeDefaults.editor ?? "",
+		// Studio-wide rather than per board: every board opens a code card's file in the same program. Trimmed
+		// here, where both pages read it, because a hand-edited state file may carry the spaces a save drops.
+		editor: (homeDefaults.editor ?? "").trim(),
 	};
 }
 
