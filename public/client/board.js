@@ -7995,10 +7995,38 @@ let atSeq = 0;
 let atMute = null;
 
 /**
+ * The word a `!` command is completing, or null when the field is not one. A bang draft is the one
+ * `sendMessage` runs: a `!` at the very front of a line that holds no newline. The word to complete is
+ * the last one after the `!`, so `cd .agents/fi` completes `.agents/fi` and leaves `cd` alone.
+ */
+function bangTokenAt(area) {
+  const value = area.value;
+  if (!value.startsWith("!") || value.includes("\n")) return null;
+  const caret = area.selectionStart;
+  if (caret !== area.selectionEnd) return null;
+  // A caret before the `!` is not in the command at all.
+  if (caret < 1) return null;
+  if (caret < value.length && !/\s/.test(value[caret])) return null;
+  const word = /\S*$/.exec(value.slice(1, caret))[0];
+  const cut = word.lastIndexOf("/");
+  return {
+    start: caret - word.length,
+    end: caret,
+    dir: cut < 0 ? "" : word.slice(0, cut + 1),
+    frag: cut < 0 ? word : word.slice(cut + 1),
+    // A row taken into a command is the bare path, where `@` mode writes the `@` back with it.
+    bang: true,
+  };
+}
+
+/**
  * The `@` token the caret sits in, or null. `@` counts only at the start of a word: `foo@bar` is an
- * address rather than a path, and the list has nothing to say about it.
+ * address rather than a path, and the list has nothing to say about it. A `!` command completes its own
+ * word instead, and the two never answer at once because a bang draft is one list or the other.
  */
 function atTokenAt(area) {
+  const bang = bangTokenAt(area);
+  if (bang) return bang;
   const caret = area.selectionStart;
   if (caret !== area.selectionEnd) return null;
   // A caret inside a word is not at the end of the token the list would replace, and taking a row
@@ -8083,6 +8111,13 @@ async function loadAtPick(tok) {
   const query = new URLSearchParams({ token, path: tok.dir.replace(/\/+$/, "") });
   if (workspace) query.set("workspace", workspace);
   if (tok.frag) query.set("q", tok.frag);
+  if (tok.bang) {
+    // A command runs in its thread's tree, so what it can see is listed from there, and `.agents` — the
+    // folder the human actually types — is offered rather than kept out of sight the way the picker does.
+    const card = cardOf(atInst);
+    if (card) query.set("card", card.id);
+    query.set("dots", "1");
+  }
   try {
     const response = await fetch(`/browse?${query}`);
     if (seq !== atSeq) return;
@@ -8090,6 +8125,10 @@ async function loadAtPick(tok) {
     const data = await response.json();
     if (seq !== atSeq) return;
     atRows = Array.isArray(data.entries) ? data.entries : [];
+    // A command word that names no file — `ls`, `-la`, `status` — leaves nothing to offer, and a box
+    // saying "no files" over the composer is noise the human never asked for. The list stays shut.
+    if (atRows.length === 0 && tok.bang) return closeAtPick();
+    atPick.hidden = false;
     drawAtPick();
   } catch {
     if (seq !== atSeq) return;
@@ -8099,6 +8138,9 @@ async function loadAtPick(tok) {
 
 /** Show the list for the token under the field's caret, or shut it when there is no token. */
 function openAtPick(inst, token) {
+  // A `!` command has nothing to complete before its word holds a character: an empty word would list
+  // the whole root, and the human has named no path yet. From the first character on the list is back.
+  if (token.bang && !token.frag && !token.dir) return closeAtPick();
   atInst = inst;
   atToken = token;
   // The previous folder's rows go before the fetch, so Enter cannot take one while this listing is
@@ -8106,7 +8148,9 @@ function openAtPick(inst, token) {
   atRows = [];
   atAt = -1;
   atList.replaceChildren();
-  atPick.hidden = false;
+  // A bang completion shows itself on its first row, so a command word with nothing to complete never
+  // paints an empty box; until then Enter still sends the command rather than taking a row.
+  atPick.hidden = Boolean(token.bang);
   placeAtPick();
   void loadAtPick(token);
 }
@@ -8136,8 +8180,11 @@ function takeAtRow(entry) {
   // keystroke, and a path written at a stale offset lands in the wrong place.
   const token = atTokenAt(inst.msg);
   if (!token || token.start !== atToken.start) return closeAtPick();
+  // `@` mode writes the `@` back, because the agent reads the path from it; a command takes the bare
+  // word the shell reads. A folder keeps its slash, so the next Tab descends into it.
+  const lead = token.bang ? "" : "@";
   if (entry.dir) {
-    inst.msg.setRangeText(`@${token.dir}${entry.name}/`, token.start, token.end, "end");
+    inst.msg.setRangeText(`${lead}${token.dir}${entry.name}/`, token.start, token.end, "end");
     inst.msg.focus();
     // Drilling in is what the token now says, so the list follows the text it just wrote.
     const drilled = atTokenAt(inst.msg);
@@ -8145,7 +8192,7 @@ function takeAtRow(entry) {
     else closeAtPick();
     return;
   }
-  inst.msg.setRangeText(`@${token.dir}${entry.name} `, token.start, token.end, "end");
+  inst.msg.setRangeText(`${lead}${token.dir}${entry.name} `, token.start, token.end, "end");
   inst.msg.focus();
   // The space ends the token, so the next `@` is a new one and nothing reopens the list by itself.
   closeAtPick();
@@ -8176,6 +8223,13 @@ function atPickKey(inst, event) {
     return true;
   }
   if (key !== "Enter" && key !== "Tab") return false;
+  // In a `!` command Enter is the run key. A list with no row on the arrows shuts and lets the line go to
+  // the shell as typed, because a row nobody chose must never rewrite a command; the next keystroke asks
+  // for the list again. Tab still takes the first row, which is how a suggestion is taken without arrows.
+  if (key === "Enter" && atToken.bang && atAt < 0) {
+    closeAtPick();
+    return false;
+  }
   event.preventDefault();
   event.stopPropagation();
   const taken = atRows[atAt < 0 ? 0 : atAt];

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -187,6 +187,70 @@ test("a workspace-scoped browser lists its folder, refuses the way out, and know
 	} finally {
 		daemon.child.kill();
 		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("a `!` completion is listed from the tree the command runs in, dot entries and all", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-bang-browse-"));
+	const repoFolder = mkdtempSync(join(tmpdir(), "pi-studio-bang-browse-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	// A repository, because a thread only gets a tree of its own in one, and that tree is where a `!`
+	// command runs. Never the human's: a throwaway folder with one commit on `dev`.
+	const git = (...args: string[]) => execFileSync("git", ["-C", repoFolder, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+	git("init", "-b", "dev");
+	git("config", "user.email", "test@example.invalid");
+	git("config", "user.name", "test");
+	// The folder the human types in `!ls .agents/`, and a child the next Tab has to reach.
+	mkdirSync(join(repoFolder, ".agents", "notes"), { recursive: true });
+	writeFileSync(join(repoFolder, ".agents", "notes", "hint.md"), "a note\n");
+	writeFileSync(join(repoFolder, "readme.md"), "hello\n");
+	git("add", ".");
+	git("commit", "-m", "first");
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder: repoFolder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		// A message is what cuts the tree the command will stand in.
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" })).status, 200);
+		let tree = "";
+		for (let tries = 0; tries < 100 && !tree; tries++) {
+			const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+			tree = (state.threads as any[]).find((one) => one.id === threadId)?.worktree?.path ?? "";
+			if (!tree) await new Promise((done) => setTimeout(done, 20));
+		}
+		assert.ok(tree && existsSync(tree), `the thread never got a tree of its own: ${tree}`);
+
+		// `!ls .agents/`: the folder itself is offered, and a listing inside it names what Tab can reach next.
+		const atRoot = await get(daemon, `/browse?token=${daemon.token}&workspace=${board.id}&card=${threadId}&dots=1&path=`);
+		assert.equal(atRoot.status, 200, atRoot.body);
+		const listed = JSON.parse(atRoot.body);
+		assert.equal(listed.path, realpathSync(tree), "the completion did not stand in the thread's tree");
+		assert.equal(listed.cwd, realpathSync(tree));
+		assert.ok(
+			listed.entries.some((one: any) => one.name === ".agents" && one.dir),
+			`the .agents folder the human types was not offered: ${JSON.stringify(listed.entries.map((one: any) => one.name))}`,
+		);
+		const typed = JSON.parse((await get(daemon, `/browse?token=${daemon.token}&workspace=${board.id}&card=${threadId}&dots=1&path=.agents`)).body);
+		assert.equal(typed.path, join(realpathSync(tree), ".agents"));
+		assert.deepEqual(
+			typed.entries.map((one: any) => [one.name, one.dir]),
+			[["notes", true]],
+		);
+
+		// The picker's own listing is what it always was: the board's folder, and no dot entries.
+		const picked = JSON.parse((await get(daemon, `/browse?token=${daemon.token}&workspace=${board.id}&path=`)).body);
+		assert.equal(picked.cwd, realpathSync(repoFolder));
+		assert.deepEqual(
+			picked.entries.map((one: any) => one.name),
+			["readme.md"],
+		);
+
+		// The sandbox follows the tree: nothing above it is listed, however the path is written.
+		const above = await get(daemon, `/browse?token=${daemon.token}&workspace=${board.id}&card=${threadId}&dots=1&path=${encodeURIComponent("../../")}`);
+		assert.equal(above.status, 404, above.body);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, repoFolder, stub.root]) rmSync(gone, { recursive: true, force: true });
 	}
 });
 
