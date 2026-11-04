@@ -8044,7 +8044,12 @@ let atMute = null;
 /**
  * The word a `!` command is completing, or null when the field is not one. A bang draft is the one
  * `sendMessage` runs: a `!` at the very front of a line that holds no newline. The word to complete is
- * the last one after the `!`, so `cd .agents/fi` completes `.agents/fi` and leaves `cd` alone.
+ * the one under the caret, so `cd .agents/fi` completes `.agents/fi` and leaves `cd` alone.
+ *
+ * A caret inside a word completes that whole word rather than the text before it, the way a terminal
+ * does: the match writes over the word instead of leaving its tail behind. The caret's word also decides
+ * what the word is — the first one is the program, every later one is a path — so a caret moved back into
+ * the program while the draft ends in a path still asks about the program.
  */
 function bangTokenAt(area) {
   const value = area.value;
@@ -8053,14 +8058,24 @@ function bangTokenAt(area) {
   if (caret !== area.selectionEnd) return null;
   // A caret before the `!` is not in the command at all.
   if (caret < 1) return null;
-  if (caret < value.length && !/\s/.test(value[caret])) return null;
-  const word = /\S*$/.exec(value.slice(1, caret))[0];
-  const cut = word.lastIndexOf("/");
+  const inside = caret < value.length && !/\s/.test(value[caret]);
+  // A caret standing at a word's start is before that word, not in it.
+  if (inside && /\s/.test(value[caret - 1])) return null;
+  // The word starts at the `!` at the earliest, so the command's own mark is never part of it.
+  let start = caret;
+  while (start > 1 && !/\s/.test(value[start - 1])) start -= 1;
+  let end = caret;
+  while (inside && end < value.length && !/\s/.test(value[end])) end += 1;
+  // The folder and the fragment are the text up to the caret, while the word runs on past it: a caret in
+  // `!cd .agen|/fi` asks about `.agen`, not about `.agen/`, and a caret in `!cd fold|r` asks about `fold`.
+  // The rows are then written over the whole word, so the tail the caret sat in front of is replaced.
+  const typed = value.slice(start, caret);
+  const cut = typed.lastIndexOf("/");
   return {
-    start: caret - word.length,
-    end: caret,
-    dir: cut < 0 ? "" : word.slice(0, cut + 1),
-    frag: cut < 0 ? word : word.slice(cut + 1),
+    start,
+    end,
+    dir: cut < 0 ? "" : typed.slice(0, cut + 1),
+    frag: cut < 0 ? typed : typed.slice(cut + 1),
     // A row taken into a command is the bare path, where `@` mode writes the `@` back with it.
     bang: true,
   };
@@ -8119,8 +8134,10 @@ function closeAtPick() {
 function drawAtPick() {
   atList.replaceChildren();
   if (atRows.length === 0) {
+    // The same muted row answers an empty folder and a Tab that found nothing to complete: a key that
+    // says nothing at all cannot be told from a dead one.
     const none = el("div", "p-empty");
-    none.textContent = "no files";
+    none.textContent = atToken?.bang ? "no match" : "no files";
     atList.appendChild(none);
     return;
   }
@@ -8258,7 +8275,8 @@ async function bangRowsFor(inst, tok) {
 
 /**
  * The answer Tab asked for: one name is written into the word and nothing is drawn, several are listed
- * above the field with no row armed, and none leaves the line as it stands.
+ * above the field with no row armed, and none says so in the box, because a suggestion that never came
+ * and one that came back empty must not look alike.
  */
 async function askBang(inst, token) {
   const seq = (atSeq += 1);
@@ -8266,21 +8284,21 @@ async function askBang(inst, token) {
   try {
     rows = await bangRowsFor(inst, token);
   } catch {
-    return;
+    // A lookup that failed answers with the same empty list as one that matched nothing: the word stays
+    // as the human typed it and the box says there was nothing.
   }
   // A keystroke, a fill or a closed list since the question was asked owns the field now.
   if (seq !== atSeq) return;
   const now = atTokenAt(inst.msg);
   if (!now || !now.bang || now.start !== token.start) return;
-  if (rows.length === 0) return;
+  atInst = inst;
+  atToken = token;
+  // One match is written into the word, so the caret lands where a terminal would leave it.
   if (rows.length === 1) {
-    atInst = inst;
-    atToken = token;
     takeAtRow(rows[0]);
     return;
   }
-  atInst = inst;
-  atToken = token;
+  // No row is armed, so Tab and Enter here can only shut the box: the line keeps what was typed.
   atAt = -1;
   atRows = rows;
   placeAtPick();
@@ -8327,7 +8345,10 @@ function takeAtRow(entry) {
     else closeAtPick();
     return;
   }
-  inst.msg.setRangeText(`${lead}${token.dir}${entry.name} `, token.start, token.end, "end");
+  // A command's word can end before the line does, and the space that ends a completed word would then
+  // double the one already standing there.
+  const gap = token.bang && /\s/.test(inst.msg.value[token.end] ?? "") ? "" : " ";
+  inst.msg.setRangeText(`${lead}${token.dir}${entry.name}${gap}`, token.start, token.end, "end");
   inst.msg.focus();
   // The space ends the token, so the next `@` is a new one and nothing reopens the list by itself.
   closeAtPick();

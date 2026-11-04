@@ -20,6 +20,7 @@ import { broadcast } from "../../bus.ts";
 import { plainCardFor } from "../../cards.ts";
 import { scheduleSave } from "../../store.ts";
 import { workdirOf } from "../../worktrees/make.ts";
+import { commandShell } from "../../command-shell.ts";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 
@@ -67,8 +68,9 @@ function killGroup(child) {
 /**
  * The command, what it printed, and whether one of the two ceilings ended it first.
  *
- * `shell` is what makes a whole line work — a pipe, an `&&`, a glob — because the human typed a line and not
- * an argv. `stdin` is ignored rather than piped: a closed stdin gives a command that reads one an end of file,
+ * The line goes to a shell with `-c` — a pipe, an `&&`, a glob — because the human typed a line and not an
+ * argv, and that shell is the one their terminal runs (`commandShell`), not `/bin/sh` under `shell: true`.
+ * `stdin` is ignored rather than piped: a closed stdin gives a command that reads one an end of file,
  * where a pipe nobody writes to would leave `cat` waiting out the whole timeout. Both streams go into one
  * buffer in the order they arrived, the way a terminal shows them.
  */
@@ -78,7 +80,8 @@ function runShell(command, cwd, timeoutMs) {
 		let cut = false;
 		let timedOut = false;
 		let settled = false;
-		const child = spawn(command, { cwd, shell: true, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+		const shell = commandShell();
+		const child = spawn(shell, ["-c", command], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
 		// The streams stay read after the ceiling is reached: a pipe nobody drains stops a command by filling
 		// up, which is a different thing from the command running out of output. What comes past the ceiling
 		// is counted by nothing and kept by nobody.
