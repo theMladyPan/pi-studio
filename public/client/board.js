@@ -30,6 +30,9 @@ const GUTTER = 56;
 const view = { x: 0, y: 0, k: 1 };
 const cards = [];
 const byId = new Map();
+// The cards a drag carries together. Kept apart from `.active`, which is the one card the board is
+// reading: marking several cards to move them says nothing about which one is being read.
+const selectedIds = new Set();
 let z = 1;
 // Z order inside a thread: the newest card on top by default. Someone who wants the other
 // way wants it every time, so the choice lives beside the rail's width.
@@ -2104,6 +2107,29 @@ function makeCard(data, quiet = false) {
     "pointerdown",
     (event) => {
       if (event.button === 1) return;
+      // Shift and ctrl (or command) mark the card instead of reading it: the press changes the
+      // selection, and it neither raises the card nor moves the one the board is reading. Under ctrl
+      // the toggle waits for a release that went nowhere, because that key is also the reading
+      // modifier and a ctrl+drag across a card belongs to its text.
+      const marks = !event.target.closest(INTERACTIVE) && (event.shiftKey || event.ctrlKey || event.metaKey);
+      if (marks) {
+        if (event.shiftKey) {
+          event.preventDefault();
+          toggleSelected(card);
+          return;
+        }
+        const sx = event.clientX;
+        const sy = event.clientY;
+        const up = (ev) => {
+          removeEventListener("pointerup", up);
+          removeEventListener("pointercancel", up);
+          if (Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) > 4) return;
+          toggleSelected(card);
+        };
+        addEventListener("pointerup", up);
+        addEventListener("pointercancel", up);
+        return;
+      }
       card.style.zIndex = z++;
       selectCard(card);
     },
@@ -2172,8 +2198,8 @@ function makeCard(data, quiet = false) {
   head.addEventListener("pointerdown", (event) => {
     // Buttons in the header are for clicking, not for dragging the card. The middle button pans
     // the canvas even here, so it belongs to the workspace rather than to the card.
-    // Ctrl (or command) is the reading modifier: the press belongs to the text, not to the card.
-    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.target.closest(INTERACTIVE)) return;
+    // Ctrl (or command) is the reading modifier and shift marks the card, so neither press moves it.
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.target.closest(INTERACTIVE)) return;
     // Two presses on the name in quick succession rename the card, the way a file manager does.
     // The press that starts a rename belongs to the name, so the card does not begin to drag.
     const named = event.target.closest(".title");
@@ -2183,19 +2209,19 @@ function makeCard(data, quiet = false) {
       startRenaming(entry);
       return;
     }
-    startCardDrag(card, entry, event);
+    startCardDrag(card, event);
   });
 
   // The whole card is a handle. Dragging its text used to select the text, which made reading a
   // board feel like a web page rather than a surface: hold ctrl for that instead, the same modifier
   // the wheel uses for zoom.
   card.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey) return;
     // The head starts the same drag on its own press, and preventing the default there does not
     // stop the event from reaching here.
     if (card.classList.contains("dragging")) return;
     if (event.target.closest(INTERACTIVE)) return;
-    startCardDrag(card, entry, event);
+    startCardDrag(card, event);
   });
 
   grip.addEventListener("pointerdown", (event) => {
@@ -2385,33 +2411,88 @@ const stopping = new Set();
 const INTERACTIVE =
   ".close, .edit, .reply, .min, .ask-pill, .resize, input, textarea, button, a, [contenteditable], .xref, .tick, .q-options, .composer";
 
+/**
+ * Which cards the selection holds, drawn as a ring on each. An id whose card has left the board goes
+ * with it, so a closed card cannot come back marked.
+ */
+function paintSelection() {
+  for (const id of [...selectedIds]) if (!byId.has(id)) selectedIds.delete(id);
+  for (const card of cards) card.classList.toggle("selected", selectedIds.has(card.dataset.id));
+}
+
+/** Add a card to the selection or take it out, leaving the card being read where it is. */
+function toggleSelected(card) {
+  const id = card.dataset.id;
+  if (selectedIds.has(id)) selectedIds.delete(id);
+  else selectedIds.add(id);
+  paintSelection();
+}
+
+function clearSelection() {
+  if (!selectedIds.size) return;
+  selectedIds.clear();
+  paintSelection();
+}
+
+/**
+ * The cards a press on `card` carries. A card inside a multi-selection brings the selection with it;
+ * anywhere else the press moves that card alone and leaves it as the only one marked, the way a
+ * desktop does.
+ */
+function dragGroup(card) {
+  if (selectedIds.has(card.dataset.id) && selectedIds.size > 1) {
+    return cards.filter((other) => selectedIds.has(other.dataset.id));
+  }
+  selectedIds.clear();
+  selectedIds.add(card.dataset.id);
+  paintSelection();
+  return [card];
+}
+
 /** Move a card by dragging it, in board units, so the card keeps up at any zoom. */
-function startCardDrag(card, entry, event) {
+function startCardDrag(card, event) {
   // The text is not being selected, so the browser must not start selecting it.
   event.preventDefault();
-  card.classList.add("dragging");
+  const group = dragGroup(card);
+  for (const other of group) other.classList.add("dragging");
   const sx = event.clientX;
   const sy = event.clientY;
-  const ox = parseFloat(card.style.left);
-  const oy = parseFloat(card.style.top);
+  const from = group.map((other) => ({
+    card: other,
+    entry: byId.get(other.dataset.id),
+    x: parseFloat(other.style.left),
+    y: parseFloat(other.style.top),
+  }));
   const move = (ev) => {
-    card.style.left = `${ox + (ev.clientX - sx) / view.k}px`;
-    card.style.top = `${oy + (ev.clientY - sy) / view.k}px`;
+    let dx = (ev.clientX - sx) / view.k;
+    let dy = (ev.clientY - sy) / view.k;
+    // The daemon stores nothing above the origin, so the group stops as one whole rather than being
+    // torn apart by the cards that would land past the edge.
+    for (const spot of from) {
+      dx = Math.max(dx, -spot.x);
+      dy = Math.max(dy, -spot.y);
+    }
+    for (const spot of from) {
+      spot.card.style.left = `${spot.x + dx}px`;
+      spot.card.style.top = `${spot.y + dy}px`;
+    }
     scheduleMap();
     scheduleArrows();
   };
   const up = () => {
-    card.classList.remove("dragging");
     removeEventListener("pointermove", move);
     removeEventListener("pointerup", up);
-    const rect = {
-      x: Math.round(parseFloat(card.style.left)),
-      y: Math.round(parseFloat(card.style.top)),
-      w: card.offsetWidth,
-      h: card.offsetHeight,
-    };
-    placeCard(entry, rect);
-    void saveLayout(entry.id, rect);
+    for (const spot of from) {
+      spot.card.classList.remove("dragging");
+      const rect = {
+        x: Math.round(parseFloat(spot.card.style.left)),
+        y: Math.round(parseFloat(spot.card.style.top)),
+        w: spot.card.offsetWidth,
+        h: spot.card.offsetHeight,
+      };
+      placeCard(spot.entry, rect);
+      void saveLayout(spot.entry.id, rect);
+    }
   };
   addEventListener("pointermove", move);
   addEventListener("pointerup", up);
@@ -2722,6 +2803,7 @@ function clearBoard() {
   for (const card of cards) card.remove();
   cards.length = 0;
   byId.clear();
+  selectedIds.clear();
   threadMeta.clear();
   scheduleArrows();
   // A replay rebuilds every card, so the observer must let go of the dead ones.
@@ -2778,6 +2860,8 @@ function dropCard(entry) {
   releaseSpot(record.card);
   recomputePill();
   updateEmpty();
+  // A card that has left the board cannot be part of what a drag carries.
+  paintSelection();
   paintFocus();
   scheduleMap();
 }
@@ -3373,9 +3457,73 @@ function beginPan(event) {
 viewport.addEventListener("pointerdown", (event) => {
   if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
   if (event.target.closest(".card")) return;
+  // Shift over the background draws the selection rectangle instead of moving the board, so it
+  // branches before the pan and before the plain click that gives up the reading position.
+  if (event.shiftKey) {
+    beginMarquee(event);
+    return;
+  }
   selectCard(null);
+  clearSelection();
   beginPan(event);
 });
+
+/** The board point under a pointer event: the view is a pan and a zoom over one plane. */
+function boardPoint(event) {
+  const box = viewport.getBoundingClientRect();
+  return { x: (event.clientX - box.left - view.x) / view.k, y: (event.clientY - box.top - view.y) / view.k };
+}
+
+/**
+ * Shift on the background marks every card the rectangle touches, adding to what was marked at the
+ * press so a second rectangle widens the selection. The rectangle is a child of the world, so it
+ * lives in board units and grows with the cards under any zoom; a press that travels nowhere is a
+ * plain click on the background and gives the selection up instead.
+ */
+function beginMarquee(event) {
+  event.preventDefault();
+  const from = boardPoint(event);
+  const base = [...selectedIds];
+  let box = null;
+  const move = (ev) => {
+    const to = boardPoint(ev);
+    const left = Math.min(from.x, to.x);
+    const top = Math.min(from.y, to.y);
+    const right = Math.max(from.x, to.x);
+    const bottom = Math.max(from.y, to.y);
+    if (!box) {
+      // A few pixels of travel is a click with a shaky hand, not a rectangle.
+      if (right - left < 4 / view.k && bottom - top < 4 / view.k) return;
+      box = el("div", "marquee");
+      world.appendChild(box);
+    }
+    box.style.left = `${left}px`;
+    box.style.top = `${top}px`;
+    box.style.width = `${right - left}px`;
+    box.style.height = `${bottom - top}px`;
+    // Live, because the rectangle answers what a drag would carry.
+    selectedIds.clear();
+    for (const id of base) selectedIds.add(id);
+    for (const card of cards) {
+      const rect = card.dataset.rect ? JSON.parse(card.dataset.rect) : null;
+      if (!rect) continue;
+      if (rect.x < right && rect.x + rect.w > left && rect.y < bottom && rect.y + rect.h > top) {
+        selectedIds.add(card.dataset.id);
+      }
+    }
+    paintSelection();
+  };
+  const up = () => {
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", up);
+    removeEventListener("pointercancel", up);
+    if (box) box.remove();
+    else clearSelection();
+  };
+  addEventListener("pointermove", move);
+  addEventListener("pointerup", up);
+  addEventListener("pointercancel", up);
+}
 
 /**
  * The reading modifier is held on the body, so the cursor says text while ctrl (or command) is
@@ -8221,8 +8369,10 @@ document.addEventListener("keydown", (event) => {
     else if (sheet === removePanel) closeRemoveSheet();
     return;
   }
-  if (!document.querySelector(".card.active")) return;
+  // The selection is a reading position and a set of cards to move, so Escape gives up both.
+  if (!document.querySelector(".card.active") && !selectedIds.size) return;
   selectCard(null);
+  clearSelection();
 });
 
 // `r` names the card you last clicked in a field, `p` pins it and `q` closes it. A field keeps its own
