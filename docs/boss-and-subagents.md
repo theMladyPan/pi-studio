@@ -281,6 +281,8 @@ findings is a boss spending the human's money to learn nothing new.
 | `server/child/modes.ts` | `MODE_NAMES`, `PATH_NAMES`, `MODE_TOOLS_OFF`, the prompt lookup |
 | `server/child/roles.ts` | `ROLE_NAMES`, `ROLE_TOOLS_OFF`, `ROLE_THINKING`, the frame around a role |
 | `bridge/child-bridge.mjs` | `board_thread` and `board_path`, the two tools a boss works with |
+| `POST /thread/collect` | frees the worktrees and branches of children whose work is already integrated, and keeps the rest |
+| `board_collect` | the boss tool that posts it: no arguments, and it reports what was freed and what was kept and why |
 
 `prompts/README.md` is the shorter account of the same folders. The settings page lists these files
 from disk on every open, so a prompt edited by hand is the prompt the next spawn gets.

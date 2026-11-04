@@ -377,6 +377,33 @@ const closeTool = defineTool({
 });
 
 
+const collectTool = defineTool({
+	name: "board_collect",
+	label: "Free merged children",
+	description:
+		"Ask the board to free the worktrees and branches of the children you spawned whose work you have already merged or otherwise brought in. The board only frees what it can prove is integrated, and answers with what it kept and why.",
+	parameters: Type.Object({}),
+	async execute(_id, _params) {
+		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
+		try {
+			const result = await call("/thread/collect", {});
+			const removed = Array.isArray(result.removed) ? result.removed : [];
+			const kept = Array.isArray(result.kept) ? result.kept : [];
+			const named = (one) => one.title ?? one.id;
+			const freed = removed.length
+				? `Freed ${removed.length} of this thread's children: ${removed.map(named).join(", ")}.`
+				: "Nothing was freed: no child of this thread holds work the board can prove is integrated.";
+			const held = kept.length
+				? ` Kept ${kept.length}: ${kept.map((one) => `${named(one)} (${one.reason})`).join("; ")}.`
+				: "";
+			return { content: [{ type: "text", text: `${freed}${held}` }], details: { removed, kept } };
+		} catch (error) {
+			return failure(error);
+		}
+	},
+});
+
+
 export default function boardBridge(pi) {
 	if (!attached()) return;
 	pi.registerTool(noteTool);
@@ -386,4 +413,5 @@ export default function boardBridge(pi) {
 	pi.registerTool(pathTool);
 	pi.registerTool(skillTool);
 	pi.registerTool(closeTool);
+	pi.registerTool(collectTool);
 }
