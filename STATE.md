@@ -134,9 +134,15 @@ commit's own account rather than on a check run now, the section below says so.
   thread is gone` reason stays as it was. This is why a thread created before worktrees existed keeps
   its conversation when its first message makes the tree.
 - **`clean` is the only thing that deletes a tree.** It retires the worktree of a thread that is gone
-  when `git status` finds no uncommitted change in it and its commits stay reachable: another local
-  branch contains the branch, or `git cherry` against the integration branch prints no `+` line and
-  has a line for every commit `rev-list` counts between the two, which a merge commit never gets. Refs
+  when `git status` finds no uncommitted change in it and one of three proofs says its work is somewhere
+  else. Another local branch holds the commit. Or every commit the branch has and the integration branch
+  does not has a commit there with the same patch, and the file versions those commits produced lie in
+  that branch's history: `git cherry` answers the first half and forgives whitespace, so the exact blob
+  is asked for as well, and a change the target holds only reindented is no proof. Or merging the branch
+  into the integration branch changes nothing, which is the proof a squash leaves and a branch the target
+  has since rewritten takes away. A merge commit gets no line from `git cherry`, and a deletion or a
+  rename leaves no file version to look for, so a branch that landed only in part is kept; so is one
+  whose copy landed with a hand edit, which no proof on disk can see. Refs
   reach git as `refs/heads/<name>`, so a tag of the same name cannot answer for a branch. Ignored files
   do not keep a tree; how many went with it is reported on the entry. The rest is reported — a tree
   with work in it is named in the response with the reason it was kept, never removed. A count git
@@ -660,9 +666,12 @@ three empty trees and their branches, kept a fourth whose tree had one commit th
 and said so: `1 commit(s) not in dev`. A tree whose thread was closed with `POST /close` was swept by
 the next `clean`, and a tree left behind by `POST /new` was still reported by a later `clean`, which is
 what the board's own record of a tree is for. With the base branch deleted, `clean` deleted nothing and
-answered `could not read dev..agent-1/...`, so an unreadable count is not taken for a zero. The prompt
-the child actually received was read out of its session file, which is how the wording above is known
-rather than assumed. `board_source` resolving a relative path against the asking thread's tree is
+answered `could not read dev..agent-1/...`, so an unreadable count is not taken for a zero. The three
+proofs are asked in `test/git.test.ts`, in scratch repositories: a branch whose copy landed on dev and was
+rewritten there afterwards goes with its tree, where the same copy reindented on dev stays, and so does
+one that landed with a hand edit and one that landed only in part, each keeping its reason for the human.
+The prompt the child actually received was read out of its session file, which is how the wording above is
+known rather than assumed. `board_source` resolving a relative path against the asking thread's tree is
 reasoning from the code: no run has asked for a file from inside a tree yet, and none of this has been
 seen in a browser.
 
