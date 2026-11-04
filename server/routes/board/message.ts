@@ -96,7 +96,11 @@ export async function onMessage(req, res, board) {
 	// the answer are read on the card of the thread that answered. A fork is such a thread now. Only a
 	// child a card nobody answers for got has no card of its own, so the card is the only place its turn
 	// can be read, and it keeps the turn there.
-	const message = `${cardIndex(board)}${preamble}${naming}${text}`;
+	// Everything the board says above is bracketed and labelled, so one line names where it stops: the
+	// words under it are the human's, and nothing above them is. A message the board prepended nothing to
+	// is the human's alone, and a label on it would be a label with nothing to separate.
+	const context = `${cardIndex(board)}${preamble}${naming}`;
+	const message = context ? `${context}[the human wrote]\n${text}` : text;
 	const holding = askedCard && thread.hidden ? askedCard : null;
 	let target = null;
 	let index;
