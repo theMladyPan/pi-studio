@@ -1984,6 +1984,13 @@ const PIN_GLYPH =
 const TRASH_GLYPH =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 3.2h8M4.6 3.2V2.1h2.8v1.1M3.3 3.2l.6 6.6h4.2l.6-6.6M5 4.9v3.2M7 4.9v3.2"/></svg>';
 
+/**
+ * A file leaving a box: what a source card's head offers, a press that hands its file to the text editor.
+ * Drawn for the same reason the pin and the bin are, so it is one monochrome shape at every size.
+ */
+const OPEN_GLYPH =
+  '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6.4 1.8H1.9v8.3h8.3V5.6M7.2 1.8h3v3M10.2 1.8 5.4 6.6"/></svg>';
+
 function makeCard(data, quiet = false) {
   const isSource = data.type === "source";
   const isQuestion = data.type === "question";
@@ -2038,6 +2045,7 @@ function makeCard(data, quiet = false) {
     <button type="button" class="ask-pill" aria-label="centre this question">answer needed</button>
     <span class="chip"></span>
     <button type="button" class="copy-id" title="copy this card's id">⧉</button>
+    <button type="button" class="open-editor" title="open this file in the text editor" aria-label="open this file in the text editor">${OPEN_GLYPH}</button>
     <button class="pin" title="pin this card" aria-label="pin this card">${PIN_GLYPH}</button>
     <button class="min" title="minimize this card" aria-label="minimize this card">▾</button>
     <button class="reply" title="ask a follow-up about this card" aria-label="ask a follow-up about this card">↩</button>
@@ -2124,6 +2132,12 @@ function makeCard(data, quiet = false) {
     copyText(entry.id)
       .then(() => footNote(`card id copied · ${entry.id}`))
       .catch(() => footNote(`the clipboard refused, so the card id is here · ${entry.id}`));
+  });
+  // A source card holds a file, so its head offers the press that hands it to the editor the settings
+  // page names. The daemon holds both the setting and the launch, so a refusal is its sentence to say.
+  head.querySelector(".open-editor").addEventListener("click", (event) => {
+    event.stopPropagation();
+    void openCardFile(entry);
   });
   if (data.mini) setMini(card, true);
   capField(card, height);
@@ -2670,6 +2684,9 @@ function paintCard(entry, data) {
   entry.askPill.style.display = isOpenQuestion ? "" : "none";
   const editBtn = entry.head.querySelector(".edit");
   if (editBtn) editBtn.style.display = data.type === "note" ? "" : "none";
+  // Only a source card holds a file, so only a source card offers the press that opens one.
+  const openBtn = entry.head.querySelector(".open-editor");
+  if (openBtn) openBtn.style.display = isSource ? "" : "none";
   // A thread is sent without `pinned`, so its head shows no pin rather than one that forgets itself.
   const pinBtn = entry.head.querySelector(".pin");
   if (pinBtn) pinBtn.style.display = data.type === "sticky" ? "none" : "";
@@ -3149,6 +3166,22 @@ async function saveNote(entry, markdown) {
     });
   } catch {
     // A failed save leaves the text on screen; the next reload shows the server's copy.
+  }
+}
+
+/** Hand a source card's file to the text editor the settings page names, and say what the daemon said. */
+async function openCardFile(entry) {
+  try {
+    const response = await fetch(`/card/open?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: entry.id }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 120) || response.statusText);
+    const data = await response.json();
+    footNote(`opened ${data.file ?? "the card's file"} in the text editor`);
+  } catch (error) {
+    footNote(`could not open the file: ${error.message || error}`, true);
   }
 }
 
