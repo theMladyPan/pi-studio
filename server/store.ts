@@ -80,6 +80,9 @@ export function saveBoard(board) {
 			// A mode and a flow are decisions the human made about this thread, so they are written with it:
 			// a restart that forgot them would turn a boss back into an agent that does the work itself.
 			...(thread.mode ? { mode: thread.mode } : {}),
+			// What the thread's last process was told to be, so a change made between runs still carries its
+			// note across a daemon restart: the conversation outlives the process that wrote it.
+			...(thread.runMode ? { runMode: thread.runMode } : {}),
 			...(thread.path ? { path: thread.path } : {}),
 			...(thread.pathChosenBy ? { pathChosenBy: thread.pathChosenBy } : {}),
 			...(thread.hidden ? { hidden: true } : {}),
@@ -185,6 +188,7 @@ export function restoredThread(raw, folder) {
 		...(Array.isArray(raw.after) ? { after: raw.after.filter((id) => typeof id === "string") } : {}),
 		...(ROLE_NAMES.includes(raw.role) ? { role: raw.role } : {}),
 		...(MODE_NAMES.includes(raw.mode) ? { mode: raw.mode } : {}),
+		...(MODE_NAMES.includes(raw.runMode) ? { runMode: raw.runMode } : {}),
 		...(PATH_NAMES.includes(raw.path) ? { path: raw.path } : {}),
 		...(raw.pathChosenBy === "human" || raw.pathChosenBy === "auto" ? { pathChosenBy: raw.pathChosenBy } : {}),
 		...(typeof raw.type === "string" && raw.type ? { type: raw.type } : {}),

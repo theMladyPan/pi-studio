@@ -2655,14 +2655,18 @@ function paintCard(entry, data) {
   // runs; `auto` is the boss still deciding.
   const mode = data.type === "sticky" ? data.mode || "" : "";
   const shownMode = mode === "boss" && data.path ? `boss · ${data.path}` : mode;
-  entry.modeEl.textContent = shownMode;
-  entry.modeEl.title = mode
-    ? mode === "boss"
-      ? `a boss: it spawns children and does no work itself${data.pathChosenBy === "auto" && data.path !== "auto" ? `, flow chosen by the model` : ""}`
-      : `a ${mode} thread`
-    : "";
-  // An agent is the baseline the board always had, so it wears nothing; a planner and a boss say so.
-  entry.modeEl.style.display = mode && mode !== "agent" ? "" : "none";
+  const waits = modeWaits(data);
+  entry.modeEl.textContent = waits ? `${shownMode} · next` : shownMode;
+  entry.modeEl.title = waits
+    ? `takes effect on the next message: this run is still a ${data.modeAtRun}`
+    : mode
+      ? mode === "boss"
+        ? `a boss: it spawns children and does no work itself${data.pathChosenBy === "auto" && data.path !== "auto" ? `, flow chosen by the model` : ""}`
+        : `a ${mode} thread`
+      : "";
+  // An agent is the baseline the board always had, so it wears nothing; a planner and a boss say so, and
+  // a chip whose choice is still waiting has something to say even when that choice is agent.
+  entry.modeEl.style.display = mode && (mode !== "agent" || waits) ? "" : "none";
   entry.subEl.classList.toggle("expired", data.type === "question" && data.status === "expired");
   // The pink ring and the pill belong to the question the agent is blocked on, so both go
   // away the moment it is settled.
@@ -5954,6 +5958,15 @@ let pathNext = "";
 /** The three names a thread's mode can have. A card's `mode` is also the queue mode of its last turn. */
 const THREAD_MODES = ["agent", "plan", "boss"];
 
+/**
+ * Whether the mode on a card is still waiting. A mode reaches a thread when its process starts, so a
+ * change made while a run is going lands on the next message: until then the card shows the mode the run
+ * in flight is following, and the chip says the choice is on its way rather than looking obeyed.
+ */
+function modeWaits(data) {
+  return Boolean(data && data.modeAtRun && data.modeAtRun !== data.mode);
+}
+
 /** What the two buttons say: this card's mode, or the one a new thread would be born with. */
 function modeShown(inst = pickInst ?? activeComposer) {
   const held = cardOf(inst);
@@ -5976,10 +5989,13 @@ function paintMode(inst) {
     return;
   }
   const { mode, path } = modeShown(inst);
-  inst.pickModeBtn.textContent = mode;
+  const held = cardOf(inst);
+  const waits = modeWaits(held?.data);
+  inst.pickModeBtn.textContent = waits ? `${mode} · next` : mode;
   inst.pickModeBtn.classList.toggle("on", mode !== "agent");
-  inst.pickModeBtn.title =
-    mode === "boss"
+  inst.pickModeBtn.title = waits
+    ? `takes effect on the next message: the run going now is still a ${held.data.modeAtRun}`
+    : mode === "boss"
       ? "a boss: it spawns children with roles and does no work itself"
       : mode === "plan"
         ? "a planner: a plan and throwaway checks under /tmp, no edits"

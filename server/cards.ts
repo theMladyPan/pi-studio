@@ -47,6 +47,10 @@ export function cardFor(thread, board = null) {
 	if (thread.after?.length) card.after = thread.after;
 	if (thread.parentThread) card.parentThread = thread.parentThread;
 	if (thread.mode) card.mode = thread.mode;
+	// A mode reaches a thread when its process starts, so a change made while a run is going lands on the
+	// next message. The card names the mode the run in flight is actually following, and the head says the
+	// choice waits rather than showing a mode nothing is obeying yet.
+	if (thread.runMode && thread.runMode !== thread.mode) card.modeAtRun = thread.runMode;
 	if (thread.path) card.path = thread.path;
 	if (thread.pathChosenBy) card.pathChosenBy = thread.pathChosenBy;
 	// A hidden thread has no card of its own, so the child carries the name its arrow points from:

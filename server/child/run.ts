@@ -16,6 +16,7 @@ import { lastLine } from "./describe.ts";
 import { NAME_MODEL, nameThread, titleFromRequest } from "../worktrees/name.ts";
 import { broadcast, card, update, updateCard } from "../bus.ts";
 import { compacted } from "../waiters.ts";
+import { modeChangeNote } from "./modes.ts";
 import { randomUUID } from "node:crypto";
 import { randomToken } from "../paths.ts";
 import { join } from "node:path";
@@ -28,7 +29,18 @@ export function ensureChild(board, thread) {
 	// must never fall back to the folder the human works in.
 	ensureWorktree(board, thread);
 	const existing = board.children.get(thread.id);
-	if (existing && existing.exitCode === null && existing.stdin?.writable) return existing;
+	if (existing && existing.exitCode === null && existing.stdin?.writable) {
+		// A mode reaches a thread as the prompt the process is started with and as the tools it is denied,
+		// so a process started under another mode cannot serve the thread as it is now. Its input is ended
+		// the way a settled run's is, and the next process starts under the mode the thread has now.
+		if ((thread.runMode ?? thread.mode) === thread.mode) return existing;
+		try {
+			existing.stdin.end();
+		} catch {
+			// Already gone, which is what this wanted.
+		}
+		board.children.delete(thread.id);
+	}
 	const cli = piCli();
 	// What this board asks of a card. The bridge reads these two, because a tool description is read at the
 	// moment a model decides whether to call the tool, which is where a frequency rule earns its keep.
@@ -53,6 +65,9 @@ export function ensureChild(board, thread) {
 		},
 	});
 	board.children.set(thread.id, child);
+	// What this process was told to be. The next message compares it with the mode the thread has by then,
+	// which is the only moment a change made mid-run can be seen and told to the model.
+	thread.runMode = thread.mode;
 	// A child that died between two messages turns the next write into EPIPE. That is a card error,
 	// not a daemon crash.
 	child.stdin.on("error", (error) => threadError(board, thread, `child stdin failed: ${error.message}`));
@@ -103,6 +118,18 @@ export function ensureChild(board, thread) {
 
 
 
+/**
+ * What is actually sent for a message: the note a mode change earns, then the words the card shows. Built
+ * before the child is ensured, because ensuring it records the mode this run starts under, and the note is
+ * about the mode the last one ran under.
+ */
+export function wireText(thread, text) {
+	const note = thread.parentThread ? "" : modeChangeNote(thread.runMode, thread.mode);
+	return note ? `${note}\n\n${text}` : text;
+}
+
+
+
 /** One prompt, either a new question or what was waiting behind the run in flight. */
 export function prompt(board, thread, text, target = null) {
 	// The tree is made here, before anything is spawned: this is the first moment the thread is going
@@ -144,9 +171,10 @@ export function prompt(board, thread, text, target = null) {
 	thread.streamParts = new Map();
 	thinkingRuns.delete(thread);
 	update(board, thread);
+	const message = wireText(thread, text);
 	try {
 		const child = ensureChild(board, thread);
-		child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "prompt", message: text })}\n`);
+		child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "prompt", message })}\n`);
 	} catch (error) {
 		threadError(board, thread, `could not send to the child: ${error.message}`);
 	}

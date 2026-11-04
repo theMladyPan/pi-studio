@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { childArgv } from "../server/child/argv.ts";
-import { ensureChild } from "../server/child/run.ts";
+import { ensureChild, wireText } from "../server/child/run.ts";
+import { modeChangeNote } from "../server/child/modes.ts";
 import { describeTool, firstLine, headline, resultText } from "../server/child/describe.ts";
 import { boardPrompt, worktreePrompt } from "../server/child/prompts.ts";
 import { BRIDGE } from "../server/paths.ts";
@@ -66,6 +67,32 @@ test("a boss carries the flow it runs, and an agent carries nothing", () => {
 	assert.match(text(childArgv(board, { ...thread, mode: "boss", path: "simple" })), /scout/);
 	assert.match(text(childArgv(board, { ...thread, mode: "plan" })), /no `write`/);
 	assert.doesNotMatch(text(childArgv(board, { ...thread, mode: "agent" })), /You are the boss/);
+});
+
+test("a mode change is announced, and only when the mode really changed", () => {
+	// The new mode's own words arrive through the system prompt the next process is started with. This
+	// note is the other half: the conversation keeps the turns the old mode wrote, so the model has to be
+	// told that they stopped being instructions.
+	const note = modeChangeNote("boss", "agent");
+	assert.match(note, /mode has changed/);
+	assert.match(note, /started as a boss/);
+	assert.match(note, /You are an agent now/);
+	// The same mode twice is nothing to say, and neither is a thread that never ran or one with no mode.
+	assert.equal(modeChangeNote("boss", "boss"), "");
+	assert.equal(modeChangeNote(undefined, "agent"), "");
+	assert.equal(modeChangeNote("agent", ""), "");
+	// A mode that is not the baseline is pointed at its own instructions rather than told it is an agent.
+	assert.match(modeChangeNote("agent", "plan"), /the plan instructions in your system prompt/);
+});
+
+test("a message on a thread whose mode changed carries the note, and every other is sent as typed", () => {
+	const changed = wireText({ id: "t1", mode: "agent", runMode: "boss" }, "hello");
+	assert.ok(changed.startsWith("[this thread's mode has changed]"), changed.slice(0, 60));
+	assert.ok(changed.endsWith("\n\nhello"), "the human's own words are not at the end of the message");
+	assert.equal(wireText({ id: "t2", mode: "boss", runMode: "boss" }, "hello"), "hello");
+	assert.equal(wireText({ id: "t3", mode: "agent" }, "hello"), "hello");
+	// A spawned child carries a role instead of a mode, so there is no mode change it could be told about.
+	assert.equal(wireText({ id: "t4", mode: "agent", runMode: "boss", parentThread: "p" }, "hello"), "hello");
 });
 
 test("a tool call is described by its name and its most useful argument", () => {
@@ -229,6 +256,40 @@ test("a child with no tree of its own is given one before it starts", async () =
 	} finally {
 		started?.stdin?.end();
 		started?.kill();
+		if (was === undefined) delete process.env.PI_MANAGED_INSTALL_ROOT;
+		else process.env.PI_MANAGED_INSTALL_ROOT = was;
+		for (const gone of [repo, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a thread whose mode changed is not served by the process started under the old one", async () => {
+	// A mode is in the prompt and in the tool list a process is started with, so a boss that was made an
+	// agent mid-run cannot keep answering as the boss: the next message starts a new process instead.
+	const repo = scratchRepo();
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-mode-")));
+	const was: string | undefined = process.env.PI_MANAGED_INSTALL_ROOT;
+	process.env.PI_MANAGED_INSTALL_ROOT = stub.root;
+	const started: any[] = [];
+	try {
+		const board: any = { id: "b1", folder: repo, name: "scratch", config: {}, children: new Map(), trees: [], threads: new Map() };
+		const thread: any = { id: "abcdef123456", title: "a boss", folder: repo, provider: "p", model: "m", mode: "boss", path: "simple" };
+		board.threads.set(thread.id, thread);
+		const boss = ensureChild(board, thread);
+		started.push(boss);
+		assert.equal(thread.runMode, "boss", "the mode the process was started with was not recorded");
+		thread.mode = "agent";
+		const agent = ensureChild(board, thread);
+		started.push(agent);
+		assert.notEqual(agent, boss, "the boss's own process was kept to answer as an agent");
+		assert.equal(thread.runMode, "agent");
+		assert.equal(board.children.get(thread.id), agent);
+		// A mode that did not change is the same process: this is a change, not a restart on every message.
+		assert.equal(ensureChild(board, thread), agent);
+	} finally {
+		for (const child of started) {
+			child?.stdin?.end();
+			child?.kill();
+		}
 		if (was === undefined) delete process.env.PI_MANAGED_INSTALL_ROOT;
 		else process.env.PI_MANAGED_INSTALL_ROOT = was;
 		for (const gone of [repo, stub.root]) rmSync(gone, { recursive: true, force: true });
