@@ -381,7 +381,7 @@ const collectTool = defineTool({
 	name: "board_collect",
 	label: "Free merged children",
 	description:
-		"Ask the board to free the worktrees and branches of the children you spawned whose work you have already merged or otherwise brought in. Each child that goes takes its thread, its closed card and its transcript with it, so its conversation cannot be reopened: this cannot be undone from here. The board only frees what it can prove is integrated, and answers with what it kept and why. A freed tree is wiped clean, so work left uncommitted in it is never offered back: only what the child committed survives.",
+		"Ask the board to free the worktrees and branches of the children you spawned whose work you have already merged or otherwise brought in. Each child that goes takes its thread, its closed card and its transcript with it, so its conversation cannot be reopened: this cannot be undone from here. The board only frees what it can prove is integrated, and answers with what it kept and why. A retired tree is wiped clean, so only what the child committed survives: commit what you want to keep before the child finishes.",
 	parameters: Type.Object({}),
 	async execute(_id, _params) {
 		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };

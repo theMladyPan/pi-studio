@@ -15,8 +15,7 @@ instead, and a boss among those also gets a flow. Two of the board's card settin
 - `roles/<role>.md` is the body of that role's instructions. The daemon reads it when a child starts,
   so an edit takes effect on the next spawn and never rewrites a run already going.
 - The daemon adds a short frame around the file: who spawned the child, that its last message is the
-  whole report, that it cannot ask the human anything, that it works in its own worktree, and that the
-  tree is wiped clean when the thread is retired, so uncommitted work in it is lost. That
+  whole report, that it cannot ask the human anything, and that it works in its own worktree. That
   frame lives in `server/child/roles.ts` (`roleSystemPrompt`), because it is behaviour rather than advice.
 - A role also sets tool rules and a thinking level, in `ROLE_TOOLS_OFF` and `ROLE_THINKING` next to
   it: scout, review and architect may not write, and scout and chore think at medium while
