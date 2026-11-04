@@ -12,8 +12,8 @@ import { cardFor, plainCardFor } from "../../cards.ts";
 import { boardFor, scheduleSave } from "../../store.ts";
 import { makeRoom, threadForRuntime } from "./lifecycle.ts";
 import { randomUUID } from "node:crypto";
-import { basename, dirname, join, relative, resolve } from "node:path";
-import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
+import { accessSync, constants, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { workdirOf } from "../../worktrees/make.ts";
 import { workspaceById } from "../../workspaces.ts";
 import { start } from "../../main.ts";
@@ -359,5 +359,50 @@ export function onBrowse(url, res) {
 		entries: entries.slice(0, BROWSE_LIMIT),
 		total: entries.length,
 		truncated: entries.length > BROWSE_LIMIT,
+	});
+}
+
+
+/**
+ * The programs a `!` command can name: the first word of a command is looked up on the shell's search
+ * path, so that is where the names come from. The shell route spawns with no `env` of its own, which
+ * makes the daemon's own `PATH` exactly what a command resolves against.
+ *
+ * `prefix` is the word the human has typed so far, and the listing is narrowed by it before it is
+ * capped, so a short word sees every program that starts with it. Only a real file that runs counts: a
+ * folder on the path, a file nobody made executable, and a search-path entry that is not there are all
+ * skipped rather than reported.
+ */
+export function onPrograms(url, res) {
+	const prefix = (url.searchParams.get("prefix") ?? "").trim().toLowerCase();
+	const seen = new Set();
+	for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+		if (!dir) continue;
+		let names;
+		try {
+			names = readdirSync(dir);
+		} catch {
+			continue; // a search-path entry that is not there is ordinary, not an error
+		}
+		for (const name of names) {
+			if (seen.has(name)) continue;
+			if (CONTROL_CHARS.test(name)) continue;
+			if (prefix && !name.toLowerCase().startsWith(prefix)) continue;
+			const full = join(dir, name);
+			try {
+				// A link to a program is a program, and the mode that matters is the one it resolves to.
+				if (!statSync(full).isFile()) continue;
+				accessSync(full, constants.X_OK);
+			} catch {
+				continue;
+			}
+			seen.add(name);
+		}
+	}
+	const programs = [...seen].sort((a, b) => a.localeCompare(b));
+	answer(res, 200, {
+		programs: programs.slice(0, BROWSE_LIMIT),
+		total: programs.length,
+		truncated: programs.length > BROWSE_LIMIT,
 	});
 }
