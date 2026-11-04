@@ -1579,6 +1579,9 @@ test("a question about a note is answered on the thread's card, and the note kee
 		assert.deepEqual(card.turns ?? [], [], "the note kept the turn");
 		const prompts = framesOf(stub).filter((frame: any) => frame.type === "prompt");
 		assert.match(prompts[1].message, /The card says: the artifact/, "the child was not told which card it is about");
+		// The board's own text ends at a named line, so the words the human typed are never read as one
+		// more thing the board said.
+		assert.match(prompts[1].message, /\[the human wrote\]\nwhat does this show\?$/, "the human's words were not told apart from the board's");
 	} finally {
 		daemon.child.kill();
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
