@@ -9,8 +9,8 @@ import { BROWSE_LIMIT, CONTROL_CHARS, MAX_NOTE_CHARS, MAX_SOURCE_CHARS, MAX_TITL
 import { anchorOf, cardByKey, field, placedRect, rootOf } from "./thread.ts";
 import { broadcast, card, update, updateCard } from "../../bus.ts";
 import { cardFor, plainCardFor } from "../../cards.ts";
-import { scheduleSave } from "../../store.ts";
-import { makeRoom } from "./lifecycle.ts";
+import { boardFor, scheduleSave } from "../../store.ts";
+import { makeRoom, threadForRuntime } from "./lifecycle.ts";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
@@ -291,18 +291,29 @@ function folderInsideWorkspace(folder, asked) {
 /**
  * The composer's file picker walks folders and answers with paths, never with file contents. With a
  * `workspace` it walks that board's folder alone, so what it offers is what the board can attach.
+ *
+ * A `card` names the card the field answers for: a `!` command runs in that thread's tree, so its
+ * completion is listed from the tree itself rather than from the folder the daemon was launched in.
+ * `dots` offers the entries the picker keeps out of sight — `.agents`, `.env` — which are the ones a
+ * command names most often. Neither changes what a listing without them says.
  */
 export function onBrowse(url, res) {
 	const start = process.cwd();
 	const scoped = url.searchParams.has("workspace");
 	const asked = url.searchParams.get("path") ?? "";
+	const dots = url.searchParams.has("dots");
 	let root = start;
 	let dir = start;
 	let named = "";
 	if (scoped) {
 		const workspace = workspaceById(url.searchParams.get("workspace") ?? "");
 		if (!workspace) return void fail(res, 409, "no such workspace");
-		const inside = folderInsideWorkspace(workspace.folder, asked);
+		// Where a `!` command would stand, read the way the shell route reads it: the thread's own tree, or
+		// the board's folder for a thread that works in place. The sandbox is the same check on that root.
+		const board = url.searchParams.has("card") ? boardFor(workspace) : null;
+		const card = url.searchParams.get("card") ?? "";
+		const thread = board ? threadForRuntime(board, card) : undefined;
+		const inside = folderInsideWorkspace(thread ? workdirOf(board, thread) : workspace.folder, asked);
 		if (!inside) return void fail(res, 404, `no such folder: ${asked}`);
 		root = inside.root;
 		dir = inside.dir;
@@ -323,7 +334,7 @@ export function onBrowse(url, res) {
 	const entries = [];
 	try {
 		for (const entry of readdirSync(dir, { withFileTypes: true })) {
-			if (entry.name.startsWith(".")) continue;
+			if (entry.name.startsWith(".") && !dots) continue;
 			if (CONTROL_CHARS.test(entry.name)) continue;
 			if (query && !entry.name.toLowerCase().includes(query)) continue;
 			let isDir = entry.isDirectory();
