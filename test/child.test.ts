@@ -87,8 +87,8 @@ test("a mode change is announced, and only when the mode really changed", () => 
 
 test("a message on a thread whose mode changed carries the note, and every other is sent as typed", () => {
 	const changed = wireText({ id: "t1", mode: "agent", runMode: "boss" }, "hello");
-	assert.ok(changed.startsWith("[this thread's mode has changed]"), changed.slice(0, 60));
-	assert.ok(changed.endsWith("\n\nhello"), "the human's own words are not at the end of the message");
+	assert.ok(changed.startsWith("[board note · this thread's mode has changed]"), changed.slice(0, 60));
+	assert.ok(changed.endsWith("---\nhello"), "the human's own words are not last, under their own name");
 	assert.equal(wireText({ id: "t2", mode: "boss", runMode: "boss" }, "hello"), "hello");
 	assert.equal(wireText({ id: "t3", mode: "agent" }, "hello"), "hello");
 	// A spawned child carries a role instead of a mode, so there is no mode change it could be told about.

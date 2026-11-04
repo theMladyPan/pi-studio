@@ -125,7 +125,7 @@ export function ensureChild(board, thread) {
  */
 export function wireText(thread, text) {
 	const note = thread.parentThread ? "" : modeChangeNote(thread.runMode, thread.mode);
-	return note ? `${note}\n\n${text}` : text;
+	return note ? `${note}\n---\n${text}` : text;
 }
 
 

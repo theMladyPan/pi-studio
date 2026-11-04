@@ -1363,7 +1363,8 @@ test("a message waiting behind a run can be rewritten or taken back before the c
 		assert.equal(after.turns[at].text, "the words I meant", "the card still shows the words that were replaced");
 		assert.equal(after.turns[at].status, "queued");
 		assert.equal(after.queued.length, 1);
-		assert.equal(after.queued[0].message, "the words I meant", "the edited words never reached the queue");
+		// The board named the section the words belong to, and the rewrite keeps that name around them.
+		assert.equal(after.queued[0].message, "[user message]\nthe words I meant", "the edited words never reached the queue");
 
 		// The turn the child already reads is not a draft, and says so rather than rewriting what it read.
 		const tooLate = await postTo(daemon, board.id, "/message/edit", { cardId: threadId, turn: 0, text: "too late" });
@@ -1579,9 +1580,10 @@ test("a question about a note is answered on the thread's card, and the note kee
 		assert.deepEqual(card.turns ?? [], [], "the note kept the turn");
 		const prompts = framesOf(stub).filter((frame: any) => frame.type === "prompt");
 		assert.match(prompts[1].message, /The card says: the artifact/, "the child was not told which card it is about");
-		// The board's own text ends at a named line, so the words the human typed are never read as one
-		// more thing the board said.
-		assert.match(prompts[1].message, /\[the human wrote\]\nwhat does this show\?$/, "the human's words were not told apart from the board's");
+		// The board's own text is a section of its own: the card list as bullets, then a divided-off line
+		// naming where the human's words begin.
+		assert.match(prompts[1].message, /^\[board state\]\n- /, "the board's cards were not listed as bullets");
+		assert.match(prompts[1].message, /\n---\n\[user message\]\nwhat does this show\?$/, "the human's words were not told apart from the board's");
 	} finally {
 		daemon.child.kill();
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });

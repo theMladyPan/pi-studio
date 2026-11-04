@@ -98,7 +98,7 @@ export function modeSystemPrompt(mode?: string, path?: string): string {
 export function modeChangeNote(from?: string, to?: string): string {
 	if (!from || !to || from === to) return "";
 	return [
-		"[this thread's mode has changed]",
+		"[board note · this thread's mode has changed]",
 		`You were started as a ${from}, and that is over. The ${from} instructions you were given apply to nothing you do now, and you do not carry on anything you began as a ${from}.`,
 		to === "agent"
 			? "You are an agent now: you do the work yourself, with the tools you have."

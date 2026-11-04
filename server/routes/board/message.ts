@@ -13,6 +13,23 @@ import { prompt } from "../../child/run.ts";
 
 
 
+/**
+ * One turn as the child reads it: what the board has to say, then a named line where the human's words
+ * begin. Each section is bracketed by whoever made it and the sections are divided by `---`, so a model
+ * never reads the human's request as one more thing the board said, or a quoted card as an order.
+ *
+ * The human's section is always named, even when nothing precedes it: the same shape on every turn is
+ * what makes the name mean something, and a turn that changed shape would be the one read as an order.
+ */
+function boardSections(board, preamble, naming, text) {
+	const sections = [cardIndex(board), preamble, naming]
+		.map((one) => String(one ?? "").replace(/\s+$/, ""))
+		.filter(Boolean);
+	return [...sections, `[user message]\n${text}`].join("\n---\n");
+}
+
+
+
 export async function onMessage(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
@@ -96,11 +113,7 @@ export async function onMessage(req, res, board) {
 	// the answer are read on the card of the thread that answered. A fork is such a thread now. Only a
 	// child a card nobody answers for got has no card of its own, so the card is the only place its turn
 	// can be read, and it keeps the turn there.
-	// Everything the board says above is bracketed and labelled, so one line names where it stops: the
-	// words under it are the human's, and nothing above them is. A message the board prepended nothing to
-	// is the human's alone, and a label on it would be a label with nothing to separate.
-	const context = `${cardIndex(board)}${preamble}${naming}`;
-	const message = context ? `${context}[the human wrote]\n${text}` : text;
+	const message = boardSections(board, preamble, naming, text);
 	const holding = askedCard && thread.hidden ? askedCard : null;
 	let target = null;
 	let index;
@@ -193,8 +206,8 @@ export async function onMessageEdit(req, res, board) {
 	if (!entry) return void fail(res, 409, "that message is not waiting: the child has it");
 	entry.text = text.slice(0, 4000);
 	// Only the human's own words change: the card quote the message was queued with stays as it was. The
-	// board line is built again, so a message rewritten after a card was added still names that card.
-	entry.message = `${cardIndex(board)}${entry.preamble ?? ""}${entry.text}`;
+	// board section is built again, so a message rewritten after a card was added still names that card.
+	entry.message = boardSections(board, entry.preamble ?? "", "", entry.text);
 	const turn = queuedTurn(board, thread, target);
 	if (turn) turn.text = entry.text;
 	showQueue(board, thread, target);
