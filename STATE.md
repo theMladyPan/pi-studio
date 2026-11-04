@@ -142,6 +142,11 @@ commit's own account rather than on a check run now, the section below says so.
   cannot read (a base branch that was renamed or deleted) is treated as unknown, so nothing is deleted
   on a guess. The record of a tree belongs to the board rather than to the thread, in `board.trees`, so
   closing a thread card or clearing the board leaves the tree sweepable instead of orphaned.
+  Three buttons ask the same question of the same proofs: `POST /clean`, the Closed panel's one press of
+  `POST /thread/clean-closed` over the cards the human put away, and `POST /thread/collect`, which a
+  thread uses on the closed children it spawned and offers its own branch as one more place their work may
+  have landed. A tree whose commit was cherry-picked into the caller's branch is spent once that branch is
+  named, where measuring against `dev` alone would keep it for ever.
 - **An answer arrives as it is written.** `message_update` from the child carries `text_delta`, and
   the daemon buffers it per content block, puts it on the turn in flight and re-broadcasts the card
   that holds that turn — the note when a note is being answered, the thread's own card otherwise — at
@@ -218,7 +223,9 @@ commit's own account rather than on a check run now, the section below says so.
   changed, so two tabs agree. A thread hidden because a card is where it is read is not in that list:
   nobody closed it. Boards written before `closedAt` existed carry only `hidden`, so a hidden thread with
   no card behind it is read as one the human closed. A closed *note* is still gone — its text lives on
-  the card, and the card is what `POST /close` deletes.
+  the card, and the card is what `POST /close` deletes. One press cleans the list: `POST /thread/clean-closed`
+  retires every row with the proof `clean` uses, answers `{removed, kept}` where a kept row carries the
+  reason it stayed, and leaves that row where the human can reopen it.
 - **A child puts its own card away.** A child whose answer has been read is spent, so the board takes its
   card off the board a few seconds later. Hidden and not closed: nothing is killed and no worktree is
   swept, so what it did is still there to assemble, and the rail lists it with the other cards put away
@@ -386,7 +393,11 @@ commit's own account rather than on a check run now, the section below says so.
   kept tree carries the reason it was kept. `POST /new` empties the board in the same workspace and
   keeps its settings; the button turns into `sure?` for four seconds first. The worktree records stay
   in the board file, so a tree left behind by `new` can still be swept by a later `clean`. Both answer
-  with a snapshot, which the client already replays, so every open tab rebuilds.
+  with a snapshot, which the client already replays, so every open tab rebuilds. `POST /thread/clean-closed`
+  is the same guarantee asked about the Closed panel, and `POST /thread/collect` is its agent side: a
+  thread retires the closed children it spawned. `/close` sweeps trees too, so the difference is not that
+  a thread route deletes one: collect is the one thread route that retires a tree its caller does not
+  stand in, which is why it refuses its own card the way `/close` does.
 - **Usage is asked for, then shown twice.** A pi child keeps its own numbers, so at every settle the
   daemon sends `{"type":"get_session_stats"}` and holds the child's stdin open until the answer
   arrives — `stdin.end()` before it threw the last run's cost away. `thread.stats` keeps input,

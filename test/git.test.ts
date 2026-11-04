@@ -266,6 +266,40 @@ test("a branch with an unmerged commit is kept, and the reason names dev", () =>
 	}
 });
 
+test("a child's commit cherry-picked into the caller's own branch is spent once that branch is offered", () => {
+	const repo = scratchRepo();
+	try {
+		const { board, tree } = treeWithChildCommit(repo);
+		// The parent never merges its child: it cherry-picks the commit into a branch of its own, which is
+		// what a boss that collects its children's work looks like. The child was cut from the parent's
+		// HEAD, so the parent's branch carries that work and dev sees neither of the two commits.
+		git(repo, "checkout", "-b", "feat/boss-1", "feat/parent");
+		// A commit of the parent's own first, so the cherry-pick is a real replay: onto the child's own base
+		// it would fast-forward and leave the very commit the tree stands on inside the branch.
+		writeFileSync(join(repo, "boss.txt"), "boss\n");
+		git(repo, "add", ".");
+		git(repo, "commit", "-m", "the parent's own work");
+		git(repo, "cherry-pick", git(repo, "rev-parse", childBranch));
+		git(repo, "checkout", "dev");
+		assert.notEqual(git(repo, "rev-parse", "feat/boss-1"), git(repo, "rev-parse", childBranch), "the ids should differ");
+		const alone = retireWorktree(board, tree);
+		assert.ok(alone, "the tree was not read at all");
+		assert.equal(alone.removed, undefined, `a tree proved against dev alone was removed: ${JSON.stringify(alone)}`);
+		assert.match(alone.kept, /commit/, `the reason says nothing about commits: ${alone.kept}`);
+		assert.ok(existsSync(tree.path));
+		const offered = retireWorktree(board, tree, { alsoUp: ["feat/boss-1"] });
+		assert.ok(offered, "the tree was not read at all");
+		assert.equal(offered.removed, true, `a tree its parent's branch holds was kept: ${JSON.stringify(offered)}`);
+		const proof = (offered as any).proof;
+		assert.match(proof, /feat\/boss-1/, `the proof does not name the branch it used: ${proof}`);
+		assert.equal(existsSync(tree.path), false);
+		assert.equal(git(repo, "branch", "--list", childBranch), "");
+		assert.notEqual(git(repo, "branch", "--list", "feat/boss-1"), "", "the caller's branch was deleted");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("a branch another local branch holds, with dev untouched, is spent", () => {
 	const repo = scratchRepo();
 	const side = mkdtempSync(join(tmpdir(), "pi-studio-side-"));

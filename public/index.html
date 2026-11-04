@@ -567,6 +567,32 @@
   #railCards .rail-card.updated .rail-state { color: var(--accent); }
   #railClosed .rail-card .rail-state { color: var(--accent); }
   #railClosed .rail-card:hover .rail-title { color: var(--text); }
+  /* A closed row holds two presses: the row itself puts the card back, and the trash beside it throws the
+     thread away. The row is a wrapper rather than a button, because a button cannot hold a button, so the
+     reopen press fills what the row used to be and the look of the row does not move. */
+  #railClosed .rail-card { padding: 0; gap: 0; }
+  #railClosed .rail-open { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
+    padding: 3px 6px; border: 0; background: none; color: inherit; font: inherit; text-align: left;
+    cursor: pointer; }
+  #railClosed .rail-open:focus-visible { outline: none; }
+  #railClosed .rail-card:focus-within { border-color: var(--accent-dim); }
+  /* The trash is the one press in this list that destroys work, so it stays muted until the pointer or the
+     keyboard reaches it, and the four-second question it asks is red for the same reason. */
+  #railClosed .rail-trash { flex: none; display: flex; align-items: center; align-self: stretch;
+    padding: 0 6px; border: 0; border-radius: 0 6px 6px 0; background: transparent; color: var(--muted);
+    font: 10px var(--mono); cursor: pointer; }
+  #railClosed .rail-trash:hover, #railClosed .rail-trash:focus-visible, #railClosed .rail-trash.armed {
+    background: rgba(248, 81, 73, .14); color: #ff7b72; outline: none; }
+  #railClosed .rail-trash:disabled { cursor: default; opacity: .55; }
+  #railClosed .rail-trash svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
+    stroke-width: 1.2; stroke-linejoin: round; }
+  /* The closed list's own clean sits beside its count and wears the footer's clean button: it is the same
+     press over a shorter list, so it looks the same at the size the rail's head is set in. */
+  #railClosedClean { margin-left: auto; font: 10.5px var(--mono); color: var(--muted);
+    background: #161b22; border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px;
+    cursor: pointer; }
+  #railClosedClean:hover { color: var(--text); border-color: var(--border-bright); }
+  #railClosedClean:disabled { cursor: default; opacity: .55; }
   /* One foldable section per thread: the rail is a stack of conversations, not one long log. */
   #railLog .rail-thread { display: flex; flex-direction: column; gap: 4px; flex: none; }
   #railLog .rail-thread-head { display: flex; align-items: center; gap: 6px; width: 100%; flex: none;
@@ -1090,7 +1116,7 @@
 <aside id="rail">
   <div class="rail-head">cards <b id="railCardCount"></b><button id="railToggle" title="hide the rail">«</button></div>
   <div id="railCards"></div>
-  <div class="rail-head" id="railClosedHead" hidden>closed <b id="railClosedCount"></b></div>
+  <div class="rail-head" id="railClosedHead" hidden>closed <b id="railClosedCount"></b><button type="button" id="railClosedClean" title="delete the closed threads whose work is saved somewhere else, with their folders, branches and conversations">clean</button></div>
   <div id="railClosed"></div>
   <div class="rail-head">activity <b id="railRunning"></b></div>
   <div id="railNow"></div>
