@@ -249,6 +249,94 @@ test("a branch squashed into one commit on dev is spent, because dev already hol
 	}
 });
 
+test("a branch whose patch landed and was rewritten afterwards is spent, because the patch is the proof", () => {
+	const repo = scratchRepo();
+	try {
+		const { board, tree } = treeWithChildCommit(repo);
+		// The parent's own work goes into dev too, so the child's branch carries nothing else unmerged.
+		git(repo, "merge", "--no-ff", "feat/parent", "-m", "merge the parent");
+		commitDev(repo);
+		git(repo, "cherry-pick", git(repo, "rev-parse", childBranch));
+		// Dev goes on working in the very file the copy landed in, so merging the branch now clashes and
+		// the content proof can say nothing. The patch that arrived is still there to be matched.
+		writeFileSync(join(repo, "child.txt"), "child, reworked on dev\n");
+		git(repo, "add", ".");
+		git(repo, "commit", "-m", "rework the child's change");
+		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
+		assert.equal(retired.removed, true, `a branch whose patch landed was kept: ${JSON.stringify(retired)}`);
+		assert.match(String((retired as any).proof), /same patch/, `the proof is not the patch: ${(retired as any).proof}`);
+		assert.equal(existsSync(tree.path), false);
+		assert.equal(git(repo, "branch", "--list", childBranch), "");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a branch whose work landed with a hand edit is kept, because no proof can see it", () => {
+	const repo = scratchRepo();
+	try {
+		const { board, tree } = treeWithChildCommit(repo);
+		git(repo, "merge", "--no-ff", "feat/parent", "-m", "merge the parent");
+		commitDev(repo);
+		// The copy arrived, but not as the patch the branch carries: nothing on disk can tell this apart
+		// from work nobody has seen, so the tree stays and the human decides.
+		git(repo, "cherry-pick", "--no-commit", git(repo, "rev-parse", childBranch));
+		writeFileSync(join(repo, "child.txt"), "child, settled by hand\n");
+		git(repo, "add", ".");
+		git(repo, "commit", "-m", "the child's work, resolved against dev");
+		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
+		assert.equal(retired.removed, undefined, `a hand-edited landing was taken for a spent branch: ${JSON.stringify(retired)}`);
+		assert.match(retired.kept, /commit/, `the reason says nothing about commits: ${retired.kept}`);
+		assert.ok(existsSync(tree.path));
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a branch only half of whose commits landed is kept", () => {
+	const repo = scratchRepo();
+	try {
+		const { board, tree } = treeWithChildCommit(repo);
+		writeFileSync(join(tree.path, "child2.txt"), "child two\n");
+		git(tree.path, "add", ".");
+		git(tree.path, "commit", "-m", "child change, second half");
+		git(repo, "merge", "--no-ff", "feat/parent", "-m", "merge the parent");
+		commitDev(repo);
+		// Only the first of the two, so a `+` line is left and the patch proof cannot clear the branch.
+		git(repo, "cherry-pick", `${git(repo, "rev-parse", childBranch)}~1`);
+		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
+		assert.equal(retired.removed, undefined, `a partly landed branch was removed: ${JSON.stringify(retired)}`);
+		assert.ok(existsSync(tree.path));
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a reindented copy on dev is no proof, so the branch is kept", () => {
+	const repo = scratchRepo();
+	try {
+		const { board, tree } = treeWithChildCommit(repo);
+		git(repo, "merge", "--no-ff", "feat/parent", "-m", "merge the parent");
+		commitDev(repo);
+		// The same word, a different patch: neither the patch proof nor the content proof may read this as
+		// the branch's work having arrived. git cherry alone would, because it forgives whitespace.
+		git(repo, "cherry-pick", "--no-commit", git(repo, "rev-parse", childBranch));
+		writeFileSync(join(repo, "child.txt"), "  child\n");
+		git(repo, "add", ".");
+		git(repo, "commit", "-m", "the child's file, indented");
+		const retired = retireWorktree(board, tree);
+		assert.ok(retired, "the tree was not read at all");
+		assert.equal(retired.removed, undefined, `a reindented copy was taken for the branch's work: ${JSON.stringify(retired)}`);
+		assert.match(retired.kept, /not in dev/, `the reason does not fall back to a count: ${retired.kept}`);
+		assert.ok(existsSync(tree.path));
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("a branch with an unmerged commit is kept, and the reason names dev", () => {
 	const repo = scratchRepo();
 	try {

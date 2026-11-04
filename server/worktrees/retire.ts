@@ -18,8 +18,8 @@ import { AGENTS_DIR } from "./make.ts";
  * started from would keep such a tree for ever.
  *
  * `alsoUp` names more branches the caller knows the work may have landed in, a parent's own feature branch
- * among them: each is asked the content proof in turn, after the integration branch. Without a candidate
- * that holds the work, a tree whose commit sits in a branch nobody named is reported and kept.
+ * among them: each is asked the proofs in turn, after the integration branch. Without a candidate that
+ * holds the work, a tree whose commit sits in a branch nobody named is reported and kept.
  */
 export function retireWorktree(board, tree, options = {}) {
 	if (!tree?.path) return null;
@@ -89,9 +89,9 @@ export function retireWorktree(board, tree, options = {}) {
 	// reach the deletion with a trunk's name.
 	const trunk = branch ? trunkReason(repo, up, branch) : "";
 	if (trunk) return { path: tree.path, branch: label, kept: why(trunk) };
-	// The work is integrated when one of two proofs holds, and the tree then holds nothing of its own.
-	// Both are asked of the main checkout, which sees every ref, about the commit read above, and a read
-	// that fails is not a proof: the tree stays.
+	// The work is integrated when one of three proofs holds, and the tree then holds nothing of its own.
+	// All are asked of the main checkout, which sees every ref, about the HEAD read above, and a read that
+	// fails is not a proof: the tree stays.
 	// Containment: a merge, a fast-forward or a rebase put the commit into another local branch. The
 	// branch always contains itself, so only another name is proof; full names are compared, because a
 	// tag of the same name makes the short form of the branch itself read `heads/<name>`.
@@ -102,10 +102,10 @@ export function retireWorktree(board, tree, options = {}) {
 		.map((name) => name.trim())
 		.find((name) => name && name !== `refs/heads/${branch}`);
 	let proof = holder ? `held by ${holder.slice("refs/heads/".length)}` : "";
-	// Content: merging the branch into the integration branch changes nothing, which covers a cherry-pick
-	// and a squash. Whitespace counts, so a reindented copy on dev is no proof; a merge that does not go
-	// through cleanly is none either. A detached tree never goes on this proof: its commit has no name
-	// but the tree's HEAD, so only another branch holding that very commit keeps it reachable.
+	// Content: merging the branch into the integration branch changes nothing, which covers a squash.
+	// Whitespace counts, so a reindented copy on dev is no proof; a merge that does not go through cleanly
+	// is none either. A detached tree never goes on either proof: its commit has no name but the tree's
+	// HEAD, so only another branch holding that very commit keeps it reachable.
 	// The integration branch is asked first, then each branch the caller offered in `alsoUp`, which is how a
 	// parent that cherry-picked its child's commit into its own branch proves the tree spent. The branch the
 	// tree stands on is never a candidate: it contains itself, so it would always prove its own work.
@@ -114,6 +114,14 @@ export function retireWorktree(board, tree, options = {}) {
 		const base = `refs/heads/${up}`;
 		const into = [...new Set([base, ...names])].filter((ref) => ref !== `refs/heads/${branch}`);
 		for (const target of into) {
+			// Patch identity first: it survives the target moving on. A copy that landed and was then rewritten
+			// in the same file still matches the patch that landed, where merging the branch now clashes and so
+			// proves nothing.
+			const patch = patchProof(repo, target, head);
+			if (patch) {
+				proof = patch;
+				break;
+			}
 			const merged = gitIn(repo, ["merge-tree", "--write-tree", target, head], 10_000);
 			const result = merged.out.split("\n")[0].trim();
 			// A clean merge exits 0 and a conflicted one exits 1, both printing the tree first; anything else
@@ -200,6 +208,47 @@ export function retireWorktree(board, tree, options = {}) {
 		...(ignoredPaths ? { ignoredPaths } : {}),
 		...(branchGone.ok ? {} : { branchKept: branchGone.err.split("\n")[0] || "git refused" }),
 	};
+}
+
+
+
+/**
+ * The patch proof: every commit the branch carries and the target does not has a commit there holding the
+ * same patch, and each of those commits' own file versions lie in the target's history. `git cherry`
+ * answers the first half, which a cherry-pick, a rebase and a `git am` all leave behind, and it survives the
+ * target going on to rewrite the very file the copy landed in. It reads a copy that landed reindented as
+ * the same patch, though, so the second half asks git for the exact blob each commit produced: a change
+ * the target holds only in other whitespace is no proof, which is the strictness the content proof keeps.
+ * A merge commit, a deletion or a rename makes no proof either, because `git cherry` has no line for a
+ * merge and the other two leave no file version to look for. Empty when nothing is proved, which reads as
+ * "not spent" and keeps the tree.
+ */
+function patchProof(repo, target, head) {
+	const unseen = gitIn(repo, ["rev-list", `${target}..${head}`]);
+	const commits = unseen.ok ? unseen.out.split("\n").map((line) => line.trim()).filter(Boolean) : [];
+	if (!commits.length) return "";
+	const cherry = gitIn(repo, ["cherry", target, head], 10_000);
+	if (!cherry.ok) return "";
+	const lines = cherry.out.split("\n").filter((line) => line.trim());
+	// A `+` line is a commit whose patch is not there, and a missing line is a merge commit, which carries
+	// a patch git cherry cannot compare: either one leaves the tree kept, so a branch only partly landed
+	// never goes on this proof.
+	if (lines.length !== commits.length || lines.some((line) => !line.startsWith("-"))) return "";
+	for (const commit of commits) {
+		const changed = gitIn(repo, ["diff-tree", "--no-commit-id", "--name-status", "-r", "-z", commit]);
+		if (!changed.ok) return "";
+		const fields = changed.out.split("\0").filter((field) => field !== "");
+		for (let i = 0; i < fields.length; i += 2) {
+			const status = fields[i];
+			const path = fields[i + 1];
+			if (!path || (status !== "A" && status !== "M")) return "";
+			const blob = gitIn(repo, ["rev-parse", "--verify", `${commit}:${path}`]);
+			if (!blob.ok || !blob.out) return "";
+			const seen = gitIn(repo, ["log", "--format=%H", "--max-count=1", `--find-object=${blob.out}`, target, "--", path], 10_000);
+			if (!seen.ok || !seen.out) return "";
+		}
+	}
+	return `its ${commits.length} commit(s) are already in ${target.slice("refs/heads/".length)}, each as the same patch`;
 }
 
 
