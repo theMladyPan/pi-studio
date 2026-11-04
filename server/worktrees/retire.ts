@@ -12,11 +12,16 @@ import { AGENTS_DIR } from "./make.ts";
 
 /**
  * Let a tree go, but only one whose work is already somewhere else: uncommitted changes, or commits no
- * other branch holds, are reported and never deleted. `clean` is the only caller. Work that was merged,
- * fast-forwarded, rebased, cherry-picked or squashed is already integrated, so counting commits against
- * the snapshot the tree started from would keep such a tree for ever.
+ * other branch holds, are reported and never deleted. The sweep behind `clean`, the Closed panel's clean
+ * and the collect a thread asks for are the callers. Work that was merged, fast-forwarded, rebased,
+ * cherry-picked or squashed is already integrated, so counting commits against the snapshot the tree
+ * started from would keep such a tree for ever.
+ *
+ * `alsoUp` names more branches the caller knows the work may have landed in, a parent's own feature branch
+ * among them: each is asked the content proof in turn, after the integration branch. Without a candidate
+ * that holds the work, a tree whose commit sits in a branch nobody named is reported and kept.
  */
-export function retireWorktree(board, tree) {
+export function retireWorktree(board, tree, options = {}) {
 	if (!tree?.path) return null;
 	const present = existsSync(tree.path);
 	const repo = (present ? mainRepoOf(tree.path) : "") || tree.repo || repoOf(board.folder);
@@ -101,16 +106,36 @@ export function retireWorktree(board, tree) {
 	// and a squash. Whitespace counts, so a reindented copy on dev is no proof; a merge that does not go
 	// through cleanly is none either. A detached tree never goes on this proof: its commit has no name
 	// but the tree's HEAD, so only another branch holding that very commit keeps it reachable.
+	// The integration branch is asked first, then each branch the caller offered in `alsoUp`, which is how a
+	// parent that cherry-picked its child's commit into its own branch proves the tree spent. The branch the
+	// tree stands on is never a candidate: it contains itself, so it would always prove its own work.
 	if (!proof && branch) {
-		const merged = gitIn(repo, ["merge-tree", "--write-tree", `refs/heads/${up}`, head], 10_000);
-		const result = merged.out.split("\n")[0].trim();
-		// A clean merge exits 0 and a conflicted one exits 1, both printing the tree first; anything else
-		// means the proof did not run, an old git without `--write-tree` included.
-		if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(result)) return { path: tree.path, branch: label, kept: why(`could not run git merge-tree ${up} ${branch}: ${firstLine(merged)}`) };
-		if (merged.ok) {
-			const ours = gitIn(repo, ["rev-parse", "--verify", `refs/heads/${up}^{tree}`]);
-			if (!ours.ok) return { path: tree.path, branch: label, kept: why(`could not read the tree of ${up}`) };
-			if (result === ours.out) proof = `merging it into ${up} changes nothing`;
+		const names = (options.alsoUp ?? []).map((name) => (String(name).startsWith("refs/") ? String(name) : `refs/heads/${name}`));
+		const base = `refs/heads/${up}`;
+		const into = [...new Set([base, ...names])].filter((ref) => ref !== `refs/heads/${branch}`);
+		for (const target of into) {
+			const merged = gitIn(repo, ["merge-tree", "--write-tree", target, head], 10_000);
+			const result = merged.out.split("\n")[0].trim();
+			// A clean merge exits 0 and a conflicted one exits 1, both printing the tree first; anything else
+			// means the proof did not run, an old git without `--write-tree` included. A branch the caller
+			// offered may simply be gone, which is no proof and no failure: the next one is tried. The
+			// integration branch is the proof every tree is judged by, so a read of it that did not run is
+			// reported rather than skipped.
+			const ran = /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(result);
+			if (!ran) {
+				if (target === base) return { path: tree.path, branch: label, kept: why(`could not run git merge-tree ${up} ${branch}: ${firstLine(merged)}`) };
+				continue;
+			}
+			if (!merged.ok) continue;
+			const ours = gitIn(repo, ["rev-parse", "--verify", `${target}^{tree}`]);
+			if (!ours.ok) {
+				if (target === base) return { path: tree.path, branch: label, kept: why(`could not read the tree of ${up}`) };
+				continue;
+			}
+			if (result === ours.out) {
+				proof = `merging it into ${target.slice("refs/heads/".length)} changes nothing`;
+				break;
+			}
 		}
 	}
 	if (!proof) {

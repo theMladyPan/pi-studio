@@ -27,7 +27,7 @@ import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.
 import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
 import { onPrompt, onPromptWrite, onPrompts } from "./routes/board/prompts.ts";
 import { onSkill } from "./routes/board/skill.ts";
-import { onClean, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onUndo } from "./routes/board/lifecycle.ts";
+import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onThreadCollect, onUndo } from "./routes/board/lifecycle.ts";
 import { onShell } from "./routes/board/shell.ts";
 
 
@@ -46,7 +46,7 @@ export const token = (() => {
 
 
 /** The routes a child may reach. Everything else on this daemon belongs to the human. */
-export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/path", "/skill", "/close"]);
+export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/path", "/thread/collect", "/skill", "/close"]);
 
 
 
@@ -379,6 +379,8 @@ export const server = createServer((req, res) => {
 				"/message/drop": onMessageDrop,
 				"/layout": onLayout,
 				"/close": onClose,
+				// A thread tidies the closed children it spawned, with the same proof a sweep asks for.
+				"/thread/collect": onThreadCollect,
 				"/reopen": onReopen,
 				"/undo": onUndo,
 				"/model": onModel,
@@ -394,6 +396,8 @@ export const server = createServer((req, res) => {
 				"/remove/preview": onRemovePreview,
 				"/remove": onRemove,
 				"/fragments/remove": onFragmentRemove,
+				// The Closed panel's one button: every card put away, retired with the proof `clean` uses.
+				"/thread/clean-closed": onCleanClosed,
 			};
 			const handler = routing[url.pathname];
 			if (handler) {

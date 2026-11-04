@@ -16,7 +16,7 @@ import { existsSync, unlinkSync } from "node:fs";
 import { finished } from "../../waiters.ts";
 import { liveThoughts, settleRows } from "../../thought.ts";
 import { settleTreeBranch } from "../../worktrees/name.ts";
-import { discardBranch, discardTree, treeBranch, treeRepo } from "../../worktrees/retire.ts";
+import { discardBranch, discardTree, retireWorktree, treeBranch, treeRepo } from "../../worktrees/retire.ts";
 import { fragmentsOf, removeFragment, removePreview, stepsNote, treeOf } from "../../worktrees/fragments.ts";
 import { sessionFile } from "../../session.ts";
 import { repoOf } from "../../git/repo.ts";
@@ -517,22 +517,26 @@ export async function onRemovePreview(req, res, board) {
 
 
 /**
- * Take a thread away whole: the child, the card and its thread, the transcript, the folder and the branch,
- * in that order. Nothing is kept and nothing is put where `ctrl+z` looks, which is why the client shows the
- * diff of `/remove/preview` before it asks for this. A step that fails is reported and the next one still
- * runs, so one locked file does not leave the other four behind; the branch goes only once its folder is
- * gone, because a branch deleted under a folder that would not go takes the name of the work with it.
+ * Take a thread away whole. `force` is what `/remove` asks for: the child, the card and its thread, the
+ * transcript, the folder and the branch, in that order. Nothing is kept and nothing is put where `ctrl+z`
+ * looks, which is why the client shows the diff of `/remove/preview` before it asks for that. A step that
+ * fails is reported and the next one still runs, so one locked file does not leave the other four behind;
+ * the branch goes only once its folder is gone, because a branch deleted under a folder that would not go
+ * takes the name of the work with it.
+ *
+ * `retire` is the mode the Closed panel's clean and the collect a thread asks for use: `retireWorktree` is
+ * asked about the tree before anything is killed or dropped, and an answer of `kept` leaves the thread, its
+ * cards, its trash entries and its transcript exactly as they were. Only a tree whose work is provably
+ * somewhere else goes, and once it has, nothing here touches git again.
  */
-export async function onRemove(req, res, board) {
-	const body = await readJson(req, res);
-	if (!body) return;
-	const { thread, refusal } = trashTarget(board, field(body.card, 100));
-	if (refusal) return void fail(res, 404, refusal);
+export function removeThreadWhole(board, thread, mode = "force", options = {}) {
 	// The branch and the folder are read before anything is killed or deleted: the folder is where both are.
 	const tree = treeOf(board, thread);
 	const repo = tree ? treeRepo(board, tree) : repoOf(board.folder);
 	const branch = (tree ? treeBranch(repo, tree) : "") || tree?.branch || "";
 	const path = tree?.path ?? "";
+	const retired = mode === "retire" ? retireWorktree(board, tree, options) : null;
+	if (retired?.kept) return { kept: retired.kept, path, branch: retired.branch || branch };
 	const steps = [];
 	cancelAutoClose(thread);
 	const stopped = killChild(board, thread);
@@ -561,22 +565,115 @@ export async function onRemove(req, res, board) {
 	steps.push({ what: "card", ok: true, note: owned.length ? `the thread was dropped with ${owned.length} card(s)` : "the thread was dropped" });
 	const file = thread.sessionId ? sessionFile({ id: board.id }, thread.sessionId) : "";
 	steps.push(file ? unlinkStep(file) : { what: "session", ok: true, note: thread.sessionId ? "the transcript was already gone" : "this thread never had a transcript" });
-	const folder = discardTree(board, tree);
-	steps.push({ what: "tree", ...folder });
-	// The branch goes only once the folder is really gone: deleted under a folder git would not remove, its
-	// name is the one thing that still points at the work.
-	if (folder.ok) steps.push({ what: "branch", ...discardBranch(repo, branch) });
+	let retiredNote = null;
+	if (mode === "retire") {
+		// The proof above took the folder and the branch, so the only thing left here is to report them.
+		retiredNote = retired ? (retired.note ?? retired.proof ?? "the folder was retired") : "there was no folder to retire";
+		steps.push({ what: "tree", ok: true, note: retiredNote });
+		if (retired?.branchKept) steps.push({ what: "branch", ok: false, note: retired.branchKept });
+	} else {
+		const folder = discardTree(board, tree);
+		steps.push({ what: "tree", ...folder });
+		// The branch goes only once the folder is really gone: deleted under a folder git would not remove, its
+		// name is the one thing that still points at the work.
+		if (folder.ok) steps.push({ what: "branch", ...discardBranch(repo, branch) });
+	}
 	// The strip draws the trees, so a removal is a redraw rather than one card leaving: `resync` reads git again.
 	resync(board);
 	nudgeWelcome();
 	scheduleSave(board);
-	answer(res, 200, {
-		thread: { id: thread.id, title: thread.title },
-		branch: branch || null,
-		path: path || null,
-		steps,
-		note: stepsNote(steps),
-	});
+	return { thread: { id: thread.id, title: thread.title }, branch: branch || null, path: path || null, steps, note: stepsNote(steps) ?? retiredNote };
+}
+
+
+
+/**
+ * `/remove`, which is the human's: a thread that answers a card is not asked to take a folder with it.
+ */
+export async function onRemove(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const { thread, refusal } = trashTarget(board, field(body.card, 100));
+	if (refusal) return void fail(res, 404, refusal);
+	answer(res, 200, removeThreadWhole(board, thread, "force"));
+}
+
+
+
+/** The closed threads this board lists, newest first, as `closedCards` orders them. */
+function closedThreads(board) {
+	const listed = new Set(closedCards(board).map((card) => card.id));
+	return [...board.threads.values()].filter((thread) => listed.has(thread.id));
+}
+
+
+
+/**
+ * Retire the closed threads `pick` names, one at a time, and report what went and what stayed. A thread whose
+ * child still holds it is kept: the tree is where that child is writing, and a sweep never runs beside one.
+ */
+function retireClosed(board, pick, options) {
+	const removed = [];
+	const kept = [];
+	for (const thread of closedThreads(board)) {
+		if (!pick(thread)) continue;
+		const tree = treeOf(board, thread);
+		const repo = tree ? treeRepo(board, tree) : repoOf(board.folder);
+		const branch = (tree ? treeBranch(repo, tree) : "") || tree?.branch || "";
+		const path = tree?.path ?? "";
+		if (board.children.has(thread.id)) {
+			kept.push({ id: thread.id, title: thread.title, path, branch, reason: "its child is still running" });
+			continue;
+		}
+		const gone = removeThreadWhole(board, thread, "retire", options);
+		if (gone.kept) kept.push({ id: thread.id, title: thread.title, path: gone.path, branch: gone.branch, reason: gone.kept });
+		// A thread with no tree record has nothing to prove, so it is simply dropped.
+		else removed.push({ id: thread.id, title: thread.title, path: gone.path, branch: gone.branch, note: gone.note });
+	}
+	return { removed, kept };
+}
+
+
+
+/**
+ * Clean the Closed panel: every card the human put away goes, worktree and branch with it, and only a tree
+ * whose work is provably somewhere else is retired. It is the same guarantee `/clean` gives without asking
+ * about one list; a tree that is kept keeps its thread on the board, because the work in it is the thing the
+ * human would reopen to read. The human's own, so it is not in `THREAD_ROUTES`.
+ */
+export async function onCleanClosed(req, res, board) {
+	req.resume();
+	const result = retireClosed(board, () => true, {});
+	// The panel and the rail both draw from the snapshot, so the redraw is the answer to a clean, not a patch.
+	resync(board);
+	scheduleSave(board);
+	answer(res, 200, result);
+}
+
+
+
+/**
+ * The agent side of the same action: a thread retires the closed children it spawned, with the proof
+ * `retireWorktree` asks for, and reads back what went and what stayed. The caller's own branch is offered as
+ * a second place its children's work may have landed, which is what lets a parent that cherry-picked a
+ * child's commit into its own branch retire that child instead of reading it as unmerged for ever.
+ */
+export async function onThreadCollect(req, res, board, caller = { human: false }) {
+	req.resume();
+	const own = caller.human ? "" : String(caller.thread?.id ?? "");
+	const mine = caller.thread ?? null;
+	// A collect is scoped to the caller the way a close is: a thread retires the children it spawned and
+	// nothing else, and its own card is not one of them. A thread whose own card is in the closed list is
+	// refused outright, because the thread that would come back is the one making the request.
+	if (!caller.human && own && closedThreads(board).some((thread) => thread.id === own)) {
+		return void fail(res, 409, "a thread cannot clean its own card");
+	}
+	const tree = mine ? treeOf(board, mine) : undefined;
+	const branch = tree ? treeBranch(treeRepo(board, tree), tree) || tree.branch || "" : "";
+	const result = retireClosed(board, (thread) => thread.parentThread === own && thread.id !== own, { alsoUp: branch ? [branch] : [] });
+	resync(board);
+	scheduleSave(board);
+	answer(res, 200, result);
 }
 
 
