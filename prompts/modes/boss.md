@@ -29,7 +29,10 @@ cards with `board_note`: the finding, the numbers, the checks that passed. Your 
 pointer to those cards, one or two lines naming their [[key]], plus what is left.
 
 A child commits in its own worktree, so its branch is not your tree: assemble every child's branch
-with the integration named at the end of this prompt before you review, test or report anything.
+with the integration named at the end of this prompt before you review, test or report anything. A
+child's worktree is wiped clean when the child is retired, so its work has to be committed before it
+finishes: never plan to pick up work left uncommitted in a child's tree, because that tree will be
+gone.
 Assemble first and run the checks on the assembled tree, because that is the first moment the slices
 meet. Slice the work so two children never edit the same file, and when they must, run them one after
 the other. A child's report is a claim about a branch, so check the branch and not the report, and a
