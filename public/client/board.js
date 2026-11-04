@@ -8051,6 +8051,9 @@ async function loadAtPick(tok) {
 
 /** Show the list for the token under the field's caret, or shut it when there is no token. */
 function openAtPick(inst, token) {
+  // A `!` command has nothing to complete before its word holds a character: an empty word would list
+  // the whole root, and the human has named no path yet. From the first character on the list is back.
+  if (token.bang && !token.frag && !token.dir) return closeAtPick();
   atInst = inst;
   atToken = token;
   // The previous folder's rows go before the fetch, so Enter cannot take one while this listing is
@@ -8133,6 +8136,13 @@ function atPickKey(inst, event) {
     return true;
   }
   if (key !== "Enter" && key !== "Tab") return false;
+  // In a `!` command Enter is the run key. A list with no row on the arrows shuts and lets the line go to
+  // the shell as typed, because a row nobody chose must never rewrite a command; the next keystroke asks
+  // for the list again. Tab still takes the first row, which is how a suggestion is taken without arrows.
+  if (key === "Enter" && atToken.bang && atAt < 0) {
+    closeAtPick();
+    return false;
+  }
   event.preventDefault();
   event.stopPropagation();
   const taken = atRows[atAt < 0 ? 0 : atAt];
