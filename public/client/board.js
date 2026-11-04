@@ -923,11 +923,39 @@ function renderMarkdown(markdown) {
         drawChart(wrap, body);
         holder.appendChild(wrap);
       } else {
+        // A plain block carries its own copy press. The wrapper holds that press so it can sit over the
+        // block's corner instead of inside it, where a block that scrolls would carry it out of view.
+        const wrap = el("div", "code-wrap");
         const pre = el("pre");
         const code = el("code");
         code.textContent = body.replace(/\n$/, "");
+        // The fence's own language stays on the code, so a later label or colouring can read it.
+        code.dataset.lang = lang;
         pre.appendChild(code);
-        holder.appendChild(pre);
+        const copy = el("button", "code-copy");
+        copy.type = "button";
+        copy.textContent = "⧉";
+        copy.title = "copy this code";
+        copy.setAttribute("aria-label", "copy this code block");
+        let swap = 0;
+        copy.addEventListener("click", (event) => {
+          // The card is a drag surface, so the press must not reach it as one.
+          event.stopPropagation();
+          copyText(code.textContent)
+            .then(() => {
+              // The block answers in place: a tick where the glyph was, for a moment, then back.
+              copy.textContent = "✓";
+              copy.classList.add("done");
+              clearTimeout(swap);
+              swap = setTimeout(() => {
+                copy.textContent = "⧉";
+                copy.classList.remove("done");
+              }, 1200);
+            })
+            .catch(() => footNote("the clipboard refused, so this code block was not copied", true));
+        });
+        wrap.append(pre, copy);
+        holder.appendChild(wrap);
       }
       continue;
     }
