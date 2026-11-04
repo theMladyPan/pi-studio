@@ -5,7 +5,7 @@
  */
 import { auditMarkdown } from "../../chart-audit.ts";
 import { answer, fail, readJson } from "../../http.ts";
-import { BROWSE_LIMIT, CONTROL_CHARS, MAX_NOTE_CHARS, MAX_SOURCE_CHARS, MAX_TITLE_CHARS } from "../../limits.ts";
+import { BROWSE_LIMIT, CONTROL_CHARS, MAX_NOTE_CHARS, MAX_SOURCE_CHARS, MAX_TITLE_CHARS, SHELL_OUTPUT_CHARS } from "../../limits.ts";
 import { anchorOf, cardByKey, field, placedRect, rootOf } from "./thread.ts";
 import { broadcast, card, update, updateCard } from "../../bus.ts";
 import { cardFor, plainCardFor } from "../../cards.ts";
@@ -374,52 +374,84 @@ const COMPGEN_DEADLINE_MS = 300;
 /** What a printed line must look like to be a program name: a bare word, never a path or a sentence. */
 const PROGRAM_NAME = /^[\w.+-]+$/;
 
+/** The interpreter a `!` line runs under, which is what `shell: true` gives `runShell` in `./shell.ts`. */
+const SHELL = "/bin/sh";
+
+/** The names in a printed listing that start with the prefix, which is what a `!` word may be written over with. */
+function printedNames(out, prefix) {
+	return out
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => PROGRAM_NAME.test(line) && line.toLowerCase().startsWith(prefix));
+}
+
 /**
- * The names bash itself reports for a prefix: its builtins and keywords, which no search path holds.
+ * The names bash itself reports for a prefix: its builtins, which no search path holds, and only those the
+ * shell that runs a `!` line can run too.
  *
  * The shell is asked with `-c` rather than `-lc`. The prefix-filtered login shell was measured here at a
  * median of 111ms, most of it its own startup (about 105ms for `echo hi`), which is past the point a
  * keystroke may wait; the plain shell answers the same prefix in about 9ms. A function a profile defines is
  * therefore not completed — it is bought with every Tab waiting a tenth of a second.
  *
+ * bash's list is not the `!` line's list, and that is the other half of the question. The line runs under
+ * `/bin/sh`, which on this host is dash, so `compgen`, `source`, `declare` and 20 more of bash's own names
+ * print `not found` there and must not be offered. The candidates therefore go back to that same interpreter
+ * as arguments, each asked `command -v`, and the one that answers nothing is dropped — a dash builtin answers
+ * yes and stays. `compgen -b` is what asks bash, rather than `-A command`: the latter prints the language's
+ * keywords too, and `fi` is a syntax error rather than a command to complete.
+ *
  * The word is handed over as an argument and quoted inside the shell, so a word that reads like shell syntax
  * stays a word. Anything the shell prints that is not a name starting with the prefix is dropped, so a chatty
- * profile cannot reach the list. The spawn is asynchronous and killed at the deadline, and a shell that cannot
- * start at all answers with nothing: every one of those roads leaves the search path's own listing to speak
- * for itself.
+ * profile cannot reach the list. One deadline covers both shells, each spawn is asynchronous and killed at it,
+ * and a shell that cannot start at all answers with nothing: every one of those roads leaves the search path's
+ * own listing to speak for itself.
  */
 function bashNames(prefix) {
+	const running = new Set();
+	// One question, one shell, and an answer cut where the shell route cuts its own.
+	const know = (file, args) =>
+		new Promise((done) => {
+			let out = "";
+			let asked;
+			try {
+				asked = spawn(file, args, { stdio: ["ignore", "pipe", "ignore"] });
+			} catch {
+				return done("");
+			}
+			running.add(asked);
+			asked.stdout.on("data", (chunk) => {
+				const room = SHELL_OUTPUT_CHARS - out.length;
+				if (room > 0) out += String(chunk).slice(0, room);
+			});
+			asked.on("error", () => done(""));
+			asked.on("close", () => done(out));
+		});
 	return new Promise((done) => {
 		let settled = false;
-		let deadline = null;
-		const child = spawn("bash", ["-c", 'compgen -A command -- "$1"', "bash", prefix], {
-			stdio: ["ignore", "pipe", "ignore"],
-		});
-		let out = "";
 		const finish = (names) => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(deadline);
-			// Whatever the shell is still doing, the answer is on its way out and this is its only pid.
-			try {
-				child.kill();
-			} catch {
-				// Already gone, which is what this wanted.
+			// Whatever the shells are still doing, the answer is on its way out and these are their only pids.
+			for (const child of running) {
+				try {
+					child.kill();
+				} catch {
+					// Already gone, which is what this wanted.
+				}
 			}
 			done(names);
 		};
-		deadline = setTimeout(() => finish([]), COMPGEN_DEADLINE_MS);
-		child.stdout.on("data", (chunk) => {
-			out += chunk;
-		});
-		child.on("error", () => finish([]));
-		child.on("close", () => {
-			const names = out
-				.split("\n")
-				.map((line) => line.trim())
-				.filter((line) => PROGRAM_NAME.test(line) && line.toLowerCase().startsWith(prefix));
-			finish(names);
-		});
+		const deadline = setTimeout(() => finish([]), COMPGEN_DEADLINE_MS);
+		void (async () => {
+			const named = printedNames(await know("bash", ["-c", 'compgen -b -- "$1"', "bash", prefix]), prefix);
+			// A word no builtin starts with is answered by the search path alone, and those names are its business:
+			// only the names bash contributes take the second shell.
+			if (!named.length) return finish([]);
+			const asked = 'for name do command -v -- "$name" >/dev/null && printf "%s\\n" "$name"; done';
+			finish(printedNames(await know(SHELL, ["-c", asked, SHELL, ...named]), prefix));
+		})();
 	});
 }
 
@@ -462,7 +494,7 @@ export async function onPrograms(url, res) {
 			seen.add(name);
 			// The listing is capped, so the walk stops one name past the cap rather than stat every name
 			// on the path: an empty prefix would otherwise look at every program there is, to throw the
-			// surplus away. `total` is then the cap plus one, which is what `truncated` says.
+			// surplus away. `total` is then at least the cap plus one, which is what `truncated` says.
 			if (seen.size > BROWSE_LIMIT) break;
 		}
 		if (seen.size > BROWSE_LIMIT) break;

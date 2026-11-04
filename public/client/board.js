@@ -8050,13 +8050,16 @@ function bangTokenAt(area) {
   while (start > 1 && !/\s/.test(value[start - 1])) start -= 1;
   let end = caret;
   while (inside && end < value.length && !/\s/.test(value[end])) end += 1;
-  const word = value.slice(start, end);
-  const cut = word.lastIndexOf("/");
+  // The folder and the fragment are the text up to the caret, while the word runs on past it: a caret in
+  // `!cd .agen|/fi` asks about `.agen`, not about `.agen/`, and a caret in `!cd fold|r` asks about `fold`.
+  // The rows are then written over the whole word, so the tail the caret sat in front of is replaced.
+  const typed = value.slice(start, caret);
+  const cut = typed.lastIndexOf("/");
   return {
     start,
     end,
-    dir: cut < 0 ? "" : word.slice(0, cut + 1),
-    frag: cut < 0 ? word : word.slice(cut + 1),
+    dir: cut < 0 ? "" : typed.slice(0, cut + 1),
+    frag: cut < 0 ? typed : typed.slice(cut + 1),
     // A row taken into a command is the bare path, where `@` mode writes the `@` back with it.
     bang: true,
   };

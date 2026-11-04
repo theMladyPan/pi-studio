@@ -234,6 +234,19 @@ test("a `!` command also names what bash itself knows, which no search path hold
 		const listed = await get(daemon, `/programs?token=${daemon.token}&prefix=readonly`);
 		assert.equal(listed.status, 200, listed.body);
 		assert.ok(JSON.parse(listed.body).programs.includes("readonly"), listed.body);
+		assert.ok(JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=ech`)).body).programs.includes("echo"), listed.body);
+
+		// Every name is one the `!` line can run, and that line is `/bin/sh -c`: a name only bash knows —
+		// `compgen`, `source`, `declare` — would be written into the word and then print `not found`.
+		for (const prefix of ["compg", "sour", "declare"]) {
+			const asked = await get(daemon, `/programs?token=${daemon.token}&prefix=${prefix}`);
+			assert.deepEqual(JSON.parse(asked.body).programs, [], `${prefix}: ${asked.body}`);
+		}
+		// `shopt` is bash's own and is not asked for here, while the programs on the search path still are.
+		assert.ok(!JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=sho`)).body).programs.includes("shopt"));
+		// A keyword is not a command either: `fi` on its own is a syntax error, not a name to complete.
+		const keyword = JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=fi`)).body).programs;
+		assert.ok(!keyword.includes("fi"), keyword);
 
 		// The word goes to the shell as an argument, so a word that reads like shell syntax is only a word:
 		// nothing in it runs, and no printed line that is not a name reaches the list.

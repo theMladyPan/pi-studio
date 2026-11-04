@@ -247,7 +247,7 @@ export const server = createServer((req, res) => {
 		// The programs a `!` command can name. It is a GET like `/browse`, so `threadRefusal` keeps it to
 		// the human: a thread names a command through the shell route, which is not in `THREAD_ROUTES`.
 		if (req.method === "GET" && url.pathname === "/programs") {
-			onPrograms(url, res);
+			await onPrograms(url, res);
 			return;
 		}
 		// The row itself is the payload: a tool row keeps its arguments and its output, a reply keeps
