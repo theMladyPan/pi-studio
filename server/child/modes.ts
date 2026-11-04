@@ -84,3 +84,27 @@ export function modeSystemPrompt(mode?: string, path?: string): string {
 	const flow = mode === "boss" && path && PATH_NAMES.includes(path) && path !== "auto" ? promptText("flows", path) : "";
 	return [text, flow].filter(Boolean).join("\n\n");
 }
+
+/**
+ * What a thread is told when the mode it was started under is no longer the mode it has. A mode reaches a
+ * thread twice, as the prompt its process is started with and as the tools that process is denied, so a
+ * change can only land between two runs. The new mode's own words arrive that way, in the system prompt.
+ * What cannot arrive that way is the withdrawal of the old ones: the conversation carries every turn the
+ * old mode wrote, and a model told nothing reads its own last turns as the instruction.
+ *
+ * A thread that has never run has no earlier mode to withdraw, and a spawned child carries a role instead,
+ * so neither is given this note.
+ */
+export function modeChangeNote(from?: string, to?: string): string {
+	if (!from || !to || from === to) return "";
+	return [
+		"[this thread's mode has changed]",
+		`You were started as a ${from}, and that is over. The ${from} instructions you were given apply to nothing you do now, and you do not carry on anything you began as a ${from}.`,
+		to === "agent"
+			? "You are an agent now: you do the work yourself, with the tools you have."
+			: `You are a ${to} now, and the ${to} instructions in your system prompt are the ones that hold from here.`,
+		"Examples of right and wrong:",
+		`- right: the thread was a boss and the human made it an agent, so the next request is answered by reading, checking and changing files here yourself.`,
+		`- wrong: the same request is answered by spawning a scout, because that is what the last few turns of this conversation did.`,
+	].join("\n");
+}
