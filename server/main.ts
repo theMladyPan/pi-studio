@@ -11,13 +11,13 @@ import { INSTANCE, STATE_DIR, STATE_FILE, buildHash, randomToken, readJsonFile, 
 import { answer, fail, send, serveStatic } from "./http.ts";
 import { activeConfig, activeHomeDefaults, describeWorkspace, welcomeClients, workspaces } from "./workspaces.ts";
 import { boardFrom, boards, flushBoard } from "./store.ts";
-import { settingsDocument } from "./settings-document.ts";
+import { boardSettingsValues, settingsDocument } from "./settings-document.ts";
 import { boardMeta, cardsFor } from "./cards.ts";
 import { closedCards } from "./bus.ts";
 import { gitPicture, refreshGit, unwatchGit, watchGit } from "./git/graph.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
-import { onDefaults, onOpenWorkspace, onPickFolder, onSettingsDefaults } from "./routes/crossroads.ts";
-import { onBrowse, onEdit, onNote, onPrograms, onRename, onSource } from "./routes/board/content.ts";
+import { onDefaults, onOpenWorkspace, onPickFile, onPickFolder, onSettingsDefaults } from "./routes/crossroads.ts";
+import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
@@ -240,6 +240,12 @@ export const server = createServer((req, res) => {
 			onPickFolder(res);
 			return;
 		}
+		// The same dialog, opened on a file: the path to the text editor a code card opens in.
+		if (req.method === "POST" && url.pathname === "/pick-file") {
+			req.resume();
+			onPickFile(res);
+			return;
+		}
 		if (req.method === "GET" && url.pathname === "/browse") {
 			onBrowse(url, res);
 			return;
@@ -359,7 +365,9 @@ export const server = createServer((req, res) => {
 				200,
 				settingsDocument({
 					scope: "board",
-					values: activeConfig(board),
+					// The editor is one program for the whole studio, so a board's page reads it from the defaults
+					// rather than from its own config, where a copy taken at birth would go stale.
+					values: boardSettingsValues(activeConfig(board), activeHomeDefaults()),
 					title: "this board",
 					subtitle: `${board.name} · ${board.folder}`,
 					foot: "new threads only · a run in flight is untouched",
@@ -375,6 +383,9 @@ export const server = createServer((req, res) => {
 				"/mode": onMode,
 				"/card/note": onNote,
 				"/card/source": onSource,
+				// Opening a file in the human's editor starts a program on their desktop, so this one is not in
+				// THREAD_ROUTES: a child may draw a card, and may not run what a card names.
+				"/card/open": onOpenCard,
 				"/skill": onSkill,
 				"/card/ask": onAsk,
 				"/edit": onEdit,

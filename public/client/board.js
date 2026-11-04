@@ -1984,6 +1984,13 @@ const PIN_GLYPH =
 const TRASH_GLYPH =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 3.2h8M4.6 3.2V2.1h2.8v1.1M3.3 3.2l.6 6.6h4.2l.6-6.6M5 4.9v3.2M7 4.9v3.2"/></svg>';
 
+/**
+ * A file leaving a box: what a source card's head offers, a press that hands its file to the text editor.
+ * Drawn for the same reason the pin and the bin are, so it is one monochrome shape at every size.
+ */
+const OPEN_GLYPH =
+  '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6.4 1.8H1.9v8.3h8.3V5.6M7.2 1.8h3v3M10.2 1.8 5.4 6.6"/></svg>';
+
 function makeCard(data, quiet = false) {
   const isSource = data.type === "source";
   const isQuestion = data.type === "question";
@@ -2038,6 +2045,7 @@ function makeCard(data, quiet = false) {
     <button type="button" class="ask-pill" aria-label="centre this question">answer needed</button>
     <span class="chip"></span>
     <button type="button" class="copy-id" title="copy this card's id">⧉</button>
+    <button type="button" class="open-editor" title="open this file in the text editor" aria-label="open this file in the text editor">${OPEN_GLYPH}</button>
     <button class="pin" title="pin this card" aria-label="pin this card">${PIN_GLYPH}</button>
     <button class="min" title="minimize this card" aria-label="minimize this card">▾</button>
     <button class="reply" title="ask a follow-up about this card" aria-label="ask a follow-up about this card">↩</button>
@@ -2124,6 +2132,12 @@ function makeCard(data, quiet = false) {
     copyText(entry.id)
       .then(() => footNote(`card id copied · ${entry.id}`))
       .catch(() => footNote(`the clipboard refused, so the card id is here · ${entry.id}`));
+  });
+  // A source card holds a file, so its head offers the press that hands it to the editor the settings
+  // page names. The daemon holds both the setting and the launch, so a refusal is its sentence to say.
+  head.querySelector(".open-editor").addEventListener("click", (event) => {
+    event.stopPropagation();
+    void openCardFile(entry);
   });
   if (data.mini) setMini(card, true);
   capField(card, height);
@@ -2674,6 +2688,9 @@ function paintCard(entry, data) {
   entry.askPill.style.display = isOpenQuestion ? "" : "none";
   const editBtn = entry.head.querySelector(".edit");
   if (editBtn) editBtn.style.display = data.type === "note" ? "" : "none";
+  // Only a source card holds a file, so only a source card offers the press that opens one.
+  const openBtn = entry.head.querySelector(".open-editor");
+  if (openBtn) openBtn.style.display = isSource ? "" : "none";
   // A thread is sent without `pinned`, so its head shows no pin rather than one that forgets itself.
   const pinBtn = entry.head.querySelector(".pin");
   if (pinBtn) pinBtn.style.display = data.type === "sticky" ? "none" : "";
@@ -3156,6 +3173,22 @@ async function saveNote(entry, markdown) {
   }
 }
 
+/** Hand a source card's file to the text editor the settings page names, and say what the daemon said. */
+async function openCardFile(entry) {
+  try {
+    const response = await fetch(`/card/open?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: entry.id }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 120) || response.statusText);
+    const data = await response.json();
+    footNote(`opened ${data.file ?? "the card's file"} in the text editor`);
+  } catch (error) {
+    footNote(`could not open the file: ${error.message || error}`, true);
+  }
+}
+
 /** Give a card the name the human typed, and keep it on screen while the daemon agrees. */
 async function renameCard(entry, title) {
   entry.data = { ...entry.data, title };
@@ -3426,11 +3459,22 @@ viewport.addEventListener("wheel", (event) => {
     // reader is looking at; otherwise the selection decides, so a board you are reading a card on
     // keeps still while you scroll that card, and a board with nothing selected pans.
     const selected = document.querySelector(".card.active");
-    const scroller = editorAt(event.target) ?? selected?.querySelector(".card-scroll");
-    const room = scroller ? scroller.scrollHeight - scroller.clientHeight : 0;
-    if (room > 1) {
+    const step = wheelPixels(event, event.deltaY) || wheelPixels(event, event.deltaX);
+    // A source card's code view is absolutely positioned inside the body, so it adds nothing to the
+    // column's scroll height: the innermost box that actually overflows is the one to scroll. A box
+    // that has nothing left to give in this direction hands the wheel to the next holder inside the
+    // same card, so a code view that ends and the messages under it are read in one gesture.
+    const holders = selected ? [selected.querySelector(".code-scroll"), selected.querySelector(".card-scroll")] : [];
+    const overflows = (box) => Boolean(box) && box.scrollHeight - box.clientHeight > 1;
+    const moves = (box) =>
+      overflows(box) && (step < 0 ? box.scrollTop > 1 : box.scrollHeight - box.clientHeight - box.scrollTop > 1);
+    // The direction only picks which holder inside the card takes the wheel. A card that holds anything
+    // which overflows keeps the wheel even at its end, as it always did, so only a card with nothing to
+    // scroll lets the turn through to the board.
+    const scroller = editorAt(event.target) ?? holders.find(moves) ?? holders.find(overflows);
+    if (scroller) {
       event.preventDefault();
-      scroller.scrollTop += wheelPixels(event, event.deltaY) || wheelPixels(event, event.deltaX);
+      scroller.scrollTop += step;
       return;
     }
     event.preventDefault();
@@ -6777,7 +6821,8 @@ function shownConfig(on) {
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
 // holds, a `prompt` opens the file, and anything with a `pick` opens the picker of that name, which
-// posts the choice itself. Nothing here knows a setting by name.
+// posts the choice itself. A text-shaped leaf with no picker of its own is typed where it is shown.
+// Nothing here knows a setting by name.
 
 /** Where this board keeps which groups it has folded. Two boards keep two shapes. */
 function foldKey() {
@@ -6889,8 +6934,14 @@ function renderGroup(group, parentPath) {
   return { fold, leaves: mine };
 }
 
+/** A leaf whose value is typed rather than picked: a `combo`, or free text, with no picker of its own. */
+function typedLeaf(field) {
+  return !field.pick && (field.type === "combo" || field.type === "text" || field.type === "number");
+}
+
 /** One leaf: a label, its value, and the click that changes it. */
 function renderLeaf(field) {
+  if (typedLeaf(field)) return renderTypedLeaf(field);
   const row = el("button", "cfg-row");
   row.type = "button";
   row.title = field.help ?? "";
@@ -6899,7 +6950,55 @@ function renderLeaf(field) {
   const value = el("b");
   row.append(label, value);
   row.addEventListener("click", () => void openLeaf(field, row));
-  const leaf = { field, row, value };
+  const leaf = { field, row, value, set: () => (value.textContent = leafShown(field)) };
+  treeLeaves.push(leaf);
+  return leaf;
+}
+
+/**
+ * A value the panel has no picker for is typed in its own row: the leaf keeps the line, the label and
+ * the value it had, the box writes through the route the document names once the human is done, and a
+ * leaf that carries `browse` offers the machine's own dialog beside it. Nothing here knows a field by
+ * name.
+ */
+function renderTypedLeaf(field) {
+  const row = el("div", "cfg-row is-typed");
+  row.title = field.help ?? "";
+  const label = el("span");
+  label.textContent = field.label ?? field.id;
+  const input = el("input", "cfg-type");
+  input.type = field.type === "number" ? "number" : "text";
+  input.value = String(field.value ?? "");
+  input.placeholder = field.placeholder ?? "";
+  input.spellcheck = false;
+  input.autocomplete = "off";
+  input.setAttribute("aria-label", field.label ?? field.id);
+  row.append(label, input);
+  // The leaf's own list is a suggestion rather than a wall, so the box completes from it and still takes
+  // a name the machine never answered with.
+  const options = Array.isArray(field.options) ? field.options : [];
+  if (options.length) {
+    const catalog = document.createElement("datalist");
+    catalog.id = `cfg-options-${field.id}`;
+    for (const option of options) {
+      const item = document.createElement("option");
+      item.value = String(option);
+      catalog.append(item);
+    }
+    input.setAttribute("list", catalog.id);
+    row.append(catalog);
+  }
+  input.addEventListener("change", () => void writeLeaf(field, input.value.trim()));
+  if (field.browse) row.append(browsePick(field, input));
+  // A repaint that arrives while the human is typing must not take the box from under them.
+  const leaf = {
+    field,
+    row,
+    value: input,
+    set: () => {
+      if (document.activeElement !== input) input.value = String(field.value ?? "");
+    },
+  };
   treeLeaves.push(leaf);
   return leaf;
 }
@@ -6967,7 +7066,7 @@ function configValue(field) {
 
 /** The values on every row, and the sum on every folded group. */
 function paintTree() {
-  for (const leaf of treeLeaves) leaf.value.textContent = leafShown(leaf.field);
+  for (const leaf of treeLeaves) leaf.set();
   for (const group of treeGroups) group.preview.textContent = groupPreview(group.leaves);
 }
 
@@ -7006,6 +7105,38 @@ async function writeLeaf(field, value) {
     hintLine(`could not change it: ${error.message || error}`, true);
     return null;
   }
+}
+
+/**
+ * The button beside a typed leaf whose document carries `browse`: the machine's own file dialog, the same
+ * POST the defaults page makes, and the answer written through the leaf's own route. A refusal lands in
+ * the panel's own line, where every other write's refusal lands.
+ */
+function browsePick(field, input) {
+  const button = el("button", "omni-browse");
+  button.type = "button";
+  button.textContent = "browse…";
+  button.title = `pick a file with the machine's own dialog (POST ${field.browse})`;
+  button.addEventListener("click", async () => {
+    // The daemon's own sentence is the whole story when it refused ("no file dialog on this machine"), so
+    // the panel's words are only for a failure that arrived without one.
+    let said = "";
+    try {
+      const response = await fetch(`${field.browse}?${auth}`, { method: "POST" });
+      if (!response.ok) {
+        said = (await response.text()).slice(0, 160) || response.statusText;
+        throw new Error(said);
+      }
+      const data = await response.json();
+      if (data.cancelled) return;
+      input.value = data.file;
+      input.focus();
+      await writeLeaf(field, input.value.trim());
+    } catch (error) {
+      hintLine(said || `no file dialog: ${error.message || error}`, true);
+    }
+  });
+  return button;
 }
 
 /** A leaf pressed: flip a switch, open a file, or hand the work to the picker that names it. */

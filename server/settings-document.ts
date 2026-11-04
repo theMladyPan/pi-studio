@@ -15,6 +15,7 @@ import { CARD_AUDIENCE, CARD_DEFAULTS, CARD_LEVELS, CARD_VERBOSITY } from "./car
 import { PATH_NAMES, PROMPT_FOLDERS, promptFiles } from "./child/modes.ts";
 import { CHILD_INTEGRATION, INTEGRATION_DEFAULT } from "./integration.ts";
 import { THINKING_LEVELS } from "./models.ts";
+import { programOnPath } from "./paths.ts";
 
 /**
  * The picker a leaf opens. A `select` says a value is one of a list, not what the list means, so the panel
@@ -65,6 +66,11 @@ export type SettingsField = {
 	split?: string;
 	/** The prompt file a `prompt` leaf edits, as `${folder}/${name}` relative to `prompts/`. */
 	file?: string;
+	/**
+	 * A route that opens the machine's own dialog for a value a browser cannot see: a folder, or the path to
+	 * a program. The page posts to it with no body and puts the path it answers with into the control.
+	 */
+	browse?: string;
 	help?: string;
 	placeholder?: string;
 	write?: { route: string; method?: "POST"; body: Record<string, string> };
@@ -105,6 +111,7 @@ type SettingsValues = Partial<{
 	provider: string;
 	model: string;
 	thinking: string;
+	editor: string;
 	path: string;
 	childIntegration: string;
 	dimOthers: boolean;
@@ -117,6 +124,16 @@ type SettingsValues = Partial<{
 	showCharts: string;
 	showReferences: string;
 }>;
+
+/**
+ * The values a board's page draws: its own config, with the one studio-wide value filled in. `editor` is
+ * kept on the crossroads' defaults and has no home on a board, so it is read from there at the moment the
+ * document is built; copied into the board's config it would be a copy that goes stale the day the default
+ * changes. `""` is "nobody chose one yet", which is what the control's placeholder is for.
+ */
+export function boardSettingsValues(chosen: SettingsValues, studio: SettingsValues): SettingsValues {
+	return { ...chosen, editor: studio.editor ?? "" };
+}
 
 /** What a caller knows and the document has to say: which scope, which values, and the three lines. */
 type SettingsInput = {
@@ -148,6 +165,9 @@ const CARD_CONTENT = [
  */
 function routeFor(scope: SettingsInput["scope"], id: string): string {
 	if (scope === "defaults") return "/defaults";
+	// `editor` is one program for the whole studio, so a board's page writes it where it is kept too: a board
+	// has no copy of it in its config, and `/config` would drop the key.
+	if (id === "editor") return "/defaults";
 	if (id === "model") return "/model";
 	if (id === "thinking") return "/thinking";
 	return "/config";
@@ -163,6 +183,30 @@ function writeFor(scope: SettingsInput["scope"], id: string): { route: string; b
 	if (id === "model") return { route, body: { provider: "@head", model: "@rest" } };
 	if (id === "thinking") return { route, body: scope === "board" ? { level: "@value" } : { thinking: "@value" } };
 	return { route, body: { [id]: "@value" } };
+}
+
+/**
+ * The programs worth offering as the text editor, in the order they are tried. Only the ones this machine
+ * has are offered, and a name that is not here is still typable, so this is a shortcut rather than a wall.
+ */
+const EDITOR_CANDIDATES = [
+	"code",
+	"codium",
+	"cursor",
+	"zed",
+	"subl",
+	"kate",
+	"gedit",
+	"gnome-text-editor",
+	"xed",
+	"emacs",
+	"vim",
+	"nano",
+];
+
+/** The editors found on this machine's search path, under the names a human would type. */
+function editorOptions(): string[] {
+	return EDITOR_CANDIDATES.filter((name) => Boolean(programOnPath(name)));
 }
 
 /**
@@ -233,6 +277,19 @@ export function settingsDocument({ scope, values, title, subtitle, foot }: Setti
 						// No level is stored until one is chosen, and that is pi's own default, which reads as off.
 						value: values.thinking ?? "off",
 						write: write("thinking"),
+					},
+					{
+						id: "editor",
+						label: "text editor",
+						type: "combo",
+						// The editors this machine actually has, so the list is a choice rather than a guess; a name it
+						// does not hold is still typable, and `browse` picks the binary wherever it lives.
+						options: editorOptions(),
+						placeholder: "code",
+						browse: "/pick-file",
+						value: values.editor ?? "",
+						help: "the program that opens a code card's file: a name found on PATH such as code, or the full path to the binary",
+						write: write("editor"),
 					},
 					{
 						id: "path",

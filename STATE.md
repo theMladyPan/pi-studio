@@ -18,7 +18,8 @@ commit's own account rather than on a check run now, the section below says so.
   nothing — children belong to the daemon and keep running.
 - **Folder picker**: `POST /pick-folder` runs `zenity --file-selection --directory`, because a browser
   cannot be handed an absolute path. Falls back to typing a path when zenity is missing; a path that
-  does not exist is refused rather than created.
+  does not exist is refused rather than created. `POST /pick-file` is the same dialog with no
+  `--directory`: it answers `{file}`, or `{cancelled: true}`, and it is where a program's path comes from.
 - **Workspaces**: `GET /workspaces` lists what has been opened with the facts the crossroads shows
   (thread count, running count, last activity, git branch and dirty count, session size, whether the
   folder still exists); `POST /workspace {folder}` registers and loads one. State lives in
@@ -176,6 +177,8 @@ commit's own account rather than on a check run now, the section below says so.
 - **Source cards**: `POST /card/source {path, line?, title?, key?}` reads a file from the workspace
   and shows it on the board, refusing anything outside the folder, a folder, a binary, or more than
   200 000 bytes. The key defaults to the path, so opening the same file again refreshes that card.
+  `POST /card/open {cardId}` spawns the text editor with that file and answers `{opened, file}`; it is
+  never in `THREAD_ROUTES`, because starting a program is the human's.
 - **Questions**: `POST /card/ask {question, options[], allowFreeText?, title?, multiple?}` puts a
   question on the board and holds the request open; `POST /answer {cardId, answer}` settles it and the
   click travels back in the held response. `multiple: true` turns the options into boxes and makes
@@ -335,8 +338,11 @@ commit's own account rather than on a check run now, the section below says so.
   time. Every card a thread answers for is re-broadcast after the change, because the card carries the
   runtime in `answersWith`.
 - **Settings live in two places.** `GET /defaults` and `POST /defaults {provider?, model?, thinking?,
-  dimOthers?}` on the crossroads set what every board opened from there is born with, kept in
-  `workspaces.json`; a model is refused with 409 unless this machine can actually run it. A board keeps
+  dimOthers?, editor?}` on the crossroads set what every board opened from there is born with, kept in
+  `workspaces.json`; a model is refused with 409 unless this machine can actually run it. `editor` is
+  the program a code card's file opens in: a name found on PATH such as `code`, or the full path to the
+  binary, one program and no arguments, and `""` clears it. It is studio-wide rather than per board, so
+  both settings pages write it here and `/config` knows no such key. A board keeps
   its own copy in `board.config`, spread over the crossroads defaults when it is created, and
   `POST /config {dimOthers}` changes one switch there without touching the next workspace. `dimOthers`
   is the one feature so far: the cards of other threads step back to 70% opacity while one is selected.

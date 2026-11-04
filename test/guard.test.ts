@@ -28,7 +28,8 @@ test("a spawned child draws nothing: every card route is refused, on its own boa
 test("a child may not reach the routes that belong to the human", () => {
 	// board_ask was refused here for the same reason /layout is, which is what made it dead for every thread.
 	// /close is not here: a thread tidies the cards it spent, and the handler refuses it the pinned ones.
-	const refused = ["/layout", "/undo", "/kill", "/config", "/answer", "/message", "/mode", "/shell"];
+	// Opening a card's file in the human's editor starts a program on their desktop, so it is here too.
+	const refused = ["/layout", "/undo", "/kill", "/config", "/answer", "/message", "/mode", "/shell", "/card/open"];
 	for (const path of refused) {
 		assert.equal(threadRefusal(child, "POST", path, "board-a"), "a thread may not use that", path);
 	}

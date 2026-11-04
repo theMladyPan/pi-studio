@@ -344,9 +344,12 @@
   .note-body blockquote p, .sticky-reply blockquote p { margin: 0 0 4px; }
   .note-body blockquote p:last-child, .sticky-reply blockquote p:last-child { margin-bottom: 0; }
   .note-body .tick { color: var(--green); cursor: pointer; }
-  .card .edit, .card .copy-id { border: 0; background: transparent; color: var(--muted); font-size: 14px;
+  .card .edit, .card .copy-id, .card .open-editor { border: 0; background: transparent; color: var(--muted); font-size: 14px;
     line-height: 1; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
-  .card .edit:hover, .card .copy-id:hover { background: #21262d; color: var(--text); }
+  .card .edit:hover, .card .copy-id:hover, .card .open-editor:hover { background: #21262d; color: var(--text); }
+  .card .open-editor { display: flex; align-items: center; }
+  .card .open-editor svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
+    stroke-width: 1.2; stroke-linejoin: round; }
   /* A pin is the human's: the card is kept when the board has to make room, and no thread may close it.
      The glyph is drawn rather than typed so the pinned state can colour it amber, and it stays an
      outline until the card is pinned. */
@@ -1021,6 +1024,16 @@
   #boardConfig .cfg-row span { color: var(--muted); font: 11.5px var(--mono); white-space: nowrap; }
   #boardConfig .cfg-row b { color: var(--accent); font: 12.5px var(--mono); font-weight: 500; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* A value nobody picks is typed in the row it is shown in, so the leaf keeps its one line: the box is
+     the value, and the browse button beside it is the one the defaults page wears. */
+  #boardConfig .cfg-row.is-typed { cursor: default; }
+  #boardConfig .cfg-type { flex: 1; min-width: 0; background: #0d1117; color: var(--accent); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 6px; font: 12.5px var(--mono); outline: none; }
+  #boardConfig .cfg-type:focus { border-color: var(--accent-dim); }
+  #boardConfig .omni-browse { flex: none; background: #21262d; color: var(--text); border: 1px solid var(--border-bright);
+    border-radius: 5px; font: 11px var(--mono); padding: 2px 8px; cursor: pointer; }
+  #boardConfig .omni-browse:hover { background: #30363d; }
+  #boardConfig .omni-browse:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   #boardConfig .cfg-note { margin: 8px 4px 0; color: var(--muted); font: 11px/1.5 var(--mono); }
   #cfgTree { display: flex; flex-direction: column; }
   #boardConfig .cfg-sub { margin: -3px 8px 4px; color: var(--muted); font: 10.5px var(--mono); }

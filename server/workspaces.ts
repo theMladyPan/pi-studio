@@ -160,6 +160,9 @@ export let homeDefaults = (() => {
 		known.extensionsOff = held.extensionsOff.filter((name) => CHILD_EXTENSIONS.some((one) => one.name === name));
 	// The flow a new board's boss starts on: an id checked against its list, as `path` is everywhere else.
 	if (PATH_NAMES.includes(held.path)) known.path = held.path;
+	// The program a code card's file opens in. A name found on PATH, or the path to the binary; empty is
+	// "nobody chose one yet", so an empty string is dropped rather than carried around.
+	if (typeof held.editor === "string" && held.editor) known.editor = held.editor;
 	return known;
 })();
 
@@ -199,6 +202,9 @@ export function activeHomeDefaults() {
 		toolsOff: homeDefaults.toolsOff ?? [],
 		extensionsOff: homeDefaults.extensionsOff ?? [],
 		path: homeDefaults.path ?? "auto",
+		// Studio-wide rather than per board: every board opens a code card's file in the same program. Trimmed
+		// here, where both pages read it, because a hand-edited state file may carry the spaces a save drops.
+		editor: (homeDefaults.editor ?? "").trim(),
 	};
 }
 

@@ -742,6 +742,39 @@
   }
 
   /**
+   * The button beside a combo field whose leaf carries `browse`: it wears the omnibar's browse style,
+   * posts the leaf's own route, and does what typing the answer would have done. Nothing here knows a
+   * field's id, and a refusal lands in the row's own error line.
+   */
+  function browsePick(field, entry, input) {
+    const button = el("button", "omni-browse", "browse…");
+    button.type = "button";
+    button.disabled = Boolean(field.disabled);
+    button.title = `pick a file with the machine's own dialog (POST ${field.browse})`;
+    button.addEventListener("click", async () => {
+      clearFieldError(entry);
+      // The daemon's own sentence is the whole story when it refused ("no file dialog on this machine"), so
+      // the row's words are only for a failure that arrived without one.
+      let said = "";
+      try {
+        const response = await fetch(`${field.browse}?${qs()}`, { method: "POST" });
+        if (!response.ok) {
+          said = (await response.text()).slice(0, 160) || response.statusText;
+          throw new Error(said);
+        }
+        const data = await response.json();
+        if (data.cancelled) return;
+        input.value = data.file;
+        input.focus();
+        await commitWrite(entry, input.value.trim());
+      } catch (error) {
+        showFieldError(entry, said || `no file dialog: ${error.message || error}`);
+      }
+    });
+    return button;
+  }
+
+  /**
    * The control a field draws, decided by its `type` and by the lists in the document. Nothing here
    * knows a field's id: a fourth field, or a fifth level, arrives with the document alone.
    */
@@ -773,6 +806,9 @@
         input.value = String(value ?? "");
       };
       line.append(input, catalog);
+      // A leaf that names a browse route gets the button: the daemon asks the machine's own dialog,
+      // because a browser cannot read a path, and the answer goes in through the change path above.
+      if (field.browse) line.append(browsePick(field, entry, input));
     } else if (field.type === "select" && options.length > 6) {
       // Too many levels to read as a segmented row: a plain select keeps the row one line tall.
       const select = el("select", "cfg-select");

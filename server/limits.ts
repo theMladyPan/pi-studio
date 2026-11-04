@@ -47,6 +47,9 @@ export const MAX_ASK_QUESTIONS = 5;
 
 export const BROWSE_LIMIT = 200;
 
+/** The editor a code card opens in: a program name or the path to one, and nothing longer than this. */
+export const MAX_EDITOR_CHARS = 512;
+
 
 export const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 

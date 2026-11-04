@@ -457,9 +457,131 @@ test("the crossroads defaults can be changed and are read back", async () => {
 
 		const refused = await post(daemon, "/defaults", { thinking: "shouting" });
 		assert.equal(refused.status, 400);
+
+		// The text editor is a default like the rest: one program, saved with them and read back.
+		const chosen = await post(daemon, "/defaults", { editor: "  /usr/bin/code  " });
+		assert.equal(chosen.status, 200, chosen.body.slice(0, 200));
+		assert.equal(JSON.parse(chosen.body).defaults.editor, "/usr/bin/code", "the editor was not trimmed and kept");
+		assert.equal(JSON.parse(readFileSync(join(folder, "workspaces.json"), "utf8")).defaults.editor, "/usr/bin/code");
+		assert.equal(JSON.parse((await get(daemon, `/defaults?token=${daemon.token}`)).body).defaults.editor, "/usr/bin/code");
+		// One program, not a command line: an argument list would be spawned as a file of that name.
+		assert.equal((await post(daemon, "/defaults", { editor: "code --wait" })).status, 400);
+		// An empty value is how a human clears it, and the defaults answer with nothing rather than dropping it.
+		const cleared = await post(daemon, "/defaults", { editor: "" });
+		assert.equal(cleared.status, 200);
+		assert.equal(JSON.parse(cleared.body).defaults.editor, "");
 	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a code card's file is opened in the editor the crossroads holds, and refused when it cannot be", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-open-"));
+	writeFileSync(join(folder, "note.ts"), "export const note = 1;\n");
+	const daemon = await boot(folder);
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		assert.equal(opened.status, 200);
+		const board = JSON.parse(opened.body).board;
+		const source = await postTo(daemon, board.id, "/card/source", { path: "note.ts" });
+		assert.equal(source.status, 200, source.body.slice(0, 200));
+		const cardId = JSON.parse(source.body).cardId;
+
+		// Nobody has chosen an editor yet, and the refusal says where to choose one.
+		const unset = await postTo(daemon, board.id, "/card/open", { cardId });
+		assert.equal(unset.status, 409);
+		assert.equal(unset.body, "no text editor is set yet: choose one on the settings page");
+
+		// A program name node cannot find on the search path starts nothing, and says so.
+		assert.equal((await post(daemon, "/defaults", { editor: "pi-studio-no-such-editor" })).status, 200);
+		const missing = await postTo(daemon, board.id, "/card/open", { cardId });
+		assert.equal(missing.status, 409);
+		assert.match(missing.body, /could not start pi-studio-no-such-editor/);
+
+		// A value that names the binary itself is checked before anything is started: a path nobody can run is
+		// a setting that cannot work, and it says which path it read.
+		const unrunnable = join(folder, "not-a-program");
+		assert.equal((await post(daemon, "/defaults", { editor: unrunnable })).status, 200);
+		const cannot = await postTo(daemon, board.id, "/card/open", { cardId });
+		assert.equal(cannot.status, 409);
+		assert.equal(cannot.body, `${unrunnable} is not a program this machine can run`);
+
+		// A card whose file is gone is refused before anything is launched: `true` is a program that runs and
+		// opens nothing, so the branch under test is the file rather than the editor.
+		assert.equal((await post(daemon, "/defaults", { editor: "true" })).status, 200);
+		rmSync(join(folder, "note.ts"));
+		const gone = await postTo(daemon, board.id, "/card/open", { cardId });
+		assert.equal(gone.status, 409);
+		assert.match(gone.body, /not a file on disk any more/);
+
+		// A note is not a file, so there is nothing to open.
+		const note = JSON.parse((await postTo(daemon, board.id, "/card/note", { markdown: "a note" })).body).cardId;
+		assert.equal((await postTo(daemon, board.id, "/card/open", { cardId: note })).status, 409);
+		assert.equal((await postTo(daemon, board.id, "/card/open", { cardId: "nope" })).status, 409);
+
+		// An editor that is there and runs answers with the file it was handed. `true` exits at once, so what
+		// this checks is the launch, not the program.
+		writeFileSync(join(folder, "note.ts"), "export const note = 2;\n");
+		const again = JSON.parse((await postTo(daemon, board.id, "/card/source", { path: "note.ts" })).body).cardId;
+		const launched = await postTo(daemon, board.id, "/card/open", { cardId: again });
+		assert.equal(launched.status, 200, launched.body.slice(0, 200));
+		assert.deepEqual(JSON.parse(launched.body), { opened: true, file: join(realpathSync(folder), "note.ts") });
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("the machine's own file dialog is asked once, and a machine without one says so", async () => {
+	const bin = mkdtempSync(join(tmpdir(), "pi-studio-routes-bin-"));
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-routes-pick-"));
+	const picked = join(state, "picked path");
+	const chosen = join(state, "zenity-answers");
+	// A `zenity` on the daemon's own search path, which is the only way to reach the dialog without a human.
+	// It prints what the control file holds and fails when that file is empty, which is a cancelled dialog.
+	writeFileSync(
+		join(bin, "zenity"),
+		`#!/bin/sh\nif [ -s "$PI_STUDIO_TEST_PICK" ]; then read -r line < "$PI_STUDIO_TEST_PICK"; printf '%s\\n' "$line"; exit 0; fi\nexit 1\n`,
+		{ mode: 0o755 },
+	);
+	const daemon = await boot(state, { PATH: bin, PI_STUDIO_TEST_PICK: chosen });
+	try {
+		writeFileSync(chosen, `${picked}\n`);
+		const file = await post(daemon, "/pick-file");
+		assert.equal(file.status, 200, file.body.slice(0, 200));
+		assert.deepEqual(JSON.parse(file.body), { file: picked });
+		// The folder dialog was the same handler, and answers the same way.
+		assert.deepEqual(JSON.parse((await post(daemon, "/pick-folder")).body), { folder: picked });
+
+		// Cancelling a dialog is a decision, not a failure.
+		rmSync(chosen);
+		const cancelled = await post(daemon, "/pick-file");
+		assert.equal(cancelled.status, 200, cancelled.body.slice(0, 200));
+		assert.deepEqual(JSON.parse(cancelled.body), { cancelled: true });
+	} finally {
+		daemon.child.kill();
+	}
+
+	// The same press on a machine without zenity: one 501, and the daemon keeps answering. The second answer
+	// this used to send threw ERR_HTTP_HEADERS_SENT on an ended response, which nothing catches and which
+	// stopped the daemon along with every board and child: a daemon still here is the proof of one answer.
+	const stripped = await boot(state, { PATH: join(state, "no-programs") });
+	try {
+		const without = await post(stripped, "/pick-file");
+		assert.equal(without.status, 501);
+		assert.equal(without.body, "no file dialog on this machine");
+		const folderless = await post(stripped, "/pick-folder");
+		assert.equal(folderless.status, 501);
+		assert.equal(folderless.body, "no folder dialog on this machine");
+
+		assert.equal((await get(stripped, `/workspaces?token=${stripped.token}`)).status, 200, "the daemon stopped");
+		assert.doesNotMatch(stripped.noise.join(""), /ERR_HTTP_HEADERS_SENT|UNCAUGHT/);
+		await new Promise((done) => setTimeout(done, 300));
+		assert.equal((stripped.child as any).exitCode, null, "the daemon is still running");
+	} finally {
+		stripped.child.kill();
+		for (const gone of [bin, state]) rmSync(gone, { recursive: true, force: true });
 	}
 });
 
