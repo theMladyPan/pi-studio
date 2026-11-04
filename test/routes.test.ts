@@ -7,6 +7,12 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
+/**
+ * The shells a check names outright, so that what it asserts does not depend on the `SHELL` of whoever runs
+ * the suite: a `!` line resolves its interpreter from that variable, and dash, bash and zsh do not agree.
+ */
+const BASH = existsSync("/bin/bash") ? "/bin/bash" : "";
+const ZSH = existsSync("/usr/bin/zsh") ? "/usr/bin/zsh" : "";
 
 /**
  * One daemon on its own state folder, started the way a human starts it. Nothing is spawned from a
@@ -202,8 +208,10 @@ test("the programs a `!` command can name are read from the daemon's own search 
 	writeFileSync(join(second, "fixture-run"), "#!/bin/sh\n", { mode: 0o755 });
 	writeFileSync(join(first, "fixture-text"), "plain\n", { mode: 0o644 });
 	mkdirSync(join(first, "fixture-dir"));
-	// A search-path entry that does not exist is the ordinary case and must not spoil the listing.
-	const daemon = await boot(state, { PATH: [first, join(state, "missing"), second].join(delimiter) });
+	// A search-path entry that does not exist is the ordinary case and must not spoil the listing. The shell
+	// that runs a `!` line is named outright: this check is about the walk, and a shell with builtins of its
+	// own would put names in the answer that are its business and not the path's.
+	const daemon = await boot(state, { PATH: [first, join(state, "missing"), second].join(delimiter), SHELL: "/bin/sh" });
 	try {
 		const listed = await get(daemon, `/programs?token=${daemon.token}&prefix=fixture`);
 		assert.equal(listed.status, 200, listed.body);
@@ -213,11 +221,12 @@ test("the programs a `!` command can name are read from the daemon's own search 
 		assert.deepEqual(JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=fixture-t`)).body).programs, []);
 		assert.deepEqual(JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=nowhere`)).body).programs, []);
 
-		// `!` and Tab with no word yet asks for `prefix=`, which takes the short way through the path. It
-		// still answers with the programs alone: the folder and the file nobody made executable stay out.
+		// `!` and Tab with no word yet asks for `prefix=`, which takes the short way through the path. The folder
+		// and the file nobody made executable stay out of it, and the answer keeps its shape.
 		const bare = JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=`)).body);
-		assert.deepEqual(bare.programs, ["fixture-run"], bare.programs);
-		assert.equal(bare.total, 1);
+		assert.ok(bare.programs.includes("fixture-run"), bare.programs);
+		assert.ok(!bare.programs.includes("fixture-dir") && !bare.programs.includes("fixture-text"), bare.programs);
+		assert.equal(bare.total, bare.programs.length);
 		assert.equal(bare.truncated, false);
 	} finally {
 		daemon.child.kill();
@@ -225,40 +234,119 @@ test("the programs a `!` command can name are read from the daemon's own search 
 	}
 });
 
-test("a `!` command also names what bash itself knows, which no search path holds", async () => {
-	const state = mkdtempSync(join(tmpdir(), "pi-studio-builtins-"));
-	// The real search path this time, because the shell the listing asks has to be findable on it. A builtin
-	// is the proof the answer is more than the files there: `readonly` is no file anywhere on the path.
-	const daemon = await boot(state);
-	try {
-		const listed = await get(daemon, `/programs?token=${daemon.token}&prefix=readonly`);
-		assert.equal(listed.status, 200, listed.body);
-		assert.ok(JSON.parse(listed.body).programs.includes("readonly"), listed.body);
-		assert.ok(JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=ech`)).body).programs.includes("echo"), listed.body);
+test(
+	"a `!` line under bash names bash's own builtins, and nothing another shell keeps for itself",
+	{ skip: BASH ? false : "no /bin/bash here" },
+	async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-builtins-"));
+		// The real search path but a shell named outright, so the check says the same thing on every machine. A
+		// builtin is the proof the answer is more than the files there: `readonly` is no file anywhere on the path.
+		const daemon = await boot(state, { SHELL: BASH });
+		try {
+			const listed = await get(daemon, `/programs?token=${daemon.token}&prefix=readonly`);
+			assert.equal(listed.status, 200, listed.body);
+			assert.ok(JSON.parse(listed.body).programs.includes("readonly"), listed.body);
+			assert.ok(JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=ech`)).body).programs.includes("echo"), listed.body);
 
-		// Every name is one the `!` line can run, and that line is `/bin/sh -c`: a name only bash knows —
-		// `compgen`, `source`, `declare` — would be written into the word and then print `not found`.
-		for (const prefix of ["compg", "sour", "declare"]) {
-			const asked = await get(daemon, `/programs?token=${daemon.token}&prefix=${prefix}`);
-			assert.deepEqual(JSON.parse(asked.body).programs, [], `${prefix}: ${asked.body}`);
+			// A name of bash's own that `/bin/sh` here (dash) cannot run is offered, because bash is what runs the
+			// line: `compgen` and `source` print `not found` under dash and so used to be filtered out of this list.
+			for (const name of ["compgen", "source"]) {
+				const prefix = name.slice(0, 4);
+				const asked = JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=${prefix}`)).body);
+				assert.ok(asked.programs.includes(name), `${prefix}: ${JSON.stringify(asked)}`);
+			}
+			// A name bash cannot run is never offered: zsh keeps `zle`, `zstyle` and `echotc` for itself and no
+			// search path holds them.
+			for (const name of ["zle", "zstyle", "echotc"]) {
+				const prefix = name.slice(0, 4);
+				const asked = JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=${prefix}`)).body);
+				assert.ok(!asked.programs.includes(name), `${name}: ${JSON.stringify(asked)}`);
+			}
+			// A keyword is not a command either: `fi` on its own is a syntax error, not a name to complete.
+			const keyword = JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=fi`)).body).programs;
+			assert.ok(!keyword.includes("fi"), keyword);
+
+			// The word goes to the shell as an argument, so a word that reads like shell syntax is only a word:
+			// nothing in it runs, and no printed line that is not a name reaches the list.
+			const odd = await get(daemon, `/programs?token=${daemon.token}&prefix=${encodeURIComponent("'; id #")}`);
+			assert.equal(odd.status, 200, odd.body);
+			assert.deepEqual(JSON.parse(odd.body).programs, [], odd.body);
+			assert.ok(!odd.body.includes("uid="), odd.body);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
 		}
-		// `shopt` is bash's own and is not asked for here, while the programs on the search path still are.
-		assert.ok(!JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=sho`)).body).programs.includes("shopt"));
-		// A keyword is not a command either: `fi` on its own is a syntax error, not a name to complete.
-		const keyword = JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=fi`)).body).programs;
-		assert.ok(!keyword.includes("fi"), keyword);
+	},
+);
 
-		// The word goes to the shell as an argument, so a word that reads like shell syntax is only a word:
-		// nothing in it runs, and no printed line that is not a name reaches the list.
-		const odd = await get(daemon, `/programs?token=${daemon.token}&prefix=${encodeURIComponent("'; id #")}`);
-		assert.equal(odd.status, 200, odd.body);
-		assert.deepEqual(JSON.parse(odd.body).programs, [], odd.body);
-		assert.ok(!odd.body.includes("uid="), odd.body);
+test(
+	"a `!` line under zsh names zsh's own builtins, and no name zsh cannot run",
+	{ skip: ZSH ? false : "no /usr/bin/zsh here" },
+	async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-zsh-names-"));
+		const daemon = await boot(state, { SHELL: ZSH });
+		try {
+			const echo = JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=ech`)).body).programs;
+			assert.ok(echo.includes("echo"), echo);
+			// zsh's builtins are in no search path at all, so `echoti` can only come from zsh's own table.
+			assert.ok(echo.includes("echoti"), echo);
+			// `source` is a zsh builtin and not a dash one, so the old filter against `/bin/sh` hid a name the line
+			// can run. It is offered now, because zsh is what runs the line.
+			assert.ok(JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=sour`)).body).programs.includes("source"));
+			// And the other way: bash's own names, and the language's keywords, are not offered under zsh.
+			assert.ok(!JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=compg`)).body).programs.includes("compgen"));
+			assert.ok(!JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=sho`)).body).programs.includes("shopt"));
+			assert.ok(!JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=fi`)).body).programs.includes("fi"));
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	},
+);
+
+test("a `!` line whose `SHELL` is missing falls back, and still lists the search path", async () => {
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-shell-fallback-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-shell-fallback-work-"));
+	// A `SHELL` that names nothing is ordinary: a shell that was uninstalled, a relative path in a profile. The
+	// daemon starts under the one shell POSIX guarantees or bash, and the listing is still an answer.
+	const daemon = await boot(state, { SHELL: "/nonexistent/not-a-shell" });
+	try {
+		const listed = await get(daemon, `/programs?token=${daemon.token}&prefix=ech`);
+		assert.equal(listed.status, 200, listed.body);
+		assert.ok(JSON.parse(listed.body).programs.includes("echo"), listed.body);
+		// And a line still runs: the fallback is a shell that started, not only a name.
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		const ran = await postTo(daemon, board.id, "/shell", { command: "echo fallback-ok", cardId: threadId });
+		assert.equal(ran.status, 200, ran.body);
+		assert.equal(JSON.parse(ran.body).output, "fallback-ok\n");
 	} finally {
 		daemon.child.kill();
-		rmSync(state, { recursive: true, force: true });
+		for (const gone of [state, folder]) rmSync(gone, { recursive: true, force: true });
 	}
 });
+
+test(
+	"a `!command` runs under the shell the app resolved, not under `/bin/sh`",
+	{ skip: BASH ? false : "no /bin/bash here" },
+	async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-shell-bash-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-shell-bash-work-"));
+		const daemon = await boot(stateHome, { SHELL: BASH });
+		try {
+			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+			const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			// Brace expansion: bash turns `{one,two}` into two words and dash prints it as it stands, so what comes
+			// back says which shell ran the line.
+			const ran = await postTo(daemon, board.id, "/shell", { command: "echo {one,two}", cardId: threadId });
+			assert.equal(ran.status, 200, ran.body);
+			assert.equal(JSON.parse(ran.body).output, "one two\n", "the line did not run under the resolved shell");
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder]) rmSync(gone, { recursive: true, force: true });
+		}
+	},
+);
 
 test("a `!` completion is listed from the tree the command runs in, dot entries and all", async () => {
 	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-bang-browse-"));
@@ -1503,7 +1591,8 @@ test("a `!command` runs where the thread works, and the next message carries wha
 	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-shell-"));
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-shell-work-"));
 	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
-	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	// `SHELL` is named outright so the line is the same shell on every machine that runs this suite.
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "", SHELL: "/bin/sh" });
 	try {
 		writeFileSync(join(folder, "a-listing.txt"), "one\ntwo\n");
 		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
@@ -1557,7 +1646,7 @@ test("a `!command` runs where the thread works, and the next message carries wha
 test("a `!command` that prints more than the ceiling is cut on the card and says where", async () => {
 	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-shell-cut-"));
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-shell-cut-work-"));
-	const daemon = await boot(stateHome);
+	const daemon = await boot(stateHome, { SHELL: "/bin/sh" });
 	try {
 		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
 		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
@@ -1586,7 +1675,7 @@ test("a `!command` that outlives its limit is stopped with everything it started
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-shell-stop-work-"));
 	// The limit is a policy constant of a minute; the checks shorten it through the environment rather than
 	// sit one out.
-	const daemon = await boot(stateHome, { PI_STUDIO_SHELL_TIMEOUT_MS: "300" });
+	const daemon = await boot(stateHome, { PI_STUDIO_SHELL_TIMEOUT_MS: "300", SHELL: "/bin/sh" });
 	try {
 		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
 		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
