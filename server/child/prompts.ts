@@ -33,6 +33,9 @@ export function worktreePrompt(board, thread) {
 			`That tree is yours alone. Stay on your branch while you edit and commit: it is your playground, and the human reads it as your work. You may check out ${tree.base} or another branch to read and compare, as long as nothing is left uncommitted when you switch back.`,
 			`If the work turns out to be something other than the branch name says, rename it with \`git branch -m <type>/<slug>-${short}\` and report the new name.`,
 			`If files changed, name the branch and the path in one clause; nothing more. Nobody merges for you: cutting a branch and merging one are the human's decisions.`,
+			// The tree is a playground that goes away: a child that leaves work uncommitted has done work
+			// nobody can read back, so the rule is said here, next to the tree it is about.
+			`When this thread is retired its worktree is wiped clean, so anything left uncommitted in it is lost: commit what you want to keep before your last message, and never leave work in that tree as an uncommitted change.`,
 		);
 		if (!existsSync(tree.path)) {
 			lines.push(

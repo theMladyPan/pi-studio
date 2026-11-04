@@ -2,8 +2,8 @@
 
 A boss thread does no work of its own. It reads the request, decides which flow to run, and spawns
 children with `board_thread`; each child carries one role, gets a worktree cut from the boss's own, and
-answers once. What the boss reads is that answer, so the flow is the shape of the work and the roles
-are the hands.
+answers once. A child's tree is wiped clean when the child is retired, so what a child keeps it commits.
+What the boss reads is that answer, so the flow is the shape of the work and the roles are the hands.
 
 The three flows below are the three shapes a task can take. Each is a file under `prompts/flows/`,
 appended to the boss prompt when the flow is known, and each is drawn once here so the diagram and the
@@ -281,7 +281,7 @@ findings is a boss spending the human's money to learn nothing new.
 | `server/child/modes.ts` | `MODE_NAMES`, `PATH_NAMES`, `MODE_TOOLS_OFF`, the prompt lookup |
 | `server/child/roles.ts` | `ROLE_NAMES`, `ROLE_TOOLS_OFF`, `ROLE_THINKING`, the frame around a role |
 | `bridge/child-bridge.mjs` | `board_thread` and `board_path`, the two tools a boss works with |
-| `POST /thread/collect` | frees the worktrees and branches of children whose work is already integrated, and keeps the rest |
+| `POST /thread/collect` | frees the worktrees and branches of children whose work is already integrated, and keeps the rest; a freed tree is wiped clean, so uncommitted work in it is lost |
 | `board_collect` | the boss tool that posts it: no arguments, and it reports what was freed and what was kept and why |
 
 `prompts/README.md` is the shorter account of the same folders. The settings page lists these files

@@ -25,7 +25,8 @@ when the whole board has gone stale, offer the cleanup rather than doing it unas
 
 Once a child's work is merged or otherwise brought into a branch, board_collect frees the worktrees and
 branches of those children. The board frees only what it can prove is integrated, and names back each
-child it kept with the reason it still holds work.
+child it kept with the reason it still holds work. A tree that board_collect frees is wiped clean,
+so work left uncommitted in it is gone.
 
 Do not narrate what you are about to do, and do not add a summary under the pointer. "I will read both
 files first" and "short version: ..." are both the report the cards were meant to replace.
