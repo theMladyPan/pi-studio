@@ -14,6 +14,7 @@ import { makeRoom, threadForRuntime } from "./lifecycle.ts";
 import { randomUUID } from "node:crypto";
 import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
 import { accessSync, constants, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { workdirOf } from "../../worktrees/make.ts";
 import { workspaceById } from "../../workspaces.ts";
 import { start } from "../../main.ts";
@@ -364,16 +365,78 @@ export function onBrowse(url, res) {
 
 
 /**
+ * How long the shell may take to name its commands. The plain shell answers in about 10ms here, so this is a
+ * deadline no ordinary answer meets, and the one thing a suggestion must never do is wait: a Tab that reaches
+ * it answers with the search path alone.
+ */
+const COMPGEN_DEADLINE_MS = 300;
+
+/** What a printed line must look like to be a program name: a bare word, never a path or a sentence. */
+const PROGRAM_NAME = /^[\w.+-]+$/;
+
+/**
+ * The names bash itself reports for a prefix: its builtins and keywords, which no search path holds.
+ *
+ * The shell is asked with `-c` rather than `-lc`. The prefix-filtered login shell was measured here at a
+ * median of 111ms, most of it its own startup (about 105ms for `echo hi`), which is past the point a
+ * keystroke may wait; the plain shell answers the same prefix in about 9ms. A function a profile defines is
+ * therefore not completed — it is bought with every Tab waiting a tenth of a second.
+ *
+ * The word is handed over as an argument and quoted inside the shell, so a word that reads like shell syntax
+ * stays a word. Anything the shell prints that is not a name starting with the prefix is dropped, so a chatty
+ * profile cannot reach the list. The spawn is asynchronous and killed at the deadline, and a shell that cannot
+ * start at all answers with nothing: every one of those roads leaves the search path's own listing to speak
+ * for itself.
+ */
+function bashNames(prefix) {
+	return new Promise((done) => {
+		let settled = false;
+		let deadline = null;
+		const child = spawn("bash", ["-c", 'compgen -A command -- "$1"', "bash", prefix], {
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		let out = "";
+		const finish = (names) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(deadline);
+			// Whatever the shell is still doing, the answer is on its way out and this is its only pid.
+			try {
+				child.kill();
+			} catch {
+				// Already gone, which is what this wanted.
+			}
+			done(names);
+		};
+		deadline = setTimeout(() => finish([]), COMPGEN_DEADLINE_MS);
+		child.stdout.on("data", (chunk) => {
+			out += chunk;
+		});
+		child.on("error", () => finish([]));
+		child.on("close", () => {
+			const names = out
+				.split("\n")
+				.map((line) => line.trim())
+				.filter((line) => PROGRAM_NAME.test(line) && line.toLowerCase().startsWith(prefix));
+			finish(names);
+		});
+	});
+}
+
+/**
  * The programs a `!` command can name: the first word of a command is looked up on the shell's search
  * path, so that is where the names come from. The shell route spawns with no `env` of its own, which
  * makes the daemon's own `PATH` exactly what a command resolves against.
+ *
+ * The search path is not the whole story, because bash knows names of its own — builtins and keywords — so what
+ * bash reports for the same prefix is merged in. A name on both lists is one candidate.
  *
  * `prefix` is the word the human has typed so far, and the listing is narrowed by it before it is
  * capped, so a short word sees every program that starts with it. Only a real file that runs counts: a
  * folder on the path, a file nobody made executable, and a search-path entry that is not there are all
  * skipped rather than reported.
  */
-export function onPrograms(url, res) {
+export async function onPrograms(url, res) {
 	const prefix = (url.searchParams.get("prefix") ?? "").trim().toLowerCase();
 	const seen = new Set();
 	for (const dir of (process.env.PATH ?? "").split(delimiter)) {
@@ -403,6 +466,19 @@ export function onPrograms(url, res) {
 			if (seen.size > BROWSE_LIMIT) break;
 		}
 		if (seen.size > BROWSE_LIMIT) break;
+	}
+	// Bash's own names are merged in after the walk, so `total`, `truncated` and the cap count one list: the
+	// answer is the merged names in order, up to the cap. A shell that gave nothing at all leaves the search
+	// path's own listing, which is what this answers with rather than a failure.
+	let fromBash = [];
+	try {
+		fromBash = await bashNames(prefix);
+	} catch {
+		// Nothing to add, and nothing to report: the listing is still an answer.
+	}
+	for (const name of fromBash) {
+		if (seen.has(name)) continue;
+		seen.add(name);
 	}
 	const programs = [...seen].sort((a, b) => a.localeCompare(b));
 	answer(res, 200, {

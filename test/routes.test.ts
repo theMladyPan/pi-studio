@@ -225,6 +225,28 @@ test("the programs a `!` command can name are read from the daemon's own search 
 	}
 });
 
+test("a `!` command also names what bash itself knows, which no search path holds", async () => {
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-builtins-"));
+	// The real search path this time, because the shell the listing asks has to be findable on it. A builtin
+	// is the proof the answer is more than the files there: `readonly` is no file anywhere on the path.
+	const daemon = await boot(state);
+	try {
+		const listed = await get(daemon, `/programs?token=${daemon.token}&prefix=readonly`);
+		assert.equal(listed.status, 200, listed.body);
+		assert.ok(JSON.parse(listed.body).programs.includes("readonly"), listed.body);
+
+		// The word goes to the shell as an argument, so a word that reads like shell syntax is only a word:
+		// nothing in it runs, and no printed line that is not a name reaches the list.
+		const odd = await get(daemon, `/programs?token=${daemon.token}&prefix=${encodeURIComponent("'; id #")}`);
+		assert.equal(odd.status, 200, odd.body);
+		assert.deepEqual(JSON.parse(odd.body).programs, [], odd.body);
+		assert.ok(!odd.body.includes("uid="), odd.body);
+	} finally {
+		daemon.child.kill();
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
 test("a `!` completion is listed from the tree the command runs in, dot entries and all", async () => {
 	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-bang-browse-"));
 	const repoFolder = mkdtempSync(join(tmpdir(), "pi-studio-bang-browse-work-"));
