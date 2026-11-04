@@ -94,6 +94,9 @@ export function saveBoard(board) {
 			at: card.at,
 			...(typeof card.markdown === "string" ? { markdown: card.markdown } : {}),
 			...(typeof card.path === "string" ? { path: card.path } : {}),
+			// The absolute path the body was read from, so a board reloaded opens the file the card shows
+			// rather than whatever the relative path means in the tree it is resolved against.
+			...(typeof card.file === "string" ? { file: card.file } : {}),
 			...(typeof card.content === "string" ? { content: card.content } : {}),
 			...(Number.isFinite(card.line) ? { line: card.line } : {}),
 			...(typeof card.question === "string" ? { question: card.question } : {}),
@@ -245,7 +248,11 @@ export function restoredPlainCard(raw) {
 		...(type === "note"
 			? { markdown: raw.markdown }
 			: type === "source"
-				? { path: raw.path, content: raw.content }
+				? {
+						path: raw.path,
+						content: raw.content,
+						...(typeof raw.file === "string" && raw.file ? { file: raw.file } : {}),
+					}
 				: asked.length
 					? { questions: asked }
 					: { question: raw.question, options: Array.isArray(raw.options) ? raw.options.filter((one) => typeof one === "string") : [] }),

@@ -144,6 +144,22 @@ export async function onSettingsDefaults(res) {
 
 
 
+/**
+ * One answer per dialog. A program that is not installed answers on `error` and then again on `close` with a
+ * non-zero code, and a second `writeHead` on an ended response throws `ERR_HTTP_HEADERS_SENT`, which nothing
+ * catches: one press would take the daemon, and every board and child with it, down.
+ */
+function answeredOnce(res) {
+	let answered = false;
+	return (say) => {
+		if (answered) return;
+		answered = true;
+		say();
+	};
+}
+
+
+
 /** A real folder dialog, because a browser cannot be told an absolute path any other way. */
 export function onPickFolder(res) {
 	let child;
@@ -154,16 +170,17 @@ export function onPickFolder(res) {
 	} catch {
 		return void fail(res, 501, "no folder dialog on this machine");
 	}
+	const once = answeredOnce(res);
 	let out = "";
 	child.stdout.on("data", (chunk) => {
 		out += String(chunk);
 	});
-	child.on("error", () => fail(res, 501, "no folder dialog on this machine"));
+	child.on("error", () => once(() => fail(res, 501, "no folder dialog on this machine")));
 	child.on("close", (code) => {
 		const folder = out.trim().split("\n")[0];
 		// Cancelling a dialog is a decision, not a failure.
-		if (code !== 0 || !folder) return void answer(res, 200, { cancelled: true });
-		answer(res, 200, { folder });
+		if (code !== 0 || !folder) return once(() => answer(res, 200, { cancelled: true }));
+		once(() => answer(res, 200, { folder }));
 	});
 }
 
@@ -177,15 +194,16 @@ export function onPickFile(res) {
 	} catch {
 		return void fail(res, 501, "no file dialog on this machine");
 	}
+	const once = answeredOnce(res);
 	let out = "";
 	child.stdout.on("data", (chunk) => {
 		out += String(chunk);
 	});
-	child.on("error", () => fail(res, 501, "no file dialog on this machine"));
+	child.on("error", () => once(() => fail(res, 501, "no file dialog on this machine")));
 	child.on("close", (code) => {
 		const file = out.trim().split("\n")[0];
 		// Cancelling a dialog is a decision, not a failure.
-		if (code !== 0 || !file) return void answer(res, 200, { cancelled: true });
-		answer(res, 200, { file });
+		if (code !== 0 || !file) return once(() => answer(res, 200, { cancelled: true }));
+		once(() => answer(res, 200, { file }));
 	});
 }
