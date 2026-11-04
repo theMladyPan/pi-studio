@@ -8198,6 +8198,9 @@ function typedInAtPick(inst) {
   // suggestion, so a list that is up goes as soon as the word it was asked about changes.
   if (token.bang) {
     atMute = null;
+    // A keystroke answers on its own, and a Tab still asking about the word it left owns nothing:
+    // without this a late reply writes an older match over the characters typed since.
+    atSeq += 1;
     if (atInst === inst) closeAtPick();
     return;
   }

@@ -397,7 +397,12 @@ export function onPrograms(url, res) {
 				continue;
 			}
 			seen.add(name);
+			// The listing is capped, so the walk stops one name past the cap rather than stat every name
+			// on the path: an empty prefix would otherwise look at every program there is, to throw the
+			// surplus away. `total` is then the cap plus one, which is what `truncated` says.
+			if (seen.size > BROWSE_LIMIT) break;
 		}
+		if (seen.size > BROWSE_LIMIT) break;
 	}
 	const programs = [...seen].sort((a, b) => a.localeCompare(b));
 	answer(res, 200, {

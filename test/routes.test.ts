@@ -212,6 +212,13 @@ test("the programs a `!` command can name are read from the daemon's own search 
 		// The prefix is the word the human typed so far, and one that names nothing answers with nothing.
 		assert.deepEqual(JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=fixture-t`)).body).programs, []);
 		assert.deepEqual(JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=nowhere`)).body).programs, []);
+
+		// `!` and Tab with no word yet asks for `prefix=`, which takes the short way through the path. It
+		// still answers with the programs alone: the folder and the file nobody made executable stay out.
+		const bare = JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=`)).body);
+		assert.deepEqual(bare.programs, ["fixture-run"], bare.programs);
+		assert.equal(bare.total, 1);
+		assert.equal(bare.truncated, false);
 	} finally {
 		daemon.child.kill();
 		rmSync(state, { recursive: true, force: true });
