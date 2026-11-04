@@ -3455,14 +3455,19 @@ viewport.addEventListener("wheel", (event) => {
     // reader is looking at; otherwise the selection decides, so a board you are reading a card on
     // keeps still while you scroll that card, and a board with nothing selected pans.
     const selected = document.querySelector(".card.active");
+    const step = wheelPixels(event, event.deltaY) || wheelPixels(event, event.deltaX);
     // A source card's code view is absolutely positioned inside the body, so it adds nothing to the
-    // column's scroll height: the innermost box that actually overflows is the one to scroll.
+    // column's scroll height: the innermost box that actually overflows is the one to scroll. A box
+    // that has nothing left to give in this direction hands the wheel to the next holder inside the
+    // same card, so a code view that ends and the messages under it are read in one gesture.
     const holders = selected ? [selected.querySelector(".code-scroll"), selected.querySelector(".card-scroll")] : [];
-    const scroller = editorAt(event.target) ?? holders.find((box) => box && box.scrollHeight - box.clientHeight > 1) ?? holders[0];
-    const room = scroller ? scroller.scrollHeight - scroller.clientHeight : 0;
-    if (room > 1) {
+    const moves = (box) =>
+      box.scrollHeight - box.clientHeight > 1 &&
+      (step < 0 ? box.scrollTop > 1 : box.scrollHeight - box.clientHeight - box.scrollTop > 1);
+    const scroller = editorAt(event.target) ?? holders.find((box) => box && moves(box));
+    if (scroller) {
       event.preventDefault();
-      scroller.scrollTop += wheelPixels(event, event.deltaY) || wheelPixels(event, event.deltaX);
+      scroller.scrollTop += step;
       return;
     }
     event.preventDefault();
@@ -6797,7 +6802,8 @@ function shownConfig(on) {
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
 // holds, a `prompt` opens the file, and anything with a `pick` opens the picker of that name, which
-// posts the choice itself. Nothing here knows a setting by name.
+// posts the choice itself. A text-shaped leaf with no picker of its own is typed where it is shown.
+// Nothing here knows a setting by name.
 
 /** Where this board keeps which groups it has folded. Two boards keep two shapes. */
 function foldKey() {
@@ -6909,8 +6915,14 @@ function renderGroup(group, parentPath) {
   return { fold, leaves: mine };
 }
 
+/** A leaf whose value is typed rather than picked: a `combo`, or free text, with no picker of its own. */
+function typedLeaf(field) {
+  return !field.pick && (field.type === "combo" || field.type === "text" || field.type === "number");
+}
+
 /** One leaf: a label, its value, and the click that changes it. */
 function renderLeaf(field) {
+  if (typedLeaf(field)) return renderTypedLeaf(field);
   const row = el("button", "cfg-row");
   row.type = "button";
   row.title = field.help ?? "";
@@ -6919,7 +6931,55 @@ function renderLeaf(field) {
   const value = el("b");
   row.append(label, value);
   row.addEventListener("click", () => void openLeaf(field, row));
-  const leaf = { field, row, value };
+  const leaf = { field, row, value, set: () => (value.textContent = leafShown(field)) };
+  treeLeaves.push(leaf);
+  return leaf;
+}
+
+/**
+ * A value the panel has no picker for is typed in its own row: the leaf keeps the line, the label and
+ * the value it had, the box writes through the route the document names once the human is done, and a
+ * leaf that carries `browse` offers the machine's own dialog beside it. Nothing here knows a field by
+ * name.
+ */
+function renderTypedLeaf(field) {
+  const row = el("div", "cfg-row is-typed");
+  row.title = field.help ?? "";
+  const label = el("span");
+  label.textContent = field.label ?? field.id;
+  const input = el("input", "cfg-type");
+  input.type = field.type === "number" ? "number" : "text";
+  input.value = String(field.value ?? "");
+  input.placeholder = field.placeholder ?? "";
+  input.spellcheck = false;
+  input.autocomplete = "off";
+  input.setAttribute("aria-label", field.label ?? field.id);
+  row.append(label, input);
+  // The leaf's own list is a suggestion rather than a wall, so the box completes from it and still takes
+  // a name the machine never answered with.
+  const options = Array.isArray(field.options) ? field.options : [];
+  if (options.length) {
+    const catalog = document.createElement("datalist");
+    catalog.id = `cfg-options-${field.id}`;
+    for (const option of options) {
+      const item = document.createElement("option");
+      item.value = String(option);
+      catalog.append(item);
+    }
+    input.setAttribute("list", catalog.id);
+    row.append(catalog);
+  }
+  input.addEventListener("change", () => void writeLeaf(field, input.value.trim()));
+  if (field.browse) row.append(browsePick(field, input));
+  // A repaint that arrives while the human is typing must not take the box from under them.
+  const leaf = {
+    field,
+    row,
+    value: input,
+    set: () => {
+      if (document.activeElement !== input) input.value = String(field.value ?? "");
+    },
+  };
   treeLeaves.push(leaf);
   return leaf;
 }
@@ -6987,7 +7047,7 @@ function configValue(field) {
 
 /** The values on every row, and the sum on every folded group. */
 function paintTree() {
-  for (const leaf of treeLeaves) leaf.value.textContent = leafShown(leaf.field);
+  for (const leaf of treeLeaves) leaf.set();
   for (const group of treeGroups) group.preview.textContent = groupPreview(group.leaves);
 }
 
@@ -7026,6 +7086,32 @@ async function writeLeaf(field, value) {
     hintLine(`could not change it: ${error.message || error}`, true);
     return null;
   }
+}
+
+/**
+ * The button beside a typed leaf whose document carries `browse`: the machine's own file dialog, the same
+ * POST the defaults page makes, and the answer written through the leaf's own route. A refusal lands in
+ * the panel's own line, where every other write's refusal lands.
+ */
+function browsePick(field, input) {
+  const button = el("button", "omni-browse");
+  button.type = "button";
+  button.textContent = "browse…";
+  button.title = `pick a file with the machine's own dialog (POST ${field.browse})`;
+  button.addEventListener("click", async () => {
+    try {
+      const response = await fetch(`${field.browse}?${auth}`, { method: "POST" });
+      if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
+      const data = await response.json();
+      if (data.cancelled) return;
+      input.value = data.file;
+      input.focus();
+      await writeLeaf(field, input.value.trim());
+    } catch (error) {
+      hintLine(`no file dialog: ${error.message || error}`, true);
+    }
+  });
+  return button;
 }
 
 /** A leaf pressed: flip a switch, open a file, or hand the work to the picker that names it. */
