@@ -3422,7 +3422,10 @@ viewport.addEventListener("wheel", (event) => {
     // reader is looking at; otherwise the selection decides, so a board you are reading a card on
     // keeps still while you scroll that card, and a board with nothing selected pans.
     const selected = document.querySelector(".card.active");
-    const scroller = editorAt(event.target) ?? selected?.querySelector(".card-scroll");
+    // A source card's code view is absolutely positioned inside the body, so it adds nothing to the
+    // column's scroll height: the innermost box that actually overflows is the one to scroll.
+    const holders = selected ? [selected.querySelector(".code-scroll"), selected.querySelector(".card-scroll")] : [];
+    const scroller = editorAt(event.target) ?? holders.find((box) => box && box.scrollHeight - box.clientHeight > 1) ?? holders[0];
     const room = scroller ? scroller.scrollHeight - scroller.clientHeight : 0;
     if (room > 1) {
       event.preventDefault();
