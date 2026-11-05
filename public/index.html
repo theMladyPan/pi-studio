@@ -785,8 +785,6 @@
   .composer .stop { font: 12px var(--mono); color: #0d1117; background: var(--red);
     border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
   .composer .stop:disabled { opacity: .5; cursor: default; }
-  /* `display` on the class beats the user agent's [hidden] rule, so hiding is spelled out. */
-  .composer .stop[hidden] { display: none; }
   /* The context figure is also the compact button, and the fill behind the words is how much of the
      window that thread has spent. It wears its neighbours' box, so the row keeps one rhythm. */
   .composer .ctx-btn { position: relative; overflow: hidden; appearance: none; cursor: pointer;
