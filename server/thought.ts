@@ -501,7 +501,7 @@ export function handleChildLine(board, thread, line) {
 				thread.turns.push({ text, status: "queued", mode: "queue", at: Date.now() });
 				update(board, thread);
 			}
-			prompt(board, thread, typeof next === "string" ? next : next.message, target);
+			prompt(board, thread, typeof next === "string" ? next : next.message, target, typeof next === "string" ? [] : next.images);
 			return;
 		}
 		// Nothing else is queued, so the run is over for anyone waiting on it.
