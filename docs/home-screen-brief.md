@@ -80,6 +80,7 @@ Do not invent data. This is the complete payload of `GET /workspaces` for each w
 | `lastActivity` | `{ label, at }` — the last thing that happened, e.g. `{ label: "turn", at: 1761… }` |
 | `git` | `{ branch, modified }` or `null` when the folder is not a repository |
 | `sessions` | `{ count, bytes }` — pi session files for this workspace |
+| `scratch` | `true` on the one throwaway row the crossroads always has; it is first in the list, and `POST /scratch/empty` empties it |
 
 And these exist once, not per workspace:
 
