@@ -25,10 +25,11 @@ commit's own account rather than on a check run now, the section below says so.
   folder still exists); `POST /workspace {folder}` registers and loads one. State lives in
   `~/.pi/agent/state/pi-studio/`: `daemon.json` (token, port), `workspaces.json` (the list plus the
   crossroads defaults), `boards/<id>.json`, `sessions/<id>/`.
-- **One row on the crossroads is the throwaway one.** A folder in the machine's temp spot named after
-  the instance (`pi-studio-scratch`, or `-<instance>` beside a second daemon), kept in
-  `workspaces.json` like any other, written down and made again on every read so no state file and no
-  `rm -rf /tmp` can leave a row nobody can open. It is first in the list because `workspaceList()` puts
+- **One row on the crossroads is the throwaway one.** A folder in the machine's temp spot
+  (`pi-studio-scratch`), or `scratch/` beside a daemon's own state folder when it has one, which is what
+  keeps a development instance and a test from littering the temp area. It is kept in `workspaces.json`
+  like any other and made again on every read, so no state file and no `rm -rf /tmp` can leave a row
+  nobody can open. It is first in the list because `workspaceList()` puts
   it there, it is not counted among the projects (`1 workspace + scratch`), and its folder is not a
   repository, so a thread there gets no branch and works in place. `POST /scratch/empty` is the row's
   one press: it kills the children, clears the board with `clearBoard` and deletes everything inside
@@ -37,7 +38,9 @@ commit's own account rather than on a check run now, the section below says so.
   route is not in `THREAD_ROUTES`, so a child cannot reach it. Verified against a daemon on its own
   state folder: the row first, the folder made again after `rm -rf`, two entries and their cards gone
   after the press, the folder and a `cardsVerbosity` setting still there, and in a browser: the armed
-  button, the empty folder after the second press, and the row not opening its board on the way.
+  button, the empty folder after the second press, and the row not opening its board on the way. The
+  suite and the smoke leave nothing in the temp area: their daemons have state folders of their own, and
+  the scratch folder lives inside the state folder it belongs to.
 - **Threads** are cards: `POST /thread` creates one in the open workspace, `POST /message {cardId,
   text, mode}` prompts it. The child is spawned on the first message, one per thread, and shut down
   when it settles.

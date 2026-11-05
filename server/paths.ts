@@ -58,11 +58,13 @@ export const WORKSPACES_FILE = join(STATE_DIR, "workspaces.json");
 /**
  * The scratch folder: the one workspace that is always on the crossroads and holds nothing worth keeping.
  *
- * It sits in the machine's temp folder so a reboot does the cleaning, and it keeps a fixed path because a
- * workspace's identity *is* its path: a name that changed per boot would open a new board each time while
- * the old files stayed on disk. A second daemon gets its own, because its board is its own too.
+ * The studio's own sits in the machine's temp folder, so a reboot does the cleaning, and it keeps a fixed
+ * path because a workspace's identity *is* its path: a name that changed per boot would open a new board
+ * each time while the old files stayed on disk. A daemon with a state folder of its own — a development
+ * instance, a test — keeps its scratch beside that state instead, because a folder in the temp area named
+ * after a state folder that has been deleted is litter nobody can name the owner of.
  */
-export const SCRATCH_DIR = join(tmpdir(), INSTANCE ? `pi-studio-scratch-${INSTANCE}` : "pi-studio-scratch");
+export const SCRATCH_DIR = INSTANCE ? join(STATE_DIR, "scratch") : join(tmpdir(), "pi-studio-scratch");
 
 /** The schema the board and workspace files are written with. */
 export const STATE_VERSION = 1;

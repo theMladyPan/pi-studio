@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -1932,9 +1932,9 @@ test("a thread's token cannot reach the shell route, whatever it writes in the b
 test("the crossroads always has a scratch row, and its empty press takes the files and the cards", async () => {
 	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-scratch-"));
 	const daemon = await boot(stateHome);
-	// The daemon names its scratch folder after its own state folder, which is what keeps this test out of
-	// the human's folder and gives a second daemon one of its own.
-	const scratch = join(tmpdir(), `pi-studio-scratch-${basename(stateHome)}`);
+	// A daemon with a state folder of its own keeps its scratch beside it, which is what keeps this test out
+	// of the human's folder and leaves nothing in the temp area once the state folder goes.
+	const scratch = join(stateHome, "scratch");
 	try {
 		const list = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces;
 		assert.equal(list.length, 1, "an unopened studio has more than the scratch row");
