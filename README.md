@@ -81,6 +81,8 @@ is what another computer on the same network needs:
 node server.ts --no-open --host 0.0.0.0
 ```
 
+or `npm run server`, which is that same line.
+
 The console prints the local link first and then one link per address (`also on http://192.168.…`), so
 the line to open on the other machine is already there, token and all. Nothing else changes: the
 agents, the files and the saved conversations stay on the machine that runs the daemon, and a tab on
