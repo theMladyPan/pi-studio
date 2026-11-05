@@ -43,6 +43,17 @@ test("a boss comes back as a boss, with the flow it was running", () => {
 	assert.equal(thread.pathChosenBy, "human");
 });
 
+test("and a flow the board named comes back as one the boss may still change", () => {
+	// A flow inherited from the board is neither the human's pin nor the boss's own pick. Read back as
+	// the human's, it would lock a boss out of choosing a flow of its own.
+	const thread = restoredThread(
+		{ id: "t4", title: "run the flow", mode: "boss", path: "simple", pathChosenBy: "board", at: now, turns: [] },
+		"/tmp/folder",
+	)!;
+	assert.equal(thread.path, "simple");
+	assert.equal(thread.pathChosenBy, "board");
+});
+
 test("and a mode that is not one of the three is dropped rather than trusted", () => {
 	const thread = restoredThread({ id: "t3", title: "x", mode: "wizard", path: "quick", at: now, turns: [] }, "/tmp/folder")!;
 	assert.equal(thread.mode, undefined);

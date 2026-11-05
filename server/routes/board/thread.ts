@@ -24,6 +24,16 @@ import { THINKING_LEVELS } from "../../models.ts";
 // ---------- routes: the board ----------------------------------------------
 
 /**
+ * The flow this board works the same way with, or empty when it names none: a board that always works
+ * one way says it once, and every boss that does not name a flow of its own starts there. A board that
+ * says `auto` has named no flow, so a boss there still decides for itself.
+ */
+function boardFlow(board) {
+	const chosen = board.config?.path;
+	return PATH_NAMES.includes(chosen) && chosen !== "auto" ? chosen : "";
+}
+
+/**
  * What a request asks for, checked once for both the plain and the spawning route: the two have to
  * refuse the same things for the same reasons. Answers the spec, or an `error` to send back.
  */
@@ -74,13 +84,16 @@ function threadSpec(board, body, caller) {
 	if (typeof body.path === "string" && body.path && !named) return { error: `unknown path: ${body.path}` };
 	if (named && mode !== "boss") return { error: "a path belongs to a boss thread" };
 	// A boss starts on the board's own flow unless this thread names one, so a board that always works
-	// the same way says it once instead of on every thread.
-	const boardPath = PATH_NAMES.includes(board.config?.path) ? board.config.path : "";
+	// the same way says it once instead of on every thread. Where the flow came from decides who chose
+	// it: a named one is the human's, the board's is neither theirs nor the boss's, and `auto` is the
+	// boss's to report. Only the board's leaves a boss free to pick a flow of its own later on.
+	const boardPath = boardFlow(board);
 	const flow = mode === "boss" ? named || boardPath || "auto" : "";
 	if (flow && flow !== "auto" && !promptText("flows", flow)) {
 		return { error: `flow prompt missing: prompts/flows/${flow}.md` };
 	}
-	return { parent, depth, after: follow, role, mode, path: flow };
+	const flowBy = flow ? (named ? "human" : boardPath ? "board" : "auto") : "";
+	return { parent, depth, after: follow, role, mode, path: flow, pathBy: flowBy };
 }
 
 
@@ -110,8 +123,9 @@ function newThread(board, body, spec) {
 		...(spec.after.length ? { after: spec.after } : {}),
 		...(spec.role ? { role: spec.role } : {}),
 		...(spec.mode ? { mode: spec.mode } : {}),
-		// A path the human pinned is theirs; `auto` means the boss decides and says which one it took.
-		...(spec.path ? { path: spec.path, pathChosenBy: spec.path === "auto" ? "auto" : "human" } : {}),
+		// A path the human pinned is theirs, one the board named is the board's, and `auto` means the boss
+		// decides and says which one it took.
+		...(spec.path ? { path: spec.path, pathChosenBy: spec.pathBy } : {}),
 		at: Date.now(),
 		turns: [],
 		queued: [],
@@ -298,8 +312,11 @@ export async function onMode(req, res, board) {
 		delete thread.path;
 		delete thread.pathChosenBy;
 	} else if (!thread.path) {
-		thread.path = "auto";
-		thread.pathChosenBy = "auto";
+		// A thread made as an agent had no flow to keep, so becoming a boss starts it where a boss made
+		// now would start: on the board's flow when the board names one, and on `auto` otherwise.
+		const boardPath = boardFlow(board);
+		thread.path = boardPath || "auto";
+		thread.pathChosenBy = boardPath ? "board" : "auto";
 	}
 	update(board, thread);
 	answer(res, 200, { card: cardFor(thread, board) });
