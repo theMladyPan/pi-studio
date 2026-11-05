@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { cardFor, plainCardFor } from "../server/cards.ts";
-import { restoredPlainCard, restoredThread } from "../server/store.ts";
+import { restoredPlainCard, restoredThread, savedTurn } from "../server/store.ts";
 
 const now = 1_700_000_000_000;
 
@@ -29,6 +29,31 @@ test("a thread file from today reloads with its fields intact", () => {
 	assert.equal(thread.turns[0].status, "answered");
 	assert.deepEqual(thread.worktree, saved.worktree);
 	assert.equal(thread.folder, "/tmp/folder");
+});
+
+test("a turn comes back as the file says, and a steer the daemon stopped keeps its own label", () => {
+	// A steer that joined a live run is answered inside the run's own turn, so its words were spent; a steer
+	// the daemon stopped — an idle thread, a cut run — never was, and a load keyed on `mode` brought it back
+	// labelled as spent. Both directions are pinned here, and a turn in flight or waiting is nobody's work.
+	const spent = savedTurn({ text: "and this instead", status: "sent", mode: "steer", at: now });
+	const cut = savedTurn({ text: "and this instead", status: "stopped", mode: "steer", at: now });
+	const writing = savedTurn({ text: "the first words", status: "sent", mode: "queue", streaming: true, at: now });
+	const waiting = savedTurn({ text: "behind the run", status: "queued", mode: "queue", at: now });
+	assert.deepEqual(
+		[spent.status, cut.status, writing.status, waiting.status],
+		["sent", "stopped", "stopped", "stopped"],
+	);
+
+	const thread = restoredThread({ id: "t10", title: "x", at: now, turns: [spent, cut, writing, waiting] }, "/tmp/folder")!;
+	assert.deepEqual(
+		thread.turns.map((turn) => turn.status),
+		["sent", "stopped", "stopped", "stopped"],
+	);
+	assert.equal(thread.turns[0].mode, "steer");
+
+	// A file this version cannot vouch for — a turn written mid-run by an older one — reads as stopped.
+	const old = restoredThread({ id: "t11", title: "x", at: now, turns: [{ text: "queued once", status: "queued" }] }, "/tmp/folder")!;
+	assert.equal(old.turns[0].status, "stopped");
 });
 
 test("a boss comes back as a boss, with the flow it was running", () => {

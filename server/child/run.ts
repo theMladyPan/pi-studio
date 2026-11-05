@@ -150,7 +150,10 @@ export function prompt(board, thread, text, target = null, images = []) {
 	// The run in flight remembers which turn it is writing, so the reply lands under the words that
 	// asked for it. That is a card's turn when a hidden child answers for a card, and one of the
 	// thread's own turns otherwise — by index, because a queue can hold more than one message.
-	thread.answering = target;
+	// A caller that names no target means the turn it has just made, and it is pinned by index here: a
+	// steer that joins the run while it is live is the newest turn, and a run that followed the newest
+	// would write its answer into the steer and leave the task's own turn with nothing.
+	thread.answering = target ?? (thread.turns.length ? { turn: thread.turns.length - 1 } : null);
 	const { turn, card: held } = liveTurn(board, thread);
 	if (turn) {
 		turn.status = "sent";

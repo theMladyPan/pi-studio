@@ -27,8 +27,15 @@ export const boards = new Map();
 export function savedTurn(turn) {
 	return {
 		text: turn.text,
-		// A turn in flight when the daemon stopped is nobody's work now.
-		status: turn.status === "answered" ? "answered" : "stopped",
+		// A turn is written as `answered` or as one of the two ends nothing is waiting on any more: a steer
+		// the run has spent keeps `sent`, so a restart cannot relabel words it read as words that stopped,
+		// and everything else — a turn still streaming, one waiting behind a run — is nobody's work now.
+		status:
+			turn.status === "answered"
+				? "answered"
+				: turn.status === "sent" && turn.mode === "steer" && !turn.streaming
+					? "sent"
+					: "stopped",
 		mode: turn.mode,
 		at: turn.at,
 		...(turn.reply ? { reply: turn.reply } : {}),
@@ -154,13 +161,20 @@ export function flushBoard(board) {
 
 
 
+/** The three statuses a turn is written with; any other word in a file is one this version cannot vouch for. */
+const STORED_STATUSES = ["answered", "sent", "stopped"];
+
+
+
 /** Rebuild a thread from its file, never as something that is still running. */
 export function restoredTurns(raw) {
 	return (Array.isArray(raw) ? raw : [])
 		.filter((turn) => turn && typeof turn.text === "string")
 		.map((turn) => ({
 			text: String(turn.text),
-			status: turn.status === "answered" ? "answered" : "stopped",
+			// A turn comes back as the file says, except anything this version cannot vouch for reads as
+			// stopped, because a turn in flight when the daemon died is nobody's work.
+			status: STORED_STATUSES.includes(turn.status) ? turn.status : "stopped",
 			mode: turn.mode === "steer" ? "steer" : "queue",
 			at: Number.isFinite(turn.at) ? turn.at : Date.now(),
 			...(typeof turn.reply === "string" ? { reply: turn.reply } : {}),
