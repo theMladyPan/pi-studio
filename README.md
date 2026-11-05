@@ -6,26 +6,25 @@
 
 <p align="center">
   A local daemon that owns pi agents and gives them a board.<br>
-  A workspace is a folder. A thread on its board is one agent, working while you watch.
+  A workspace is a folder. A thread on its board is one agent;<br>
+  you type into its card and watch what it does.
 </p>
 
 <p align="center">
   <img alt="Node 22.18 or newer" src="https://img.shields.io/badge/node-%E2%89%A522.18-2ea44f?style=flat-square&logo=nodedotjs&logoColor=white">
-  <img alt="Zero runtime dependencies" src="https://img.shields.io/badge/zero%20runtime%20deps-2ea44f?style=flat-square">
-  <img alt="Listens on loopback" src="https://img.shields.io/badge/listens%20on-loopback-1f6feb?style=flat-square">
-  <img alt="Built on pi RPC" src="https://img.shields.io/badge/built%20on-pi%20rpc-db61a2?style=flat-square">
+  <img alt="Zero runtime dependencies" src="https://img.shields.io/badge/dependencies-zero-1f6feb?style=flat-square">
+  <img alt="Listens on loopback" src="https://img.shields.io/badge/local-loopback-1f6feb?style=flat-square">
 </p>
 
 <p align="center">
-  <img src="docs/media/board.png" width="100%" alt="A pi-studio board: thirteen threads of a document audit laid out as cards, some answering with tables and charts, and the activity rail listing every command, edit and thought of the running agent.">
+  <img src="docs/media/board.png" width="100%" alt="A pi-studio board: thirteen cards of a document audit — two thread cards, and eleven note cards with tables and charts that the threads posted beside themselves — with the activity rail on the left and the branch strip on the right.">
   <br>
-  <sub>One folder, thirteen threads. Every card is a conversation with its own agent; the rail on the
-       left is what the running one is doing, and the strip on the right is the branches the threads made.</sub>
+  <sub>Two threads and the eleven cards they posted beside themselves. The rail on the left is every
+       command, edit and thought as it happens; the strip on the right is the branches the threads made.</sub>
 </p>
 
-You type into a card, the agent answers there, and you can steer it while it runs. Everything stays
-on your machine: the agents, the files, the saved conversations. It replaces the dashboard extension,
-which was a view of a single pi session and could never supervise more than one agent.
+Type into a card and the agent answers there. `steer` puts a correction into a run that is still going,
+`queue` waits behind it, and the rail lists what the agent is doing while it does it.
 
 ## Run it
 
@@ -40,70 +39,22 @@ Or, with the repository in `PATH` or linked into `~/.local/bin`:
 pi-studio
 ```
 
-There is no build step and nothing to install to run it. Node 22.18 or newer — where running a `.ts`
-file stopped needing a flag — and a working `pi` on the same machine are the whole requirement. The
-daemon is TypeScript, and Node strips the types as it loads them.
+Node 22.18 or newer runs the `.ts` files directly, and `pi` has to be on the same machine: that is the
+whole requirement. There is no build step and nothing to install.
 
 `npm install` is for the checks only: TypeScript is a dev dependency, and `npm run check` uses it to
 type check the code.
 
-## How it works
+### Two at once
 
-```mermaid
-flowchart LR
-  tab["browser tab<br>the board"]
-  daemon["pi-studio daemon<br>loopback, one token"]
-  agent["pi --mode rpc<br>one child per thread"]
-  tree["git worktree<br>a branch per thread"]
-  state["state folder<br>boards, layout, sessions"]
-
-  tab -- "type, steer, answer" --> daemon
-  daemon -- "one message" --> agent
-  agent -- "cards, notes, questions" --> daemon
-  agent -- "commits" --> tree
-  daemon -- "saves as it goes" --> state
-```
-
-**Workspaces** are folders you have opened before. The crossroads at `/` lists them, previews the
-selected one, and opens it as a board in a tab of its own (`/w/<id>`); asking again reuses that tab.
-The folder dialog is the machine's own, through `zenity`. A workspace's board, its threads and their
-layout live in `~/.pi/agent/state/pi-studio/boards/<id>.json`.
-
-**The first row is always the scratch one.** A folder in the machine's temp spot, made again whenever
-it is gone, for the question that deserves no project and for the scripts that are all thrash. Its
-threads work in that folder directly — it is not a repository, so there is no branch to cut — and the
-`empty` button on its row stops whatever is still running there, then deletes everything in the folder
-and every card on its board. That press asks twice: the first one only arms the button, which turns red
-and says `empty?` for four seconds. The board's settings stay.
-
-**Threads** are cards. A thread is created with `+` and starts its agent on the first message. A
-thread's pi session is written under `~/.pi/agent/state/pi-studio/sessions/<workspace>/`, so a restart
-of the daemon resumes the conversation instead of starting over.
-
-**A thread draws beside itself.** It posts notes with tables and charts, files opened at the line that
-matters, and questions with buttons it needs answered. The board keeps each one where it was put.
-
-**Steering** — send with `steer` to redirect a run in flight, or `queue` to wait behind it.
-
-**A boss thread spawns children instead of working.** It runs one of three flows and gives each child
-one role; [docs/boss-and-subagents.md](docs/boss-and-subagents.md) draws the three flows and says what
-each role may do.
-
-**One client, one visual language.** `public/` holds the board client, carried over from the dashboard
-extension when this became its own application. There is no second UI.
-
-The daemon listens on loopback only. The token in the URL guards every data route.
-
-## Two at once
-
-The state folder is one flag away from the usual place, which is what lets a development instance run
-beside the stable one. Each instance keeps its own token, its own port, its own workspaces, its own
-boards and its own pi sessions, so they cannot read or overwrite each other:
+`--state` moves the state folder, which is what lets a development instance run beside the stable one.
+Each keeps its own token, port, workspaces, boards and pi sessions, so they cannot read or overwrite
+each other:
 
 ```bash
-pi-studio                                   # stable, its own state folder
-node server.ts --no-open --state ~/.pi/agent/state/pi-studio-dev   # a second one
-npm run dev:alt                             # the same, watching the code
+pi-studio                                                        # stable
+node server.ts --no-open --state ~/.pi/agent/state/pi-studio-dev  # a second one
+npm run dev:alt                                                  # the same, watching the code
 ```
 
 A daemon whose folder is not the usual one names itself after that folder: in its console line, in the
@@ -113,7 +64,7 @@ serve the same board id out of their own folder, with their own threads.
 
 `PI_STUDIO_STATE` does the same as `--state` for anything that would rather set an environment.
 
-## From another computer
+### From another computer
 
 `--host 0.0.0.0` (or `PI_STUDIO_HOST`) puts the board on every address the machine answers on, which is
 what another computer on the same network needs:
@@ -129,24 +80,72 @@ the line to open on the other machine is already there, token and all. Nothing e
 the files and the saved conversations stay on the machine that runs the daemon, and a tab on any device
 watches the same board.
 
-The token in that link is the machine — whoever holds it can ask an agent to run anything there — and
-the traffic is plain http. Keep it to a network you trust, or put a tunnel in front of it. The folder
-dialog belongs to the daemon's own screen: from another machine, type the path when it offers the field
-instead.
+Anyone holding that link can ask an agent to run anything on that machine, and the traffic is plain
+http. Keep it to a network you trust, or put a tunnel in front of it. The folder dialog belongs to the
+daemon's own screen: from another machine, type the path when it offers the field instead.
+
+## How it works
+
+```mermaid
+flowchart LR
+  tab["browser tab<br>the board"]
+  daemon["pi-studio daemon<br>loopback, one token"]
+  agent["pi --mode rpc<br>one child per thread"]
+  tree["git worktree<br>a branch per thread"]
+  state["state folder<br>boards, layout, sessions"]
+
+  tab -- "type, steer, answer" --> daemon
+  daemon -- "prompt and steer" --> agent
+  agent -- "cards, notes, questions" --> daemon
+  agent -- "commits" --> tree
+  daemon -- "writes the board file" --> state
+```
+
+**Workspaces** are folders you have opened before. The crossroads at `/` lists them, previews the
+selected one, and opens it as a board in a tab of its own (`/w/<id>`); asking again reuses that tab.
+The folder dialog is the machine's own, through `zenity`. A workspace's board, its threads and their
+layout live in `~/.pi/agent/state/pi-studio/boards/<id>.json`.
+
+**Scratch** is the first row of that list. A folder in the machine's temp spot, made again whenever it
+is gone, for the question that deserves no project and for the scripts that are all thrash. Its threads
+work there directly, because it is not a repository and there is no branch to cut. The `empty` button on
+its row stops whatever is running, then deletes the files and the cards and keeps the settings; it asks
+twice, and the first press only arms it for four seconds.
+
+**Threads** are cards. A thread is created with `+` and starts its agent on the first message. Its pi
+session is written under `~/.pi/agent/state/pi-studio/sessions/<workspace>/`, so a restart of the daemon
+resumes the conversation instead of starting over.
+
+**Notes, sources and questions** are what a thread draws beside itself: a table or a chart, a file opened
+at the line that matters, a question with buttons it needs answered. The board keeps each one where it
+was put.
+
+**Steering** sends into a run in flight, which is the difference between redirecting an agent and
+waiting behind it.
+
+**Worktrees** keep the threads out of each other's way. In a repository, each thread works in its own
+worktree on a branch of its own, and the strip in the corner of the board draws the branches and the
+commits on them.
+
+**A boss thread** spawns children instead of working. It runs one of three flows and gives each child
+one role; [docs/boss-and-subagents.md](docs/boss-and-subagents.md) draws the three flows and says what
+each role may do.
+
+The daemon listens on loopback only, and every data route needs the token it printed.
 
 ## Checks
 
 ```bash
 npm install     # once, for the checks only; running the daemon needs nothing
-npm run check   # syntax, the import graph, tsc, node --test, then the smoke suite
+npm run check   # syntax, imports, tsc, node --test, then the smoke suite
 npm test        # the unit and route tests on their own
-npm run smoke   # boots two daemons against scratch folders, runs its checks, exits 1 on the first failure
+npm run smoke   # two daemons against scratch folders; exits 1 on the first failure
 ```
 
 ## Layout
 
 ```
-server.ts         the entry: reads argv and starts the daemon, nothing else
+server.ts         the entry: reads argv and starts the daemon
 server/           the daemon, one module per subject
   main.ts         the request handler and the route table
   routes/         one file per route group, board routes under routes/board/
@@ -157,19 +156,20 @@ server/           the daemon, one module per subject
   worktrees/      making a thread's worktree, naming its branch, retiring it
   paths.ts        every path and the JSON io; types.ts the shapes that cross a boundary
 public/           the board client: index.html with its styles, welcome.html for the crossroads
-  client/         board.js, and the two vendored files beside it: mermaid 11.17.2 and Chart.js 4.6.1,
-                  MIT, fetched the first time a card carries a fence they draw and never before that
+  client/         board.js, and beside it mermaid 11.17.2 and Chart.js 4.6.1, MIT, fetched the
+                  first time a card carries a fence they draw
 bridge/           the extension a child loads so a thread can draw on its board
 bin/pi-studio     the wrapper: one word to start it
-bin/smoke.mjs     boot two daemons against scratch folders and hit the routes a change can break
+bin/smoke.mjs     two daemons against scratch folders, and the routes a change can break
 bin/check-imports.mjs  every import resolves, and every client module is served
 test/             node --test: the restore paths, git, worktrees, the child, the routes
-docs/             settled plans and briefs; docs/media holds the picture in this README
+docs/             settled plans and briefs; docs/media holds the picture above
 TODO.md           the one list of what is open: a fix, a feature, a chore
 STATE.md          what works, and what does not work yet
 ```
 
-## What it does not do yet
+What is still open lives in [TODO.md](TODO.md); what works, and what does not, is in
+[STATE.md](STATE.md).
 
-Usage totals beside a rail row's detail sheet, and a screenshot's picture after the daemon restarts.
-[TODO.md](TODO.md) keeps the whole list of what is open, and [STATE.md](STATE.md) says what works.
+pi-studio began as the dashboard extension, which was a view of one pi session and could never
+supervise more than one agent.
