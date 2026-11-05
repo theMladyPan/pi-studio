@@ -227,6 +227,71 @@
     return `${Math.round(hours / 24)}d ago`;
   }
 
+  /** How long the scratch row's empty button stays armed: a second press inside this window does it. */
+  const EMPTY_ARM_MS = 4000;
+  /**
+   * The press state, held by workspace id rather than on the button. A live update from the daemon rebuilds
+   * every row, and a deadline or a request in flight that lived on the old button would be thrown away with
+   * it — the arming would vanish, or a second press would start a second delete.
+   */
+  const emptyArmed = new Map();
+  const emptyPending = new Set();
+  let emptyPaint = 0;
+
+  /** One button drawn from the state, whichever row is holding it at the moment. */
+  function paintEmpty(button, id) {
+    const pending = emptyPending.has(id);
+    const armed = !pending && (emptyArmed.get(id) || 0) > Date.now();
+    button.disabled = pending;
+    button.classList.toggle("is-armed", armed);
+    button.textContent = pending ? "emptying" : armed ? "empty?" : "empty";
+    button.dataset.armed = armed ? "yes" : "";
+  }
+
+  /** Every scratch button on screen, which is how a rebuilt row gets the state the old one had. */
+  function paintEmptyRows() {
+    for (const button of nodes.list.querySelectorAll(".ws-empty")) paintEmpty(button, button.dataset.id);
+  }
+
+  /**
+   * Emptying the scratch row takes two presses. The first arms the button and says so; the second clears
+   * the board and deletes everything in the folder. One press is a whole folder of files plus every card
+   * on that board, which is too much for a slip of the mouse, and a browser dialog would be a second
+   * language for the one thing this page never otherwise asks.
+   */
+  async function emptyScratch(workspace) {
+    const id = workspace.id;
+    if (emptyPending.has(id)) return;
+    if ((emptyArmed.get(id) || 0) <= Date.now()) {
+      emptyArmed.set(id, Date.now() + EMPTY_ARM_MS);
+      paintEmptyRows();
+      clearTimeout(emptyPaint);
+      // One timer for the page: it repaints whatever is on screen, so a row rebuilt in the meantime is drawn
+      // from the same deadline as the one that was pressed.
+      emptyPaint = setTimeout(paintEmptyRows, EMPTY_ARM_MS + 20);
+      return;
+    }
+    emptyArmed.delete(id);
+    emptyPending.add(id);
+    paintEmptyRows();
+    pathError = "";
+    let done = true;
+    try {
+      const response = await fetch(`/scratch/empty?${qs()}`, { method: "POST" });
+      if (!response.ok) throw new Error((await response.text()).slice(0, 140) || response.statusText);
+    } catch (error) {
+      done = false;
+      pathError = `could not empty the scratch folder: ${error.message || error}`;
+    } finally {
+      // A press that failed puts its button back, usable, beside the reason: the next thing the human does is
+      // try again. A press that worked reloads, so the rows on screen are the ones the daemon now has.
+      emptyPending.delete(id);
+      paintEmptyRows();
+      applyFilter();
+      if (done) await load();
+    }
+  }
+
   function rowFor(workspace) {
     const row = el("li", "ws-row");
     row.setAttribute("role", "option");
@@ -234,6 +299,7 @@
     row.dataset.match = haystack(workspace);
     if (workspace.running) row.classList.add("is-running");
     if (workspace.missing) row.classList.add("is-missing");
+    if (workspace.scratch) row.classList.add("is-scratch");
 
     const dot = el("span", `status-dot ${workspace.missing ? "missing" : workspace.running ? "running" : "idle"}`);
     dot.title = workspace.missing
@@ -246,6 +312,22 @@
     left.append(dot, el("span", "ws-name", workspace.name), el("span", "ws-context", contextLine(workspace)));
 
     const right = el("div", "ws-right");
+    if (workspace.scratch) {
+      // The one row that can be thrown away, so it is the one row with a button that throws it away.
+      const empty = el("button", "ws-empty", "empty");
+      empty.type = "button";
+      empty.dataset.id = workspace.id;
+      empty.title = "delete everything in the scratch folder and clear its cards";
+      paintEmpty(empty, workspace.id);
+      empty.addEventListener("click", (event) => {
+        event.stopPropagation();
+        emptyScratch(workspace);
+      });
+      empty.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+      });
+      right.append(empty);
+    }
     if (workspace.missing) right.append(el("span", "sig-missing", "folder missing"));
     else if (workspace.running) right.append(el("span", "sig-running", `${workspace.running} running`));
     else {
@@ -355,7 +437,11 @@
     }
     nodes.sep.textContent = "·";
     const running = workspaces.reduce((sum, workspace) => sum + (workspace.running || 0), 0);
-    const count = `${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"}`;
+    // The scratch row is not one of the projects: it is counted on its own, or not at all when the daemon
+    // is too old to have one.
+    const projects = workspaces.filter((workspace) => !workspace.scratch);
+    const scratch = workspaces.some((workspace) => workspace.scratch) ? " + scratch" : "";
+    const count = `${projects.length} workspace${projects.length === 1 ? "" : "s"}${scratch}`;
     nodes.brand.replaceChildren(
       document.createTextNode(`${count} · `),
       el("span", running ? "live-count" : "", `${running} running`),
@@ -363,9 +449,13 @@
   }
 
   function adopt(list) {
+    // A live update replaces every row, and the empty button is the one control in the list: a human who had
+    // it focused gets it back rather than losing their place to the body.
+    const focused = document.activeElement?.classList?.contains("ws-empty") ? document.activeElement.dataset.id : "";
     workspaces = Array.isArray(list) ? list : [];
     listError = "";
     nodes.list.replaceChildren(...workspaces.map(rowFor));
+    if (focused) nodes.list.querySelector(`.ws-empty[data-id="${focused}"]`)?.focus();
     paintBrand();
     applyFilter();
   }

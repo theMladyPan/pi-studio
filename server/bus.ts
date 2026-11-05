@@ -7,7 +7,7 @@ import { send } from "./http.ts";
 import { boardMeta, cardFor, cardsFor, plainCardFor } from "./cards.ts";
 import { homeCard } from "./routes/board/message.ts";
 import { refreshGit } from "./git/graph.ts";
-import { describeWorkspace, welcomeClients, workspaces } from "./workspaces.ts";
+import { describeWorkspace, welcomeClients, workspaceList } from "./workspaces.ts";
 import { MAX_ACTIVITY, scheduleSave } from "./store.ts";
 
 
@@ -49,7 +49,7 @@ export function liveThreadIds(board) {
 /** The crossroads shows counts, so it hears about every change that alters one. */
 export function nudgeWelcome() {
 	if (!welcomeClients.size) return;
-	send(welcomeClients, { type: "workspaces", workspaces: workspaces.map(describeWorkspace) });
+	send(welcomeClients, { type: "workspaces", workspaces: workspaceList().map(describeWorkspace) });
 }
 
 

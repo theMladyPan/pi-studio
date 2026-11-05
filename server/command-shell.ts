@@ -11,6 +11,7 @@
  * suggestion is one the line can actually run and a builtin the line can run is never hidden.
  */
 import { accessSync, constants, statSync } from "node:fs";
+import type { ChildProcess } from "node:child_process";
 
 /**
  * Resolved on the first ask and kept: the answer cannot change while the daemon runs, because the
@@ -39,4 +40,65 @@ export function commandShell(): string {
 	if (resolved) return resolved;
 	resolved = runnable(process.env.SHELL) || runnable("/bin/bash") || "/bin/sh";
 	return resolved;
+}
+
+
+// ---------- the groups a `!` line has running right now ----------------------
+
+/**
+ * A command is spawned detached, so its pid is its own process group's, and one signal takes the whole line:
+ * `sh -c "sleep 600 & wait"` leaves a sleeper behind when only the shell is signalled. The direct kill is the
+ * fallback for the moment before that group exists.
+ */
+export function killGroup(child: ChildProcess): void {
+	if (!child.pid) return;
+	try {
+		process.kill(-child.pid, "SIGKILL");
+	} catch {
+		try {
+			child.kill("SIGKILL");
+		} catch {
+			// Already gone, which is what this wanted.
+		}
+	}
+}
+
+
+
+/** Live groups, by board: what is running under a `!` line right now. */
+const groups = new Map<string, Set<ChildProcess>>();
+
+/** A command that has started. Emptying a board has to be able to take it: a command still running when the
+ * human throws the board away writes its file back into the folder after the delete and its note onto a
+ * board that was just emptied. */
+export function trackShell(boardId: string, child: ChildProcess): void {
+	const held = groups.get(boardId) ?? new Set();
+	held.add(child);
+	groups.set(boardId, held);
+}
+
+
+
+/** A command that has ended, however it ended. */
+export function untrackShell(boardId: string, child: ChildProcess): void {
+	const held = groups.get(boardId);
+	if (!held) return;
+	held.delete(child);
+	if (!held.size) groups.delete(boardId);
+}
+
+
+
+/** Every group this board is running, killed. Nothing waits here: the child's own `close` is what settles a run. */
+export function stopShells(boardId: string): number {
+	const held = groups.get(boardId);
+	if (!held) return 0;
+	let killed = 0;
+	for (const child of held) {
+		killGroup(child);
+		killed += 1;
+	}
+	held.clear();
+	groups.delete(boardId);
+	return killed;
 }

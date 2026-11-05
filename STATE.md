@@ -25,6 +25,37 @@ commit's own account rather than on a check run now, the section below says so.
   folder still exists); `POST /workspace {folder}` registers and loads one. State lives in
   `~/.pi/agent/state/pi-studio/`: `daemon.json` (token, port), `workspaces.json` (the list plus the
   crossroads defaults), `boards/<id>.json`, `sessions/<id>/`.
+- **One row on the crossroads is the throwaway one.** A folder in the machine's temp spot
+  (`pi-studio-scratch`), or `scratch/` beside a daemon's own state folder when it has one, which is what
+  keeps a development instance and a test from littering the temp area. `workspaceList()` asks
+  `ensureScratch()` for it on every crossroads read and at boot, so no state file and no `rm -rf /tmp`
+  can leave a row nobody can open; the row's id is recomputed from the folder each time, because a
+  hand-edited file naming another board's id would point the empty press at that board. It is first in
+  the list, and it is not counted among the projects (`1 workspace + scratch`).
+  - **The folder is worked in place.** A thread there gets no worktree: `isScratchFolder` answers before
+    `repoOf`, so a scratch folder that sat inside a checkout cannot cut a branch in that project and its
+    scripts cannot outlive the press.
+  - **The root is never followed.** A symlink or a plain file standing at the scratch path is unlinked and
+    replaced by a directory only this account can write: the temp area is writable by everyone, so a link
+    planted there would make "delete everything in the scratch folder" delete somebody else's folder. A
+    path that cannot be made answers `""`, which the crossroads reads as no row and the empty press as a
+    503 — never as an empty folder to delete into. Boot says so once on stderr rather than throwing.
+  - **`POST /scratch/empty` takes the writers with it.** `clearBoard` now kills the board's running `!`
+    command groups as well as its pi children, and the route clears the board, waits `SCRATCH_SETTLE_MS`
+    (250 ms) and clears it again: a killed command still handles its own `close`, and the note it writes
+    then would land on the board the press just emptied. Then everything inside the folder goes, keeping
+    the folder and the board's settings, and `resync` runs whether the delete worked or not, so a tab is
+    never left drawing cards the daemon no longer has. The route is not in `THREAD_ROUTES`.
+  - **The client asks twice.** The button turns red and says `empty?` for four seconds; the deadline and
+    the in-flight flag live by workspace id rather than on the button, because a live update rebuilds
+    every row. A failed press puts the button back beside the reason. Verified against daemons on their
+    own state folders: the row first and alone, the folder made again after `rm -rf`, a link at the root
+    replaced with the folder it pointed at still holding its file, a file in the folder's place not
+    stopping the boot, a hand-edited id repaired with the other board's card still there, a command
+    killed mid-run leaving neither its file nor its note, two entries and their cards gone after the
+    press, the folder and a `cardsVerbosity` setting still there, and the smoke emptying one instance's
+    row with the other instance's marker intact. In a browser: the armed red button, the empty folder
+    after the second press, the row not opening its board on the way.
 - **Threads** are cards: `POST /thread` creates one in the open workspace, `POST /message {cardId,
   text, mode}` prompts it. The child is spawned on the first message, one per thread, and shut down
   when it settles.

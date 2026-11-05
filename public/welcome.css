@@ -1054,6 +1054,40 @@ body[data-view="settings"] .shelf-stage {
   color: var(--muted);
 }
 
+/* The one throwaway row: its name is quiet, and it is the only row carrying a button. */
+.ws-row.is-scratch .ws-name {
+  color: var(--dim);
+  font-weight: 500;
+}
+
+.ws-empty {
+  font: 11px/1 var(--mono);
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.ws-empty:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.ws-empty.is-armed {
+  color: var(--bad);
+  border-color: var(--bad);
+  background: rgba(248, 81, 73, 0.1);
+}
+
+.ws-empty:disabled {
+  color: var(--muted);
+  border-color: var(--border);
+  background: transparent;
+  cursor: progress;
+}
+
 .enter-glyph {
   color: var(--muted);
   font: 11px/1 var(--mono);

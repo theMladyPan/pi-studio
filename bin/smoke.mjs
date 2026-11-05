@@ -15,7 +15,7 @@
  *   node bin/smoke.mjs --keep   # leave the scratch folders behind, named in the output
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -110,6 +110,11 @@ function recorded(folder) {
 	return { daemon: daemonFile(folder), workspaces: JSON.parse(readFileSync(join(folder, "workspaces.json"), "utf8")) };
 }
 
+/** The rows a human opened: every studio writes down a scratch row of its own, named for what it is. */
+function projectRows(saved) {
+	return (saved.workspaces ?? []).filter((each) => each.name !== "scratch");
+}
+
 async function main() {
 	const first = scratchFolder();
 	const second = scratchFolder();
@@ -150,6 +155,14 @@ async function main() {
 		saved.daemon.token === one.token && Number(saved.daemon.port) > 0,
 		"the token and port are its own",
 		`port ${saved.daemon.port}`,
+	);
+	// The throwaway row: first on the crossroads, and its folder is the daemon's own, so two daemons side
+	// by side cannot empty each other's mess.
+	const rows = JSON.parse((await get(one, `/workspaces?token=${one.token}`)).body || "{}").workspaces ?? [];
+	said(
+		rows[0]?.scratch === true && rows[0]?.name === "scratch" && rows.some((row) => row.id === opened.board.id),
+		"the crossroads puts the scratch row first",
+		`${rows.map((row) => row.name).join(", ")}`,
 	);
 	said(
 		state.meta?.instance === basename(first),
@@ -295,11 +308,27 @@ async function main() {
 	const stillThere = await get(one, `/state?token=${one.token}&workspace=${opened.board.id}`);
 	said(stillThere.status === 200, "the first instance is still answering");
 	// Nothing of the second daemon leaked into the first one's folder: its token file is the one it
-	// wrote, and the only workspace recorded there is the one its own board was opened with.
+	// wrote, and the only folder recorded there beside the scratch row is the one its own board was
+	// opened with.
 	const again = recorded(first);
 	said(
-		again.daemon.token === one.token && again.workspaces.workspaces.length === 1,
+		again.daemon.token === one.token && again.workspaces.workspaces.length === 2 && projectRows(again.workspaces).length === 1,
 		"the second instance left the first one's folder alone",
+		`${projectRows(again.workspaces).length} folder(s) beside the scratch row`,
+	);
+	// Each instance's throwaway row is its own folder. Emptying one must not take the other's work: two
+	// daemons of the same account share nothing but the account.
+	const mineRow = (JSON.parse((await get(one, `/workspaces?token=${one.token}`)).body || "{}").workspaces ?? []).find((row) => row.scratch);
+	const theirRow = (JSON.parse((await get(two, `/workspaces?token=${two.token}`)).body || "{}").workspaces ?? []).find((row) => row.scratch);
+	if (theirRow?.folder) writeFileSync(join(theirRow.folder, "marker.txt"), "theirs\n");
+	const emptied = await get(one, `/scratch/empty?token=${one.token}`, { method: "POST" });
+	said(
+		Boolean(mineRow?.folder) &&
+			mineRow.folder !== theirRow?.folder &&
+			emptied.status === 200 &&
+			existsSync(join(theirRow?.folder ?? "/nonexistent", "marker.txt")),
+		"emptying one instance's scratch row leaves the other's alone",
+		`${mineRow?.folder} | ${theirRow?.folder}`,
 	);
 	for (const daemon of [one, two]) {
 		if (daemon.noise.length) console.log(`     stderr: ${daemon.noise.join("").trim().split("\n").slice(-1)[0]}`);

@@ -20,7 +20,7 @@ import { broadcast } from "../../bus.ts";
 import { plainCardFor } from "../../cards.ts";
 import { scheduleSave } from "../../store.ts";
 import { workdirOf } from "../../worktrees/make.ts";
-import { commandShell } from "../../command-shell.ts";
+import { commandShell, killGroup, trackShell, untrackShell } from "../../command-shell.ts";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 
@@ -45,27 +45,6 @@ function saidAsTime(ms) {
 
 
 /**
- * The whole line the command started, not only the shell in front of it. `sh -c "sleep 600 & wait"` leaves a
- * sleeper behind when only the shell is signalled, and a command that forks is the ordinary case. The command
- * is spawned detached, which makes its pid the pid of its own process group, so one signal takes the group.
- * The direct kill is the fallback for the moment before that group exists.
- */
-function killGroup(child) {
-	if (!child.pid) return;
-	try {
-		process.kill(-child.pid, "SIGKILL");
-	} catch {
-		try {
-			child.kill("SIGKILL");
-		} catch {
-			// Already gone, which is what this wanted.
-		}
-	}
-}
-
-
-
-/**
  * The command, what it printed, and whether one of the two ceilings ended it first.
  *
  * The line goes to a shell with `-c` — a pipe, an `&&`, a glob — because the human typed a line and not an
@@ -74,7 +53,7 @@ function killGroup(child) {
  * where a pipe nobody writes to would leave `cat` waiting out the whole timeout. Both streams go into one
  * buffer in the order they arrived, the way a terminal shows them.
  */
-function runShell(command, cwd, timeoutMs) {
+function runShell(board, command, cwd, timeoutMs) {
 	return new Promise((done) => {
 		let output = "";
 		let cut = false;
@@ -82,6 +61,9 @@ function runShell(command, cwd, timeoutMs) {
 		let settled = false;
 		const shell = commandShell();
 		const child = spawn(shell, ["-c", command], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+		// Named on the board while it runs, so emptying that board can take it. A command nobody can stop is a
+		// command that writes its file back into a folder the human just emptied.
+		trackShell(board.id, child);
 		// The streams stay read after the ceiling is reached: a pipe nobody drains stops a command by filling
 		// up, which is a different thing from the command running out of output. What comes past the ceiling
 		// is counted by nothing and kept by nobody.
@@ -100,6 +82,7 @@ function runShell(command, cwd, timeoutMs) {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
+			untrackShell(board.id, child);
 			// The marker is in the output itself, so the card and the composer's answer say the same thing and
 			// neither of them presents half a listing as a whole one.
 			done({
@@ -187,7 +170,7 @@ export async function onShell(req, res, board) {
 	const thread = threadForRuntime(board, body.cardId);
 	const folder = thread ? workdirOf(board, thread) : board.folder;
 	const timeoutMs = shellTimeout();
-	const run = await runShell(command, folder, timeoutMs);
+	const run = await runShell(board, command, folder, timeoutMs);
 	const note = writeNote(board, command, { ...run, timeoutMs }, thread);
 	// A command that exited non-zero is not a refusal: the human typed it and it ran, so the answer is a 200
 	// carrying what happened. The field says `exit 2` in its own hint from this body, where a 500 would read as

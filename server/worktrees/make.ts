@@ -4,6 +4,7 @@
  * it is cut from.
  */
 import { baseRef, gitIn, repoOf } from "../git/repo.ts";
+import { isScratchFolder } from "../paths.ts";
 import { join, resolve } from "node:path";
 import { existsSync } from "node:fs";
 
@@ -85,6 +86,13 @@ export function ensureWorktree(board, thread) {
 		thread.worktree = undefined;
 	}
 	if (thread.worktree) return thread.worktree;
+	// The throwaway row is worked in place by design, not by the accident of not being a repository: a scratch
+	// folder that happened to sit inside a checkout would otherwise cut a branch in that project, and the
+	// scripts written in the tree would outlive the press that empties the sandbox.
+	if (isScratchFolder(thread.folder ?? board.folder)) {
+		thread.worktree = { skipped: "the scratch folder is worked in place" };
+		return thread.worktree;
+	}
 	const repo = repoOf(thread.folder ?? board.folder);
 	if (!repo) {
 		thread.worktree = { skipped: "this folder is not a git repository" };

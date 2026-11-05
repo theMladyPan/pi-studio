@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
@@ -1926,5 +1927,158 @@ test("a thread's token cannot reach the shell route, whatever it writes in the b
 	} finally {
 		daemon.child.kill();
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("the crossroads always has a scratch row, and its empty press takes the files and the cards", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-scratch-"));
+	const daemon = await boot(stateHome);
+	// A daemon with a state folder of its own keeps its scratch beside it, which is what keeps this test out
+	// of the human's folder and leaves nothing in the temp area once the state folder goes.
+	const scratch = join(stateHome, "scratch");
+	try {
+		const list = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces;
+		assert.equal(list.length, 1, "an unopened studio has more than the scratch row");
+		assert.equal(list[0].scratch, true, "the first row is not the scratch folder");
+		assert.equal(list[0].folder, realpathSync(scratch));
+		assert.equal(list[0].missing, false);
+		assert.equal(list[0].name, "scratch");
+
+		// Deleted by hand, it is made again by the next read: a row whose folder is gone is a row nobody can open.
+		rmSync(scratch, { recursive: true, force: true });
+		const again = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces;
+		assert.equal(again[0].missing, false, "the scratch row came back missing");
+		assert.ok(existsSync(scratch), "the folder was not made again");
+
+		const board = again[0].id;
+		// A real folder opened beside it keeps its own place: the scratch row is first, not instead.
+		const project = mkdtempSync(join(tmpdir(), "pi-studio-scratch-project-"));
+		assert.equal((await post(daemon, "/workspace", { folder: project })).status, 200);
+		const rows = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces;
+		assert.deepEqual(
+			rows.map((row: any) => row.scratch),
+			[true, false],
+			"the scratch row is not the first of two",
+		);
+
+		assert.equal((await postTo(daemon, board, "/card/note", { markdown: "throwaway", key: "n1" })).status, 200);
+		mkdirSync(join(scratch, "deeper"));
+		writeFileSync(join(scratch, "try.py"), "print(1)\n");
+		writeFileSync(join(scratch, "deeper", "x.txt"), "x\n");
+		// A setting is the board's shape, not its mess, so the press must leave it alone.
+		assert.equal((await postTo(daemon, board, "/config", { cardsVerbosity: "verbose" })).status, 200);
+
+		const emptied = await post(daemon, "/scratch/empty");
+		assert.equal(emptied.status, 200);
+		assert.equal(JSON.parse(emptied.body).removed, 2, "the press did not count what it took");
+		assert.deepEqual(readdirSync(scratch), [], "something is still in the scratch folder");
+		assert.ok(existsSync(scratch), "the folder itself went with the press");
+
+		const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board}`)).body);
+		assert.deepEqual(state.cards, [], "a card survived the press");
+		assert.equal(state.meta.config.cardsVerbosity, "verbose", "the press took a setting with the mess");
+		rmSync(project, { recursive: true, force: true });
+	} finally {
+		daemon.child.kill();
+		rmSync(stateHome, { recursive: true, force: true });
+		rmSync(scratch, { recursive: true, force: true });
+	}
+});
+
+test("a link planted at the scratch path is replaced, never walked into", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-scratch-link-"));
+	// The temp area is writable by everyone on the machine, so a link standing at the scratch name is what a
+	// stranger, or a mistake, leaves there. Empty must take the link and never what it points at.
+	const kept = mkdtempSync(join(tmpdir(), "pi-studio-scratch-kept-"));
+	writeFileSync(join(kept, "keep.txt"), "keep\n");
+	symlinkSync(kept, join(stateHome, "scratch"));
+	const daemon = await boot(stateHome);
+	try {
+		const row = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces[0];
+		assert.equal(row.scratch, true);
+		assert.equal(row.missing, false);
+		const emptied = await post(daemon, "/scratch/empty");
+		assert.equal(emptied.status, 200);
+		assert.equal(existsSync(join(kept, "keep.txt")), true, "the press deleted a folder through the link");
+		const root = lstatSync(join(stateHome, "scratch"));
+		assert.equal(root.isSymbolicLink(), false, "the link is still standing at the scratch path");
+		assert.equal(root.isDirectory(), true);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, kept]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a file where the scratch folder belongs does not stop the daemon, and the row is made", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-scratch-file-"));
+	writeFileSync(join(stateHome, "scratch"), "not a folder\n");
+	const daemon = await boot(stateHome);
+	try {
+		// A throw from the folder setup used to take the whole daemon down at its listening line.
+		const row = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces[0];
+		assert.equal(row.scratch, true);
+		assert.equal(row.missing, false, "the row is missing with a file in the folder's place");
+		assert.equal(lstatSync(join(stateHome, "scratch")).isDirectory(), true);
+	} finally {
+		daemon.child.kill();
+		rmSync(stateHome, { recursive: true, force: true });
+	}
+});
+
+test("an id written onto the scratch row by hand cannot point its press at another board", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-scratch-id-"));
+	const project = mkdtempSync(join(tmpdir(), "pi-studio-scratch-id-project-"));
+	const scratch = realpathSync(mkdirSync(join(stateHome, "scratch"), { recursive: true }) ?? join(stateHome, "scratch"));
+	// The identity rule the daemon uses: the first twelve hex of the folder's sha256.
+	const idOf = (folder: string) => createHash("sha256").update(folder).digest("hex").slice(0, 12);
+	const projectId = idOf(realpathSync(project));
+	// A file that names the project's board on the scratch row as well: every card route would clear the project.
+	writeFileSync(
+		join(stateHome, "workspaces.json"),
+		JSON.stringify({
+			version: 1,
+			workspaces: [
+				{ id: projectId, folder: realpathSync(project), name: "project", openedAt: 1 },
+				{ id: projectId, folder: scratch, name: "scratch", openedAt: 0 },
+			],
+			defaults: {},
+		}),
+	);
+	const daemon = await boot(stateHome);
+	try {
+		const rows = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces;
+		assert.equal(rows[0].scratch, true);
+		assert.notEqual(rows[0].id, projectId, "the scratch row kept an id that belongs to another folder");
+		assert.equal(rows[0].id, idOf(scratch));
+
+		assert.equal((await postTo(daemon, projectId, "/card/note", { markdown: "a project's work", key: "p1" })).status, 200);
+		assert.equal((await post(daemon, "/scratch/empty")).status, 200);
+		const kept = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${projectId}`)).body);
+		assert.equal(kept.cards.length, 1, "the press emptied a board that was not the scratch one");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, project]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a command still running when the scratch row is emptied writes nothing back", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-scratch-late-"));
+	const daemon = await boot(stateHome);
+	const scratch = join(stateHome, "scratch");
+	try {
+		const board = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces[0].id;
+		// The line a human would type in the composer: it writes its file half a second from now.
+		const running = postTo(daemon, board, "/shell", { command: "sleep 0.5; printf late > late.txt" });
+		await new Promise((done) => setTimeout(done, 120));
+		assert.equal((await post(daemon, "/scratch/empty")).status, 200);
+		await running;
+		// Long enough that the command would have finished and put its note on the board.
+		await new Promise((done) => setTimeout(done, 900));
+		assert.equal(existsSync(join(scratch, "late.txt")), false, "a killed command wrote its file back");
+		const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board}`)).body);
+		assert.deepEqual(state.cards, [], "a killed command put its note back on the emptied board");
+	} finally {
+		daemon.child.kill();
+		rmSync(stateHome, { recursive: true, force: true });
 	}
 });

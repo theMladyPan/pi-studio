@@ -10,6 +10,7 @@ import { port } from "./main.ts";
 import { retireWorktree } from "./worktrees/retire.ts";
 import { stopStream, liveTurn } from "./child/run.ts";
 import { INSTANCE } from "./paths.ts";
+import { stopShells } from "./command-shell.ts";
 import { MODEL } from "./models.ts";
 import { activeConfig } from "./workspaces.ts";
 import { scheduleSave } from "./store.ts";
@@ -321,6 +322,9 @@ export function cleanBoard(board) {
 
 /** New: the same workspace and the same settings, with nothing on the board. */
 export function clearBoard(board) {
+	// A `!` command running in this board's folder is part of what is being thrown away: left running, it
+	// writes its output file back where the file was and its note onto the board nobody is looking at.
+	stopShells(board.id);
 	for (const thread of [...board.threads.values()]) {
 		board.children.get(thread.id)?.kill("SIGKILL");
 		board.children.delete(thread.id);

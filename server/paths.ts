@@ -9,8 +9,8 @@
  * point at real files exist.
  */
 import { createHash } from "node:crypto";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -54,6 +54,34 @@ export const STATE_DIR = resolve(stateArg.startsWith("~/") ? join(homedir(), sta
 export const INSTANCE = STATE_DIR === homeStateDir() ? "" : basename(STATE_DIR);
 export const STATE_FILE = join(STATE_DIR, "daemon.json");
 export const WORKSPACES_FILE = join(STATE_DIR, "workspaces.json");
+
+/**
+ * The scratch folder: the one workspace that is always on the crossroads and holds nothing worth keeping.
+ *
+ * The studio's own sits in the machine's temp folder, so a reboot does the cleaning, and it keeps a fixed
+ * path because a workspace's identity *is* its path: a name that changed per boot would open a new board
+ * each time while the old files stayed on disk. A daemon with a state folder of its own — a development
+ * instance, a test — keeps its scratch beside that state instead, because a folder in the temp area named
+ * after a state folder that has been deleted is litter nobody can name the owner of.
+ */
+export const SCRATCH_DIR = INSTANCE ? join(STATE_DIR, "scratch") : join(tmpdir(), "pi-studio-scratch");
+
+
+/**
+ * Whether a folder is this daemon's scratch folder. Asked by the worktree maker, so a thread there works in
+ * the folder itself: a scratch folder inside a repository — a state folder a human put in a checkout — would
+ * otherwise get a branch and a tree under that project, and the scripts written in it would outlive the empty
+ * press. The real path is compared when both ends can be read, because `/tmp` is a symlink on some machines.
+ */
+export function isScratchFolder(folder: string): boolean {
+	if (!folder) return false;
+	if (resolve(folder) === resolve(SCRATCH_DIR)) return true;
+	try {
+		return realpathSync(folder) === realpathSync(SCRATCH_DIR);
+	} catch {
+		return false;
+	}
+}
 
 /** The schema the board and workspace files are written with. */
 export const STATE_VERSION = 1;
