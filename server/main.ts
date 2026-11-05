@@ -131,6 +131,33 @@ export function requestUrl(target) {
 
 
 
+/**
+ * Whether a change made on the strength of a cookie came from this daemon's own origin.
+ *
+ * `Sec-Fetch-Site` is the browser's own word and it is enough where it is sent, but a browser sends the
+ * `Sec-Fetch-*` family only to an address it trusts: https, localhost, 127.0.0.1. This daemon is reached as
+ * `http://192.168.x.x` too, where every request arrives without one, so `Origin` answers for it there. The
+ * host and port are what decide: the scheme is left out because the LAN case is plain http behind no proxy,
+ * and a site on another port is another origin. A form from another site sends no `Origin` at all, and a
+ * sandboxed frame sends the string `null`, which is not a URL and is no origin here.
+ */
+export function sameOriginRequest(headers) {
+	if (headers["sec-fetch-site"] === "same-origin") return true;
+	const origin = headers.origin;
+	if (typeof origin !== "string" || !origin || origin === "null") return false;
+	let parts;
+	try {
+		parts = new URL(origin);
+	} catch {
+		// Garbage is refused as a stranger, not thrown: a guard that throws answers 500 instead of 403.
+		return false;
+	}
+	const host = headers.host;
+	return typeof host === "string" && host !== "" && parts.host === host;
+}
+
+
+
 export const server = createServer((req, res) => {
 	void (async () => {
 		const url = requestUrl(req.url);
@@ -189,7 +216,7 @@ export const server = createServer((req, res) => {
 		}
 		// A cookie is sent with whatever a page asks for, so a change made on its strength has to come from
 		// this origin. A token has to be written into the request, which no other site can do.
-		if (caller.via === "cookie" && req.method !== "GET" && req.method !== "HEAD" && req.headers["sec-fetch-site"] !== "same-origin") {
+		if (caller.via === "cookie" && req.method !== "GET" && req.method !== "HEAD" && !sameOriginRequest(req.headers)) {
 			req.resume();
 			fail(res, 403, "cross-site request");
 			return;
