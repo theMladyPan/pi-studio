@@ -1,7 +1,34 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
-import { boards } from "../server/store.ts";
-import { THREAD_ROUTES, callerFor, threadRefusal } from "../server/main.ts";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, test } from "node:test";
+
+/**
+ * The daemon's state folder is resolved once, when `server/paths.ts` is first imported, so this file moves
+ * it to a folder it made before any of the daemon's code is loaded and then loads that code dynamically.
+ * Importing the daemon reads the session store, and a store that pruned while it loaded wrote into whatever
+ * folder was named — the human's own when nothing named one. It writes only into folders it made under
+ * `tmpdir()`, and binds no socket.
+ */
+const state = mkdtempSync(join(tmpdir(), "pi-studio-guard-state-"));
+process.env.PI_STUDIO_STATE = state;
+
+const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+/** A token, and a session that ran out long ago, seeded before the store reads them: reading is the defect. */
+const savedToken = "a".repeat(32);
+const spent = "b".repeat(32);
+const sessionsFile = join(state, "sessions.json");
+const seeded = `${JSON.stringify({ owner: sha(savedToken).slice(0, 16), sessions: { [sha(spent)]: Date.now() - 1000 } }, null, 2)}\n`;
+writeFileSync(join(state, "daemon.json"), JSON.stringify({ token: savedToken }));
+writeFileSync(sessionsFile, seeded);
+
+const { boards } = await import("../server/store.ts");
+const { hasSession } = await import("../server/login.ts");
+const { THREAD_ROUTES, callerFor, threadRefusal } = await import("../server/main.ts");
+
+after(() => rmSync(state, { recursive: true, force: true }));
 
 // A child token is minted inside the spawn, so no HTTP client can forge one. The decision it answers to
 // is a plain function, and that is what these tests call.
@@ -51,6 +78,14 @@ test("the human at the keyboard is never refused", () => {
 		assert.equal(threadRefusal(human, method, "/layout", "board-b"), null);
 		assert.equal(threadRefusal(human, method, "/state", ""), null);
 	}
+});
+
+test("loading the session store prunes in memory and leaves the state folder alone", () => {
+	// The spent session is gone from what the daemon will answer with…
+	assert.equal(hasSession(`pi-studio-${sha(savedToken).slice(0, 8)}=${spent}`), false);
+	// …and the file it was read from is exactly as it was: a load is not a create and not a logout, so it
+	// writes nothing. A test that only imports the daemon must not touch the folder it did not make.
+	assert.equal(readFileSync(sessionsFile, "utf8"), seeded, "loading the sessions wrote to the state folder");
 });
 
 test("a thread's token is its own in a query and nothing at all in a cookie", () => {

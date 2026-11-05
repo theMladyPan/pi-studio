@@ -33,20 +33,19 @@ function save() {
 	writeJsonFile(SESSIONS_FILE, { owner, sessions: Object.fromEntries(sessions) });
 }
 
-/** Forget what has ended. True when something went, so the caller knows the file is stale. */
+/** Forget what has ended. Nothing here writes: the next `save()` carries the result. */
 function prune() {
-	let gone = false;
-	for (const [key, ends] of sessions) {
-		if (ends <= Date.now()) gone = sessions.delete(key) || gone;
-	}
-	return gone;
+	for (const [key, ends] of sessions) if (ends <= Date.now()) sessions.delete(key);
 }
 
 {
 	const saved = readJsonFile<any>(SESSIONS_FILE, null);
 	const kept = saved?.owner === owner && saved.sessions && typeof saved.sessions === "object" ? saved.sessions : {};
 	for (const [key, ends] of Object.entries(kept)) if (typeof ends === "number") sessions.set(key, ends);
-	if (prune() || Object.keys(saved?.sessions ?? {}).length !== sessions.size) save();
+	// Loading writes nothing. What is spent or belongs to another token is dropped from memory here, and the
+	// file follows on the next create or logout: a test that only imports the daemon would otherwise prune
+	// the human's own state folder the moment it ran.
+	prune();
 }
 
 /** A new session's id, to be set as a cookie. Never expires early and is never extended. */

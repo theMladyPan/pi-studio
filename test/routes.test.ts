@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
+import { request } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -1938,6 +1939,21 @@ async function signIn(daemon: Daemon, search = "") {
 	return { res, set, cookie: set.split(";")[0] };
 }
 const asCookie = (cookie: string, init: RequestInit = {}) => ({ ...init, headers: { cookie, ...(init.headers as object) } });
+/**
+ * A POST built by hand, because `fetch` will not write `Host` and the guard reads it beside `Origin`. The
+ * socket still reaches this machine; the headers are the claim a browser on the network makes.
+ */
+function rawPost(daemon: Daemon, path: string, headers: Record<string, string>) {
+	const target = new URL(daemon.base);
+	return new Promise<number>((resolve, reject) => {
+		const sent = request({ host: target.hostname, port: target.port, path, method: "POST", headers }, (res) => {
+			res.resume();
+			res.on("end", () => resolve(res.statusCode ?? 0));
+		});
+		sent.on("error", reject);
+		sent.end();
+	});
+}
 
 test("the link pi prints is traded for a session cookie, and the cookie alone opens the data routes", async () => {
 	const state = mkdtempSync(join(tmpdir(), "pi-studio-cookie-"));
@@ -1988,17 +2004,25 @@ test("no credential, a wrong token and a master token in a cookie are all refuse
 	}
 });
 
-test("a change made on a cookie has to say it is same-origin, and a token needs no such word", async () => {
+test("a change made on a cookie has to come from this origin, and a token needs no such word", async () => {
 	const state = mkdtempSync(join(tmpdir(), "pi-studio-cookie-"));
 	const daemon = await boot(state);
 	try {
 		const { cookie } = await signIn(daemon);
-		const send = (headers: Record<string, string>) =>
-			get(daemon, "/pick-folder", { method: "POST", headers: { cookie, ...headers } });
-		assert.equal((await send({})).status, 403);
-		assert.equal((await send({ "sec-fetch-site": "cross-site" })).status, 403);
-		assert.notEqual((await send({ "sec-fetch-site": "same-origin" })).status, 403);
-		assert.notEqual((await post(daemon, "/pick-folder")).status, 403);
+		// An address the daemon would answer on when it is bound beyond this machine. Nothing there is https,
+		// so a browser sends no `Sec-Fetch-Site` at all and `Origin` is the only word it has.
+		const host = "192.168.1.5:5173";
+		const send = (headers: Record<string, string>) => rawPost(daemon, "/defaults", { cookie, host, ...headers });
+		assert.equal(await send({ "sec-fetch-site": "same-origin" }), 200);
+		assert.equal(await send({ "sec-fetch-site": "cross-site" }), 403);
+		// The plain-http LAN case: no `Sec-Fetch-*` header, and an `Origin` whose host and port are the `Host`.
+		assert.equal(await send({ origin: `http://${host}` }), 200);
+		assert.equal(await send({ origin: "http://192.168.1.6:5173" }), 403);
+		// A form from another site sends no `Origin`, and a sandboxed frame sends the string `null`.
+		assert.equal(await send({}), 403);
+		assert.equal(await send({ origin: "null" }), 403);
+		// A token is written into the request, which no other site can do, so it needs neither header.
+		assert.equal((await post(daemon, "/defaults")).status, 200);
 	} finally {
 		daemon.child.kill();
 		rmSync(state, { recursive: true, force: true });
@@ -2040,15 +2064,24 @@ test("an expired session stays refused after a restart, and a changed token drop
 		assert.equal((await get(daemon, "/workspaces", asCookie(cookie))).status, 200);
 		daemon.child.kill();
 		// …and gone once its time has passed.
-		writeFileSync(file, JSON.stringify({ ...kept, sessions: { [Object.keys(kept.sessions)[0]]: Date.now() - 1000 } }));
+		const expired = { ...kept, sessions: { [Object.keys(kept.sessions)[0]]: Date.now() - 1000 } };
+		writeFileSync(file, JSON.stringify(expired));
 		daemon = await boot(state);
 		assert.equal((await get(daemon, "/workspaces", asCookie(cookie))).status, 403);
-		assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).sessions, {});
+		// A load prunes in memory and writes nothing, so the spent session is still in the file it was read
+		// from; the first create or logout after it is what clears the file out.
+		assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).sessions, expired.sessions);
+		await signIn(daemon);
+		const keptNow = JSON.parse(readFileSync(file, "utf8")).sessions;
+		assert.equal(Object.keys(keptNow).length, 1);
+		assert.equal(keptNow[Object.keys(expired.sessions)[0]], undefined);
 		// Another token owns none of what the file holds.
 		daemon.child.kill();
-		writeFileSync(file, JSON.stringify({ owner: "0".repeat(16), sessions: { [Object.keys(kept.sessions)[0]]: Date.now() + 1e9 } }));
+		const foreign = { owner: "0".repeat(16), sessions: { [Object.keys(kept.sessions)[0]]: Date.now() + 1e9 } };
+		writeFileSync(file, JSON.stringify(foreign));
 		daemon = await boot(state);
-		assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).sessions, {});
+		assert.equal((await get(daemon, "/workspaces", asCookie(cookie))).status, 403);
+		assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).sessions, foreign.sessions);
 	} finally {
 		daemon.child.kill();
 		rmSync(state, { recursive: true, force: true });
