@@ -2534,14 +2534,8 @@ function startCardDrag(card, event) {
     y: parseFloat(other.style.top),
   }));
   const move = (ev) => {
-    let dx = (ev.clientX - sx) / view.k;
-    let dy = (ev.clientY - sy) / view.k;
-    // The daemon stores nothing above the origin, so the group stops as one whole rather than being
-    // torn apart by the cards that would land past the edge.
-    for (const spot of from) {
-      dx = Math.max(dx, -spot.x);
-      dy = Math.max(dy, -spot.y);
-    }
+    const dx = (ev.clientX - sx) / view.k;
+    const dy = (ev.clientY - sy) / view.k;
     for (const spot of from) {
       spot.card.style.left = `${spot.x + dx}px`;
       spot.card.style.top = `${spot.y + dy}px`;
@@ -2556,8 +2550,8 @@ function startCardDrag(card, event) {
       spot.card.classList.remove("dragging");
       const x = Math.round(parseFloat(spot.card.style.left));
       const y = Math.round(parseFloat(spot.card.style.top));
-      // The selection carries cards the drag never carried, and the clamp can absorb the whole
-      // travel, so a card whose place the board already holds is neither moved nor written.
+      // The selection carries cards the drag never carried, so a card whose place the board already
+      // holds is neither moved nor written.
       const before = spot.card.dataset.rect ? rectOf(spot.card) : null;
       if (before && before.x === x && before.y === y) continue;
       // A folded card measures as its header only, so its stored height is the one to unfold into.

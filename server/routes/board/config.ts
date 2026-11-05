@@ -161,8 +161,11 @@ export async function onLayout(req, res, board) {
 	const held = board.threads.get(id) ?? board.cards.get(id);
 	const rect = body.rect;
 	if (!held || !rect) return void fail(res, 409, "no such card");
-	const clamp = (value) => Math.max(0, Math.min(40000, Math.round(Number.isFinite(Number(value)) ? Number(value) : 0)));
-	held.rect = { x: clamp(rect.x), y: clamp(rect.y), w: clamp(rect.w), h: clamp(rect.h) };
+	const round = (value) => Math.round(Number.isFinite(Number(value)) ? Number(value) : 0);
+	// A place is somewhere on an endless board, so it may be west or north of the origin; a size is not.
+	const at = (value) => Math.max(-40000, Math.min(40000, round(value)));
+	const size = (value) => Math.max(1, Math.min(40000, round(value)));
+	held.rect = { x: at(rect.x), y: at(rect.y), w: size(rect.w), h: size(rect.h) };
 	if (typeof body.mini === "boolean") held.mini = body.mini;
 	// A pin is the human's: the card stays when the board has to make room for a new one.
 	if (typeof body.pinned === "boolean") held.pinned = body.pinned;
