@@ -7602,6 +7602,9 @@ function paintRemoveSheet(preview) {
       ? "This removes the card, the conversation on it and its branch. Nothing is kept, so there is no undo."
       : "This removes the card and the conversation on it. Nothing is kept, so there is no undo.";
   const parts = [warning];
+  // The ignored files git deletes without a word, named while they fit on the page: a list says more
+  // than a count, so the line that only counted them is kept for the case where no list fits.
+  const ignoredNames = Array.isArray(preview.ignoredNames) ? preview.ignoredNames : [];
   // The counts in words: the work sitting in the folder, the files git deletes without a word, and the work
   // that never left the branch. The two clauses that talk about the branch are only said when there is one:
   // a folder before its first commit is detached, and a sentence about a branch it does not have is noise.
@@ -7610,7 +7613,9 @@ function paintRemoveSheet(preview) {
     const risk = el("div", "act-prose");
     risk.textContent = [
       dirty ? `${counted(dirty, "uncommitted file")} in the folder would go` : "nothing uncommitted",
-      ignored ? `${counted(ignored, "ignored file")} would go with the folder, and no diff can show ${ignored === 1 ? "it" : "them"}` : "",
+      ignored && !ignoredNames.length
+        ? `${counted(ignored, "ignored file")} would go with the folder, and no diff can show ${ignored === 1 ? "it" : "them"}`
+        : "",
       commits
         ? `${counted(commits, "commit")} never reached ${base || "another branch"}`
         : preview.branch
@@ -7623,9 +7628,8 @@ function paintRemoveSheet(preview) {
       .join("\n");
     parts.push(panelBlock("the work at risk", risk));
   }
-  // The ignored files are the ones git deletes without a word and no diff draws, so the sheet names them while
-  // they fit: a count alone leaves the human guessing what else the folder was holding.
-  const ignoredNames = Array.isArray(preview.ignoredNames) ? preview.ignoredNames : [];
+  // The list carries the sentence the count used to: named or counted, these are files no diff can draw,
+  // so the sheet never leaves that unsaid.
   if (ignoredNames.length) {
     const names = el("div", "act-kv");
     for (const name of ignoredNames) {
@@ -7634,7 +7638,11 @@ function paintRemoveSheet(preview) {
       row.children[0].textContent = String(name);
       names.appendChild(row);
     }
-    parts.push(panelBlock("the ignored files that would go", names));
+    const said = el("div", "gone");
+    said.textContent = "git ignores these, so it deletes them without asking, and no diff can show them";
+    const block = panelBlock("the ignored files that would go", names);
+    block.appendChild(said);
+    parts.push(block);
   }
   // The daemon's own line about this removal, when it has one: it is the only thing that can say why a
   // folder has no diff, so it stands on its own rather than under a heading that would contradict it.
