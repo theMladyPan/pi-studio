@@ -4,8 +4,9 @@
  * pickers.
  */
 import { answer, fail, readJson } from "../http.ts";
-import { CONTROL_CHARS, MAX_EDITOR_CHARS } from "../limits.ts";
+import { CONTROL_CHARS, MAX_EDITOR_CHARS, SCRATCH_SETTLE_MS } from "../limits.ts";
 import { join, resolve } from "node:path";
+import { SCRATCH_DIR } from "../paths.ts";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
 import { activeHomeDefaults, describeWorkspace, emptyScratchFolder, ensureScratch, homeDefaults, rememberWorkspace, setHomeDefaults } from "../workspaces.ts";
@@ -30,6 +31,9 @@ export async function onOpenWorkspace(req, res) {
 	if (folder.startsWith("~/")) folder = join(homedir(), folder.slice(2));
 	if (!folder) return void fail(res, 400, "a folder is required");
 	const absolute = resolve(folder);
+	// The one folder the app promises to have: a path typed into the box may be the scratch root, which the
+	// daemon makes on demand, and refusing it as missing would break that promise.
+	if (absolute === resolve(SCRATCH_DIR)) ensureScratch();
 	if (!existsSync(absolute) || !statSync(absolute).isDirectory()) {
 		// A typo fails here rather than creating a tree somewhere the human did not look.
 		return void fail(res, 404, `no such folder: ${absolute}`);
@@ -43,18 +47,34 @@ export async function onOpenWorkspace(req, res) {
 
 
 /**
- * The scratch row's one press. The children go first and are killed by the clear: a run still writing into
- * the folder would put back a file the delete just took. The settings stay, because the next question is
- * still asked on the same board — only the mess and the cards are what "throwaway" means.
+ * The scratch row's one press. The writers go first: a pi child killed by the clear cannot write again, and
+ * `clearBoard` takes the board's running `!` commands with it, so nothing puts a file back after the delete.
+ * The board is cleared twice around a short wait, because a killed command still handles its own `close` and
+ * the note it writes then would land on the board this press just emptied. The settings stay: the next
+ * question is asked on the same board, so only the mess and the cards are what "throwaway" means.
  */
 export async function onScratchEmpty(req, res) {
 	req.resume();
 	const workspace = ensureScratch();
+	// The folder could not be made at all — a temp area that is not writable, a path a file already holds.
+	// Saying so is the honest answer; deleting "everything" in a folder that is not ours is not.
+	if (!workspace) return void fail(res, 503, "the scratch folder could not be made");
 	const board = boardFor(workspace);
 	clearBoard(board);
-	const removed = emptyScratchFolder();
+	await new Promise((done) => setTimeout(done, SCRATCH_SETTLE_MS));
+	clearBoard(board);
+	let removed = 0;
+	let failure = null;
+	try {
+		removed = emptyScratchFolder();
+	} catch (error) {
+		failure = error;
+	}
+	// A tab is told either way: the cards are already gone from memory, so a tab that hears nothing would
+	// keep drawing a board that no longer exists.
 	resync(board);
 	nudgeWelcome();
+	if (failure) return void fail(res, 500, `the files were not deleted: ${failure.message || failure}`);
 	answer(res, 200, { emptied: true, removed });
 }
 

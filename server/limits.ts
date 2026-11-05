@@ -83,3 +83,11 @@ export const SHELL_TIMEOUT_MS = 60_000;
  * is a glance at what the command said and not a copy of everything it printed.
  */
 export const SHELL_OUTPUT_CHARS = 20_000;
+
+
+/**
+ * How long emptying the scratch row waits between killing its writers and clearing the board a second time.
+ * A killed process still has a `close` to handle, and the note it writes then would land on the board the
+ * press just emptied. Short enough to press again, long enough for a signal to have done its work.
+ */
+export const SCRATCH_SETTLE_MS = 250;
