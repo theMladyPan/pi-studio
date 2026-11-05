@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { cardFor, plainCardFor } from "../server/cards.ts";
-import { restoredPlainCard, restoredThread } from "../server/store.ts";
+import { restoredPlainCard, restoredThread, savedTurn } from "../server/store.ts";
 
 const now = 1_700_000_000_000;
 
@@ -29,6 +29,25 @@ test("a thread file from today reloads with its fields intact", () => {
 	assert.equal(thread.turns[0].status, "answered");
 	assert.deepEqual(thread.worktree, saved.worktree);
 	assert.equal(thread.folder, "/tmp/folder");
+});
+
+test("a steer the run read survives a save and a load, and a turn still in flight does not", () => {
+	// A steer that joined a live run is answered inside the run's own turn, so its words were spent and the
+	// file has to say so: saved as stopped, a restart brought the false label back. A turn the run is still
+	// writing, and one waiting behind it, are nobody's work once the daemon is gone.
+	const spent = savedTurn({ text: "and this instead", status: "sent", mode: "steer", at: now });
+	assert.equal(spent.status, "sent");
+	const writing = savedTurn({ text: "the first words", status: "sent", mode: "queue", streaming: true, at: now });
+	assert.equal(writing.status, "stopped");
+	const waiting = savedTurn({ text: "behind the run", status: "queued", mode: "queue", at: now });
+	assert.equal(waiting.status, "stopped");
+
+	const thread = restoredThread({ id: "t10", title: "x", at: now, turns: [spent, writing, waiting] }, "/tmp/folder")!;
+	assert.deepEqual(
+		thread.turns.map((turn) => turn.status),
+		["sent", "stopped", "stopped"],
+	);
+	assert.equal(thread.turns[0].mode, "steer");
 });
 
 test("a boss comes back as a boss, with the flow it was running", () => {
