@@ -8,7 +8,7 @@ import { cardPreamble, field } from "./thread.ts";
 import { randomUUID } from "node:crypto";
 import { runtimeDefaults } from "../../workspaces.ts";
 import { card, update, updateCard } from "../../bus.ts";
-import { threadError } from "../../cards.ts";
+import { acceptedImages, promptImages, thumbImages, threadError } from "../../cards.ts";
 import { prompt } from "../../child/run.ts";
 
 
@@ -34,7 +34,11 @@ export async function onMessage(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const text = typeof body.text === "string" ? body.text.trim() : "";
-	if (!text) return void fail(res, 400, "empty message");
+	// A message may be pictures alone: the words are what a turn says, and a screenshot says something.
+	const images = acceptedImages(body.images);
+	if (!text && !images.length) return void fail(res, 400, "empty message");
+	// What the turn remembers of them, which is the thumbnail and not the bytes.
+	const thumbs = thumbImages(images);
 	const mode = body.mode === "steer" ? "steer" : "queue";
 	const asked = typeof body.cardId === "string" ? body.cardId : "";
 	const fork = body.fork === true;
@@ -120,12 +124,24 @@ export async function onMessage(req, res, board) {
 	if (holding) {
 		holding.turns = holding.turns ?? [];
 		// A steer joins the run in flight, so the turn is already being acted on.
-		holding.turns.push({ text: text.slice(0, 4000), status: mode === "steer" ? "sent" : "queued", mode, at: Date.now() });
+		holding.turns.push({
+			text: text.slice(0, 4000),
+			status: mode === "steer" ? "sent" : "queued",
+			mode,
+			at: Date.now(),
+			...(thumbs.length ? { images: thumbs } : {}),
+		});
 		index = holding.turns.length - 1;
 		target = { cardId: holding.id, turn: index };
 		updateCard(board, holding);
 	} else {
-		thread.turns.push({ text: text.slice(0, 4000), status: mode === "steer" ? "sent" : "queued", mode, at: Date.now() });
+		thread.turns.push({
+			text: text.slice(0, 4000),
+			status: mode === "steer" ? "sent" : "queued",
+			mode,
+			at: Date.now(),
+			...(thumbs.length ? { images: thumbs } : {}),
+		});
 		index = thread.turns.length - 1;
 		// The thread's own turn is named by its index alone: there is no card holding it.
 		target = { turn: index };
@@ -135,16 +151,22 @@ export async function onMessage(req, res, board) {
 	if (running && mode === "steer") {
 		// A steer joins the run in flight instead of waiting behind it.
 		try {
-			board.children.get(thread.id)?.stdin?.write(`${JSON.stringify({ id: randomUUID(), type: "steer", message })}\n`);
+			const pictures = promptImages(images);
+			board.children
+				.get(thread.id)
+				?.stdin?.write(
+					`${JSON.stringify({ id: randomUUID(), type: "steer", message, ...(pictures.length ? { images: pictures } : {}) })}\n`,
+				);
 		} catch (error) {
 			threadError(board, thread, `could not steer the child: ${error.message}`);
 		}
 	} else if (running) {
 		// The card quote is kept beside the words the human typed, so a message still waiting can be
 		// rewritten without losing what the child needs to know about the card it is about.
-		thread.queued.push({ message, text, preamble, target });
+		// The pictures wait with the words: a run that has not read them yet is not told about them twice.
+		thread.queued.push({ message, text, preamble, target, ...(images.length ? { images } : {}) });
 	} else {
-		prompt(board, thread, message, target);
+		prompt(board, thread, message, target, images);
 	}
 	answer(res, 200, { id: thread.id, turn: index });
 }

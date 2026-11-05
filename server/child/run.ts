@@ -10,7 +10,7 @@ import { ensureWorktree, shortId, workdirOf } from "../worktrees/make.ts";
 import { handleChildLine, thinkingRuns } from "../thought.ts";
 import { homeCard } from "../routes/board/message.ts";
 import { port } from "../main.ts";
-import { cardFor, plainCardFor, threadError } from "../cards.ts";
+import { cardFor, plainCardFor, promptImages, threadError } from "../cards.ts";
 import { StringDecoder } from "node:string_decoder";
 import { lastLine } from "./describe.ts";
 import { NAME_MODEL, nameThread, titleFromRequest } from "../worktrees/name.ts";
@@ -131,7 +131,7 @@ export function wireText(thread, text) {
 
 
 /** One prompt, either a new question or what was waiting behind the run in flight. */
-export function prompt(board, thread, text, target = null) {
+export function prompt(board, thread, text, target = null, images = []) {
 	// The tree is made here, before anything is spawned: this is the first moment the thread is going
 	// to do something, and the child's working folder is decided by it.
 	ensureWorktree(board, thread);
@@ -172,9 +172,13 @@ export function prompt(board, thread, text, target = null) {
 	thinkingRuns.delete(thread);
 	update(board, thread);
 	const message = wireText(thread, text);
+	// The pictures ride beside the words, as pi's RPC takes them: the base64 and the type it is.
+	const pictures = promptImages(images);
 	try {
 		const child = ensureChild(board, thread);
-		child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "prompt", message })}\n`);
+		child.stdin.write(
+			`${JSON.stringify({ id: randomUUID(), type: "prompt", message, ...(pictures.length ? { images: pictures } : {}) })}\n`,
+		);
 	} catch (error) {
 		threadError(board, thread, `could not send to the child: ${error.message}`);
 	}

@@ -12,7 +12,7 @@ import { answer, fail } from "./http.ts";
 import { MODEL, PROVIDER, THINKING_LEVELS } from "./models.ts";
 import { ROLE_NAMES } from "./child/roles.ts";
 import { MODE_NAMES, PATH_NAMES } from "./child/modes.ts";
-import { sweepTrees } from "./cards.ts";
+import { sweepTrees, thumbImages } from "./cards.ts";
 import { MAX_PUT_AWAY_CHILDREN } from "./limits.ts";
 
 
@@ -36,6 +36,12 @@ export function savedTurn(turn) {
 		// a run that answered out of nowhere.
 		...(turn.interim?.length ? { interim: turn.interim } : {}),
 		...(turn.error ? { error: turn.error } : {}),
+		// A picture is written as its thumbnail: the bytes are the pages the turn was read on, and a board
+		// file carrying whole screenshots would grow by a megabyte each.
+		...(() => {
+			const images = thumbImages(turn.images);
+			return images.length ? { images } : {};
+		})(),
 	};
 }
 
@@ -160,6 +166,11 @@ export function restoredTurns(raw) {
 			...(typeof turn.reply === "string" ? { reply: turn.reply } : {}),
 			...(Array.isArray(turn.interim) && turn.interim.length ? { interim: turn.interim.map(String) } : {}),
 			...(typeof turn.error === "string" && turn.error ? { error: turn.error } : {}),
+			// The same gate the message came through: a thumbnail the file cannot vouch for is dropped.
+			...(() => {
+				const images = thumbImages(turn.images);
+				return images.length ? { images } : {};
+			})(),
 		}));
 }
 
