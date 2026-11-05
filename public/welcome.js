@@ -6,9 +6,8 @@
  * client module here would 404 at runtime with every check green.
  */
 (() => {
-  const token = new URLSearchParams(location.search).get("token") || "";
-  // The token rides on every request, the stream included: the daemon accepts nothing without it.
-  const qs = () => `token=${encodeURIComponent(token)}`;
+  // No token rides on a request: the browser's session cookie is the credential, and the daemon
+  // set it when the link pi printed was first opened.
 
   /** Where the human left the settings tree, one entry per dotted group path. */
   const COLLAPSE_KEY = "pi-studio.settings.collapsed.v1";
@@ -284,7 +283,7 @@
   function openBoard(id) {
     const workspace = workspaces.find((candidate) => candidate.id === id);
     if (!workspace || workspace.missing) return;
-    const url = `/w/${workspace.id}?${qs()}`;
+    const url = `/w/${workspace.id}`;
     const tab = window.open(url, `pi-studio-${workspace.id}`);
     // A tab that already carries this name is only focused, not reloaded, so a board left open from an
     // older build would keep its stale client. Navigating it again costs one reload and means the tab
@@ -372,7 +371,7 @@
 
   async function load() {
     try {
-      const response = await fetch(`/workspaces?${qs()}`);
+      const response = await fetch("/workspaces");
       if (!response.ok) throw new Error((await response.text()).slice(0, 120) || response.statusText);
       const data = await response.json();
       adopt(data.workspaces);
@@ -390,7 +389,7 @@
     pathError = "";
     applyFilter();
     try {
-      const response = await fetch(`/workspace?${qs()}`, {
+      const response = await fetch("/workspace", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ folder }),
@@ -413,7 +412,7 @@
     applyFilter();
     try {
       // A browser cannot hand us an absolute path, so the daemon asks the machine's own dialog.
-      const response = await fetch(`/pick-folder?${qs()}`, { method: "POST" });
+      const response = await fetch("/pick-folder", { method: "POST" });
       if (!response.ok) throw new Error((await response.text()).slice(0, 140) || response.statusText);
       const data = await response.json();
       if (data.cancelled) return;
@@ -627,7 +626,7 @@
     const write = field.write;
     if (!write?.route) return;
     const method = write.method || "POST";
-    const route = `${write.route}${write.route.includes("?") ? "&" : "?"}${qs()}`;
+    const route = write.route;
     const body = bodyOf(field, value);
     paint("saving…", "dirty");
     setSaved("dirty", `saving… · ${field.label}`);
@@ -680,7 +679,7 @@
   async function loadTools() {
     if (toolCatalogue || toolsTrouble) return toolCatalogue;
     try {
-      const response = await fetch(`/tools?${qs()}`);
+      const response = await fetch("/tools");
       if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
       toolCatalogue = await response.json();
     } catch (error) {
@@ -757,7 +756,7 @@
       // the row's words are only for a failure that arrived without one.
       let said = "";
       try {
-        const response = await fetch(`${field.browse}?${qs()}`, { method: "POST" });
+        const response = await fetch(field.browse, { method: "POST" });
         if (!response.ok) {
           said = (await response.text()).slice(0, 160) || response.statusText;
           throw new Error(said);
@@ -922,7 +921,7 @@
       async function loadText() {
         paint("reading the file…", "");
         try {
-          const response = await fetch(`${read}${read.includes("?") ? "&" : "?"}${qs()}`);
+          const response = await fetch(read);
           if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
           const { text } = await response.json();
           const whole = String(text ?? "");
@@ -1139,7 +1138,7 @@
 
   async function loadDocument() {
     try {
-      const response = await fetch(`/settings/defaults?${qs()}`);
+      const response = await fetch("/settings/defaults");
       if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
       doc = await response.json();
       renderDocument();
@@ -1251,19 +1250,11 @@
     }
   });
 
-  if (!token) {
-    nodes.list.hidden = true;
-    nodes.empty.hidden = false;
-    nodes.emptyTitle.textContent = "This page was opened without a token.";
-    nodes.emptyCopy.textContent = "Use the URL pi-studio printed, the one ending in ?token=…";
-    return;
-  }
-
   showView("shelf");
   void load();
 
   // Counts on this page are live: a thread that starts or settles elsewhere shows up here.
-  const stream = new EventSource(`/events?scope=welcome&${qs()}`);
+  const stream = new EventSource("/events?scope=welcome");
   stream.onmessage = (message) => {
     try {
       const payload = JSON.parse(message.data);
