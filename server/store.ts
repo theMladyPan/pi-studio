@@ -193,7 +193,9 @@ export function restoredThread(raw, folder) {
 		...(MODE_NAMES.includes(raw.mode) ? { mode: raw.mode } : {}),
 		...(MODE_NAMES.includes(raw.runMode) ? { runMode: raw.runMode } : {}),
 		...(PATH_NAMES.includes(raw.path) ? { path: raw.path } : {}),
-		...(raw.pathChosenBy === "human" || raw.pathChosenBy === "auto" ? { pathChosenBy: raw.pathChosenBy } : {}),
+		...(raw.pathChosenBy === "human" || raw.pathChosenBy === "auto" || raw.pathChosenBy === "board"
+			? { pathChosenBy: raw.pathChosenBy }
+			: {}),
 		...(typeof raw.type === "string" && raw.type ? { type: raw.type } : {}),
 		// The tree is not made again after a restart: it is on disk, and its branch is where the work is.
 		...(raw.worktree && typeof raw.worktree === "object" && typeof raw.worktree.path === "string"
