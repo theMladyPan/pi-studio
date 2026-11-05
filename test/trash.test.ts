@@ -11,6 +11,7 @@ import { test } from "node:test";
 process.env.PI_STUDIO_STATE = mkdtempSync(join(tmpdir(), "pi-studio-trash-state-"));
 
 const { onFragmentRemove, onFragments, onRemove, onRemovePreview } = await import("../server/routes/board/lifecycle.ts");
+const { PREVIEW_IGNORED_FILES } = await import("../server/worktrees/fragments.ts");
 const { discardBranch } = await import("../server/worktrees/retire.ts");
 const { ensureWorktree } = await import("../server/worktrees/make.ts");
 const { sessionFile } = await import("../server/session.ts");
@@ -226,13 +227,34 @@ test("a preview counts the ignored files the forced removal takes with the folde
 		const board = scratchBoard(repo);
 		const { thread, tree } = startThread(board, "2222aaaa", "feat/2222-work-2222aaaa");
 		writeFileSync(join(tree.path, "installed.log"), "a dependency nobody wants to see\n");
+		// A name git would quote in its line form, because the sheet draws what it is handed.
+		writeFileSync(join(tree.path, "my cache.log"), "a space in the name\n");
 		const res = scratchRes();
 		await onRemovePreview(jsonRequest({ card: thread.id }), res, board);
 		assert.equal(res.status, 200, res.body);
 		const seen = answered(res);
 		assert.equal(seen.dirty, 0, "an ignored file is not an uncommitted change");
 		assert.deepEqual(seen.new, []);
-		assert.equal(seen.ignored, 1, "the folder says it holds nothing while git is about to drop a file");
+		assert.equal(seen.ignored, 2, "the folder says it holds nothing while git is about to drop a file");
+		assert.deepEqual([...seen.ignoredNames].sort(), ["installed.log", "my cache.log"], "the sheet cannot name what it drops");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a folder holding more ignored files than the sheet names arrives as a count alone", async () => {
+	const repo = scratchRepo();
+	try {
+		writeFileSync(join(repo, ".git", "info", "exclude"), "*.log\n");
+		const board = scratchBoard(repo);
+		const { thread, tree } = startThread(board, "3333bbbb", "feat/3333-work-3333bbbb");
+		for (let at = 0; at <= PREVIEW_IGNORED_FILES; at += 1) writeFileSync(join(tree.path, `dep-${at}.log`), "x\n");
+		const res = scratchRes();
+		await onRemovePreview(jsonRequest({ card: thread.id }), res, board);
+		assert.equal(res.status, 200, res.body);
+		const seen = answered(res);
+		assert.equal(seen.ignored, PREVIEW_IGNORED_FILES + 1);
+		assert.deepEqual(seen.ignoredNames, [], "a list past the page is a list the sheet cannot draw");
 	} finally {
 		rmSync(repo, { recursive: true, force: true });
 	}

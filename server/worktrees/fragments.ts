@@ -16,6 +16,9 @@ export const PREVIEW_DIFF_CHARS = 8000;
 /** How many of a folder's new files the preview names, one per line: past this its count is the answer. */
 export const PREVIEW_NEW_FILES = 20;
 
+/** How many of a folder's ignored files the preview names, one per line, on the same rule. */
+export const PREVIEW_IGNORED_FILES = 20;
+
 
 
 /** The tree record a board keeps for a thread's folder: its own pointer, or the board's record for it. */
@@ -115,6 +118,7 @@ export function removePreview(board: BoardLike, thread: ThreadLike) {
 	let dirty = 0;
 	let fresh: string[] = [];
 	let ignored = 0;
+	let ignoredNames: string[] = [];
 	let commits = 0;
 	let raw = "";
 	if (present) {
@@ -133,8 +137,13 @@ export function removePreview(board: BoardLike, thread: ThreadLike) {
 		// has to say: a count of changes with an empty diff under it reads as a folder holding nothing.
 		fresh = lines.filter((line) => line.startsWith("?? ")).map((line) => line.slice(3));
 		// `--ignored=matching` is the only place git lists the files its own removal deletes without asking.
-		const also = gitIn(path, ["status", "--porcelain", "--ignored=matching"], 10_000);
-		ignored = also.ok ? also.out.split("\n").filter((line) => line.startsWith("!! ")).length : 0;
+		// `-z` for the same reason as above: the sheet draws the name it is given, and the line form would
+		// hand it the quoting git puts around one holding a space. An ignored entry names no source, so no
+		// field is skipped here.
+		const also = gitIn(path, ["status", "--porcelain", "-z", "--ignored=matching"], 10_000);
+		const gone = also.ok ? also.out.split("\0").filter((field) => field.startsWith("!! ")) : [];
+		ignored = gone.length;
+		ignoredNames = gone.map((field) => field.slice(3));
 	}
 	if (base) {
 		// The tree's own HEAD is what its commits hang on while it is on disk; a deleted folder leaves only
@@ -162,6 +171,8 @@ export function removePreview(board: BoardLike, thread: ThreadLike) {
 		// The new files the diff above cannot show: each name alone while they fit, their count when not.
 		new: fresh.length > PREVIEW_NEW_FILES ? fresh.length : fresh,
 		ignored,
+		// The wildcard files the folder's removal takes without asking, named while they fit.
+		ignoredNames: ignoredNames.length > PREVIEW_IGNORED_FILES ? [] : ignoredNames,
 		diff: raw.slice(0, PREVIEW_DIFF_CHARS),
 		trunc: raw.length > PREVIEW_DIFF_CHARS,
 		note,

@@ -7549,12 +7549,14 @@ function armedPress(button, label, act) {
   return reset;
 }
 
-const removeGoReset = armedPress(removeGo, "remove it", () => removeThread());
+// The sheet has already asked what the removal costs, so its yes is one press: the red button is the
+// confirmation, and a "sure?" on top of it would ask the same question twice.
+removeGo.addEventListener("click", () => void removeThread());
 
 /**
  * The trash on a thread: the sheet opens at once with the line that it is asking, then holds what the
- * removal would cost. The remove press stays dead until that answer is on screen, so nobody confirms a
- * sheet that has not said what goes with the card.
+ * removal would cost. The remove press stays dead until that answer is on screen, so nobody presses yes
+ * on a sheet that has not said what goes with the card.
  */
 async function openRemoveSheet(entry, opener) {
   removeCard = entry.id;
@@ -7562,7 +7564,6 @@ async function openRemoveSheet(entry, opener) {
   removeName = entry.data.title || "this thread";
   removePanelName.textContent = removeName;
   removePanelMeta.textContent = "";
-  removeGoReset();
   removeGo.disabled = true;
   const looking = el("div", "gone");
   looking.textContent = "looking at what would go with it…";
@@ -7608,7 +7609,7 @@ function paintRemoveSheet(preview) {
     const ignored = Number(preview.ignored) || 0;
     const risk = el("div", "act-prose");
     risk.textContent = [
-      dirty ? `${counted(dirty, "uncommitted file")} in the folder would go` : "the folder holds nothing uncommitted",
+      dirty ? `${counted(dirty, "uncommitted file")} in the folder would go` : "nothing uncommitted",
       ignored ? `${counted(ignored, "ignored file")} would go with the folder, and no diff can show ${ignored === 1 ? "it" : "them"}` : "",
       commits
         ? `${counted(commits, "commit")} never reached ${base || "another branch"}`
@@ -7621,6 +7622,19 @@ function paintRemoveSheet(preview) {
       .filter(Boolean)
       .join("\n");
     parts.push(panelBlock("the work at risk", risk));
+  }
+  // The ignored files are the ones git deletes without a word and no diff draws, so the sheet names them while
+  // they fit: a count alone leaves the human guessing what else the folder was holding.
+  const ignoredNames = Array.isArray(preview.ignoredNames) ? preview.ignoredNames : [];
+  if (ignoredNames.length) {
+    const names = el("div", "act-kv");
+    for (const name of ignoredNames) {
+      const row = el("div", "act-row");
+      row.appendChild(el("span", "v"));
+      row.children[0].textContent = String(name);
+      names.appendChild(row);
+    }
+    parts.push(panelBlock("the ignored files that would go", names));
   }
   // The daemon's own line about this removal, when it has one: it is the only thing that can say why a
   // folder has no diff, so it stands on its own rather than under a heading that would contradict it.
@@ -7668,7 +7682,6 @@ function closeRemoveSheet() {
   removePanel.hidden = true;
   removePanelBody.replaceChildren();
   removeCard = null;
-  removeGoReset();
   removeGo.disabled = true;
   // The trash may have gone with the card it sat on, in which case the focus has nowhere to go.
   removeOpener?.focus();

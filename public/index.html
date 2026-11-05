@@ -976,10 +976,10 @@
   .sheet .act-note .diagram-wrap { overflow-x: auto; }
   .sheet .act-note .diagram-wrap svg { max-width: none; }
   .sheet .act-note .diagram-error { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
-  /* The answers of a sheet that asks before it acts, in the same strip as the panel's head. The second
-     press of the red one is the confirmation, so `armed` means here what it means in the header: these
-     presses wear the header's own button, and the clauses that differ from it are said beside the header's
-     rule below. */
+  /* The answers of a sheet that asks before it acts, in the same strip as the panel's head. A sheet whose
+     body has already said what the press costs wears its yes in red and acts on it at once; a press that
+     asks again first says so with `armed`, which means here what it means in the header. These presses wear
+     the header's own button, and the clauses that differ from it are said beside the header's rule below. */
   .sheet .sheet-actions { display: flex; gap: 8px; justify-content: flex-end; flex: none;
     padding: 8px 10px; border-top: 1px solid var(--border); background: var(--card-head); }
   .sheet .sheet-btn:disabled { cursor: default; opacity: .55; }
@@ -1014,6 +1014,11 @@
   .card.dim { opacity: .7; }
   /* The second press of a press that acts is the confirmation, so the button says so. */
   header button.armed, .sheet .sheet-btn.armed { color: #f85149; border-color: rgba(248, 81, 73, .5); }
+  /* A sheet that has already said what goes with the press: its yes is red all the time, because the
+     question was the sheet and the press is the answer. */
+  .sheet .sheet-btn.danger { color: #f85149; border-color: rgba(248, 81, 73, .45); }
+  .sheet .sheet-btn.danger:hover:not(:disabled), .sheet .sheet-btn.danger:focus-visible {
+    color: #ff7b72; border-color: rgba(248, 81, 73, .8); background: rgba(248, 81, 73, .1); }
   /* This board's settings. A tree the daemon describes, drawn here: a group folds to one line that sums
      what is inside it, so the panel stays as tall as the human means it to be. A leaf is a label and its
      value on one line, the value in the accent. A panel that has to be read closely is a panel nobody
@@ -1288,10 +1293,10 @@
     </div>
     <!-- Focusable so a keyboard user can scroll past the first screen; it is the second tab stop. -->
     <div id="removeDetailBody" class="sheet-body" tabindex="0"></div>
-    <!-- Two answers only: the one that changes nothing, and the red one whose second press is the answer. -->
+    <!-- Two answers only: the one that changes nothing, and the red one that acts at once. -->
     <div class="sheet-actions">
       <button type="button" class="sheet-btn" id="removeDetailKeep">keep it</button>
-      <button type="button" class="sheet-btn" id="removeDetailGo">remove it</button>
+      <button type="button" class="sheet-btn danger" id="removeDetailGo">remove it</button>
     </div>
   </div>
 </div>
