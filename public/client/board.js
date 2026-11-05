@@ -1788,7 +1788,11 @@ function pinToBottom(entry) {
   if (entry.pinWatch) return;
   entry.pinnedBottom = true;
   const settle = () => {
-    // Released only while the human is away from the bottom: nothing else re-pins.
+    // Geometry reaches here with no scroll to announce it: a column that fits itself, or a window that
+    // grows, can put the whole conversation inside the box and bring a released reader back to the
+    // bottom. So a released column is measured again by the same one measure the listener reads, and
+    // follows again once that measure says the bottom is within reach; away from it, nothing moves.
+    if (!entry.pinnedBottom) entry.pinnedBottom = entry.scroll.scrollHeight - entry.scroll.scrollTop - entry.scroll.clientHeight < 24;
     if (!entry.pinnedBottom) return;
     putColumnAtBottom(entry);
   };
