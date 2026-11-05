@@ -21,6 +21,7 @@ import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } 
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
+import { LOOPBACK, bindHost, boardUrls, isLoopback } from "./listen.ts";
 import { onMode, onPath, onThread, onThreadSpawn } from "./routes/board/thread.ts";
 import { onAnswer, onAsk } from "./routes/board/answer.ts";
 import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.ts";
@@ -488,8 +489,32 @@ export function lastPort() {
 
 
 
-export function startListening(wanted) {
-	server.listen(wanted, "127.0.0.1", onListening);
+/** The address this daemon holds: this machine only, unless the entry was told otherwise. */
+let bindAddress = LOOPBACK;
+
+
+
+export function startListening(wanted, host = bindAddress) {
+	bindAddress = host;
+	server.once("error", onListenError);
+	server.listen(wanted, host, onListening);
+}
+
+
+
+/**
+ * A port somebody else took, or an address this machine does not have. The first is answered with any
+ * free port, which is what the note on port reuse already promised; the second is a typo, and a typo
+ * deserves one sentence rather than a stack from inside the socket.
+ */
+function onListenError(error) {
+	if (error.code === "EADDRINUSE") return startListening(0, bindAddress);
+	if (error.code === "EADDRNOTAVAIL" || error.code === "ENOTFOUND") {
+		console.error(`pi-studio: this machine has no address ${bindAddress}. 0.0.0.0 answers on all of them; leaving --host off answers on this machine only.`);
+		return void process.exit(1);
+	}
+	console.error(`pi-studio: could not listen on ${bindAddress}: ${error.message || error}`);
+	process.exit(1);
 }
 
 
@@ -497,8 +522,14 @@ export function startListening(wanted) {
 export function onListening() {
 	port = server.address().port;
 	writeJsonFile(STATE_FILE, { token, port, at: new Date().toISOString() });
-	const url = `http://127.0.0.1:${port}/?token=${token}`;
+	const links = boardUrls(bindAddress, port, token);
+	const url = links[0];
 	console.log(`pi-studio${INSTANCE ? ` [${INSTANCE}]` : ""} listening on ${url}`);
+	for (const link of links.slice(1)) console.log(`  also on ${link}`);
+	// Reach is a decision with a price, and the price is worth knowing before the link is shared.
+	if (!isLoopback(bindAddress)) {
+		console.log(`open beyond this machine on ${bindAddress}: the token in that link is this machine, so share it only on a network you trust, and it travels as plain http unless a tunnel carries it`);
+	}
 	// Which build is answering matters the moment a tab looks wrong, so it is said out loud.
 	console.log(`build ${buildHash()}${INSTANCE ? `, state ${STATE_DIR}` : ""}`);
 	if (workspaces.length) console.log(`${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"}, newest ${workspaces[0].name}`);
@@ -521,5 +552,12 @@ export function onListening() {
  * The entry calls this and nothing else, so importing this file never binds a socket.
  */
 export function start() {
-	startListening(Number(process.env.PI_STUDIO_PORT) || lastPort());
+	let host;
+	try {
+		host = bindHost();
+	} catch (error) {
+		console.error(`pi-studio: ${error.message}`);
+		process.exit(1);
+	}
+	startListening(Number(process.env.PI_STUDIO_PORT) || lastPort(), host);
 }
