@@ -31,23 +31,29 @@ test("a thread file from today reloads with its fields intact", () => {
 	assert.equal(thread.folder, "/tmp/folder");
 });
 
-test("a steer the run read survives a save and a load, and a turn still in flight does not", () => {
-	// A steer that joined a live run is answered inside the run's own turn, so its words were spent and the
-	// file has to say so: saved as stopped, a restart brought the false label back. A turn the run is still
-	// writing, and one waiting behind it, are nobody's work once the daemon is gone.
+test("a turn comes back as the file says, and a steer the daemon stopped keeps its own label", () => {
+	// A steer that joined a live run is answered inside the run's own turn, so its words were spent; a steer
+	// the daemon stopped — an idle thread, a cut run — never was, and a load keyed on `mode` brought it back
+	// labelled as spent. Both directions are pinned here, and a turn in flight or waiting is nobody's work.
 	const spent = savedTurn({ text: "and this instead", status: "sent", mode: "steer", at: now });
-	assert.equal(spent.status, "sent");
+	const cut = savedTurn({ text: "and this instead", status: "stopped", mode: "steer", at: now });
 	const writing = savedTurn({ text: "the first words", status: "sent", mode: "queue", streaming: true, at: now });
-	assert.equal(writing.status, "stopped");
 	const waiting = savedTurn({ text: "behind the run", status: "queued", mode: "queue", at: now });
-	assert.equal(waiting.status, "stopped");
+	assert.deepEqual(
+		[spent.status, cut.status, writing.status, waiting.status],
+		["sent", "stopped", "stopped", "stopped"],
+	);
 
-	const thread = restoredThread({ id: "t10", title: "x", at: now, turns: [spent, writing, waiting] }, "/tmp/folder")!;
+	const thread = restoredThread({ id: "t10", title: "x", at: now, turns: [spent, cut, writing, waiting] }, "/tmp/folder")!;
 	assert.deepEqual(
 		thread.turns.map((turn) => turn.status),
-		["sent", "stopped", "stopped"],
+		["sent", "stopped", "stopped", "stopped"],
 	);
 	assert.equal(thread.turns[0].mode, "steer");
+
+	// A file this version cannot vouch for — a turn written mid-run by an older one — reads as stopped.
+	const old = restoredThread({ id: "t11", title: "x", at: now, turns: [{ text: "queued once", status: "queued" }] }, "/tmp/folder")!;
+	assert.equal(old.turns[0].status, "stopped");
 });
 
 test("a boss comes back as a boss, with the flow it was running", () => {
