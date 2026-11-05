@@ -227,6 +227,44 @@
     return `${Math.round(hours / 24)}d ago`;
   }
 
+  /** How long the scratch row's empty button stays armed: a second press inside this window does it. */
+  const EMPTY_ARM_MS = 4000;
+  let emptyDisarm = 0;
+
+  /**
+   * Emptying the scratch row takes two presses. The first arms the button and says so; the second clears
+   * the board and deletes everything in the folder. One press is a whole folder of files plus every card
+   * on that board, which is too much for a slip of the mouse, and a browser dialog would be a second
+   * language for the one thing this page never otherwise asks.
+   */
+  async function emptyScratch(button) {
+    if (button.dataset.armed !== "yes") {
+      button.dataset.armed = "yes";
+      button.textContent = "empty?";
+      button.classList.add("is-armed");
+      clearTimeout(emptyDisarm);
+      emptyDisarm = setTimeout(() => {
+        button.dataset.armed = "";
+        button.textContent = "empty";
+        button.classList.remove("is-armed");
+      }, EMPTY_ARM_MS);
+      return;
+    }
+    clearTimeout(emptyDisarm);
+    button.dataset.armed = "";
+    button.disabled = true;
+    button.textContent = "emptying";
+    pathError = "";
+    try {
+      const response = await fetch(`/scratch/empty?${qs()}`, { method: "POST" });
+      if (!response.ok) throw new Error((await response.text()).slice(0, 140) || response.statusText);
+      await load();
+    } catch (error) {
+      pathError = `could not empty the scratch folder: ${error.message || error}`;
+      applyFilter();
+    }
+  }
+
   function rowFor(workspace) {
     const row = el("li", "ws-row");
     row.setAttribute("role", "option");
@@ -234,6 +272,7 @@
     row.dataset.match = haystack(workspace);
     if (workspace.running) row.classList.add("is-running");
     if (workspace.missing) row.classList.add("is-missing");
+    if (workspace.scratch) row.classList.add("is-scratch");
 
     const dot = el("span", `status-dot ${workspace.missing ? "missing" : workspace.running ? "running" : "idle"}`);
     dot.title = workspace.missing
@@ -246,6 +285,20 @@
     left.append(dot, el("span", "ws-name", workspace.name), el("span", "ws-context", contextLine(workspace)));
 
     const right = el("div", "ws-right");
+    if (workspace.scratch) {
+      // The one row that can be thrown away, so it is the one row with a button that throws it away.
+      const empty = el("button", "ws-empty", "empty");
+      empty.type = "button";
+      empty.title = "delete everything in the scratch folder and clear its cards";
+      empty.addEventListener("click", (event) => {
+        event.stopPropagation();
+        emptyScratch(empty);
+      });
+      empty.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+      });
+      right.append(empty);
+    }
     if (workspace.missing) right.append(el("span", "sig-missing", "folder missing"));
     else if (workspace.running) right.append(el("span", "sig-running", `${workspace.running} running`));
     else {
@@ -355,7 +408,11 @@
     }
     nodes.sep.textContent = "·";
     const running = workspaces.reduce((sum, workspace) => sum + (workspace.running || 0), 0);
-    const count = `${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"}`;
+    // The scratch row is not one of the projects: it is counted on its own, or not at all when the daemon
+    // is too old to have one.
+    const projects = workspaces.filter((workspace) => !workspace.scratch);
+    const scratch = workspaces.some((workspace) => workspace.scratch) ? " + scratch" : "";
+    const count = `${projects.length} workspace${projects.length === 1 ? "" : "s"}${scratch}`;
     nodes.brand.replaceChildren(
       document.createTextNode(`${count} · `),
       el("span", running ? "live-count" : "", `${running} running`),

@@ -9,14 +9,14 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { INSTANCE, STATE_DIR, STATE_FILE, buildHash, randomToken, readJsonFile, writeJsonFile } from "./paths.ts";
 import { answer, fail, send, serveStatic } from "./http.ts";
-import { activeConfig, activeHomeDefaults, describeWorkspace, welcomeClients, workspaces } from "./workspaces.ts";
+import { activeConfig, activeHomeDefaults, describeWorkspace, ensureScratch, welcomeClients, workspaceList, workspaces } from "./workspaces.ts";
 import { boardFrom, boards, flushBoard } from "./store.ts";
 import { boardSettingsValues, settingsDocument } from "./settings-document.ts";
 import { boardMeta, cardsFor } from "./cards.ts";
 import { closedCards } from "./bus.ts";
 import { gitPicture, refreshGit, unwatchGit, watchGit } from "./git/graph.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
-import { onDefaults, onOpenWorkspace, onPickFile, onPickFolder, onSettingsDefaults } from "./routes/crossroads.ts";
+import { onDefaults, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
@@ -169,7 +169,7 @@ export const server = createServer((req, res) => {
 			const scope = url.searchParams.get("scope");
 			if (scope === "welcome") {
 				// The crossroads only needs counts and previews, and it needs them as they change.
-				send(new Set([res]), { type: "workspaces", workspaces: workspaces.map(describeWorkspace) });
+				send(new Set([res]), { type: "workspaces", workspaces: workspaceList().map(describeWorkspace) });
 				welcomeClients.add(res);
 				const keepAlive = setInterval(() => res.write(": ping\n\n"), 20_000);
 				const forget = () => {
@@ -207,7 +207,7 @@ export const server = createServer((req, res) => {
 
 		// ----- crossroads -----
 		if (req.method === "GET" && url.pathname === "/workspaces") {
-			answer(res, 200, { workspaces: workspaces.map(describeWorkspace), instance: INSTANCE });
+			answer(res, 200, { workspaces: workspaceList().map(describeWorkspace), instance: INSTANCE });
 			return;
 		}
 		// What every board opened from here is born with. The crossroads sets it; a board may then
@@ -234,6 +234,12 @@ export const server = createServer((req, res) => {
 		}
 		if (req.method === "POST" && url.pathname === "/workspace") {
 			await onOpenWorkspace(req, res);
+			return;
+		}
+		// The scratch row's empty press: the files and the cards, with the settings kept. It is not in
+		// `THREAD_ROUTES`, so a child cannot reach it and only the human at the keyboard can empty it.
+		if (req.method === "POST" && url.pathname === "/scratch/empty") {
+			await onScratchEmpty(req, res);
 			return;
 		}
 		if (req.method === "POST" && url.pathname === "/pick-folder") {
@@ -532,8 +538,13 @@ export function onListening() {
 	}
 	// Which build is answering matters the moment a tab looks wrong, so it is said out loud.
 	console.log(`build ${buildHash()}${INSTANCE ? `, state ${STATE_DIR}` : ""}`);
-	if (workspaces.length) console.log(`${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"}, newest ${workspaces[0].name}`);
+	// The scratch folder is made at boot rather than on the first request, so the crossroads never draws a
+	// row for a folder that is not there yet.
+	const scratch = ensureScratch();
+	const opened = workspaces.filter((workspace) => workspace.folder !== scratch.folder);
+	if (opened.length) console.log(`${opened.length} workspace${opened.length === 1 ? "" : "s"}, newest ${opened[0].name}`);
 	else console.log("no workspace yet — open one on the crossroads");
+	console.log(`scratch ${scratch.folder}`);
 	// The crossroads is where a desktop app starts, so it starts in the browser.
 	if (OPEN_BROWSER) {
 		try {

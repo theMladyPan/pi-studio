@@ -8,10 +8,10 @@ import { CONTROL_CHARS, MAX_EDITOR_CHARS } from "../limits.ts";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
-import { activeHomeDefaults, describeWorkspace, homeDefaults, rememberWorkspace, setHomeDefaults } from "../workspaces.ts";
+import { activeHomeDefaults, describeWorkspace, emptyScratchFolder, ensureScratch, homeDefaults, rememberWorkspace, setHomeDefaults } from "../workspaces.ts";
 import { boardFor } from "../store.ts";
-import { nudgeWelcome } from "../bus.ts";
-import { cardFor } from "../cards.ts";
+import { nudgeWelcome, resync } from "../bus.ts";
+import { cardFor, clearBoard } from "../cards.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog } from "../models.ts";
 import { CARD_AUDIENCE, CARD_LEVELS, CARD_SHOWS, CARD_VERBOSITY } from "../card-settings.ts";
 import { CHILD_INTEGRATION } from "../integration.ts";
@@ -38,6 +38,24 @@ export async function onOpenWorkspace(req, res) {
 	const board = boardFor(workspace);
 	nudgeWelcome();
 	answer(res, 200, { workspace: describeWorkspace(workspace), board: { id: board.id }, cards: [...board.threads.values()].map(cardFor) });
+}
+
+
+
+/**
+ * The scratch row's one press. The children go first and are killed by the clear: a run still writing into
+ * the folder would put back a file the delete just took. The settings stay, because the next question is
+ * still asked on the same board — only the mess and the cards are what "throwaway" means.
+ */
+export async function onScratchEmpty(req, res) {
+	req.resume();
+	const workspace = ensureScratch();
+	const board = boardFor(workspace);
+	clearBoard(board);
+	const removed = emptyScratchFolder();
+	resync(board);
+	nudgeWelcome();
+	answer(res, 200, { emptied: true, removed });
 }
 
 

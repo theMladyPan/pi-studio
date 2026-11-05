@@ -10,7 +10,7 @@
  */
 import { createHash } from "node:crypto";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -54,6 +54,15 @@ export const STATE_DIR = resolve(stateArg.startsWith("~/") ? join(homedir(), sta
 export const INSTANCE = STATE_DIR === homeStateDir() ? "" : basename(STATE_DIR);
 export const STATE_FILE = join(STATE_DIR, "daemon.json");
 export const WORKSPACES_FILE = join(STATE_DIR, "workspaces.json");
+
+/**
+ * The scratch folder: the one workspace that is always on the crossroads and holds nothing worth keeping.
+ *
+ * It sits in the machine's temp folder so a reboot does the cleaning, and it keeps a fixed path because a
+ * workspace's identity *is* its path: a name that changed per boot would open a new board each time while
+ * the old files stayed on disk. A second daemon gets its own, because its board is its own too.
+ */
+export const SCRATCH_DIR = join(tmpdir(), INSTANCE ? `pi-studio-scratch-${INSTANCE}` : "pi-studio-scratch");
 
 /** The schema the board and workspace files are written with. */
 export const STATE_VERSION = 1;

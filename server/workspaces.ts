@@ -3,14 +3,14 @@
  * The workspaces on disk: the list the crossroads shows, the defaults a new board starts with, and the
  * one line of facts each one is described by.
  */
-import { STATE_VERSION, WORKSPACES_FILE, boardFile, readJsonFile, workspaceId, writeJsonFile } from "./paths.ts";
+import { SCRATCH_DIR, STATE_VERSION, WORKSPACES_FILE, boardFile, readJsonFile, workspaceId, writeJsonFile } from "./paths.ts";
 import { boards } from "./store.ts";
 import { sessionFacts } from "./session.ts";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, MODEL, PROVIDER, THINKING_LEVELS, run } from "./models.ts";
 import { CARD_AUDIENCE, CARD_LEVELS, CARD_SHOWS, CARD_VERBOSITY, cardSettings } from "./card-settings.ts";
 import { CHILD_INTEGRATION, integrationOf } from "./integration.ts";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { PATH_NAMES } from "./child/modes.ts";
 import { spawnSync } from "node:child_process";
 
@@ -242,6 +242,76 @@ export function workspaceById(id) {
 
 
 
+// ---------- the scratch workspace ------------------------------------------
+
+/**
+ * Where the scratch folder really is, made the first time anything asks. The real path is the one kept,
+ * because that is what `rememberWorkspace` stores for every other folder: two spellings of one folder
+ * would be two rows, and `/tmp` is a symlink on some machines.
+ */
+let scratchFolder = "";
+
+export function scratchFolderPath() {
+	if (!scratchFolder) {
+		mkdirSync(SCRATCH_DIR, { recursive: true });
+		scratchFolder = realpathSync(SCRATCH_DIR);
+	}
+	return scratchFolder;
+}
+
+
+
+/** Whether a folder is the scratch one. Compared by path, so an older workspaces file needs no field. */
+export function isScratch(folder) {
+	return Boolean(folder) && folder === scratchFolderPath();
+}
+
+
+
+/**
+ * The scratch workspace itself: made and written down the first time the crossroads is read, so the list
+ * has one row that is always there and no state file can lose it.
+ */
+export function ensureScratch() {
+	const folder = scratchFolderPath();
+	// Made on every read, not only at boot: a temp cleaner or a `rm -rf /tmp/*` takes the folder of a daemon
+	// that is still running, and a row whose folder is gone is a row nobody can open.
+	mkdirSync(folder, { recursive: true });
+	const held = workspaces.find((workspace) => workspace.folder === folder);
+	if (held) return held;
+	// `openedAt` of 0 keeps it out of the age order every other row is sorted by: the list puts it first.
+	const workspace = { id: workspaceId(folder), folder, name: "scratch", openedAt: 0 };
+	workspaces.push(workspace);
+	saveWorkspaces();
+	return workspace;
+}
+
+
+
+/** The crossroads' rows: the scratch one first, then the folders newest first, which is the list order. */
+export function workspaceList() {
+	const scratch = ensureScratch();
+	return [scratch, ...workspaces.filter((workspace) => workspace.folder !== scratch.folder)];
+}
+
+
+
+/**
+ * Everything inside the scratch folder and never the folder itself: a missing folder is a row nobody can
+ * open, and the row is the one thing about the scratch that is meant to last.
+ */
+export function emptyScratchFolder() {
+	const folder = scratchFolderPath();
+	let removed = 0;
+	for (const entry of readdirSync(folder)) {
+		rmSync(join(folder, entry), { recursive: true, force: true });
+		removed += 1;
+	}
+	return removed;
+}
+
+
+
 // ---------- what the crossroads needs to know ------------------------------
 
 /** A short, honest answer about a folder, cheap enough to run for every row. */
@@ -282,6 +352,9 @@ export function describeWorkspace(workspace) {
 	return {
 		...workspace,
 		...facts,
+		// The crossroads draws this row as the throwaway one: it is not counted with the projects and it has
+		// a press that empties it.
+		scratch: isScratch(workspace.folder),
 		running: threads.filter((thread) => thread.status === "running").length,
 		threads: threads
 			.slice()
