@@ -372,7 +372,15 @@
   async function load() {
     try {
       const response = await fetch("/workspaces");
-      if (!response.ok) throw new Error((await response.text()).slice(0, 120) || response.statusText);
+      if (!response.ok) {
+        // A 403 here is the session cookie gone or the token refused, and the daemon's own word for it is
+        // "forbidden": the board says the sentence a human can act on, so this page says the same one.
+        const said =
+          response.status === 403
+            ? "session expired or token refused — reopen the link pi printed"
+            : (await response.text()).slice(0, 120) || response.statusText;
+        throw new Error(said);
+      }
       const data = await response.json();
       adopt(data.workspaces);
     } catch (error) {
