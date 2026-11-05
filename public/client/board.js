@@ -6011,13 +6011,16 @@ function modeWaits(data) {
   return Boolean(data && data.modeAtRun && data.modeAtRun !== data.mode);
 }
 
-/** What the two buttons say: this card's mode, or the one a new thread would be born with. */
+/**
+ * What the two buttons say: this card's mode, or the one a new thread would be born with. A card that
+ * carries no flow of its own shows the board's, which is the flow its boss was started on.
+ */
 function modeShown(inst = pickInst ?? activeComposer) {
   const held = cardOf(inst);
   const mode = held ? (THREAD_MODES.includes(held.data.mode) ? held.data.mode : "agent") : modeNext;
   return {
     mode,
-    path: held ? held.data.path || "auto" : pathNext || boardConfig.path || "auto",
+    path: held ? held.data.path || boardConfig.path || "auto" : pathNext || boardConfig.path || "auto",
   };
 }
 

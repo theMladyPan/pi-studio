@@ -681,6 +681,49 @@ test("a board's card settings are written by /config and read back out of it", a
 	}
 });
 
+test("a boss starts on the board's flow, whether it was made as one or switched into one", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-boss-flow-"));
+	const work = mkdtempSync(join(tmpdir(), "pi-studio-routes-boss-flow-work-"));
+	const daemon = await boot(folder);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder: work })).body).board;
+		// A board that has named no flow: a boss decides for itself, and says that it did.
+		const bossless = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "boss", mode: "boss" })).body);
+		assert.equal(bossless.card.path, "auto");
+		assert.equal(bossless.card.pathChosenBy, "auto");
+		const bare = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "agent" })).body);
+		const bareSwitched = JSON.parse((await postTo(daemon, board.id, "/mode", { cardId: bare.threadId, mode: "boss" })).body);
+		assert.equal(bareSwitched.card.path, "auto", "a switch on a board with no flow still starts on auto");
+		assert.equal(bareSwitched.card.pathChosenBy, "auto");
+
+		// The board now works one way, so every boss that names no flow of its own starts there.
+		assert.equal((await postTo(daemon, board.id, "/config", { path: "simple" })).status, 200);
+		const made = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "made a boss", mode: "boss" })).body);
+		assert.equal(made.card.path, "simple");
+		// Neither the human's pin nor the boss's own pick: the board's, which leaves a boss free to choose.
+		assert.equal(made.card.pathChosenBy, "board");
+
+		// A thread made as an agent has no flow to keep, so becoming a boss starts it where one made now starts.
+		const agent = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "an agent" })).body);
+		assert.equal(agent.card.path, undefined);
+		const switched = JSON.parse((await postTo(daemon, board.id, "/mode", { cardId: agent.threadId, mode: "boss" })).body);
+		assert.equal(switched.card.path, "simple");
+		assert.equal(switched.card.pathChosenBy, "board");
+
+		// A flow the request names is still the human's, and an agent carries none.
+		const pinned = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "pinned", mode: "boss", path: "advanced" })).body);
+		assert.equal(pinned.card.path, "advanced");
+		assert.equal(pinned.card.pathChosenBy, "human");
+		const dropped = JSON.parse((await postTo(daemon, board.id, "/mode", { cardId: pinned.threadId, mode: "agent" })).body);
+		assert.equal(dropped.card.path, undefined, "a thread turned back into an agent drops the flow");
+		assert.equal(dropped.card.pathChosenBy, undefined);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+		rmSync(work, { recursive: true, force: true });
+	}
+});
+
 test("how a child's work comes back is a default a new board is born with", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-integration-"));
 	const daemon = await boot(folder);
