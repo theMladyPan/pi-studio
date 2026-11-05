@@ -157,6 +157,26 @@ test("an answer that arrives without a spawn is put away all the same", (t) => {
 	assert.equal(board.threads.get(child.id), child);
 });
 
+test("a card whose run answered is put away even when a steer or a taken-back message came last", (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	// The run answered its own turn, which is the turn `thread.answering` names; a steer it read and a
+	// message the human took back both land after it, and neither is the turn that ended the run.
+	const cases: [string, any][] = [
+		["a steer", { text: "and this instead", status: "sent", mode: "steer", at: Date.now() }],
+		["a message taken back", { text: "never mind", status: "stopped", error: "withdrawn", mode: "queue", at: Date.now() }],
+	];
+	for (const [why, trailing] of cases) {
+		const { board, child } = family();
+		child.turns.push(trailing);
+		child.answering = { turn: 0 };
+		handleChildLine(board, child, SETTLED);
+		assert.equal(child.answering, null, `${why}: the answering pointer was not cleared`);
+		assert.equal(child.turns[1].status, trailing.status, `${why}: the turn after the answer was rewritten`);
+		t.mock.timers.tick(CHILD_CLOSE_DELAY_MS);
+		assert.equal(child.hidden, true, `${why}: the answered card was not put away`);
+	}
+});
+
 test("a run that was stopped or failed is never put away, however much it said", (t) => {
 	t.mock.timers.enable({ apis: ["setTimeout"] });
 	// The turn as a timeout, an abort or an error leaves it: an answer was written, and it is not one.

@@ -1208,6 +1208,13 @@ process.stdin.on("data", (chunk) => {
 		if (frame.type === "prompt") {
 			// A "hold" file keeps the run open, which is the state a compaction has to refuse.
 			if (existsSync(flag("hold"))) continue;
+			// A "cut" file is a run the board stopped before it said anything: the empty, aborted answer
+			// that leaves its turn reading stopped.
+			if (existsSync(flag("cut"))) {
+				say({ type: "turn_end", message: { role: "assistant", content: [], stopReason: "aborted" } });
+				say({ type: "agent_settled" });
+				continue;
+			}
 			// A "slow" file delays one answer, which is the window a second message is queued in. It is
 			// spent on the first prompt so the rest of the run answers at once.
 			if (existsSync(flag("slow"))) {
@@ -1399,6 +1406,55 @@ function framesOf(stub: { root: string; envFile: string }) {
 	return readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
+/**
+ * A tab on the board's event stream, kept open for the length of one test. What the client draws is the
+ * card in a frame, so the tests that ask what a person sees read that rather than the board in memory.
+ */
+async function watching(daemon: Daemon, board: string) {
+	const controller = new AbortController();
+	const response = await fetch(`${daemon.base}/events?token=${daemon.token}&workspace=${board}`, { signal: controller.signal });
+	assert.equal(response.status, 200);
+	assert.ok(response.body, "no stream body");
+	const frames: any[] = [];
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	void (async () => {
+		let buffer = "";
+		try {
+			for (;;) {
+				const { value, done } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				let cut = buffer.indexOf("\n\n");
+				while (cut >= 0) {
+					const frame = buffer.slice(0, cut);
+					buffer = buffer.slice(cut + 2);
+					for (const line of frame.split("\n")) if (line.startsWith("data: ")) frames.push(JSON.parse(line.slice(6)));
+					cut = buffer.indexOf("\n\n");
+				}
+			}
+		} catch {
+			// The test closed the stream.
+		}
+	})();
+	const card = (id: string) => frames.filter((frame) => frame.type === "update" && frame.card?.id === id).at(-1)?.card ?? null;
+	return {
+		/** The card the client last received, or null while it has heard nothing about it. */
+		card,
+		/** Wait for the card to read the way the test expects a settled one to, and hand it back. */
+		async until(id: string, reads: (card: any) => boolean) {
+			let shown = null;
+			for (let tries = 0; tries < 200; tries++) {
+				shown = card(id);
+				if (shown && reads(shown)) return shown;
+				await new Promise((done) => setTimeout(done, 25));
+			}
+			throw new Error(`the client never drew the card that way: ${JSON.stringify(shown?.turns ?? shown)}`);
+		},
+		stop: () => controller.abort(),
+	};
+}
+
 test("a message waiting behind a run can be rewritten or taken back before the child reads it", async () => {
 	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-queue-"));
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-queue-work-"));
@@ -1461,6 +1517,124 @@ test("a message waiting behind a run can be rewritten or taken back before the c
 		}
 		assert.equal(told("a first draft"), false, "the child was told the draft that was replaced");
 		assert.equal(told("the second draft"), true, `the child was told ${JSON.stringify(framesOf(stub).filter((frame) => frame.type === "prompt").map((frame) => frame.message))}`);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a run that read a steer keeps the steer's own words, and the answer stays on the run's turn", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-steer-spent-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-steer-spent-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const flags = dirname(stub.envFile);
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	let tab: { stop: () => void } | null = null;
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "a thread" })).body).threadId;
+		const seen = await watching(daemon, board.id);
+		tab = seen;
+		// A run slow enough that a steer lands while it is live, which is the only way a steer is spent.
+		writeFileSync(join(flags, "slow"), "1");
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "the first words" })).status, 200);
+		const steered = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "and this instead", mode: "steer" });
+		assert.equal(steered.status, 200);
+		const at = JSON.parse(steered.body).turn as number;
+		for (let tries = 0; tries < 100 && !framesOf(stub).some((frame) => frame.type === "steer"); tries++) {
+			await new Promise((done) => setTimeout(done, 20));
+		}
+		assert.ok(framesOf(stub).some((frame) => frame.type === "steer"), "the steer never reached the child, so it was never spent");
+		// The frame the settle sends is the one a person reads the card from: the thread reads answered once
+		// the run is over, and every frame before that one still says a run is going.
+		const card = await seen.until(threadId, (shown) => shown.status === "answered");
+		assert.equal(card.turns[0].status, "answered", "the run's own turn kept no answer");
+		assert.equal(card.turns[0].reply, "the stub answered");
+		assert.equal(card.turns[at].status, "sent", "the steer the run read was relabelled as stopped");
+		assert.equal(card.turns[at].mode, "steer");
+		assert.equal(card.turns[at].reply, undefined, "the steer took the run's answer");
+	} finally {
+		tab?.stop();
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a steer sent to an idle thread is that run's own turn, and a run that never answered reads stopped", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-steer-idle-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-steer-idle-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const flags = dirname(stub.envFile);
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	let tab: { stop: () => void } | null = null;
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "a thread" })).body).threadId;
+		const seen = await watching(daemon, board.id);
+		tab = seen;
+		// The composer sends `steer` whether a run is live or not, so this turn is the run's own turn. The
+		// child says nothing at all, which is a run that was cut before it answered.
+		writeFileSync(join(flags, "cut"), "1");
+		const sent = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "the only words", mode: "steer" });
+		assert.equal(sent.status, 200);
+		const at = JSON.parse(sent.body).turn as number;
+		const card = await seen.until(threadId, (shown) => shown.turns?.[at]?.status !== "sent" && shown.turns?.[at]?.streaming !== true);
+		assert.equal(card.turns[at].status, "stopped", "a steer on an idle thread kept the label of a run that never answered");
+		assert.equal(card.turns[at].mode, "steer");
+		assert.equal(card.turns[at].reply, undefined, "a run that said nothing left an answer");
+	} finally {
+		tab?.stop();
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a spawned child reports the turn that answered, and one that never answered reports stopped", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-spawn-report-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-spawn-report-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const flags = dirname(stub.envFile);
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const parentId = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "the master" })).body).threadId;
+		// A run slow enough that a steer lands while the spawn is waiting for the answer.
+		writeFileSync(join(flags, "slow"), "1");
+		const spawn = postTo(daemon, board.id, "/thread/spawn", {
+			task: "look at it",
+			title: "the child",
+			parentThread: parentId,
+			timeoutSeconds: 30,
+		});
+		// The child's own thread is on the board before its run ends, and that is the window a steer is sent in.
+		let childId = "";
+		for (let tries = 0; tries < 200 && !childId; tries++) {
+			const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+			childId = (state.threads as any[]).find((one) => one.parentThread === parentId)?.id ?? "";
+			if (!childId) await new Promise((done) => setTimeout(done, 20));
+		}
+		assert.ok(childId, "the spawned thread never reached the board");
+		const steered = await postTo(daemon, board.id, "/message", { cardId: childId, text: "and this instead", mode: "steer" });
+		assert.equal(steered.status, 200);
+		const answered = await spawn;
+		assert.equal(answered.status, 200);
+		const report = JSON.parse(answered.body);
+		assert.equal(report.status, "done", `a run that answered was reported as ${report.status}`);
+		assert.equal(report.output, "the stub answered", "the report took the steer's words instead of the answer");
+		// Where the words landed is the other half of the report being right: the steer took nothing.
+		const child = await threadState(daemon, board.id, childId);
+		assert.equal(child.turns[0].status, "answered");
+		assert.equal(child.turns[0].reply, "the stub answered", "the steer took the run's answer");
+		assert.equal(child.turns[1].status, "sent");
+
+		// A child that said nothing has no answering turn to report, so it is a run that stopped.
+		writeFileSync(join(flags, "cut"), "1");
+		const quiet = await postTo(daemon, board.id, "/thread/spawn", { task: "say nothing", title: "the quiet child", parentThread: parentId, timeoutSeconds: 30 });
+		assert.equal(quiet.status, 200);
+		const cut = JSON.parse(quiet.body);
+		assert.equal(cut.status, "stopped", `a run that never answered was reported as ${cut.status}`);
+		assert.equal(cut.output, "");
+		assert.equal(cut.error, undefined);
 	} finally {
 		daemon.child.kill();
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
