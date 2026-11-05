@@ -1763,38 +1763,53 @@ function turnShape(turn) {
 }
 
 /**
+ * Every programmatic scroll of a conversation column lands through here, so the place it really left
+ * the column is stored as the pin's baseline. The browser clamps the line above to the column's own
+ * height, and a baseline that is not the clamped figure makes the scroll handler read the pin's own
+ * move as the human's: it either lets go of a reader who never moved, or drags back a reader who did.
+ */
+function putColumnAtBottom(entry) {
+  entry.scroll.scrollTop = entry.scroll.scrollHeight;
+  // Read back for that reason: the clamped position is where the column actually ended up.
+  entry.pinTop = entry.scroll.scrollTop;
+}
+
+/**
  * A conversation opens at its newest message, and stays there while the card is still settling under
  * it. One scroll to the bottom is not enough: a diagram or a chart draws into a holder that starts
  * empty, a picture arrives with no size of its own, and a card that fits itself grows in a later
  * frame, so the bottom drawn at paint time ends up above the fold. The column is therefore pinned,
  * and every late shift of the content or of the card re-pins it, until the human scrolls it themselves.
+ * The observer and the single listener outlive that release, so scrolling back to the bottom arms the
+ * pin again and a picture landing after it is followed.
  */
 function pinToBottom(entry) {
-  if (entry.pinnedBottom) return;
+  // A repaint of the same card must not stack a second listener or a second observer.
+  if (entry.pinWatch) return;
   entry.pinnedBottom = true;
-  const pin = () => {
-    entry.scroll.scrollTop = entry.scroll.scrollHeight;
-    // Read back, because the browser clamps the line above to the column's own height, and the place
-    // the pin really left the column is what the scroll handler compares against.
-    entry.pinTop = entry.scroll.scrollTop;
-  };
   const settle = () => {
+    // Released only while the human is away from the bottom: nothing else re-pins.
+    if (!entry.pinnedBottom) return;
     cancelAnimationFrame(entry.pinFrame);
-    entry.pinFrame = requestAnimationFrame(pin);
+    entry.pinFrame = requestAnimationFrame(() => putColumnAtBottom(entry));
   };
   // The column's own box grows when the card fits itself, and the note and the thread grow as the
   // drawings and the pictures land, so one observer over the three catches every late shift.
   const watch = new ResizeObserver(settle);
   entry.pinWatch = watch;
-  // Only the human moves the column up: the pin lands at the bottom, and a scroll event that still
-  // reads the bottom is the pin's own, however far the content grew before the event was delivered.
+  // Only the human moving up lets the pin go. A clamp always leaves the column at its bottom, so an
+  // event that still reads the bottom is never a release, however far the content moved under it, and
+  // it arms the pin again; the baseline follows it for the same reason it follows the pin's own land.
   // The 24px is the same tolerance an answer growing under a reader is given.
   const onScroll = () => {
+    if (entry.scroll.scrollHeight - entry.scroll.scrollTop - entry.scroll.clientHeight < 24) {
+      entry.pinnedBottom = true;
+      entry.pinTop = entry.scroll.scrollTop;
+      return;
+    }
     if (entry.scroll.scrollTop >= (entry.pinTop ?? 0) - 24) return;
     entry.pinnedBottom = false;
     cancelAnimationFrame(entry.pinFrame);
-    watch.disconnect();
-    entry.scroll.removeEventListener("scroll", onScroll);
   };
   entry.scroll.addEventListener("scroll", onScroll);
   watch.observe(entry.scroll);
@@ -1855,15 +1870,17 @@ function paintThread(entry, data) {
   }
   if (!firstPaint && !fresh && !(Boolean(last?.streaming) && atBottom)) return;
   // The first paint opens the conversation at the bottom, and the pin holds it there through the
-  // drawings and the fitting that land after this frame.
+  // drawings and the fitting that land after this frame. A card with no turns has no conversation to
+  // open at its newest message: a long note or question keeps the first paint it always had.
   if (firstPaint) {
-    pinToBottom(entry);
+    if (turns.length > 0) pinToBottom(entry);
     return;
   }
   // The note above the thread can be taller than the card, so the answer would land below the
-  // fold with nothing moving: the card's own column scrolls down to it.
+  // fold with nothing moving: the card's own column scrolls down to it. The baseline moves with it,
+  // so the scroll handler is not left comparing against a place the column has already left.
   requestAnimationFrame(() => {
-    entry.scroll.scrollTop = entry.scroll.scrollHeight;
+    putColumnAtBottom(entry);
   });
 }
 
