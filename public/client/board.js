@@ -742,6 +742,9 @@ const CHART_BODY_LIMIT = 20000;
 function chartImage(png) {
   const img = document.createElement("img");
   img.src = png;
+  // The picture carries several times the pixels the card shows, so it is held to the card's own
+  // width here: a wide card must not stretch a chart, and the CSS shrinks the extra pixels away.
+  img.style.width = `${CHART_WIDTH}px`;
   // The drawing says nothing a screen reader could not take from the sentence above it.
   img.alt = "";
   return img;
@@ -791,10 +794,14 @@ function drawChart(holder, body) {
   }
   loadChartJs()
     .then((Chart) => {
-      const ratio = window.devicePixelRatio || 1;
+      // The board zooms to 300% and a picture is only as sharp as the pixels it was painted with, so
+      // the snapshot carries three times the screen's own density. The cap keeps a dense screen from
+      // paying for detail no zoom can show.
+      const density = Math.min(6, 3 * (window.devicePixelRatio || 1));
       const canvas = document.createElement("canvas");
       // Chart.js reads these as the CSS size and multiplies by `devicePixelRatio` into the backing
-      // store, so the snapshot is 400px wide on any screen and sharp on a retina one.
+      // store, so the layout stays CHART_WIDTH whatever the density is, and the card scales the
+      // extra pixels back into that width.
       canvas.width = CHART_WIDTH;
       canvas.height = CHART_HEIGHT;
       // The colours are the board's unless the config named its own, so this runs before the draw.
@@ -808,7 +815,7 @@ function drawChart(holder, body) {
           responsive: false,
           maintainAspectRatio: false,
           animation: false,
-          devicePixelRatio: ratio,
+          devicePixelRatio: density,
         },
       });
       let png;
