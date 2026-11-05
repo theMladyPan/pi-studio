@@ -18,6 +18,61 @@ import { finished } from "./waiters.ts";
 
 
 
+// ---------- the pictures a message carries ---------------------------------
+
+/** How many pictures one message may carry: a screenshot and a crop or two, not a gallery. */
+export const MAX_IMAGES = 4;
+
+/** Base64 as a browser writes it: no `data:` prefix, no whitespace, the padding optional. */
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+
+
+/**
+ * One picture a message carries: the bytes as base64, the type they are, and the thumbnail the turn
+ * keeps. Anything else is not a picture, and is dropped below rather than refused: a browser that sends
+ * four and mangles one has still asked to look at three.
+ */
+function oneImage(raw) {
+	if (!raw || typeof raw !== "object") return null;
+	const { data, mimeType, thumb } = raw;
+	// A base64 string is never one character longer than a multiple of four, padded or not.
+	if (typeof data !== "string" || !data || data.length % 4 === 1 || !BASE64.test(data)) return null;
+	if (typeof mimeType !== "string" || !mimeType.startsWith("image/")) return null;
+	if (typeof thumb !== "string" || !thumb.startsWith("data:image/")) return null;
+	return { data, mimeType, thumb };
+}
+
+
+
+/** The pictures a message carries, as far as the board accepts them: at most `MAX_IMAGES`, junk dropped. */
+export function acceptedImages(raw) {
+	return (Array.isArray(raw) ? raw : []).map(oneImage).filter(Boolean).slice(0, MAX_IMAGES);
+}
+
+
+
+/**
+ * What a turn keeps of them, and what the browser draws: the thumbnail and its type, never the bytes.
+ * The board file is written on every turn, so a picture on a card is the small one or none at all.
+ */
+export function thumbImages(raw) {
+	return (Array.isArray(raw) ? raw : [])
+		.filter((one) => one && typeof one.thumb === "string" && one.thumb.startsWith("data:image/"))
+		.filter((one) => typeof one.mimeType === "string" && one.mimeType.startsWith("image/"))
+		.map(({ thumb, mimeType }) => ({ thumb, mimeType }))
+		.slice(0, MAX_IMAGES);
+}
+
+
+
+/** The pictures as pi's RPC takes them, which is the same bytes without the `data:` prefix. */
+export function promptImages(images) {
+	return (Array.isArray(images) ? images : []).map(({ data, mimeType }) => ({ type: "image", data, mimeType }));
+}
+
+
+
 // ---------- the board the client draws -------------------------------------
 
 /** A thread as the card the browser draws: a title, and the conversation under it. */
@@ -35,7 +90,7 @@ export function cardFor(thread, board = null) {
 		text: "",
 		status,
 		mode: "queue",
-		images: 0,
+		// The pictures travel on the turn that carried them, so the card itself counts nothing.
 		turns: thread.turns.map((turn) => ({ ...turn })),
 	};
 	if (thread.rect) card.rect = thread.rect;
@@ -80,7 +135,6 @@ export function plainCardFor(card, board = null) {
 		text: "",
 		status: "answered",
 		mode: "queue",
-		images: 0,
 		...(card.turns?.length ? { turns: card.turns } : {}),
 		...(card.type === "note"
 			? { markdown: card.markdown }

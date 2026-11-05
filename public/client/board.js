@@ -1554,12 +1554,36 @@ function turnLabel(turn) {
   return "queued · waits for the run";
 }
 
+/**
+ * The pictures a message was sent with, as the row the history draws under its words. A picture the daemon
+ * kept no thumbnail of leaves no image behind, and a message with none returns null so the caller can draw
+ * whatever else it has.
+ */
+function shotRow(images) {
+  const held = Array.isArray(images) ? images.filter((image) => typeof image?.thumb === "string" && image.thumb) : [];
+  if (held.length === 0) return null;
+  const row = el("div", "turn-shots");
+  for (const image of held) {
+    const shot = document.createElement("img");
+    shot.className = "turn-shot";
+    shot.src = image.thumb;
+    shot.alt = "image sent with this message";
+    if (typeof image.mimeType === "string") shot.title = image.mimeType;
+    row.appendChild(shot);
+  }
+  return row;
+}
+
 /** One follow-up exchange: your question, what happened to it, then the answer. */
 function turnNode(entry, turn, index) {
   const wrap = el("div", `turn ${turn.status || "queued"}`);
   const question = el("div", "turn-q");
   question.textContent = turn.text || "";
   wrap.appendChild(question);
+  // What was sent with the words, drawn small under them: a picture is read at a glance, and a count
+  // would make the human open the turn to know what they sent.
+  const shots = shotRow(turn.images);
+  if (shots) wrap.appendChild(shots);
   // The child has not been told this one yet, so its words are still the human's to change.
   if (turn.status === "queued") {
     question.title = "press twice to rewrite this message";
@@ -1573,11 +1597,6 @@ function turnNode(entry, turn, index) {
   // A connection error fits on this line; a longer reason is readable in full on hover.
   if (turn.error) status.title = turn.error;
   wrap.appendChild(status);
-  if (turn.images) {
-    const shot = el("div", "turn-status");
-    shot.textContent = `${turn.images} image${turn.images > 1 ? "s" : ""} attached`;
-    wrap.appendChild(shot);
-  }
   // What the run said on the way, above the answer: one block each, ruled apart, muted. It draws
   // nothing at all on a run that answered in one message.
   wrap.appendChild(el("div", "turn-interim"));
@@ -1730,7 +1749,17 @@ async function dropQueued(entry, index) {
 /** What a turn draws besides its answer. A turn that changes here has to be redrawn whole. */
 function turnShape(turn) {
   const notes = Array.isArray(turn.interim) ? turn.interim : [];
-  return [turn.text, turn.status, turn.mode, turn.images, turn.error, notes.length, notes.join("\u0000")].join("\u0000");
+  return [
+    turn.text,
+    turn.status,
+    turn.mode,
+    // The pictures arrive from a fresh parse of every broadcast, so the array is a new one each time and
+    // only its value says whether the turn changed.
+    JSON.stringify(turn.images ?? null),
+    turn.error,
+    notes.length,
+    notes.join("\u0000"),
+  ].join("\u0000");
 }
 
 /**
@@ -1798,11 +1827,6 @@ function stickyBody(data) {
     const text = el("div", "sticky-text");
     text.textContent = said;
     holder.appendChild(text);
-    if (data.images) {
-      const shot = el("div", "sticky-status");
-      shot.textContent = `${data.images} image${data.images > 1 ? "s" : ""} attached`;
-      holder.appendChild(shot);
-    }
     const status = el("div", `sticky-status ${data.status || "queued"}`);
     status.textContent =
       data.status === "answered"
@@ -1814,6 +1838,10 @@ function stickyBody(data) {
             : `queued · ${data.mode === "steer" ? "steer" : "queue"}`;
     holder.appendChild(status);
   }
+  // The pictures stand outside that guard for the same reason the text draws nothing: a message that was
+  // only pictures has no words, and its shots are all it has to show.
+  const shots = shotRow(data.images);
+  if (shots) holder.appendChild(shots);
   if (data.reply) {
     const reply = el("div", "sticky-reply note-body");
     reply.appendChild(renderMarkdown(data.reply));
@@ -2769,7 +2797,7 @@ function cardChanged(before, after) {
       old.text !== turn.text ||
       old.status !== turn.status ||
       old.reply !== turn.reply ||
-      old.images !== turn.images ||
+      JSON.stringify(old.images ?? null) !== JSON.stringify(turn.images ?? null) ||
       (old.interim ?? []).join("\u0000") !== (turn.interim ?? []).join("\u0000")
     );
   });
@@ -5588,6 +5616,8 @@ function makeComposer(entry) {
     named: [],
     /** Images pasted into this field and paths picked for it: both travel with the message. */
     images: [],
+    /** The pastes still being read and shrunk, which a send waits for so its picture is not left behind. */
+    encodes: [],
     picked: new Map(),
   };
   wireComposer(inst);
@@ -5636,14 +5666,31 @@ function wireComposer(inst) {
     const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
     if (files.length === 0) return;
     event.preventDefault();
-    for (const file of files.slice(0, 4)) {
-      const reader = new FileReader();
-      reader.addEventListener("load", async () => {
-        const shot = await shrinkImage(String(reader.result), file.type);
+    // One message goes with four pictures, and the field holds no more than that: a paste that would make
+    // a fifth keeps the ones it can carry and says why.
+    const room = Math.max(0, MAX_PENDING_IMAGES - inst.images.length);
+    if (files.length > room) hintLine("only four pictures go with one message", true, inst);
+    for (const file of files.slice(0, room)) {
+      // The read and the shrink are asynchronous, so the field holds the promise: a message sent one
+      // instant after the paste waits for it and goes with the picture rather than the words alone.
+      const landing = readPastedImage(file).then((shot) => {
+        if (!shot) return;
+        // A picture with no thumbnail is one the daemon would drop on its way in: it reaches neither the
+        // model nor the history, so the human is told rather than left with a chip that sends nothing.
+        if (!shot.thumb) {
+          hintLine("this picture cannot be shown on the board — try a screenshot or a PNG", true, inst);
+          return;
+        }
+        // Two pastes in flight at once each saw their own room, so the list is capped here too.
+        if (inst.images.length >= MAX_PENDING_IMAGES) {
+          hintLine("only four pictures go with one message", true, inst);
+          return;
+        }
         inst.images.push(shot);
         drawAttachments(inst);
       });
-      reader.readAsDataURL(file);
+      inst.encodes.push(landing);
+      landing.then(() => dropEncode(inst, landing), () => dropEncode(inst, landing));
     }
   });
   inst.send.addEventListener("click", () => void sendMessage(inst));
@@ -7853,29 +7900,86 @@ function drawAttachments(inst = activeComposer) {
 // A screenshot is several megabytes once base64 encoded, which is slow to push and slow to
 // replay. Shrinking it to a size that still reads well keeps the message small.
 const MAX_IMAGE_EDGE = 1568;
+/** The pictures one message carries: the daemon keeps four, so the field gathers no more. */
+const MAX_PENDING_IMAGES = 4;
+/** The small copy the history draws: a picture read at a glance, and too small to weigh on a broadcast. */
+const THUMB_IMAGE_EDGE = 320;
+const THUMB_QUALITY = 0.6;
+/** The daemon refuses a body over about a megabyte whole, so a message stays under that with room to spare. */
+const SEND_BODY_BUDGET = 900_000;
+/**
+ * How the pictures step down until the body fits: the long edge in pixels, then the JPEG quality. Each step
+ * is drawn from the picture the field holds, so the loss does not stack.
+ */
+const SEND_IMAGE_STEPS = [[1200, 0.7], [900, 0.55], [700, 0.45], [500, 0.35]];
+
+/** The `data` half of a data URL, which is what travels in the body. */
+const dataOf = (dataUrl) => dataUrl.slice(dataUrl.indexOf(",") + 1);
+
+/** A body's size the way the daemon measures it: in bytes, not in characters. */
+const bodyBytes = (body) => new TextEncoder().encode(body).length;
+
+/** One canvas draw of a decoded image: the JPEG that carries it, at the size and quality asked for. */
+function drawJpeg(image, maxEdge, quality) {
+  const scale = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
 function shrinkImage(dataUrl, mimeType) {
-  const original = { dataUrl, mimeType, data: dataUrl.slice(dataUrl.indexOf(",") + 1) };
+  const original = { dataUrl, mimeType, data: dataOf(dataUrl) };
   return new Promise((resolve) => {
     const image = new Image();
     image.addEventListener("load", () => {
-      const width = image.naturalWidth;
-      const height = image.naturalHeight;
-      if (Math.max(width, height) <= MAX_IMAGE_EDGE && dataUrl.length < 400_000) {
-        resolve(original);
+      // Drawn whatever the size of the picture, so the history has a small copy of a small screenshot too.
+      const thumb = drawJpeg(image, THUMB_IMAGE_EDGE, THUMB_QUALITY);
+      if (Math.max(image.naturalWidth, image.naturalHeight) <= MAX_IMAGE_EDGE && dataUrl.length < 400_000) {
+        resolve({ ...original, thumb });
         return;
       }
-      const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(width, height));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(width * scale));
-      canvas.height = Math.max(1, Math.round(height * scale));
-      canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
-      const shrunk = canvas.toDataURL("image/jpeg", 0.85);
-      resolve({ dataUrl: shrunk, mimeType: "image/jpeg", data: shrunk.slice(shrunk.indexOf(",") + 1) });
+      const shrunk = drawJpeg(image, MAX_IMAGE_EDGE, 0.85);
+      resolve({ dataUrl: shrunk, mimeType: "image/jpeg", data: dataOf(shrunk), thumb });
     });
-    // Anything the browser cannot decode travels untouched rather than disappearing.
+    // A picture the browser cannot decode keeps the bytes it had and carries no thumbnail: the field
+    // reads that absence as the reason to say so instead of sending what the daemon would drop.
     image.addEventListener("error", () => resolve(original));
     image.src = dataUrl;
   });
+}
+
+/** One pasted file as the picture the field carries, or null for a file the browser cannot read. */
+function readPastedImage(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => void shrinkImage(String(reader.result), file.type).then(resolve));
+    // A file that never reads carries no picture, and the field does not wait for it forever.
+    reader.addEventListener("error", () => resolve(null));
+    reader.addEventListener("abort", () => resolve(null));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** One picture re-encoded smaller from the source the field holds, for a body that would not otherwise fit. */
+function reencodeImage(image, maxEdge, quality) {
+  return new Promise((resolve) => {
+    const held = new Image();
+    held.addEventListener("load", () => {
+      const shrunk = drawJpeg(held, maxEdge, quality);
+      resolve({ ...image, dataUrl: shrunk, mimeType: "image/jpeg", data: dataOf(shrunk) });
+    });
+    // A picture that cannot be decoded again keeps the bytes it had: a smaller body is not worth losing it.
+    held.addEventListener("error", () => resolve(image));
+    held.src = image.dataUrl;
+  });
+}
+
+/** A landed paste leaves the field's list, so a long session of them holds no finished work. */
+function dropEncode(inst, landing) {
+  const at = inst.encodes.indexOf(landing);
+  if (at >= 0) inst.encodes.splice(at, 1);
 }
 
 // ---------- file picker --------------------------------------------------
@@ -8544,40 +8648,80 @@ function pickedPathsText() {
   return `Files and folders:\n${lines.join("\n")}`;
 }
 
+/** An image with no words sends this one line, because a message is read as words before the picture is seen. */
+const IMAGE_ONLY_TEXT = "(image attached)";
+
+/**
+ * The body a message sends. The daemon refuses a body over about a megabyte as no body at all, so the
+ * pictures step down in size and quality until the message fits. Null means it cannot be made to fit, and
+ * then nothing is sent: a message that went without its pictures would say something else.
+ */
+async function messageBody(fields, images) {
+  const shape = (pictures) =>
+    JSON.stringify({
+      ...fields,
+      // The thumbnail rides beside the picture, so the history draws what was sent without the full base64.
+      images: pictures.map((image) => ({ data: image.data, mimeType: image.mimeType, thumb: image.thumb })),
+    });
+  // Words alone have no picture to make smaller, so a body they overflow stays the daemon's to refuse.
+  if (images.length === 0) return shape(images);
+  let body = shape(images);
+  for (const [edge, quality] of SEND_IMAGE_STEPS) {
+    if (bodyBytes(body) <= SEND_BODY_BUDGET) return body;
+    body = shape(await Promise.all(images.map((image) => reencodeImage(image, edge, quality))));
+  }
+  return bodyBytes(body) <= SEND_BODY_BUDGET ? body : null;
+}
+
 async function sendMessage(inst = activeComposer) {
   if (!inst || inst.send.disabled) return;
   // Enter fires again while the first send is in flight; a second body would carry a new id,
-  // slip past the server's duplicate guard and deliver the message twice.
-  const draft = inst.msg.value;
-  const typed = draft.trim();
-  if (!typed && inst.images.length === 0 && inst.picked.size === 0) return;
-  // A `!` at the very front of a one-line draft is the shell, the way it is in a console pi. A draft with a
-  // newline in it is prose that happens to start with `!` — nobody types a two-line command — and stays a
-  // message, and a space before the `!` is a message too, so "!important" in a sentence is never run.
-  if (draft.startsWith("!") && !draft.includes("\n")) return runCommand(inst, draft, draft.slice(1).trim());
-  const text = inst.picked.size === 0 ? typed : `${typed}${typed ? "\n\n" : ""}${pickedPathsText()}`;
-  // What this message carries, so a pick or a keystroke made while it travels is still there.
-  const sentPaths = [...inst.picked.keys()];
-  const sentImages = [...inst.images];
-  const sentNamed = [...inst.named];
-  // A fork is the human's choice for this one send, and is asked on behalf of a card the message names:
-  // it is answered in a card the board has not drawn yet, so the caret follows the new card when it arrives.
-  const sentFork = inst.forkNext ? forkTarget(inst) : null;
-  const card = cardOf(inst);
+  // slip past the server's duplicate guard and deliver the message twice. A paste is read and shrunk after
+  // the event that made it, so the button is claimed before that wait too: a message sent one instant after
+  // a paste goes with the picture, and a second Enter during the wait sends nothing twice.
   inst.send.disabled = true;
-  // Both attempts carry the same id, so a retry after a reset cannot deliver twice.
-  const body = JSON.stringify({
-    id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
-    // A fork is asked about the card it is forked from; anything else answers the field's own thread.
-    cardId: sentFork ? sentFork.id : card?.id,
-    // The cards the message names travel beside the one it answers, so the agent is told about each.
-    refs: sentFork ? sentNamed.filter((id) => id !== sentFork.id) : sentNamed,
-    fork: Boolean(sentFork) || undefined,
-    text,
-    mode: inst.sendMode,
-    images: sentImages.map((image) => ({ data: image.data, mimeType: image.mimeType })),
-  });
   try {
+    if (inst.encodes.length) await Promise.allSettled([...inst.encodes]);
+    const draft = inst.msg.value;
+    const typed = draft.trim();
+    if (!typed && inst.images.length === 0 && inst.picked.size === 0) return;
+    // A `!` at the very front of a one-line draft is the shell, the way it is in a console pi. A draft with a
+    // newline in it is prose that happens to start with `!` — nobody types a two-line command — and stays a
+    // message, and a space before the `!` is a message too, so "!important" in a sentence is never run.
+    if (draft.startsWith("!") && !draft.includes("\n")) return runCommand(inst, draft, draft.slice(1).trim());
+    const text = inst.picked.size === 0 ? typed : `${typed}${typed ? "\n\n" : ""}${pickedPathsText()}`;
+    // What this message carries, so a pick or a keystroke made while it travels is still there.
+    const sentPaths = [...inst.picked.keys()];
+    const sentImages = [...inst.images];
+    const sentNamed = [...inst.named];
+    // A picture on its own is a message. A message is read as words, so an empty draft with images on it
+    // goes as the one line that names them, and the agent finds the picture beside it.
+    const words = text || (sentImages.length ? IMAGE_ONLY_TEXT : "");
+    // A fork is the human's choice for this one send, and is asked on behalf of a card the message names:
+    // it is answered in a card the board has not drawn yet, so the caret follows the new card when it arrives.
+    const sentFork = inst.forkNext ? forkTarget(inst) : null;
+    const card = cardOf(inst);
+    // The daemon refuses a body over about a megabyte as no body at all, so the pictures are stepped down
+    // until the message fits. One that cannot be made to fit stays in the field, where the human still has
+    // it: a message that went without its pictures would say something else.
+    const body = await messageBody(
+      {
+        // Both attempts carry the same id, so a retry after a reset cannot deliver twice.
+        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+        // A fork is asked about the card it is forked from; anything else answers the field's own thread.
+        cardId: sentFork ? sentFork.id : card?.id,
+        // The cards the message names travel beside the one it answers, so the agent is told about each.
+        refs: sentFork ? sentNamed.filter((id) => id !== sentFork.id) : sentNamed,
+        fork: Boolean(sentFork) || undefined,
+        text: words,
+        mode: inst.sendMode,
+      },
+      sentImages,
+    );
+    if (!body) {
+      hintLine("images too large to send — remove one", true, inst);
+      return;
+    }
     let response;
     // A socket the browser thought was alive can be closed under it, which loses the
     // request silently. One retry turns that into a delivered message.
