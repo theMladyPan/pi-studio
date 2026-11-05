@@ -4312,7 +4312,7 @@ const trBody = document.getElementById("trBody");
 const trTitleEl = trPanel.querySelector(".tr-title");
 const trNoteEl = trPanel.querySelector(".tr-note");
 const trFollowBtn = document.getElementById("trFollow");
-const TR_MARKS = { user: "›", answer: "●", thinking: "▸", call: "▸", result: "·" };
+const TR_MARKS = { user: "›", answer: "●", thinking: "▸", call: "▸", result: "·", image: "▣" };
 let trThread = "";
 let trFollow = true;
 let trTimer = 0;
@@ -4321,6 +4321,15 @@ let trDrawn = "";
 function trEntryNode(entry) {
   const node = el("div", `tr-entry ${entry.kind}`);
   node.dataset.mark = TR_MARKS[entry.kind] ?? "";
+  // A picture arrives as a number rather than as bytes, so the transcript it is polled with stays the
+  // size of its words: the browser fetches the picture itself, once, and draws it small.
+  if (entry.kind === "image") {
+    const picture = el("img", "tr-shot");
+    picture.alt = "a picture in this conversation";
+    picture.src = `/transcript/${encodeURIComponent(trThread)}/image/${entry.image}?${auth}`;
+    node.append(picture);
+    return node;
+  }
   node.textContent = entry.kind === "thinking" ? `thinking: ${entry.text}` : entry.text;
   return node;
 }
@@ -4345,7 +4354,7 @@ async function trLoad() {
     .join(" · ");
   // A repaint keeps the reader's place unless they were at the bottom, and an unchanged transcript is
   // not painted at all: the poll runs every few seconds for as long as the drawer is open.
-  const drawn = JSON.stringify(data.entries.map((entry) => [entry.kind, entry.text]));
+  const drawn = JSON.stringify(data.entries.map((entry) => [entry.kind, entry.text, entry.image ?? null]));
   if (drawn === trDrawn) return;
   trDrawn = drawn;
   const atBottom = trBody.scrollHeight - trBody.scrollTop - trBody.clientHeight < 60;

@@ -19,7 +19,7 @@ import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readSco
 import { onDefaults, onOpenWorkspace, onPickFile, onPickFolder, onSettingsDefaults } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
 import { rowWithThought } from "./thought.ts";
-import { sessionFile, transcriptOf } from "./session.ts";
+import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
 import { onMode, onPath, onThread, onThreadSpawn } from "./routes/board/thread.ts";
 import { onAnswer, onAsk } from "./routes/board/answer.ts";
@@ -270,6 +270,24 @@ export const server = createServer((req, res) => {
 			answer(res, 200, rowWithThought(row));
 			return;
 		}
+		// One picture out of a session file. The transcript names a picture by its number instead of
+		// carrying its base64, so what the drawer polls for the words stays the size of the words; the
+		// browser fetches each picture once and keeps it.
+		const pictureAt = /^\/transcript\/([^/]+)\/image\/(\d+)$/.exec(url.pathname);
+		if (req.method === "GET" && pictureAt) {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			const thread = board.threads.get(decodeURIComponent(pictureAt[1]));
+			if (!thread) return void fail(res, 404, "no such thread");
+			const file = thread.sessionId ? sessionFile({ id: board.id }, thread.sessionId) : "";
+			const picture = file ? sessionImage(file, Number(pictureAt[2])) : null;
+			if (!picture) return void fail(res, 404, "no picture there");
+			const bytes = Buffer.from(picture.data, "base64");
+			res.writeHead(200, { "Content-Type": picture.mime, "Content-Length": bytes.length, "Cache-Control": "private, max-age=60" });
+			res.end(bytes);
+			return;
+		}
+
 		// The conversation behind a thread, rendered for reading: what the activity rail summarises and
 		// what the card shows one answer of.
 		if (req.method === "GET" && url.pathname.startsWith("/transcript/")) {

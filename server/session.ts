@@ -119,6 +119,7 @@ export function transcriptOf(file) {
 		return null;
 	}
 	const entries = [];
+	let pictures = 0;
 	for (const line of raw.split("\n")) {
 		if (!line.trim()) continue;
 		let record;
@@ -135,6 +136,13 @@ export function transcriptOf(file) {
 		if (role === "system") continue;
 		const blocks = Array.isArray(message.content) ? message.content : [];
 		for (const block of blocks) {
+			// A picture carries no words, so it is an entry of its own: the drawer fetches it by the number
+			// it landed on here and draws it, rather than shipping the base64 with the words it polls for.
+			if (block?.type === "image") {
+				entries.push({ kind: "image", text: "", image: pictures });
+				pictures += 1;
+				continue;
+			}
 			const kind =
 				block?.type === "thinking"
 					? "thinking"
@@ -157,4 +165,44 @@ export function transcriptOf(file) {
 		}
 	}
 	return entries.length > TRANSCRIPT_ENTRIES ? entries.slice(-TRANSCRIPT_ENTRIES) : entries;
+}
+
+
+/**
+ * One picture out of a session file, by the number the transcript gave it: the nth image block in the
+ * order pi wrote them. Null when the session has no such picture, or the file is gone.
+ *
+ * It reads the whole file, because a jsonl is a file of lines and nothing says where the pictures are.
+ * That is the cost of a drawer that shows one and leaves the words it polls for small: the browser
+ * fetches a picture once and keeps it.
+ */
+export function sessionImage(file, index) {
+	if (!Number.isInteger(index) || index < 0) return null;
+	let raw;
+	try {
+		raw = readFileSync(file, "utf8");
+	} catch {
+		return null;
+	}
+	let seen = 0;
+	for (const line of raw.split("\n")) {
+		if (!line.trim()) continue;
+		let record;
+		try {
+			record = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (record?.type !== "message") continue;
+		const blocks = Array.isArray(record.message?.content) ? record.message.content : [];
+		for (const block of blocks) {
+			if (block?.type !== "image") continue;
+			if (seen === index) {
+				if (typeof block.data !== "string" || !block.data) return null;
+				return { mime: typeof block.mimeType === "string" && block.mimeType ? block.mimeType : "image/png", data: block.data };
+			}
+			seen += 1;
+		}
+	}
+	return null;
 }
