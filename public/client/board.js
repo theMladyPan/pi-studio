@@ -1763,15 +1763,77 @@ function turnShape(turn) {
 }
 
 /**
+ * Every programmatic scroll of a conversation column lands through here, and one card keeps one of them
+ * pending: a new follow replaces the one still queued, and the card's release cancels it. A reader who
+ * let go is therefore never dragged down by a scroll that was scheduled before they moved.
+ */
+function putColumnAtBottom(entry) {
+  cancelAnimationFrame(entry.scrollFrame);
+  entry.scrollFrame = requestAnimationFrame(() => {
+    entry.scroll.scrollTop = entry.scroll.scrollHeight;
+  });
+}
+
+/**
+ * A conversation opens at its newest message, and stays there while the card is still settling under
+ * it. One scroll to the bottom is not enough: a diagram or a chart draws into a holder that starts
+ * empty, a picture arrives with no size of its own, and a card that fits itself grows in a later
+ * frame, so the bottom drawn at paint time ends up above the fold. The column is therefore pinned,
+ * and every late shift of the content or of the card re-pins it, until the human scrolls it themselves.
+ * The observer and the single listener outlive that release, so scrolling back to the bottom arms the
+ * pin again and a picture landing after it is followed.
+ */
+function pinToBottom(entry) {
+  // A repaint of the same card must not stack a second listener or a second observer.
+  if (entry.pinWatch) return;
+  entry.pinnedBottom = true;
+  const settle = () => {
+    // Geometry reaches here with no scroll to announce it: a column that fits itself, or a window that
+    // grows, can put the whole conversation inside the box and bring a released reader back to the
+    // bottom. So a released column is measured again by the same one measure the listener reads, and
+    // follows again once that measure says the bottom is within reach; away from it, nothing moves.
+    if (!entry.pinnedBottom) entry.pinnedBottom = entry.scroll.scrollHeight - entry.scroll.scrollTop - entry.scroll.clientHeight < 24;
+    if (!entry.pinnedBottom) return;
+    putColumnAtBottom(entry);
+  };
+  // The column's own box grows when the card fits itself, and the note and the thread grow as the
+  // drawings and the pictures land, so one observer over the three catches every late shift.
+  const watch = new ResizeObserver(settle);
+  entry.pinWatch = watch;
+  // The whole state is this one measure: the pin follows while the column is within reach of its
+  // bottom and lets go once it is not. A clamp always leaves the column at its bottom, so the pin's own
+  // move never reads as the human's, and nothing is compared against a stale place; a reader who walks
+  // up in small steps is away from the bottom the moment they pass it, whatever the steps were; and an
+  // event that still reads the bottom arms the pin again, which is how a late picture is followed. The
+  // 24px is the same tolerance an answer growing under a reader is given.
+  const onScroll = () => {
+    entry.pinnedBottom = entry.scroll.scrollHeight - entry.scroll.scrollTop - entry.scroll.clientHeight < 24;
+    // A released reader has no automatic scroll left in flight.
+    if (!entry.pinnedBottom) cancelAnimationFrame(entry.scrollFrame);
+  };
+  entry.scroll.addEventListener("scroll", onScroll);
+  watch.observe(entry.scroll);
+  watch.observe(entry.body);
+  watch.observe(entry.thread);
+  settle();
+}
+
+/**
  * Follow-ups live in the card they are about, below its body, so asking again never pushes a
  * new card onto the canvas.
  */
 function paintThread(entry, data) {
   const turns = Array.isArray(data.turns) ? data.turns : [];
   const last = turns[turns.length - 1];
+  // A thread the card is created with is drawn as history, so this paint is the last one that can say
+  // the conversation is opening: read before `threadSeen` is seeded below.
+  const firstPaint = entry.threadSeen === undefined;
   // News is a turn that was not there before, or the last turn's answer landing; a thread the
   // card is created with is history. Either way it fires once per real answer.
   const seen = entry.threadSeen ?? { count: turns.length, answered: Boolean(last?.reply) };
+  // A card created with no turns carries no conversation to open, so the paint that gives it its first
+  // one is the paint that opens it, exactly as a first paint would.
+  const opened = !firstPaint && seen.count === 0 && turns.length > 0;
   const fresh = turns.length > seen.count || (Boolean(last?.reply) && !seen.answered);
   entry.threadSeen = { count: turns.length, answered: Boolean(last?.reply) };
   entry.thread.hidden = turns.length === 0;
@@ -1809,12 +1871,19 @@ function paintThread(entry, data) {
     entry.thread.replaceChildren(...nodes);
     entry.turnNodes = turns.map((turn, at) => ({ turn: { ...turn }, node: nodes[at] }));
   }
-  if (!fresh && !(Boolean(last?.streaming) && atBottom)) return;
+  if (!firstPaint && !fresh && !(Boolean(last?.streaming) && atBottom)) return;
+  // The first paint opens the conversation at the bottom, and the pin holds it there through the
+  // drawings and the fitting that land after this frame. A card created empty opens the same way when
+  // its first turn arrives. A card with no turns has no conversation to open at its newest message: a
+  // long note or question keeps the first paint it always had.
+  if (firstPaint || opened) {
+    if (turns.length > 0) pinToBottom(entry);
+    return;
+  }
   // The note above the thread can be taller than the card, so the answer would land below the
-  // fold with nothing moving: the card's own column scrolls down to it.
-  requestAnimationFrame(() => {
-    entry.scroll.scrollTop = entry.scroll.scrollHeight;
-  });
+  // fold with nothing moving: the card's own column scrolls down to it. It shares the pin's one pending
+  // frame, so a reader who lets go before it runs is not dragged back down.
+  putColumnAtBottom(entry);
 }
 
 /** A message from the user, with the agent's answer attached once it arrives. */
@@ -2888,6 +2957,11 @@ function clearBoard() {
   composers.clear();
   activeComposer = null;
   for (const card of cards) card.remove();
+  // A replay rebuilds every card, so the pins must let go of the ones going away.
+  for (const record of byId.values()) {
+    cancelAnimationFrame(record.scrollFrame);
+    record.pinWatch?.disconnect();
+  }
   cards.length = 0;
   byId.clear();
   selectedIds.clear();
@@ -2932,6 +3006,9 @@ function dropCard(entry) {
     if (activeComposer === held) activeComposer = null;
   }
   record.card.remove();
+  // A dropped card keeps no pin: the observer would otherwise hold the dead column in memory.
+  cancelAnimationFrame(record.scrollFrame);
+  record.pinWatch?.disconnect();
   forgetSeen(record.card);
   inView.delete(record.card);
   seenObserver.unobserve(record.card);
