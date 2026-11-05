@@ -2667,12 +2667,14 @@ function paintCard(entry, data) {
   entry.roleEl.style.display = role ? "" : "none";
   // A boss is a thread the human started that spawns instead of working, so its chip carries the flow it
   // runs; `auto` is the boss still deciding. A thread born from a typed message carries no mode of its own
-  // and the card's `mode` is the queue state of its last turn, so only a real mode counts as one.
+  // and the card's `mode` is the queue state of its last turn, so only a real mode counts as one. The name
+  // is the plain mode, never a suffix: the chip is quiet while the mode is in force and blue while the
+  // choice waits, so colour alone says which one it is.
   const mode = data.type === "sticky" && THREAD_MODES.includes(data.mode) ? data.mode : "";
   const shownMode = mode === "boss" && data.path ? `boss · ${data.path}` : mode;
   const waits = modeWaits(data);
   entry.modeEl.classList.toggle("on", waits);
-  entry.modeEl.textContent = waits ? `${shownMode} · next` : shownMode;
+  entry.modeEl.textContent = shownMode;
   entry.modeEl.title = waits
     ? `takes effect on the next message: this run is still a ${data.modeAtRun}`
     : mode
@@ -2761,7 +2763,7 @@ function fitContent(entry, data) {
 function cardChanged(before, after) {
   // A mode or a flow is repainted too: `/mode` and `/thread/path` change nothing else on the card.
   // `modeAtRun` is in the list because a mode lands when the next child starts: that broadcast carries the
-  // corrected badge and nothing else, and a card that ignores it keeps saying `· next` for the whole run.
+  // corrected badge and nothing else, and a card that ignores it keeps the wrong colour for the whole run.
   const fields = ["title", "markdown", "details", "text", "question", "reply", "status", "mode", "modeAtRun", "path", "pathChosenBy"];
   if (fields.some((field) => before[field] !== after[field])) return true;
   if (JSON.stringify(before.worktree ?? null) !== JSON.stringify(after.worktree ?? null)) return true;
@@ -6012,7 +6014,7 @@ const THREAD_MODES = ["agent", "plan", "boss"];
 /**
  * Whether the mode on a card is still waiting. A mode reaches a thread when its process starts, so a
  * change made while a run is going lands on the next message: until then the card shows the mode the run
- * in flight is following, and the chip says the choice is on its way rather than looking obeyed.
+ * in flight is following, and the chip wears the waiting colour rather than looking obeyed.
  *
  * Only a run in flight waits. An idle thread whose mode was just changed obeys it the moment it is asked
  * to do anything, and the choice already in force has nothing on its way either, so both are quiet.
@@ -6045,9 +6047,10 @@ function paintMode(inst) {
   const { mode, path } = modeShown(inst);
   const held = cardOf(inst);
   const waits = modeWaits(held?.data);
-  inst.pickModeBtn.textContent = waits ? `${mode} · next` : mode;
+  inst.pickModeBtn.textContent = mode;
   // Blue is the choice waiting, not the choice made: a mode already in force wears the quiet colour, so
-  // one press of the button means one thing on the card and in the field.
+  // one press of the button means one thing on the card and in the field. Colour alone carries that,
+  // so the button and the card's chip both keep the plain name.
   inst.pickModeBtn.classList.toggle("on", waits);
   inst.pickModeBtn.title = waits
     ? `takes effect on the next message: the run going now is still a ${held.data.modeAtRun}`
