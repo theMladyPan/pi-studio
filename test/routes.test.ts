@@ -1037,6 +1037,27 @@ test("a pinned card makes room by evicting the second-oldest note", async () => 
 	}
 });
 
+test("a card dragged west or north of the origin keeps the place it was given", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-north-west-"));
+	const daemon = await boot(folder);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const made = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "far", markdown: "northwest" })).body).cardId;
+		// The board is endless both ways: a card above or left of the origin is a place, not a mistake.
+		const rect = { x: -1840, y: -1260, w: 320, h: 240 };
+		const moved = await postTo(daemon, board.id, "/layout", { cardId: made, rect });
+		assert.equal(moved.status, 200);
+
+		const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		const card = (state.cards as any[]).find((one) => one.id === made);
+		assert.ok(card, "the card is not on the board");
+		assert.deepEqual(card.rect, rect);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
 test("a note whose chart fence is not JSON answers with a report naming the fault", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-note-report-"));
 	const daemon = await boot(folder);
