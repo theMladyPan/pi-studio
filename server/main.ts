@@ -181,6 +181,8 @@ export const server = createServer((req, res) => {
 				"/": ["welcome.html", "text/html; charset=utf-8"],
 				"/welcome.js": ["welcome.js", "text/javascript; charset=utf-8"],
 				"/welcome.css": ["welcome.css", "text/css; charset=utf-8"],
+				// Both surfaces name this one in their head, so a tab carries the mark before the page paints.
+				"/favicon.svg": ["favicon.svg", "image/svg+xml"],
 			};
 			const hit = statics[url.pathname];
 			if (hit) {

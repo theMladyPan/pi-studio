@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="pi-studio">
+  <!-- The board's left rail as a solid band, with the pi standing on the canvas beside it. Drawn on a
+       32-dot grid so it holds at the 16 pixels a tab gives it; the shape is the draft the board chose,
+       mockups/favicons/draft-4-rail.svg. -->
+  <rect width="32" height="32" rx="7" fill="#0d1117"/>
+  <path d="M0 7a7 7 0 0 1 7-7h2.2v32H7a7 7 0 0 1-7-7z" fill="#1f6feb"/>
+  <g fill="none" stroke="#e6edf3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12.6 11.6h14"/>
+    <path d="M16.6 13.1v8.6"/>
+    <path d="M22.6 13.1v6c0 1.7 1.1 2.5 2.6 2.4"/>
+  </g>
+</svg>

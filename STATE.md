@@ -16,6 +16,10 @@ commit's own account rather than on a check run now, the section below says so.
 - **Boards are independent**: threads, children, activity and the event stream are keyed by
   workspace, so two tabs work at once and neither can disturb the other. Closing a tab kills
   nothing — children belong to the daemon and keep running.
+- **Favicon**: `/favicon.svg` is served beside the pages and named in both heads, so the crossroads and
+  every board tab carry the mark instead of the browser's blank page glyph. It is a static file with
+  no route of its own beyond the table it sits in, so it answers before the token check the way the
+  pages do. The drafts it was chosen from are in `mockups/favicons/`.
 - **Folder picker**: `POST /pick-folder` runs `zenity --file-selection --directory`, because a browser
   cannot be handed an absolute path. Falls back to typing a path when zenity is missing; a path that
   does not exist is refused rather than created. `POST /pick-file` is the same dialog with no

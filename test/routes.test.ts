@@ -785,6 +785,11 @@ test("a route without the token is refused, and the page is not", async () => {
 		const script = await get(daemon, "/client/board.js");
 		assert.equal(script.status, 200);
 		assert.match(script.type, /javascript/);
+		// The icon both pages name is served too, and as an image, so a tab shows the mark.
+		const icon = await get(daemon, "/favicon.svg");
+		assert.equal(icon.status, 200);
+		assert.match(icon.type, /image\/svg\+xml/);
+		assert.match(icon.body, /<svg/);
 	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });
