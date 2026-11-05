@@ -539,12 +539,13 @@ export function onListening() {
 	// Which build is answering matters the moment a tab looks wrong, so it is said out loud.
 	console.log(`build ${buildHash()}${INSTANCE ? `, state ${STATE_DIR}` : ""}`);
 	// The scratch folder is made at boot rather than on the first request, so the crossroads never draws a
-	// row for a folder that is not there yet.
+	// row for a folder that is not there yet. A temp area that refuses it is said out loud here, once, rather
+	// than as a row nobody can open on every refresh.
 	const scratch = ensureScratch();
-	const opened = workspaces.filter((workspace) => workspace.folder !== scratch.folder);
+	const opened = scratch ? workspaces.filter((workspace) => workspace.folder !== scratch.folder) : workspaces;
 	if (opened.length) console.log(`${opened.length} workspace${opened.length === 1 ? "" : "s"}, newest ${opened[0].name}`);
 	else console.log("no workspace yet — open one on the crossroads");
-	console.log(`scratch ${scratch.folder}`);
+	console.log(scratch ? `scratch ${scratch.folder}` : "the scratch folder could not be made — no throwaway row this session");
 	// The crossroads is where a desktop app starts, so it starts in the browser.
 	if (OPEN_BROWSER) {
 		try {
