@@ -5674,6 +5674,30 @@ function focusedComposer() {
 }
 
 /**
+ * A field grows with its words and stops at ten of them, where it scrolls inside itself. The height is set
+ * from the text and the box's own CSS clamps it, so the field's corner, the height of the card it sits in
+ * and the window all keep the last word. One function serves the bottom bar and every card, so the two
+ * behave alike.
+ */
+function growComposer(inst) {
+  const field = inst.msg;
+  // A press on the field's corner may be a drag, so the box belongs to the human until it is released.
+  if (inst.cornerPress) return;
+  // An empty field goes back to the height its CSS gives it, and a field the human had dragged hands the
+  // sizing back: the words grow it again.
+  if (field.value === "") {
+    inst.dragged = false;
+    field.style.removeProperty("height");
+    return;
+  }
+  // A corner the human dragged is their layout, so the words stop resizing this field while it holds them.
+  if (inst.dragged) return;
+  // `auto` first, so the box measures the words rather than the height it already holds.
+  field.style.height = "auto";
+  field.style.height = `${field.scrollHeight}px`;
+}
+
+/**
  * One field, built once per thread card and once for the bottom bar a one-session board keeps. Its
  * whole state lives here, so two cards never share a draft, an attachment or a reference.
  */
@@ -5704,6 +5728,10 @@ function makeComposer(entry) {
     sendMode: "queue",
     // A fork asks a new thread instead of the one that answers the card, and is one send's choice.
     forkNext: false,
+    // Whether the human dragged the field's corner: their height wins over the one the words ask for.
+    dragged: false,
+    // Whether a press is on that corner right now, which is a drag until it is released.
+    cornerPress: false,
     // The thread whose compaction is in flight, so the meter says so until the figures come back.
     compacting: "",
     /** The `!command` this field handed to the daemon, while it runs: the hint says so until it answers. */
@@ -5757,7 +5785,39 @@ function wireComposer(inst) {
       void sendMessage(inst);
     }
   });
-  inst.msg.addEventListener("input", () => typedInAtPick(inst));
+  inst.msg.addEventListener("input", () => {
+    typedInAtPick(inst);
+    growComposer(inst);
+  });
+  // How tall the words have to be depends on the width they wrap at, so a window resize, a dragged rail
+  // and a card whose height changed are all measured again from the text. A notification where only the
+  // height moved is this script's own write or the human's drag, and neither asks for another grow.
+  let fieldWidth = 0;
+  new ResizeObserver(() => {
+    if (inst.msg.offsetWidth === fieldWidth) return;
+    fieldWidth = inst.msg.offsetWidth;
+    growComposer(inst);
+  }).observe(inst.msg);
+  // The field's own corner is the human's, and their drag beats the words. The press is the only proof
+  // that the height about to change is theirs rather than this script's, so it is recorded here and read
+  // at the release: a press that leaves the box at a different height was a drag, and a press that moved
+  // nothing is a caret, which keeps the growth. A drag changes the width with the height, so the measure
+  // above is held off until the release as well, or the two would fight over the box.
+  inst.msg.addEventListener("pointerdown", (event) => {
+    const box = inst.msg.getBoundingClientRect();
+    // The corner the browser draws its grip in, with a little either way; anywhere else is a caret.
+    if (event.clientX < box.right - 18 || event.clientY < box.bottom - 18) return;
+    const was = box.height;
+    inst.cornerPress = true;
+    const release = () => {
+      removeEventListener("pointerup", release);
+      removeEventListener("pointercancel", release);
+      inst.cornerPress = false;
+      if (Math.abs(inst.msg.getBoundingClientRect().height - was) > 1) inst.dragged = true;
+    };
+    addEventListener("pointerup", release);
+    addEventListener("pointercancel", release);
+  });
   inst.msg.addEventListener("paste", (event) => {
     const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
     if (files.length === 0) return;
@@ -5815,6 +5875,11 @@ function wireComposer(inst) {
 // A board with a single session behind it keeps one field in the bottom bar. A board of threads hides
 // the bar: every thread card carries its own field, built where the card is.
 composerHome.appendChild(makeComposer(null).root);
+// The bar is a fixed overlay and the board's viewport stops above it, so a field that grows with its words
+// must not end up over the cards: the bar's own measured height is the bottom inset the viewport reads.
+new ResizeObserver(() => {
+  document.documentElement.style.setProperty("--composer-h", `${composerHome.offsetHeight}px`);
+}).observe(composerHome);
 
 // ---------- hints ---------------------------------------------------------
 /**
@@ -6020,6 +6085,7 @@ function restoreDraft(inst) {
   drawAttachments(inst);
   drawChips(inst);
   paintRefs(inst);
+  growComposer(inst);
 }
 
 /**
@@ -8864,7 +8930,10 @@ async function sendMessage(inst = activeComposer) {
     // Which thread answered: a fork is a new one, drawn as a card of its own, and the answer is read there.
     const made = sentFork ? await response.json().catch(() => null) : null;
     // Only what was sent leaves the field: a keystroke or a pick made while it travelled stays.
-    if (inst.msg.value === draft) inst.msg.value = "";
+    if (inst.msg.value === draft) {
+      inst.msg.value = "";
+      growComposer(inst);
+    }
     for (const image of sentImages) {
       const at = inst.images.indexOf(image);
       if (at >= 0) inst.images.splice(at, 1);
@@ -8967,7 +9036,10 @@ async function runCommand(inst, draft, command) {
     // What ran leaves the field the way a sent message does, and only if nothing was typed while it ran. A
     // command that failed keeps its words, because the next thing the human does with it is fix it.
     const failed = ran.timedOut || ran.exitCode !== 0;
-    if (!failed && inst.msg.value === draft) inst.msg.value = "";
+    if (!failed && inst.msg.value === draft) {
+      inst.msg.value = "";
+      growComposer(inst);
+    }
     if (failed) {
       const why = ran.timedOut
         ? "stopped at the time limit"

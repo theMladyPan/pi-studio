@@ -44,7 +44,9 @@
   /* `hidden` is a scroll container, so a focused card can shift the board behind the pan state;
      `clip` is not. Where `clip` is unsupported the script zeroes that scroll offset instead. */
   #viewport {
-    position: fixed; inset: 44px 0 96px var(--rail); overflow: hidden; overflow: clip;
+    /* The bottom inset is the height of the bar a board with a single session keeps under it, published by
+       the script as `--composer-h`: the field there grows with its words, and no card may end up under it. */
+    position: fixed; inset: 44px 0 var(--composer-h, 96px) var(--rail); overflow: hidden; overflow: clip;
     background-color: var(--bg);
     background-image: radial-gradient(circle at 1px 1px, #21262d 1px, transparent 0);
     background-size: 24px 24px;
@@ -757,18 +759,25 @@
   .composer .paths .chip button { border: 0; background: transparent; color: var(--muted); cursor: pointer;
     font: 12px var(--mono); line-height: 1; padding: 1px 4px; border-radius: 50%; }
   .composer .paths .chip button:hover { background: #21262d; color: var(--text); }
-  /* The field is dragged taller from its corner. The card clips whatever grows past it, so the drag
-     stops at the height that card can hold (`--field-max`, set from the card's own height): a field
+  /* The field is dragged taller from its corner, and it grows with its words up to ten of them. Ten lines
+     of the field's own font is what the cap counts, so a card's 13px and the 14px of the bottom bar each
+     stop at their own ten, and its padding and border come back on top because the height the script sets
+     from `scrollHeight` already counts them. A card that cannot hold ten lines has the last word
+     (`--field-max`, set from the card's own height): the card clips whatever grows past it, so a field
      taller than its card would push its own drag corner out of the card, where nothing can grab it. */
   .composer textarea {
-    /* `flex: none`, not `flex: 1`: a zero flex basis would ignore the height the corner sets, and the
-       drag would look like it did nothing. The field is its own height between a floor and the card. */
+    /* `flex: none`, not `flex: 1`: a zero flex basis would ignore the height the script and the corner set,
+       and the growth and the drag would look like they did nothing. The field is its own height between a
+       floor and the cap. */
     flex: none; resize: vertical; font: 13px/1.45 system-ui, sans-serif; color: var(--text);
-    min-height: 52px; max-height: var(--field-max, 150px); background: #0d1117;
-    border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px;
+    min-height: 52px; max-height: min(var(--field-max, 340px), calc(10 * 1.45em + 16px));
+    background: #0d1117; border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px;
   }
-  /* The bottom bar is the window's, not a card's, so it takes what the window gives it. */
-  #composerHome .composer textarea { font-size: 14px; padding: 8px 10px; max-height: min(320px, 40vh); }
+  /* The bottom bar is the window's, not a card's, so it takes what the window gives it: the same ten lines
+     in its own 14px font, and no more than a short window can spare. */
+  #composerHome .composer textarea {
+    font-size: 14px; padding: 8px 10px; max-height: min(calc(10 * 1.45em + 18px), 40vh);
+  }
   .composer textarea:focus { outline: none; border-color: var(--accent-dim); }
   .composer .modes button { font: 11px var(--mono); color: var(--muted); background: #161b22;
     border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
