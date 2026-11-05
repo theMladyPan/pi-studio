@@ -2960,7 +2960,12 @@ function applyMessage(data, quiet = false) {
 function clearBoard() {
   // Every field lives inside a card, so they go with the cards. A field's words are kept under its card
   // so a snapshot that rebuilds the board puts the same draft back.
-  for (const inst of composers.values()) parkDraft(inst);
+  for (const inst of composers.values()) {
+    parkDraft(inst);
+    // A field inside a card goes with it, and its measure goes too: a rebuilt card makes its own. The
+    // bottom bar's field stays where it is, so its measure stays with it.
+    if (inst.entry) inst.growWatch?.disconnect();
+  }
   composers.clear();
   activeComposer = null;
   for (const card of cards) card.remove();
@@ -3009,6 +3014,8 @@ function dropCard(entry) {
   const held = record.composer;
   if (held) {
     parkDraft(held);
+    // A dropped card keeps no measure: the observer would hold the field it can no longer reach.
+    held.growWatch?.disconnect();
     composers.delete(held.key);
     if (activeComposer === held) activeComposer = null;
   }
@@ -5681,20 +5688,28 @@ function focusedComposer() {
  */
 function growComposer(inst) {
   const field = inst.msg;
-  // A press on the field's corner may be a drag, so the box belongs to the human until it is released.
-  if (inst.cornerPress) return;
-  // An empty field goes back to the height its CSS gives it, and a field the human had dragged hands the
-  // sizing back: the words grow it again.
-  if (field.value === "") {
+  // Whether the box holds words, and whether the last one has just left it. An empty box goes back to the
+  // height its CSS gives it at that moment only: a drag the human made on a box that never had words stays,
+  // because no clear has happened to hand the sizing back. A clear lands even while the corner is held.
+  const words = field.value !== "";
+  const emptied = inst.filled && !words;
+  inst.filled = words;
+  if (emptied) {
     inst.dragged = false;
     field.style.removeProperty("height");
     return;
   }
+  // A press on the field's corner may be a drag, so the box belongs to the human until it is released.
+  if (inst.cornerPress) return;
+  if (!words) return;
   // A corner the human dragged is their layout, so the words stop resizing this field while it holds them.
   if (inst.dragged) return;
-  // `auto` first, so the box measures the words rather than the height it already holds.
+  // `auto` first, so the box measures the words rather than the height it already holds. `scrollHeight`
+  // counts the padding and not the border, and the height written here is the border box.
   field.style.height = "auto";
-  field.style.height = `${field.scrollHeight}px`;
+  const edge = getComputedStyle(field);
+  const border = (parseFloat(edge.borderTopWidth) || 0) + (parseFloat(edge.borderBottomWidth) || 0);
+  field.style.height = `${field.scrollHeight + border}px`;
 }
 
 /**
@@ -5732,6 +5747,8 @@ function makeComposer(entry) {
     dragged: false,
     // Whether a press is on that corner right now, which is a drag until it is released.
     cornerPress: false,
+    // Whether the field holds words, so the clear that empties it is seen as the change it is.
+    filled: false,
     // The thread whose compaction is in flight, so the meter says so until the figures come back.
     compacting: "",
     /** The `!command` this field handed to the daemon, while it runs: the hint says so until it answers. */
@@ -5793,30 +5810,52 @@ function wireComposer(inst) {
   // and a card whose height changed are all measured again from the text. A notification where only the
   // height moved is this script's own write or the human's drag, and neither asks for another grow.
   let fieldWidth = 0;
-  new ResizeObserver(() => {
+  // It is kept on the field, so a card that leaves the board lets go of the field this measures.
+  inst.growWatch = new ResizeObserver(() => {
     if (inst.msg.offsetWidth === fieldWidth) return;
     fieldWidth = inst.msg.offsetWidth;
     growComposer(inst);
-  }).observe(inst.msg);
+  });
+  inst.growWatch.observe(inst.msg);
   // The field's own corner is the human's, and their drag beats the words. The press is the only proof
   // that the height about to change is theirs rather than this script's, so it is recorded here and read
-  // at the release: a press that leaves the box at a different height was a drag, and a press that moved
+  // at the end of it: a press that leaves the box at a different height was a drag, and a press that moved
   // nothing is a caret, which keeps the growth. A drag changes the width with the height, so the measure
-  // above is held off until the release as well, or the two would fight over the box.
+  // above is held off until the press ends as well, or the two would fight over the box.
   inst.msg.addEventListener("pointerdown", (event) => {
     const box = inst.msg.getBoundingClientRect();
     // The corner the browser draws its grip in, with a little either way; anywhere else is a caret.
     if (event.clientX < box.right - 18 || event.clientY < box.bottom - 18) return;
+    // One press at a time: a second finger on the corner would leave its listeners behind on the window.
+    if (inst.cornerPress) return;
     const was = box.height;
+    const pointer = event.pointerId;
+    // The words the press started on: a press whose words leave is a send's clear, not a drag.
+    const hadWords = inst.msg.value !== "";
     inst.cornerPress = true;
-    const release = () => {
-      removeEventListener("pointerup", release);
-      removeEventListener("pointercancel", release);
+    // One press ends once: its own pointer's release, a cancel, or the window losing the pointer when the
+    // release never comes. A press left open would hold the growth off for good, so whichever arrives
+    // first takes the box back and the others do nothing.
+    const end = (up) => {
+      if (!inst.cornerPress || (up && up.pointerId !== pointer)) return;
       inst.cornerPress = false;
-      if (Math.abs(inst.msg.getBoundingClientRect().height - was) > 1) inst.dragged = true;
+      removeEventListener("pointerup", end);
+      removeEventListener("pointercancel", end);
+      removeEventListener("blur", lost);
+      // A box the human left at another height is theirs, unless its words were cleared under the press:
+      // that clear already gave the height back, and the one left behind is the resting one.
+      const emptied = hadWords && inst.msg.value === "";
+      if (!emptied && Math.abs(inst.msg.getBoundingClientRect().height - was) > 1) {
+        inst.dragged = true;
+        return;
+      }
+      // Nothing was dragged, so the words are asked again: the width may have moved under the press.
+      growComposer(inst);
     };
-    addEventListener("pointerup", release);
-    addEventListener("pointercancel", release);
+    const lost = () => end(null);
+    addEventListener("pointerup", end);
+    addEventListener("pointercancel", end);
+    addEventListener("blur", lost);
   });
   inst.msg.addEventListener("paste", (event) => {
     const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
@@ -6067,7 +6106,11 @@ async function compactField(inst) {
  */
 function parkDraft(inst) {
   if (!inst) return;
-  const held = { text: inst.msg.value, images: [...inst.images], picked: [...inst.picked], named: [...inst.named] };
+  const held = {
+    text: inst.msg.value, images: [...inst.images], picked: [...inst.picked], named: [...inst.named],
+    // A height the human dragged is part of the draft: the field put back must not grow over it.
+    dragged: inst.dragged, height: inst.dragged ? inst.msg.style.height : "",
+  };
   const used = held.text.trim() !== "" || held.images.length > 0 || held.picked.length > 0 || held.named.length > 0;
   if (used) drafts.set(inst.key, held);
   else drafts.delete(inst.key);
@@ -6085,6 +6128,9 @@ function restoreDraft(inst) {
   drawAttachments(inst);
   drawChips(inst);
   paintRefs(inst);
+  // The drag comes back with the words, before the measure that would otherwise overrule it.
+  inst.dragged = held.dragged === true;
+  if (inst.dragged && held.height) inst.msg.style.height = held.height;
   growComposer(inst);
 }
 
@@ -8764,6 +8810,8 @@ function takeAtRow(entry) {
   const lead = token.bang ? "" : "@";
   if (entry.dir) {
     inst.msg.setRangeText(`${lead}${token.dir}${entry.name}/`, token.start, token.end, "end");
+    // A completed path can wrap where the words did not, so the box is measured for it as it is for a key.
+    growComposer(inst);
     inst.msg.focus();
     // Drilling in is what the token now says, so the list follows the text it just wrote. A `!` command
     // walks into the folder on its next Tab instead, the way a terminal does, so its list stays shut.
@@ -8776,6 +8824,7 @@ function takeAtRow(entry) {
   // double the one already standing there.
   const gap = token.bang && /\s/.test(inst.msg.value[token.end] ?? "") ? "" : " ";
   inst.msg.setRangeText(`${lead}${token.dir}${entry.name}${gap}`, token.start, token.end, "end");
+  growComposer(inst);
   inst.msg.focus();
   // The space ends the token, so the next `@` is a new one and nothing reopens the list by itself.
   closeAtPick();
