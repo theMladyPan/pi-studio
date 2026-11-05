@@ -62,7 +62,7 @@ commit's own account rather than on a check run now, the section below says so.
 - **A thread is named by its first request, never by a counter.** `POST /thread` with no title leaves
   the card nameless, and its head shows nothing until there is something to show. The first message
   names it twice over: `titleFromRequest` takes its opening words at once, and `nameThread` asks
-  `PI_STUDIO_NAME_MODEL` (default `openrouter/z-ai/glm-5.3-flash`, naming off when empty) beside the
+  `PI_STUDIO_NAME_MODEL` (default `openrouter/inception/mercury-3:nitro`, naming off when empty) beside the
   turn for two to four better words, keeping the answer only when `plausibleTitle` accepts its shape
   and it is not a dull name like "work" or `thread 1a2b3c4d`. `namedBy` records whether the human,
   `request` or the model chose, and only the `request` name is ever replaced, so a rename by hand

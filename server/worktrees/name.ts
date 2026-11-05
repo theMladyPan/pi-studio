@@ -22,11 +22,12 @@ export const TITLE_FROM_REQUEST_CHARS = 48;
 
 /**
  * The model that names a thread once its first request is in hand. Empty turns naming off.
- * `inception/mercury-3` was the first choice and answers 404 (no endpoints for the routing this
- * machine gets), so the default is the fastest flash model measured here: 2.1s against 10.7s for the
- * copilot one. Any other model is a `PI_STUDIO_NAME_MODEL` away.
+ * `inception/mercury-3` was the first choice and answered 404 when naming was built, so the default
+ * moved to a flash model; it answers now, and with the `:nitro` routing it names in 1.3-1.7s against
+ * 2.1-3.0s for `z-ai/glm-5.3-flash` and 3.1-8.9s for `nvidia/nemotron-3.5-lightning`, on names the
+ * gate accepts and at a lower price. Any other model is a `PI_STUDIO_NAME_MODEL` away.
  */
-export const NAME_MODEL = process.env.PI_STUDIO_NAME_MODEL ?? "openrouter/z-ai/glm-5.3-flash";
+export const NAME_MODEL = process.env.PI_STUDIO_NAME_MODEL ?? "openrouter/inception/mercury-3:nitro";
 
 
 export const NAME_TIMEOUT_MS = 8000;
