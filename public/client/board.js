@@ -8359,7 +8359,9 @@ async function browse(path, { focus = true } = {}) {
     // can read, which is what attaching a file needs.
     const asked = path || boardFolder();
     const query = new URLSearchParams({ token, path: asked });
-    if (pickHidden.checked) query.set("hidden", "1");
+    // The server names the entries the picker hides by default `dots`, the same word the `!` completion
+    // asks with; `hidden` reached no branch of its own and the box did nothing.
+    if (pickHidden.checked) query.set("dots", "1");
     const needle = pickFilter.value.trim();
     // Filtering happens on the server because the server is what caps how many names travel.
     if (needle) query.set("q", needle);
