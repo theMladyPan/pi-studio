@@ -761,8 +761,9 @@
   .composer .paths .chip button:hover { background: #21262d; color: var(--text); }
   /* The field is dragged taller from its corner, and it grows with its words up to ten of them. Ten lines
      of the field's own font is what the cap counts, so a card's 13px and the 14px of the bottom bar each
-     stop at their own ten, and its padding and border come back on top because the height the script sets
-     from `scrollHeight` already counts them. A card that cannot hold ten lines has the last word
+     stop at their own ten. `scrollHeight` counts the padding but not the border, so the `16px` and the
+     `18px` below carry both: the padding the measurement already holds, and the border the script adds
+     before it writes the height. A card that cannot hold ten lines has the last word
      (`--field-max`, set from the card's own height): the card clips whatever grows past it, so a field
      taller than its card would push its own drag corner out of the card, where nothing can grab it. */
   .composer textarea {
