@@ -2483,7 +2483,7 @@ function paintFooter() {
   footRun.textContent = [threads ? `${threads} thread${threads > 1 ? "s" : ""}` : "", running ? `${running} running` : "", msgs ? `${msgs} msgs` : "", tools ? `${tools} tools` : ""].filter(Boolean).join(" · ");
 }
 
-/** A section says what its thread costs and offers the stop the card's head also offers. */
+/** A section says what its thread costs and which role it plays. */
 function paintSections() {
   for (const entry of railSections.values()) {
     const held = threadFacts.get(entry.id);
@@ -2492,7 +2492,6 @@ function paintSections() {
     if (stats?.context) bits.push(`${compact(stats.context)}${stats.contextMax ? `/${compact(stats.contextMax)}` : ""} ctx`);
     if (stats?.cost) bits.push(`$${stats.cost < 1 ? stats.cost.toFixed(2) : compact(stats.cost)}`);
     entry.head.children[3].textContent = bits.join(" · ");
-    entry.head.children[4].hidden = held?.running !== true;
     // The role arrives with the thread's card, which can land after its first activity row.
     const { role = "" } = threadMeta.get(entry.id) ?? {};
     entry.roleEl.textContent = role;
@@ -2547,9 +2546,6 @@ function selectCard(card) {
  * What answers this card is doing. A thread card says it itself — the daemon sends `sent` while a run
  * is live — and a plain card says it through the child that owns it.
  */
-/** A thread that has been asked to stop. A stop that does not land turns into a kill. */
-const stopping = new Set();
-
 /**
  * What a pointer down on a card may not grab: the controls in its head, the field inside it, a link or a
  * checkbox, the resize corner. Everything else is surface, which drags the card.
@@ -4347,7 +4343,6 @@ new ResizeObserver(() => paintGit()).observe(gitStrip);
 document.addEventListener("visibilitychange", startPulse);
 
 // ---------- activity rail ------------------------------------------------
-const stopBtn = document.getElementById("stop");
 const railNow = document.getElementById("railNow");
 const railLog = document.getElementById("railLog");
 const railRunning = document.getElementById("railRunning");
@@ -5372,18 +5367,8 @@ function railSection(row) {
       el("span", "rail-thread-title"),
       el("span", "rail-thread-count"),
       el("span", "rail-thread-stats"),
-      el("button", "rail-thread-stop"),
       el("span", "rail-thread-role"),
     );
-    const stop = head.children[4];
-    stop.type = "button";
-    stop.textContent = "■";
-    stop.title = "stop this thread's run";
-    stop.addEventListener("click", (event) => {
-      // The section's own press must not fold it, which is what the head's click does.
-      event.stopPropagation();
-      stopThread(id);
-    });
     const body = el("div", "rail-thread-body");
     section.append(head, body);
     head.addEventListener("click", () => {
@@ -5393,7 +5378,7 @@ function railSection(row) {
     });
     // The section says which thread it is, so a right click can read that thread's conversation.
     section.dataset.thread = id;
-    entry = { section, head, body, id, title: "", roleEl: head.children[5], at: 0 };
+    entry = { section, head, body, id, title: "", roleEl: head.children[4], at: 0 };
     entry.roleEl.hidden = true;
     railSections.set(id, entry);
     applyFold(entry);
@@ -5687,6 +5672,7 @@ function makeComposer(entry) {
     root,
     msg: root.querySelector(".msg"),
     send: root.querySelector(".send"),
+    stopBtn: root.querySelector(".stop"),
     hintEl: root.querySelector(".hintline"),
     refRow: root.querySelector(".refs"),
     paths: root.querySelector(".paths"),
@@ -5706,6 +5692,8 @@ function makeComposer(entry) {
     forkNext: false,
     // The thread whose compaction is in flight, so the meter says so until the figures come back.
     compacting: "",
+    // A run this field has already been asked to stop, so the next press of the same run kills it.
+    stopping: false,
     /** The `!command` this field handed to the daemon, while it runs: the hint says so until it answers. */
     shellRunning: "",
     /** The cards this message names beside the one it is written in. */
@@ -5790,6 +5778,7 @@ function wireComposer(inst) {
     }
   });
   inst.send.addEventListener("click", () => void sendMessage(inst));
+  inst.stopBtn.addEventListener("click", () => void stopRun(inst));
   inst.modeBtn.addEventListener("click", () => {
     inst.sendMode = inst.sendMode === "steer" ? "queue" : "steer";
     paintHint(inst);
@@ -5825,6 +5814,13 @@ composerHome.appendChild(makeComposer(null).root);
 function paintHint(inst) {
   const running = metaRunning === true;
   const forkable = forkTarget(inst);
+  // A run that ended is the end of the stop that did not land either, so a later press stops the run
+  // that is there then instead of killing a child that is already gone.
+  if (!running) inst.stopping = false;
+  // The stop is on screen only while there is something to stop, and says on what scale it acts: a
+  // thread card stops its own run, the bottom bar has no card and stops the whole board.
+  inst.stopBtn.hidden = !running;
+  inst.stopBtn.title = cardOf(inst) ? "stop this card's run — press again to kill it" : "stop every run on this board";
   inst.modeBtn.textContent = inst.sendMode;
   inst.modeBtn.classList.toggle("steer", inst.sendMode === "steer");
   inst.modeBtn.title = running
@@ -5849,6 +5845,38 @@ function paintHint(inst) {
 /** Every field on the board, because a run boundary changes what all of them would do. */
 function paintComposer() {
   for (const inst of composers.values()) paintHint(inst);
+}
+
+/**
+ * Stop the run this field stands beside, and kill it when the stop did not land: the second press of
+ * one run asks for the kill. The bottom bar has no card of its own, so its press stops every run on
+ * the board, and there is no child for a second press to kill.
+ */
+async function stopRun(inst) {
+  if (inst.stopBtn.disabled) return;
+  const card = cardOf(inst);
+  const kill = card ? inst.stopping === true : false;
+  inst.stopping = kill ? false : Boolean(card);
+  inst.stopBtn.disabled = true;
+  try {
+    const response = await fetch(`/${kill ? "kill" : "stop"}?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(card ? { cardId: card.id } : {}),
+    });
+    if (!response.ok) {
+      inst.stopping = false;
+      hintLine((await response.text()).slice(0, 80) || response.statusText, true, inst);
+      return;
+    }
+    hintLine(kill ? "killed" : "stopping…", false, inst);
+  } catch {
+    // A socket the browser thought was alive can be closed under it, and nothing was stopped then.
+    inst.stopping = false;
+    hintLine("board connection lost — reload the page", true, inst);
+  } finally {
+    inst.stopBtn.disabled = false;
+  }
 }
 
 /**
@@ -6597,20 +6625,6 @@ function drawLevels() {
   const rows = levels.map((level) => pickRow(level, "", level === current, () => void chooseRuntime("thinking", level)));
   if (chosen && chosen.thinking === false) rows.push(pickNote(`${shortModel(here.model)} does not think`));
   runtimeList.replaceChildren(...(rows.length ? rows : [pickNote("no level to choose")]));
-}
-
-/** Stop one thread from its section, and kill it if the stop does not land. */
-function stopThread(threadId) {
-  const held = threadFacts.get(threadId);
-  if (!held) return;
-  const kill = stopping.has(threadId);
-  if (kill) stopping.delete(threadId);
-  else stopping.add(threadId);
-  void fetch(`/${kill ? "kill" : "stop"}?${auth}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ cardId: held.cardId }),
-  });
 }
 
 async function openPick(which, anchor = null, forBoard = false, inst = null) {
@@ -9040,18 +9054,6 @@ async function startThread() {
 
 newThreadBtn.addEventListener("click", () => void startThread());
 
-// Stop asks the server to abort the run, then waits for meta to confirm it settled.
-stopBtn.addEventListener("click", async () => {
-  stopBtn.disabled = true;
-  stopBtn.textContent = "stopping…";
-  try {
-    await fetch(`/stop?${auth}`, { method: "POST" });
-  } catch {
-    stopBtn.disabled = false;
-    stopBtn.textContent = "stop";
-  }
-});
-
 /**
  * The sheet that is up, if one is: the activity detail and the clean receipt are dialogs drawn over the
  * board. A key press belongs to the sheet while it is open, and to nothing behind it.
@@ -9213,12 +9215,6 @@ function applyMeta(meta) {
   }
   renderLive();
   syncTicker();
-  // The stop button exists only while there is something to stop.
-  stopBtn.style.display = meta.running ? "" : "none";
-  if (!meta.running) {
-    stopBtn.disabled = false;
-    stopBtn.textContent = "stop";
-  }
   // The label names the workspace this tab belongs to; clicking it goes back to the crossroads,
   // where another one can be opened in a tab of its own.
   const folder = meta.workspace?.name || meta.folder || "session";

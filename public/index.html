@@ -175,8 +175,6 @@
   /* At this zoom the board is read as a map of threads, so the arrows step out of the way. */
   #world > svg.away { opacity: 0; }
   .spacer { flex: 1; }
-  #stop { color: #f85149; border-color: rgba(248,81,73,.4); }
-  #stop[disabled] { color: var(--muted); border-color: #30363d; }
   .sticky-status.stopped { color: #f85149; }
   .chip { font: 12px var(--mono); color: var(--accent); background: rgba(88,166,255,.1);
     border: 1px solid rgba(88,166,255,.25); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
@@ -627,11 +625,6 @@
   #railLog .rail-thread-count { flex: none; }
   #railLog .rail-thread-stats { flex: none; color: var(--muted); font: 10px var(--mono); }
   #railLog .rail-thread-stats:empty { display: none; }
-  /* The stop sits where the thread's own numbers are, because both belong to that thread. */
-  #railLog .rail-thread-stop { flex: none; padding: 0 3px; border: 0; border-radius: 4px;
-    background: transparent; color: #f85149; font: 10px/1 system-ui; cursor: pointer; }
-  #railLog .rail-thread-stop:hover { background: rgba(248, 81, 73, .14); color: #ff7b72; }
-  #railLog .rail-thread-stop[hidden] { display: none; }
   #railLog .rail-thread-role { flex: none; font: 10px var(--mono); color: var(--accent);
     background: rgba(88,166,255,.1); border: 1px solid rgba(88,166,255,.22); border-radius: 999px;
     padding: 0 5px; }
@@ -787,6 +780,13 @@
   .composer .send { font: 12px var(--mono); color: #0d1117; background: var(--green);
     border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
   .composer .send:disabled { opacity: .5; cursor: default; }
+  /* The stop is the send's twin in the run's own colour, and is there only while there is a run
+     to end, so the field can still steer or queue a message beside it. */
+  .composer .stop { font: 12px var(--mono); color: #0d1117; background: var(--red);
+    border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  .composer .stop:disabled { opacity: .5; cursor: default; }
+  /* `display` on the class beats the user agent's [hidden] rule, so hiding is spelled out. */
+  .composer .stop[hidden] { display: none; }
   /* The context figure is also the compact button, and the fill behind the words is how much of the
      window that thread has spent. It wears its neighbours' box, so the row keeps one rhythm. */
   .composer .ctx-btn { position: relative; overflow: hidden; appearance: none; cursor: pointer;
@@ -1112,7 +1112,6 @@
        and the word appears on hover or focus so the row keeps its width at rest. -->
   <button class="stat" id="statCtx" title="compact the context, the same as /compact" hidden><span id="statCtxValue"></span><span class="act" aria-hidden="true">compact</span></button>
   <button id="newPill" style="display:none">0 new</button>
-  <button id="stop" style="display:none" title="stop this run (same as escape)">stop</button>
   <button id="threadOrder"></button>
   <button id="stack" title="cascade every thread again under its root">stack</button>
   <button id="tidy">tidy</button>
@@ -1192,6 +1191,7 @@
         <button class="files" type="button" title="attach files or folders from disk">files</button>
       </div>
       <span class="hintline" role="status" aria-live="polite"></span>
+      <button class="stop" type="button" hidden title="stop the run in flight">stop</button>
       <button class="send" type="button">send</button>
     </div>
   </div>
