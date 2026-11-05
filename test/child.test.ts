@@ -298,8 +298,8 @@ test("a thread whose mode changed is not served by the process started under the
 
 test("a message on a thread whose mode changed tells the board the choice has landed", async () => {
 	// The mode lands when the child is started under it, and nothing the daemon says afterwards carries it
-	// until the first streamed event. Without a broadcast from there the head keeps saying `· next` for the
-	// whole run, so the card is announced twice: once with the choice waiting, once with it in force.
+	// until the first streamed event. Without a broadcast from there the head keeps the waiting colour for
+	// the whole run, so the card is announced twice: once with the choice waiting, once with it in force.
 	const repo = scratchRepo();
 	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-landed-")));
 	const was: string | undefined = process.env.PI_MANAGED_INSTALL_ROOT;
