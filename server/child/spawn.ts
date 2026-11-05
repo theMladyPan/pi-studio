@@ -54,7 +54,11 @@ export async function runSpawn(board, thread, task, limits, kill) {
 	// The abort did its job, so the kill that follows it has nothing left to do and must not fire into
 	// whatever run the human starts next on this card.
 	if (killTimer) clearTimeout(killTimer);
-	const turn = thread.turns[thread.turns.length - 1];
+	// The report is the answer, so it is read off the turn that answered: a steer the run read after its
+	// answer is the newest turn, and its words say nothing about how the run ended. A child that never
+	// answered has no such turn, and the newest one is where its end was recorded.
+	const newest = thread.turns[thread.turns.length - 1];
+	const turn = [...thread.turns].reverse().find((one) => one.status === "answered") ?? newest;
 	const turns = thread.runTurns ?? 0;
 	// What the run spent is only known to the child, so it is asked, and the answer is waited for.
 	const child = board.children.get(thread.id);
@@ -71,9 +75,9 @@ export async function runSpawn(board, thread, task, limits, kill) {
 		? "timeout"
 		: thread.status === "dead"
 			? "failed"
-			: turn?.status === "stopped"
-				? "stopped"
-				: "done";
+			: turn?.status === "answered"
+				? "done"
+				: "stopped";
 	return {
 		cardId: thread.id,
 		title: thread.title,
