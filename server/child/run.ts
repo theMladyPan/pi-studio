@@ -174,6 +174,10 @@ export function prompt(board, thread, text, target = null) {
 	const message = wireText(thread, text);
 	try {
 		const child = ensureChild(board, thread);
+		// The mode has landed: ensuring the child recorded the mode this process was started with, so a choice
+		// that was waiting is now the one in force. It is said here because nothing else speaks until the
+		// child's first streamed event, and until then the board would still read the choice as on its way.
+		update(board, thread);
 		child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "prompt", message })}\n`);
 	} catch (error) {
 		threadError(board, thread, `could not send to the child: ${error.message}`);
