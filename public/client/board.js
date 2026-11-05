@@ -794,10 +794,10 @@ function drawChart(holder, body) {
   }
   loadChartJs()
     .then((Chart) => {
-      // The board zooms to 300% and a picture is only as sharp as the pixels it was painted with, so
-      // the snapshot carries three times the screen's own density. The cap keeps a dense screen from
+      // The board zooms to 400% and a picture is only as sharp as the pixels it was painted with, so
+      // the snapshot carries four times the screen's own density. The cap keeps a dense screen from
       // paying for detail no zoom can show.
-      const density = Math.min(6, 3 * (window.devicePixelRatio || 1));
+      const density = Math.min(8, 4 * (window.devicePixelRatio || 1));
       const canvas = document.createElement("canvas");
       // Chart.js reads these as the CSS size and multiplies by `devicePixelRatio` into the backing
       // store, so the layout stays CHART_WIDTH whatever the density is, and the card scales the
@@ -3599,7 +3599,7 @@ viewport.addEventListener("wheel", (event) => {
     return;
   }
   event.preventDefault();
-  const k = Math.min(3, Math.max(0.25, view.k * Math.exp(-wheelPixels(event, event.deltaY) * 0.0015)));
+  const k = Math.min(4, Math.max(0.25, view.k * Math.exp(-wheelPixels(event, event.deltaY) * 0.0015)));
   const rect = viewport.getBoundingClientRect();
   const px = event.clientX - rect.left;
   const py = event.clientY - rect.top;
