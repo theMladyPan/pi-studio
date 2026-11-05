@@ -13,12 +13,10 @@ const live = document.getElementById("live");
 const liveText = document.getElementById("liveText");
 const liveClock = document.getElementById("liveClock");
 const resetBtn = document.getElementById("reset");
-const params = new URLSearchParams(location.search);
-const token = params.get("token") || "";
 // The board is one page for every workspace; the path names the one this tab belongs to, and every
 // board route has to carry it.
 const workspace = (location.pathname.match(/^\/w\/([0-9a-f]{6,64})\/?$/) || [])[1] || "";
-const auth = `token=${encodeURIComponent(token)}${workspace ? `&workspace=${encodeURIComponent(workspace)}` : ""}`;
+const auth = workspace ? `workspace=${encodeURIComponent(workspace)}` : "";
 // The path already says what this page is: `/w/<id>` is a board of threads, whose field lives
 // inside a card. Waiting for a frame from the server to decide that left a board looking like a
 // one-session board whenever the stream was slow, stale or dead.
@@ -7995,7 +7993,7 @@ document.addEventListener(
 // Choosing a workspace is not this page's job any more: it lives on `/`, in its own tab, so a board
 // never has to be paused to pick another one. The header label goes back there.
 document.getElementById("sess").addEventListener("click", () => {
-  window.open(`/?token=${encodeURIComponent(token)}`, "pi-studio-crossroads");
+  window.open("/", "pi-studio-crossroads");
 });
 
 // Images pasted into a field travel with its message, so a screenshot reaches the agent without
@@ -8246,7 +8244,7 @@ async function browse(path, { focus = true } = {}) {
     // works. It is asked by path rather than by workspace id: this picker walks anywhere the server
     // can read, which is what attaching a file needs.
     const asked = path || boardFolder();
-    const query = new URLSearchParams({ token, path: asked });
+    const query = new URLSearchParams({ path: asked });
     if (pickHidden.checked) query.set("hidden", "1");
     const needle = pickFilter.value.trim();
     // Filtering happens on the server because the server is what caps how many names travel.
@@ -8537,7 +8535,7 @@ function markAt(at) {
  * keeps it out of a plain listing.
  */
 function atQuery(inst, tok) {
-  const query = new URLSearchParams({ token, path: tok.dir.replace(/\/+$/, "") });
+  const query = new URLSearchParams({ path: tok.dir.replace(/\/+$/, "") });
   if (workspace) query.set("workspace", workspace);
   if (tok.frag) query.set("q", tok.frag);
   if (tok.bang) {
@@ -8617,7 +8615,7 @@ async function bangRowsFor(inst, tok) {
   // A command's program is its first word, and a word with a folder in front of it names a path instead.
   const first = !tok.dir && /^\s*$/.test(inst.msg.value.slice(1, tok.start));
   const asked = [fetch(`/browse?${atQuery(inst, tok)}`)];
-  if (first) asked.push(fetch(`/programs?${new URLSearchParams({ token, prefix: tok.frag })}`));
+  if (first) asked.push(fetch(`/programs?${new URLSearchParams({ prefix: tok.frag })}`));
   const replies = await Promise.all(asked);
   const paths = replies[0].ok ? await replies[0].json() : {};
   const programs = replies[1]?.ok ? await replies[1].json() : {};
@@ -9409,10 +9407,10 @@ function connect() {
   const source = new EventSource(`/events?${auth}`);
   source.onopen = () => setLive(true);
   source.onerror = () => {
-    // The browser tells the two failures apart: an HTTP error, such as a token the board no
+    // The browser tells the two failures apart: an HTTP error, such as a session the daemon no
     // longer knows, closes the stream for good, while a network error leaves it retrying.
     if (source.readyState === EventSource.CLOSED) {
-      setLive(false, "token refused — reopen the link pi printed");
+      setLive(false, "session expired or token refused — reopen the link pi printed");
     } else {
       setLive(false, "pi not reachable — retrying");
     }
@@ -9507,13 +9505,6 @@ const BOARD_START = () => {
   applyView();
   updateEmpty();
   paintRuntime();
-  if (!token) {
-    // No stream exists here, so nothing on the page is stale: only the header says why the board
-    // is blank.
-    linkNote = "missing token";
-    renderLive();
-    return;
-  }
   connect();
 };
 

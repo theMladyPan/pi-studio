@@ -1928,3 +1928,129 @@ test("a thread's token cannot reach the shell route, whatever it writes in the b
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
 	}
 });
+
+// ---------- the session cookie -----------------------------------------------
+
+/** Trades the printed link for a cookie, the way a browser does, and hands back its `name=value` pair. */
+async function signIn(daemon: Daemon, search = "") {
+	const res = await fetch(`${daemon.base}/?token=${daemon.token}${search}`, { redirect: "manual" });
+	const set = res.headers.get("set-cookie") ?? "";
+	return { res, set, cookie: set.split(";")[0] };
+}
+const asCookie = (cookie: string, init: RequestInit = {}) => ({ ...init, headers: { cookie, ...(init.headers as object) } });
+
+test("the link pi prints is traded for a session cookie, and the cookie alone opens the data routes", async () => {
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-cookie-"));
+	const daemon = await boot(state);
+	try {
+		const { res, set, cookie } = await signIn(daemon, "&workspace=abc123def");
+		assert.equal(res.status, 303);
+		assert.equal(res.headers.get("location"), "/?workspace=abc123def");
+		assert.equal(res.headers.get("cache-control"), "no-store");
+		assert.equal(res.headers.get("referrer-policy"), "no-referrer");
+		assert.match(set, /^pi-studio-[0-9a-f]{8}=[0-9a-f]{32}; HttpOnly; SameSite=Strict; Path=\/; Max-Age=2592000$/);
+		assert.ok(!daemon.token.includes(cookie.split("=")[1]), "the session id is not the token");
+		// The state file keeps a hash, not the id the browser holds.
+		const saved = readFileSync(join(state, "sessions.json"), "utf8");
+		assert.ok(!saved.includes(cookie.split("=")[1]));
+
+		assert.equal((await get(daemon, "/workspaces", asCookie(cookie))).status, 200);
+		// The token still works unchanged, and a board path is traded the same way.
+		assert.equal((await get(daemon, `/workspaces?token=${daemon.token}`)).status, 200);
+		const board = await fetch(`${daemon.base}/w/abcdef12/?token=${daemon.token}`, { redirect: "manual" });
+		assert.equal(board.status, 303);
+		assert.equal(board.headers.get("location"), "/w/abcdef12");
+	} finally {
+		daemon.child.kill();
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("no credential, a wrong token and a master token in a cookie are all refused, and a wrong token earns no cookie", async () => {
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-cookie-"));
+	const daemon = await boot(state);
+	try {
+		assert.equal((await get(daemon, "/workspaces")).status, 403);
+		const wrong = await fetch(`${daemon.base}/?token=${"0".repeat(32)}`, { redirect: "manual" });
+		assert.equal(wrong.status, 200);
+		assert.equal(wrong.headers.get("set-cookie"), null);
+		// A wrong token does not fall back to a good cookie.
+		const { cookie } = await signIn(daemon);
+		assert.equal((await get(daemon, `/workspaces?token=${"0".repeat(32)}`, asCookie(cookie))).status, 403);
+		// An empty one does.
+		assert.equal((await get(daemon, "/workspaces?token=", asCookie(cookie))).status, 200);
+		// The cookie holds a session id, so the master token in its place is only a stranger.
+		const name = cookie.split("=")[0];
+		assert.equal((await get(daemon, "/workspaces", asCookie(`${name}=${daemon.token}`))).status, 403);
+	} finally {
+		daemon.child.kill();
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("a change made on a cookie has to say it is same-origin, and a token needs no such word", async () => {
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-cookie-"));
+	const daemon = await boot(state);
+	try {
+		const { cookie } = await signIn(daemon);
+		const send = (headers: Record<string, string>) =>
+			get(daemon, "/pick-folder", { method: "POST", headers: { cookie, ...headers } });
+		assert.equal((await send({})).status, 403);
+		assert.equal((await send({ "sec-fetch-site": "cross-site" })).status, 403);
+		assert.notEqual((await send({ "sec-fetch-site": "same-origin" })).status, 403);
+		assert.notEqual((await post(daemon, "/pick-folder")).status, 403);
+	} finally {
+		daemon.child.kill();
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("a session ends at logout, and Secure rides only behind a TLS proxy", async () => {
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-cookie-"));
+	const daemon = await boot(state);
+	try {
+		const proxied = await fetch(`${daemon.base}/?token=${daemon.token}`, { redirect: "manual", headers: { "x-forwarded-proto": "https" } });
+		assert.match(proxied.headers.get("set-cookie") ?? "", /; Secure$/);
+		const { cookie, set } = await signIn(daemon);
+		assert.ok(!/Secure/.test(set));
+		const out = await fetch(`${daemon.base}/logout`, { method: "POST", headers: { cookie, "sec-fetch-site": "same-origin" } });
+		assert.equal(out.status, 200);
+		assert.match(out.headers.get("set-cookie") ?? "", new RegExp(`^${cookie.split("=")[0]}=; .*Max-Age=0`));
+		assert.equal((await get(daemon, "/workspaces", asCookie(cookie))).status, 403);
+		// The other session lives on.
+		const other = proxied.headers.get("set-cookie")!.split(";")[0];
+		assert.equal((await get(daemon, "/workspaces", asCookie(other))).status, 200);
+	} finally {
+		daemon.child.kill();
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("an expired session stays refused after a restart, and a changed token drops every session", async () => {
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-cookie-"));
+	let daemon = await boot(state);
+	try {
+		const { cookie } = await signIn(daemon);
+		daemon.child.kill();
+		const file = join(state, "sessions.json");
+		const kept = JSON.parse(readFileSync(file, "utf8"));
+		assert.equal(Object.keys(kept.sessions).length, 1);
+		// Still running after a restart…
+		daemon = await boot(state);
+		assert.equal((await get(daemon, "/workspaces", asCookie(cookie))).status, 200);
+		daemon.child.kill();
+		// …and gone once its time has passed.
+		writeFileSync(file, JSON.stringify({ ...kept, sessions: { [Object.keys(kept.sessions)[0]]: Date.now() - 1000 } }));
+		daemon = await boot(state);
+		assert.equal((await get(daemon, "/workspaces", asCookie(cookie))).status, 403);
+		assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).sessions, {});
+		// Another token owns none of what the file holds.
+		daemon.child.kill();
+		writeFileSync(file, JSON.stringify({ owner: "0".repeat(16), sessions: { [Object.keys(kept.sessions)[0]]: Date.now() + 1e9 } }));
+		daemon = await boot(state);
+		assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).sessions, {});
+	} finally {
+		daemon.child.kill();
+		rmSync(state, { recursive: true, force: true });
+	}
+});

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { THREAD_ROUTES, threadRefusal } from "../server/main.ts";
+import { boards } from "../server/store.ts";
+import { THREAD_ROUTES, callerFor, threadRefusal } from "../server/main.ts";
 
 // A child token is minted inside the spawn, so no HTTP client can forge one. The decision it answers to
 // is a plain function, and that is what these tests call.
@@ -49,5 +50,19 @@ test("the human at the keyboard is never refused", () => {
 	for (const method of ["GET", "POST"]) {
 		assert.equal(threadRefusal(human, method, "/layout", "board-b"), null);
 		assert.equal(threadRefusal(human, method, "/state", ""), null);
+	}
+});
+
+test("a thread's token is its own in a query and nothing at all in a cookie", () => {
+	const board = { id: "board-cookie", threads: new Map([["t1", { id: "t1", token: "thread-secret-token" }]]) };
+	boards.set(board.id, board as any);
+	try {
+		assert.equal(callerFor("thread-secret-token", undefined)?.human, false);
+		for (const header of ["thread-secret-token", `pi-studio-00000000=thread-secret-token; a=b`]) {
+			assert.equal(callerFor("", header), null, header);
+			assert.equal(callerFor(null, header), null, header);
+		}
+	} finally {
+		boards.delete(board.id);
 	}
 });
