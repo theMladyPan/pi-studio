@@ -29,7 +29,8 @@ test("a child may not reach the routes that belong to the human", () => {
 	// board_ask was refused here for the same reason /layout is, which is what made it dead for every thread.
 	// /close is not here: a thread tidies the cards it spent, and the handler refuses it the pinned ones.
 	// Opening a card's file in the human's editor starts a program on their desktop, so it is here too.
-	const refused = ["/layout", "/undo", "/kill", "/config", "/answer", "/message", "/mode", "/shell", "/card/open"];
+	// `/scratch/empty` deletes a whole folder and every card on a board, which is the human's press alone.
+	const refused = ["/layout", "/undo", "/kill", "/config", "/answer", "/message", "/mode", "/shell", "/card/open", "/scratch/empty"];
 	for (const path of refused) {
 		assert.equal(threadRefusal(child, "POST", path, "board-a"), "a thread may not use that", path);
 	}

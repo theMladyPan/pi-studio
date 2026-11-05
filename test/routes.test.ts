@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -1926,5 +1926,60 @@ test("a thread's token cannot reach the shell route, whatever it writes in the b
 	} finally {
 		daemon.child.kill();
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("the crossroads always has a scratch row, and its empty press takes the files and the cards", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-scratch-"));
+	const daemon = await boot(stateHome);
+	// The daemon names its scratch folder after its own state folder, which is what keeps this test out of
+	// the human's folder and gives a second daemon one of its own.
+	const scratch = join(tmpdir(), `pi-studio-scratch-${basename(stateHome)}`);
+	try {
+		const list = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces;
+		assert.equal(list.length, 1, "an unopened studio has more than the scratch row");
+		assert.equal(list[0].scratch, true, "the first row is not the scratch folder");
+		assert.equal(list[0].folder, realpathSync(scratch));
+		assert.equal(list[0].missing, false);
+		assert.equal(list[0].name, "scratch");
+
+		// Deleted by hand, it is made again by the next read: a row whose folder is gone is a row nobody can open.
+		rmSync(scratch, { recursive: true, force: true });
+		const again = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces;
+		assert.equal(again[0].missing, false, "the scratch row came back missing");
+		assert.ok(existsSync(scratch), "the folder was not made again");
+
+		const board = again[0].id;
+		// A real folder opened beside it keeps its own place: the scratch row is first, not instead.
+		const project = mkdtempSync(join(tmpdir(), "pi-studio-scratch-project-"));
+		assert.equal((await post(daemon, "/workspace", { folder: project })).status, 200);
+		const rows = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces;
+		assert.deepEqual(
+			rows.map((row: any) => row.scratch),
+			[true, false],
+			"the scratch row is not the first of two",
+		);
+
+		assert.equal((await postTo(daemon, board, "/card/note", { markdown: "throwaway", key: "n1" })).status, 200);
+		mkdirSync(join(scratch, "deeper"));
+		writeFileSync(join(scratch, "try.py"), "print(1)\n");
+		writeFileSync(join(scratch, "deeper", "x.txt"), "x\n");
+		// A setting is the board's shape, not its mess, so the press must leave it alone.
+		assert.equal((await postTo(daemon, board, "/config", { cardsVerbosity: "verbose" })).status, 200);
+
+		const emptied = await post(daemon, "/scratch/empty");
+		assert.equal(emptied.status, 200);
+		assert.equal(JSON.parse(emptied.body).removed, 2, "the press did not count what it took");
+		assert.deepEqual(readdirSync(scratch), [], "something is still in the scratch folder");
+		assert.ok(existsSync(scratch), "the folder itself went with the press");
+
+		const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board}`)).body);
+		assert.deepEqual(state.cards, [], "a card survived the press");
+		assert.equal(state.meta.config.cardsVerbosity, "verbose", "the press took a setting with the mess");
+		rmSync(project, { recursive: true, force: true });
+	} finally {
+		daemon.child.kill();
+		rmSync(stateHome, { recursive: true, force: true });
+		rmSync(scratch, { recursive: true, force: true });
 	}
 });
