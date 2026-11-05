@@ -166,10 +166,12 @@
     background: rgba(88,166,255,.1); border: 1px solid rgba(88,166,255,.22); border-radius: 999px;
     padding: 0 6px; white-space: nowrap; }
   /* What a thread is for, next to the role it was spawned under. A mode is the human's, a role is the
-     child's, and neither replaces the queue chip beside them. */
-  .mode-chip { flex: none; font: 10px var(--mono); letter-spacing: .04em; color: #d29922;
-    background: rgba(210,153,34,.12); border: 1px solid rgba(210,153,34,.35); border-radius: 999px;
+     child's, and neither replaces the queue chip beside them. The chip is quiet while the mode is the one
+     running, and blue while the choice still waits for the next message, as the field's own button is. */
+  .mode-chip { flex: none; font: 10px var(--mono); letter-spacing: .04em; color: var(--muted);
+    background: rgba(125,133,144,.1); border: 1px solid rgba(125,133,144,.28); border-radius: 999px;
     padding: 0 6px; white-space: nowrap; }
+  .mode-chip.on { color: var(--accent); background: rgba(88,166,255,.1); border-color: rgba(88,166,255,.25); }
   /* At this zoom the board is read as a map of threads, so the arrows step out of the way. */
   #world > svg.away { opacity: 0; }
   .spacer { flex: 1; }

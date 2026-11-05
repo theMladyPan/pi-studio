@@ -2666,10 +2666,12 @@ function paintCard(entry, data) {
   entry.roleEl.title = role ? `spawned with the ${role} role` : "";
   entry.roleEl.style.display = role ? "" : "none";
   // A boss is a thread the human started that spawns instead of working, so its chip carries the flow it
-  // runs; `auto` is the boss still deciding.
-  const mode = data.type === "sticky" ? data.mode || "" : "";
+  // runs; `auto` is the boss still deciding. A thread born from a typed message carries no mode of its own
+  // and the card's `mode` is the queue state of its last turn, so only a real mode counts as one.
+  const mode = data.type === "sticky" && THREAD_MODES.includes(data.mode) ? data.mode : "";
   const shownMode = mode === "boss" && data.path ? `boss · ${data.path}` : mode;
   const waits = modeWaits(data);
+  entry.modeEl.classList.toggle("on", waits);
   entry.modeEl.textContent = waits ? `${shownMode} · next` : shownMode;
   entry.modeEl.title = waits
     ? `takes effect on the next message: this run is still a ${data.modeAtRun}`
@@ -2681,6 +2683,9 @@ function paintCard(entry, data) {
   // An agent is the baseline the board always had, so it wears nothing; a planner and a boss say so, and
   // a chip whose choice is still waiting has something to say even when that choice is agent.
   entry.modeEl.style.display = mode && (mode !== "agent" || waits) ? "" : "none";
+  // The field's own chip says the same thing as the head, and a mode that lands does so without touching
+  // anything else the card draws, so it is repainted from here rather than from a press.
+  if (entry.composer) paintMode(entry.composer);
   entry.subEl.classList.toggle("expired", data.type === "question" && data.status === "expired");
   // The pink ring and the pill belong to the question the agent is blocked on, so both go
   // away the moment it is settled.
@@ -2755,7 +2760,9 @@ function fitContent(entry, data) {
  */
 function cardChanged(before, after) {
   // A mode or a flow is repainted too: `/mode` and `/thread/path` change nothing else on the card.
-  const fields = ["title", "markdown", "details", "text", "question", "reply", "status", "mode", "path", "pathChosenBy"];
+  // `modeAtRun` is in the list because a mode lands when the next child starts: that broadcast carries the
+  // corrected badge and nothing else, and a card that ignores it keeps saying `· next` for the whole run.
+  const fields = ["title", "markdown", "details", "text", "question", "reply", "status", "mode", "modeAtRun", "path", "pathChosenBy"];
   if (fields.some((field) => before[field] !== after[field])) return true;
   if (JSON.stringify(before.worktree ?? null) !== JSON.stringify(after.worktree ?? null)) return true;
   // A follow-up's answer settles into the turn it was asked with, so the thread changes without
@@ -6006,9 +6013,12 @@ const THREAD_MODES = ["agent", "plan", "boss"];
  * Whether the mode on a card is still waiting. A mode reaches a thread when its process starts, so a
  * change made while a run is going lands on the next message: until then the card shows the mode the run
  * in flight is following, and the chip says the choice is on its way rather than looking obeyed.
+ *
+ * Only a run in flight waits. An idle thread whose mode was just changed obeys it the moment it is asked
+ * to do anything, and the choice already in force has nothing on its way either, so both are quiet.
  */
 function modeWaits(data) {
-  return Boolean(data && data.modeAtRun && data.modeAtRun !== data.mode);
+  return Boolean(data && data.status === "sent" && data.modeAtRun && data.modeAtRun !== data.mode);
 }
 
 /** What the two buttons say: this card's mode, or the one a new thread would be born with. */
@@ -6036,7 +6046,9 @@ function paintMode(inst) {
   const held = cardOf(inst);
   const waits = modeWaits(held?.data);
   inst.pickModeBtn.textContent = waits ? `${mode} · next` : mode;
-  inst.pickModeBtn.classList.toggle("on", mode !== "agent");
+  // Blue is the choice waiting, not the choice made: a mode already in force wears the quiet colour, so
+  // one press of the button means one thing on the card and in the field.
+  inst.pickModeBtn.classList.toggle("on", waits);
   inst.pickModeBtn.title = waits
     ? `takes effect on the next message: the run going now is still a ${held.data.modeAtRun}`
     : mode === "boss"
