@@ -239,8 +239,10 @@ export async function onMessageEdit(req, res, board) {
 
 
 /**
- * Taking a message back before the child is told it. The turn stays, wearing the words that were
- * withdrawn: a card that silently lost a message reads as one that was never typed.
+ * Taking a message back before the child is told it. The turn is not drawn: the client skips it, because
+ * the human who took the message back asked for it to go. It stays on the daemon's side, marked `stopped`
+ * with `error: "withdrawn"`, because that mark is what the client reads to skip it, and because every
+ * other row is still addressed by the index it was given.
  */
 export async function onMessageDrop(req, res, board) {
 	const body = await readJson(req, res);
