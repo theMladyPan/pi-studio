@@ -2543,10 +2543,6 @@ function selectCard(card) {
 }
 
 /**
- * What answers this card is doing. A thread card says it itself — the daemon sends `sent` while a run
- * is live — and a plain card says it through the child that owns it.
- */
-/**
  * What a pointer down on a card may not grab: the controls in its head, the field inside it, a link or a
  * checkbox, the resize corner. Everything else is surface, which drags the card.
  */
@@ -5812,7 +5808,10 @@ composerHome.appendChild(makeComposer(null).root);
  * stop promising a send.
  */
 function paintHint(inst) {
-  const running = metaRunning === true;
+  // A card answers for itself: `sent` is its thread answering, the same status its strip reads. The
+  // board-wide flag is what the bottom bar has, since it speaks for every thread at once.
+  const held = cardOf(inst);
+  const running = held ? held.data?.status === "sent" : metaRunning === true;
   const forkable = forkTarget(inst);
   // A run that ended is the end of the stop that did not land either, so a later press stops the run
   // that is there then instead of killing a child that is already gone.

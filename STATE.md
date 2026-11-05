@@ -272,15 +272,15 @@ commit's own account rather than on a check run now, the section below says so.
   where a click brings it back. A card the human pinned, a run that was stopped, failed or timed out, and
   a child they wrote to again all stay where they are. Once that rail holds more rows than its cap allows,
   the oldest put-away card on it is retired and the newest stay.
-- **A run is stopped or killed where it is read, and only there.** The thread's own activity section
-  carries the one control: `■` asks the child to abort, and the same control becomes `⊗` — kill —
-  when the stop does not land. It was on the card's header too, with the same stop-then-kill state
-  kept in two places; the card lost it. `POST
+- **A run is stopped or killed from the field beside it.** A thread card's composer carries the one
+  control, and shows it only while that card's own run is live: the first press asks the child to
+  abort, and a second press of the same run asks for the kill. The flag that turns one into the other
+  lives on the field and clears when that card's run ends. `POST
   /stop` takes a card id and stops only that thread; without one it still stops everything, which is
-  what the header button means. `POST /kill` sends SIGKILL, marks the turn stopped, drains the queue
-  that nothing will now serve, and leaves the thread and its card in place, so the next message starts
-  a fresh child on the same session. An abort asked for before the child got going is repeated on the
-  run's first event, because there was no run to abort yet.
+  what the bottom bar of a one-session board asks for. `POST /kill` sends SIGKILL, marks the turn
+  stopped, drains the queue that nothing will now serve, and leaves the thread and its card in place,
+  so the next message starts a fresh child on the same session. An abort asked for before the child
+  got going is repeated on the run's first event, because there was no run to abort yet.
 - **A source card is titled by its file, then by its label**: `docs/notes.md - The list as it reads
   now`. The path is made relative to the workspace, so a card says where it is before what it is.
   Opening the same file again titles the card from the file once more, so a name given by hand to a
@@ -445,7 +445,7 @@ commit's own account rather than on a check run now, the section below says so.
   daemon sends `{"type":"get_session_stats"}` and holds the child's stdin open until the answer
   arrives — `stdin.end()` before it threw the last run's cost away. `thread.stats` keeps input,
   output, cache reads, total, cost, message and tool counts, and the context the last request carried.
-  A thread's activity section head shows its context, its cost and the stop; the footer along the
+  A thread's activity section head shows its context and its cost; the footer along the
   bottom edge follows the selection the way the wheel and the dimming do: with a card selected it is
   that thread in full — provider and model in the clear, tokens, cache, cost, context against the
   window, messages and tools, `running` while a run is live — and with nothing selected it is the
