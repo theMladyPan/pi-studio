@@ -7,7 +7,8 @@
  */
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { INSTANCE, STATE_DIR, STATE_FILE, buildHash, randomToken, readJsonFile, writeJsonFile } from "./paths.ts";
+import { INSTANCE, STATE_DIR, STATE_FILE, buildHash, readJsonFile, writeJsonFile } from "./paths.ts";
+import { createSession, endSession, hasSession, sessionCookie, token } from "./login.ts";
 import { answer, fail, send, serveStatic } from "./http.ts";
 import { activeConfig, activeHomeDefaults, describeWorkspace, ensureScratch, welcomeClients, workspaceList, workspaces } from "./workspaces.ts";
 import { boardFrom, boards, flushBoard } from "./store.ts";
@@ -39,10 +40,7 @@ export const OPEN_BROWSER = !process.argv.includes("--no-open");
 
 // ---------- the server -----------------------------------------------------
 
-export const token = (() => {
-	const saved = readJsonFile(STATE_FILE, null);
-	return typeof saved?.token === "string" && saved.token ? saved.token : randomToken();
-})();
+export { token };
 
 
 
@@ -92,6 +90,19 @@ export function threadRefusal(caller, method, pathname, workspace) {
 
 
 /**
+ * Who is asking, given what the request carried. A token in the query is the only credential then, so a
+ * wrong one is refused rather than rescued by a cookie. Without one, the session cookie speaks for the
+ * human and for nobody else: it never reaches `callerOf`, so a thread's token or the master token put
+ * in a cookie is refused.
+ */
+export function callerFor(askedToken, cookieHeader) {
+	if (askedToken) return callerOf(askedToken);
+	return hasSession(cookieHeader) ? { human: true, via: "cookie" } : null;
+}
+
+
+
+/**
  * The path a route is compared against. The client never writes `//` or a trailing slash, but a URL
  * typed by hand, pasted from a log or built by a proxy can, and an unfolded one matched nothing and
  * fell through to an answer that was neither the page nor a plain not-found. Root stays root.
@@ -120,11 +131,52 @@ export function requestUrl(target) {
 
 
 
+/**
+ * Whether a change made on the strength of a cookie came from this daemon's own origin.
+ *
+ * `Sec-Fetch-Site` is the browser's own word and it is enough where it is sent, but a browser sends the
+ * `Sec-Fetch-*` family only to an address it trusts: https, localhost, 127.0.0.1. This daemon is reached as
+ * `http://192.168.x.x` too, where every request arrives without one, so `Origin` answers for it there. The
+ * host and port are what decide: the scheme is left out because the LAN case is plain http behind no proxy,
+ * and a site on another port is another origin. A form from another site sends no `Origin` at all, and a
+ * sandboxed frame sends the string `null`, which is not a URL and is no origin here.
+ */
+export function sameOriginRequest(headers) {
+	if (headers["sec-fetch-site"] === "same-origin") return true;
+	const origin = headers.origin;
+	if (typeof origin !== "string" || !origin || origin === "null") return false;
+	let parts;
+	try {
+		parts = new URL(origin);
+	} catch {
+		// Garbage is refused as a stranger, not thrown: a guard that throws answers 500 instead of 403.
+		return false;
+	}
+	const host = headers.host;
+	return typeof host === "string" && host !== "" && parts.host === host;
+}
+
+
+
 export const server = createServer((req, res) => {
 	void (async () => {
 		const url = requestUrl(req.url);
 		// Static assets carry no session data, so the token only guards the data routes.
 		if (req.method === "GET") {
+			// The link pi prints is traded for a cookie and sent back without the token. A wrong token earns
+			// neither, and the page is served as before.
+			const asked = url.searchParams.get("token");
+			if (asked && (url.pathname === "/" || /^\/w\/[0-9a-f]{6,64}\/?$/.test(url.pathname)) && callerOf(asked)?.human) {
+				url.searchParams.delete("token");
+				res.writeHead(303, {
+					"Set-Cookie": sessionCookie(createSession(), req.headers["x-forwarded-proto"]),
+					Location: url.pathname + url.search,
+					"Cache-Control": "no-store",
+					"Referrer-Policy": "no-referrer",
+				});
+				res.end();
+				return;
+			}
 			const statics = {
 				"/": ["welcome.html", "text/html; charset=utf-8"],
 				"/welcome.js": ["welcome.js", "text/javascript; charset=utf-8"],
@@ -147,7 +199,7 @@ export const server = createServer((req, res) => {
 				return;
 			}
 		}
-		const caller = callerOf(url.searchParams.get("token"));
+		const caller = callerFor(url.searchParams.get("token"), req.headers.cookie);
 		if (!caller) {
 			// A refused POST has to have its body taken off the wire, otherwise the client's next
 			// request rides the same socket into the leftovers and reads as a reset.
@@ -160,6 +212,20 @@ export const server = createServer((req, res) => {
 		if (refusal) {
 			req.resume();
 			fail(res, 403, refusal);
+			return;
+		}
+		// A cookie is sent with whatever a page asks for, so a change made on its strength has to come from
+		// this origin. A token has to be written into the request, which no other site can do.
+		if (caller.via === "cookie" && req.method !== "GET" && req.method !== "HEAD" && !sameOriginRequest(req.headers)) {
+			req.resume();
+			fail(res, 403, "cross-site request");
+			return;
+		}
+		if (req.method === "POST" && url.pathname === "/logout") {
+			req.resume();
+			endSession(req.headers.cookie);
+			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store", "Set-Cookie": sessionCookie("", req.headers["x-forwarded-proto"]) });
+			res.end("{}");
 			return;
 		}
 
@@ -532,9 +598,10 @@ export function onListening() {
 	const url = links[0];
 	console.log(`pi-studio${INSTANCE ? ` [${INSTANCE}]` : ""} listening on ${url}`);
 	for (const link of links.slice(1)) console.log(`  also on ${link}`);
-	// Reach is a decision with a price, and the price is worth knowing before the link is shared.
+	// The link is a credential, and what it costs is worth knowing before it is shared.
+	console.log(`that link signs a browser in for 30 days and then leaves the address bar; the token is also in ${STATE_FILE}`);
 	if (!isLoopback(bindAddress)) {
-		console.log(`open beyond this machine on ${bindAddress}: the token in that link is this machine, so share it only on a network you trust, and it travels as plain http unless a tunnel carries it`);
+		console.log(`open beyond this machine on ${bindAddress}: share the link only on a network you trust, and the session cookie travels as plain http unless a TLS proxy carries it`);
 	}
 	// Which build is answering matters the moment a tab looks wrong, so it is said out loud.
 	console.log(`build ${buildHash()}${INSTANCE ? `, state ${STATE_DIR}` : ""}`);

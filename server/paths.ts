@@ -8,7 +8,7 @@
  * "unknown" for the build. So all of them are derived from one root, and a test asserts the two that
  * point at real files exist.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
@@ -136,7 +136,7 @@ export function buildHash(): string {
 }
 
 export function randomToken() {
-	return createHash("sha256").update(`${process.pid}-${Date.now()}-${Math.random()}`).digest("hex").slice(0, 32);
+	return randomBytes(16).toString("hex");
 }
 
 /**
