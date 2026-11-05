@@ -271,8 +271,8 @@ test("a thread whose mode changed is not served by the process started under the
 	process.env.PI_MANAGED_INSTALL_ROOT = stub.root;
 	const started: any[] = [];
 	try {
-		const board: any = { id: "b1", folder: repo, name: "scratch", config: {}, children: new Map(), trees: [], threads: new Map() };
-		const thread: any = { id: "abcdef123456", title: "a boss", folder: repo, provider: "p", model: "m", mode: "boss", path: "simple" };
+		const board: any = { id: "b1", folder: repo, name: "scratch", config: {}, children: new Map(), trees: [], threads: new Map(), clients: new Set() };
+		const thread: any = { id: "abcdef123456", title: "a boss", folder: repo, provider: "p", model: "m", mode: "boss", path: "simple", turns: [] };
 		board.threads.set(thread.id, thread);
 		const boss = ensureChild(board, thread);
 		started.push(boss);
