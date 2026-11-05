@@ -737,6 +737,11 @@
   .composer .shots .shot button { position: absolute; top: -5px; right: -5px; width: 16px; height: 16px;
     border-radius: 50%; border: 1px solid var(--border); background: #21262d; color: var(--text);
     font: 10px var(--mono); line-height: 1; cursor: pointer; padding: 0; }
+  /* What a message was sent with, under its words in the history: one small row, so a screenshot reads as
+     a picture rather than as a number. Both edges are capped, so a tall shot and a wide one sit alike. */
+  .turn-shots { display: flex; gap: 6px; flex-wrap: wrap; }
+  .turn-shots .turn-shot { max-width: 96px; max-height: 96px; border-radius: 5px;
+    border: 1px solid var(--border); display: block; }
   /* One row, scrolling sideways, so a long list of picks costs one line of the field. */
   .composer .paths { display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; }
   .composer .paths:empty { display: none; }
