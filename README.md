@@ -72,6 +72,25 @@ npm run smoke   # boots two daemons against scratch folders, runs 19 checks, exi
 
 The daemon listens on loopback only. The token in the URL guards every data route.
 
+### From another computer
+
+`--host 0.0.0.0` (or `PI_STUDIO_HOST`) puts the board on every address the machine answers on, which
+is what another computer on the same network needs:
+
+```bash
+node server.ts --no-open --host 0.0.0.0
+```
+
+The console prints the local link first and then one link per address (`also on http://192.168.…`), so
+the line to open on the other machine is already there, token and all. Nothing else changes: the
+agents, the files and the saved conversations stay on the machine that runs the daemon, and a tab on
+any device watches the same board.
+
+The token in that link is the machine — whoever holds it can ask an agent to run anything there — and
+the traffic is plain http. So keep it to a network you trust, or put a tunnel in front of it. The
+folder dialog belongs to the daemon's own screen: from another machine, type the path when it offers
+the field instead.
+
 ## Layout
 
 ```
