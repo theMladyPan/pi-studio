@@ -463,18 +463,25 @@ export function handleChildLine(board, thread, line) {
 		settleTreeBranch(board, thread);
 		// The turn has just finished, and whatever it did to the disk is what the strip must show.
 		noteGit(board);
-		// A turn whose answer was redirected by a steer, or whose run was stopped, never gets a reply
-		// of its own. It reads as stopped rather than as a message still being worked on, and the
-		// caret goes because nothing is being written any more.
+		// A turn whose run was stopped, or whose message was redirected, never gets a reply of its own. It
+		// reads as stopped rather than as a message still being worked on, and the caret goes because
+		// nothing is being written any more.
+		//
+		// One turn keeps its words: the one this run was answering, when it is a steer. The composer sends
+		// `steer` whether a run is live or not, so a steer on an idle thread is the run's own turn and is
+		// swept like any other; a steer that joined a live run is read and answered inside the run's turn,
+		// so its words are spent and it keeps the label that says so. The run's own turn is the one
+		// `thread.answering` names, read here before the pointer is cleared.
+		const { turn: reached } = liveTurn(board, thread);
 		for (const turn of thread.turns) {
 			turn.streaming = false;
-			if (turn.status === "sent") turn.status = "stopped";
+			if (turn.status === "sent" && !(turn.mode === "steer" && turn !== reached)) turn.status = "stopped";
 		}
 		const parked = thread.answering?.cardId ? board.cards.get(thread.answering.cardId) : undefined;
 		if (parked) {
 			for (const turn of parked.turns ?? []) {
 				turn.streaming = false;
-				if (turn.status === "sent") turn.status = "stopped";
+				if (turn.status === "sent" && !(turn.mode === "steer" && turn !== reached)) turn.status = "stopped";
 			}
 			updateCard(board, parked);
 		}
