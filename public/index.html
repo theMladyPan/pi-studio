@@ -687,11 +687,17 @@
     background: #0f141b; border-top: 1px solid var(--border);
   }
   .composer .type { order: 1; flex: 1 1 100%; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-  /* A narrow card cannot hold the buttons and the send side by side, so the row wraps: the buttons
-     first, then the hint and the send on the right of whatever line is left. */
+  /* A narrow card cannot hold the chips and the field's own line side by side, so the row wraps. What
+     must not wrap is that line and the two buttons: they are one group, so the send is never stranded
+     on a line of its own below the stop. The chips keep the whole of the first line to fold into. */
   .composer .side { order: 2; flex: 1 1 100%; display: flex; flex-wrap: wrap;
     justify-content: flex-end; align-items: center; gap: 6px 8px; }
   .composer .modes { display: flex; gap: 5px; flex-wrap: wrap; margin-right: auto; }
+  /* The group holds the hint and the two buttons, and never breaks: it sits at the right end of the
+     row while the chips leave it room, and drops to the next line whole when they do not. Inside it
+     the hint is the only thing that gives up width, so both buttons keep their size. */
+  .composer .acts { display: flex; align-items: center; gap: 6px 8px; min-width: 0; }
+  .composer .acts > button { flex: none; }
   /* A board of threads has no single session to message, so its field lives inside a card and the
      bottom bar is gone. The same client serves a one-session board, which keeps both. */
   #composerHome {
@@ -822,7 +828,13 @@
   /* Nothing to do while the child is busy: the press answers with the reason rather than looking stuck. */
   .composer .ctx-btn.working { color: var(--text); cursor: progress; }
   .composer .ctx-btn.working::after { animation: none; }
-  .composer .hintline { color: var(--muted); font: 11px var(--mono); }
+  /* The hint is a status line, so it stays legible rather than folding the row: cut with the ellipsis
+     the footer's figures use (`#footer .stat`), and `min-width: 0` lets it give up that width at all.
+     With nothing to report it is hidden, because a spot that is only sometimes filled still costs the
+     row its gap. */
+  .composer .hintline { color: var(--muted); font: 11px var(--mono); min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .composer .hintline[hidden] { display: none; }
   /* A note that reports a failure, so it does not read as the usual quiet hint. */
   .composer .hintline.bad { color: var(--red); }
   /* The cards a message names beside the one it is written in, added with `r` or with the ↩ in a
@@ -1198,9 +1210,11 @@
         <button class="ctx-btn" type="button" hidden><span class="ctx-label"></span></button>
         <button class="files" type="button" title="attach files or folders from disk">files</button>
       </div>
-      <span class="hintline" role="status" aria-live="polite"></span>
-      <button class="stop" type="button" hidden title="stop the run in flight">stop</button>
-      <button class="send" type="button">send</button>
+      <div class="acts">
+        <span class="hintline" role="status" aria-live="polite" hidden></span>
+        <button class="stop" type="button" hidden title="stop the run in flight">stop</button>
+        <button class="send" type="button">send</button>
+      </div>
     </div>
   </div>
 </template>

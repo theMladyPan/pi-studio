@@ -5735,8 +5735,6 @@ function makeComposer(entry) {
     compacting: "",
     // A run this field has already been asked to stop, so the next press of the same run kills it.
     stopping: false,
-    /** The `!command` this field handed to the daemon, while it runs: the hint says so until it answers. */
-    shellRunning: "",
     /** The cards this message names beside the one it is written in. */
     named: [],
     /** Images pasted into this field and paths picked for it: both travel with the message. */
@@ -5907,16 +5905,26 @@ new ResizeObserver(() => {
 
 // ---------- hints ---------------------------------------------------------
 /**
- * What the field says under its buttons: whether the message leaves now, waits behind a run, or cuts
- * it short. A stream that is down leaves the field readable on purpose, so it is the hint that has to
- * stop promising a send.
+ * The line under the buttons, and it is left empty unless there is something to report: the mode chip
+ * already names what a send would do and its tooltip explains it, so a word describing that is room
+ * taken for nothing. `hidden` is what makes an empty line cost the row neither width nor gap.
+ */
+function sayHint(into, text, bad = false) {
+  // Off the accessibility tree first, so the words go into a live region the reader can already see.
+  into.hintEl.hidden = !text;
+  into.hintEl.textContent = text;
+  into.hintEl.classList.toggle("bad", bad);
+}
+
+/**
+ * What the field has to say under its buttons. A stream that is down leaves the field readable on
+ * purpose, so the one standing word kept is the line saying the send would not arrive.
  */
 function paintHint(inst) {
   // A card answers for itself: `sent` is its thread answering, the same status its strip reads. The
   // board-wide flag is what the bottom bar has, since it speaks for every thread at once.
   const held = cardOf(inst);
   const running = held ? held.data?.status === "sent" : metaRunning === true;
-  const forkable = forkTarget(inst);
   // A run that ended is the end of the stop that did not land either, so a later press stops the run
   // that is there then instead of killing a child that is already gone.
   if (!running) inst.stopping = false;
@@ -5931,18 +5939,7 @@ function paintHint(inst) {
       ? "steer: this message interrupts the run in flight — click for queue"
       : "queue: this message waits for the run in flight — click for steer"
     : "nothing is running, so this message goes now — click to choose steer next time";
-  inst.hintEl.classList.remove("bad");
-  inst.hintEl.textContent = !linkUp
-    ? "offline"
-    : inst.shellRunning
-      ? `running !${inst.shellRunning.slice(0, 32)}`
-      : !running
-        ? "sends now"
-        : inst.sendMode === "steer"
-          ? "interrupts the run"
-          : forkable && inst.forkNext
-            ? "asks a new thread"
-            : "waits for this run to finish";
+  sayHint(inst, linkUp ? "" : "offline", !linkUp);
 }
 
 /** Every field on the board, because a run boundary changes what all of them would do. */
@@ -5983,15 +5980,14 @@ async function stopRun(inst) {
 }
 
 /**
- * Something the board did rather than the field: say it, then go back to the usual hint. Nothing to
- * say it in — a board with no thread card on it — and the footer says it instead, because that is on
- * screen whatever the board is doing.
+ * Something the board did rather than the field: say it, then go back to what the field has to report
+ * on its own, which is usually nothing. Nothing to say it in — a board with no thread card on it — and
+ * the footer says it instead, because that is on screen whatever the board is doing.
  */
 function hintLine(text, bad = false, inst = activeComposer) {
   const into = inst && composers.has(inst.key) ? inst : activeComposer;
   if (!into) return footNote(text, bad);
-  into.hintEl.textContent = text;
-  into.hintEl.classList.toggle("bad", bad);
+  sayHint(into, text, bad);
   clearTimeout(hintTimer);
   hintTimer = setTimeout(paintComposer, 6000);
 }
@@ -9020,16 +9016,14 @@ async function sendMessage(inst = activeComposer) {
       focusThread(made.id);
     }
     // With no run in flight the message is being sent, not queued behind one.
-    inst.hintEl.textContent = metaRunning !== true ? "sent" : inst.sendMode === "steer" ? "steered" : "queued";
+    sayHint(inst, metaRunning !== true ? "sent" : inst.sendMode === "steer" ? "steered" : "queued");
     // The footer says where the message went when that is not simply this card: a fork is answered in a
     // new card, and a message about another card is worth naming.
     if (sentFork && made?.id) footNote(`a new thread answers ↳ ${cardName(sentFork)}`);
     else if (sentNamed.length === 1) footNote(`asked about ↳ ${cardName(byId.get(sentNamed[0]))}`);
   } catch (error) {
     const gone = error instanceof TypeError; // fetch rejects like this when nothing answers
-    inst.hintEl.textContent = gone
-      ? "board connection lost — reload the page"
-      : `failed: ${error.message || error}`;
+    sayHint(inst, gone ? "board connection lost — reload the page" : `failed: ${error.message || error}`);
   } finally {
     inst.send.disabled = false;
   }
@@ -9082,11 +9076,10 @@ async function runCommand(inst, draft, command) {
   }
   const card = cardOf(inst);
   inst.send.disabled = true;
-  // The hint line is where a field says what it is doing, so a command that runs for a minute says so there
-  // instead of leaving the field looking frozen. `shellRunning` is what keeps the words on screen through a
-  // repaint, and a run boundary repaints every field.
-  inst.shellRunning = command;
-  paintHint(inst);
+  // A command is handed over and answers later, so the press says it went rather than leaving the field
+  // looking frozen. Nothing stands on the line while it runs: anything standing there is room taken for
+  // words the human did not ask for.
+  hintLine(`running !${command.slice(0, 32)}`, false, inst);
   try {
     const response = await fetch(`/shell?${auth}`, {
       method: "POST",
@@ -9120,7 +9113,6 @@ async function runCommand(inst, draft, command) {
     const gone = error instanceof TypeError; // fetch rejects like this when nothing answers
     hintLine(gone ? "board connection lost — reload the page" : `could not run it: ${error.message || error}`, true, inst);
   } finally {
-    inst.shellRunning = "";
     inst.send.disabled = false;
   }
 }
@@ -9415,7 +9407,7 @@ let metaRunning = null;
 let runStartedAt = null;
 let ticker = null;
 // The first paint waits until here: the composer section runs before the run and link state
-// above exist, and its hardcoded hint contradicted what paintComposer says.
+// above exist, so the line it paints alone would be a guess at what paintComposer knows.
 paintComposer();
 
 // The header line is one decision: a broken link wins, because without the stream the agent's
