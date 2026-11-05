@@ -517,9 +517,10 @@ export function handleChildLine(board, thread, line) {
 		// answer is a spent card and the board puts it away a moment later — hidden, never killed, so the
 		// tree it worked in is still there to assemble. A turn that was stopped or failed is not an answer,
 		// however much of it arrived: an abort, a timeout and an error all leave the turn reading `stopped`,
-		// which is the distinction the spawn route drew with `result.status === "done"`.
-		const { turn: ended } = liveTurn(board, thread);
-		if (ended?.status === "answered") autoCloseChild(board, thread);
+		// which is the distinction the spawn route drew with `result.status === "done"`. The turn read is the
+		// one captured above, before the answering pointer went: a steer or a message taken back after the
+		// answer is the newest turn, and it is not the turn that ended this run.
+		if (reached?.status === "answered") autoCloseChild(board, thread);
 		// What the run spent is only known to the child, so it is asked before stdin closes. The close
 		// waits for the answer.
 		const child = board.children.get(thread.id);
