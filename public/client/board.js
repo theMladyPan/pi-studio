@@ -1581,15 +1581,9 @@ function turnNode(entry, turn, index) {
   question.textContent = turn.text || "";
   wrap.appendChild(question);
   // What was sent with the words, drawn small under them: a picture is read at a glance, and a count
-  // would make the human open the turn to know what they sent. A turn from before the board kept the
-  // pictures carries only their number, and says so in the line it always did.
+  // would make the human open the turn to know what they sent.
   const shots = shotRow(turn.images);
   if (shots) wrap.appendChild(shots);
-  else if (Number.isFinite(turn.images) && turn.images > 0) {
-    const shot = el("div", "turn-status");
-    shot.textContent = `${turn.images} image${turn.images > 1 ? "s" : ""} attached`;
-    wrap.appendChild(shot);
-  }
   // The child has not been told this one yet, so its words are still the human's to change.
   if (turn.status === "queued") {
     question.title = "press twice to rewrite this message";
@@ -1755,7 +1749,17 @@ async function dropQueued(entry, index) {
 /** What a turn draws besides its answer. A turn that changes here has to be redrawn whole. */
 function turnShape(turn) {
   const notes = Array.isArray(turn.interim) ? turn.interim : [];
-  return [turn.text, turn.status, turn.mode, turn.images, turn.error, notes.length, notes.join("\u0000")].join("\u0000");
+  return [
+    turn.text,
+    turn.status,
+    turn.mode,
+    // The pictures arrive from a fresh parse of every broadcast, so the array is a new one each time and
+    // only its value says whether the turn changed.
+    JSON.stringify(turn.images ?? null),
+    turn.error,
+    notes.length,
+    notes.join("\u0000"),
+  ].join("\u0000");
 }
 
 /**
@@ -1838,11 +1842,6 @@ function stickyBody(data) {
   // only pictures has no words, and its shots are all it has to show.
   const shots = shotRow(data.images);
   if (shots) holder.appendChild(shots);
-  else if (Number.isFinite(data.images) && data.images > 0) {
-    const shot = el("div", "sticky-status");
-    shot.textContent = `${data.images} image${data.images > 1 ? "s" : ""} attached`;
-    holder.appendChild(shot);
-  }
   if (data.reply) {
     const reply = el("div", "sticky-reply note-body");
     reply.appendChild(renderMarkdown(data.reply));
@@ -2798,7 +2797,7 @@ function cardChanged(before, after) {
       old.text !== turn.text ||
       old.status !== turn.status ||
       old.reply !== turn.reply ||
-      old.images !== turn.images ||
+      JSON.stringify(old.images ?? null) !== JSON.stringify(turn.images ?? null) ||
       (old.interim ?? []).join("\u0000") !== (turn.interim ?? []).join("\u0000")
     );
   });
@@ -5667,11 +5666,26 @@ function wireComposer(inst) {
     const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
     if (files.length === 0) return;
     event.preventDefault();
-    for (const file of files.slice(0, 4)) {
+    // One message goes with four pictures, and the field holds no more than that: a paste that would make
+    // a fifth keeps the ones it can carry and says why.
+    const room = Math.max(0, MAX_PENDING_IMAGES - inst.images.length);
+    if (files.length > room) hintLine("only four pictures go with one message", true, inst);
+    for (const file of files.slice(0, room)) {
       // The read and the shrink are asynchronous, so the field holds the promise: a message sent one
       // instant after the paste waits for it and goes with the picture rather than the words alone.
       const landing = readPastedImage(file).then((shot) => {
         if (!shot) return;
+        // A picture with no thumbnail is one the daemon would drop on its way in: it reaches neither the
+        // model nor the history, so the human is told rather than left with a chip that sends nothing.
+        if (!shot.thumb) {
+          hintLine("this picture cannot be shown on the board — try a screenshot or a PNG", true, inst);
+          return;
+        }
+        // Two pastes in flight at once each saw their own room, so the list is capped here too.
+        if (inst.images.length >= MAX_PENDING_IMAGES) {
+          hintLine("only four pictures go with one message", true, inst);
+          return;
+        }
         inst.images.push(shot);
         drawAttachments(inst);
       });
@@ -7883,6 +7897,8 @@ function drawAttachments(inst = activeComposer) {
 // A screenshot is several megabytes once base64 encoded, which is slow to push and slow to
 // replay. Shrinking it to a size that still reads well keeps the message small.
 const MAX_IMAGE_EDGE = 1568;
+/** The pictures one message carries: the daemon keeps four, so the field gathers no more. */
+const MAX_PENDING_IMAGES = 4;
 /** The small copy the history draws: a picture read at a glance, and too small to weigh on a broadcast. */
 const THUMB_IMAGE_EDGE = 320;
 const THUMB_QUALITY = 0.6;
@@ -7924,8 +7940,8 @@ function shrinkImage(dataUrl, mimeType) {
       const shrunk = drawJpeg(image, MAX_IMAGE_EDGE, 0.85);
       resolve({ dataUrl: shrunk, mimeType: "image/jpeg", data: dataOf(shrunk), thumb });
     });
-    // Anything the browser cannot decode travels untouched rather than disappearing. It carries no
-    // thumbnail, and the body says nothing it cannot know.
+    // A picture the browser cannot decode keeps the bytes it had and carries no thumbnail: the field
+    // reads that absence as the reason to say so instead of sending what the daemon would drop.
     image.addEventListener("error", () => resolve(original));
     image.src = dataUrl;
   });
