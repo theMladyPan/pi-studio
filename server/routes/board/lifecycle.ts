@@ -457,7 +457,7 @@ export async function onUndo(req, res, board) {
 
 
 export async function onStop(req, res, board) {
-	// A card stops its own thread; no card stops everything, which is what the header button means.
+	// A card stops its own thread; no card stops every running thread, which is what the bottom bar of a one-session board asks for.
 	const body = (await readJson(req, res)) ?? {};
 	const asked = body?.cardId ? threadForRuntime(board, field(body.cardId, 100)) : undefined;
 	const running = asked
