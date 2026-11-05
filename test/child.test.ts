@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { childArgv } from "../server/child/argv.ts";
-import { ensureChild, wireText } from "../server/child/run.ts";
+import { ensureChild, prompt, wireText } from "../server/child/run.ts";
 import { modeChangeNote } from "../server/child/modes.ts";
 import { describeTool, firstLine, headline, resultText } from "../server/child/describe.ts";
 import { boardPrompt, worktreePrompt } from "../server/child/prompts.ts";
@@ -271,8 +271,8 @@ test("a thread whose mode changed is not served by the process started under the
 	process.env.PI_MANAGED_INSTALL_ROOT = stub.root;
 	const started: any[] = [];
 	try {
-		const board: any = { id: "b1", folder: repo, name: "scratch", config: {}, children: new Map(), trees: [], threads: new Map() };
-		const thread: any = { id: "abcdef123456", title: "a boss", folder: repo, provider: "p", model: "m", mode: "boss", path: "simple" };
+		const board: any = { id: "b1", folder: repo, name: "scratch", config: {}, children: new Map(), trees: [], threads: new Map(), clients: new Set() };
+		const thread: any = { id: "abcdef123456", title: "a boss", folder: repo, provider: "p", model: "m", mode: "boss", path: "simple", turns: [] };
 		board.threads.set(thread.id, thread);
 		const boss = ensureChild(board, thread);
 		started.push(boss);
@@ -286,6 +286,62 @@ test("a thread whose mode changed is not served by the process started under the
 		// A mode that did not change is the same process: this is a change, not a restart on every message.
 		assert.equal(ensureChild(board, thread), agent);
 	} finally {
+		for (const child of started) {
+			child?.stdin?.end();
+			child?.kill();
+		}
+		if (was === undefined) delete process.env.PI_MANAGED_INSTALL_ROOT;
+		else process.env.PI_MANAGED_INSTALL_ROOT = was;
+		for (const gone of [repo, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("a message on a thread whose mode changed tells the board the choice has landed", async () => {
+	// The mode lands when the child is started under it, and nothing the daemon says afterwards carries it
+	// until the first streamed event. Without a broadcast from there the head keeps the waiting colour for
+	// the whole run, so the card is announced twice: once with the choice waiting, once with it in force.
+	const repo = scratchRepo();
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-landed-")));
+	const was: string | undefined = process.env.PI_MANAGED_INSTALL_ROOT;
+	process.env.PI_MANAGED_INSTALL_ROOT = stub.root;
+	const started: any[] = [];
+	// The run is over as far as this test is concerned once the frames are read, so a child that stops in
+	// the teardown is not a run that died mid-answer.
+	let run: any = null;
+	try {
+		const frames: any[] = [];
+		const board: any = {
+			id: "b1",
+			folder: repo,
+			name: "scratch",
+			config: {},
+			children: new Map(),
+			trees: [],
+			threads: new Map(),
+			cards: new Map(),
+			activity: [],
+			// A tab that writes every frame down: what this test reads is what the browser would draw.
+			clients: new Set([{ writableEnded: false, destroyed: false, write: (frame: string) => frames.push(JSON.parse(frame.replace(/^data: /, ""))) }]),
+		};
+		// A process already running under the old mode is the state a change made mid-run leaves, and what
+		// the choice has to be pending against.
+		run = { id: "abcdef123456", title: "a boss", folder: repo, provider: "p", model: "m", mode: "agent", runMode: "boss", path: "simple", turns: [] };
+		board.threads.set(run.id, run);
+		prompt(board, run, "hello");
+		started.push(board.children.get(run.id));
+		// The board write is the daemon's, and this board has no file of its own to write.
+		clearTimeout(board.saveTimer);
+		board.saveTimer = null;
+		const cards = frames.filter((frame) => frame.type === "update").map((frame) => frame.card);
+		assert.ok(
+			cards.some((held) => held.modeAtRun === "boss" && held.mode === "agent"),
+			`the board was never told the choice was waiting: ${JSON.stringify(cards)}`,
+		);
+		const last = cards[cards.length - 1];
+		assert.equal(last.mode, "agent");
+		assert.equal(last.modeAtRun, undefined, "the card still says the mode is waiting after the new process started");
+	} finally {
+		if (run) run.status = "idle";
 		for (const child of started) {
 			child?.stdin?.end();
 			child?.kill();

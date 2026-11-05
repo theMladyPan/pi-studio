@@ -149,6 +149,21 @@ test("a thread becomes a card the client can draw", () => {
 	assert.equal(card.title, "a title");
 });
 
+test("a thread with no mode of its own still says a choice made mid-run is waiting", () => {
+	// A thread typed into being carries no mode, which is the agent the board has always been: a human who
+	// picks `plan` while it is answering must see the choice waiting against the agent the run in flight
+	// follows, not a dark chip that reads as obeyed.
+	const thread: any = { id: "t10", title: "typed", at: now, status: "running", turns: [] };
+	// Neither a mode nor a run behind one: the card wears the queue state of its last turn and no chip at all.
+	const born = cardFor(thread, null);
+	assert.equal(born.mode, "queue");
+	assert.equal(born.modeAtRun, undefined);
+	thread.mode = "plan";
+	const waiting = cardFor(thread, null);
+	assert.equal(waiting.mode, "plan");
+	assert.equal(waiting.modeAtRun, "agent");
+});
+
 test("a plain card becomes a card of its own kind", () => {
 	const card = plainCardFor({ id: "c7", type: "note", title: "n", at: now, markdown: "body" }, null) as any;
 	assert.equal(card.id, "c7");

@@ -66,8 +66,12 @@ export function ensureChild(board, thread) {
 	});
 	board.children.set(thread.id, child);
 	// What this process was told to be. The next message compares it with the mode the thread has by then,
-	// which is the only moment a change made mid-run can be seen and told to the model.
+	// which is the only moment a change made mid-run can be seen and told to the model. A choice that was
+	// waiting has landed here, and the board has to hear it now: nothing else speaks until the child's first
+	// streamed event, and until then the card would still read the choice as on its way.
+	const wasRunMode = thread.runMode;
 	thread.runMode = thread.mode;
+	if (wasRunMode !== thread.runMode) update(board, thread);
 	// A child that died between two messages turns the next write into EPIPE. That is a card error,
 	// not a daemon crash.
 	child.stdin.on("error", (error) => threadError(board, thread, `child stdin failed: ${error.message}`));

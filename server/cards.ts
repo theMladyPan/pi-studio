@@ -104,8 +104,12 @@ export function cardFor(thread, board = null) {
 	if (thread.mode) card.mode = thread.mode;
 	// A mode reaches a thread when its process starts, so a change made while a run is going lands on the
 	// next message. The card names the mode the run in flight is actually following, and the head says the
-	// choice waits rather than showing a mode nothing is obeying yet.
-	if (thread.runMode && thread.runMode !== thread.mode) card.modeAtRun = thread.runMode;
+	// choice waits rather than showing a mode nothing is obeying yet. A thread with no mode of its own is the
+	// agent the board always had, so the run in flight is compared against that baseline rather than an absent
+	// field: a `plan` picked on such a thread while it answers is a choice waiting on an agent, and it has to
+	// say so. Nothing chosen and nothing running still names nothing, because that card wears no mode chip.
+	const atRun = thread.runMode ?? "agent";
+	if (atRun !== (thread.mode ?? "agent")) card.modeAtRun = atRun;
 	if (thread.path) card.path = thread.path;
 	if (thread.pathChosenBy) card.pathChosenBy = thread.pathChosenBy;
 	// A hidden thread has no card of its own, so the child carries the name its arrow points from:
