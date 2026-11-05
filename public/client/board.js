@@ -1751,6 +1751,15 @@ async function dropQueued(entry, index) {
   }
 }
 
+/**
+ * A message the human took back before the child read it. The daemon keeps the turn so every queued
+ * message after it keeps the number it was given, and the client draws nothing for it: taking a message
+ * back leaves the conversation as it was without it.
+ */
+function withdrawnTurn(turn) {
+  return turn.status === "stopped" && turn.error === "withdrawn";
+}
+
 /** What a turn draws besides its answer. A turn that changes here has to be redrawn whole. */
 function turnShape(turn) {
   const notes = Array.isArray(turn.interim) ? turn.interim : [];
@@ -1830,6 +1839,9 @@ function pinToBottom(entry) {
 function paintThread(entry, data) {
   const turns = Array.isArray(data.turns) ? data.turns : [];
   const last = turns[turns.length - 1];
+  // A withdrawn turn is not drawn, but it keeps its place in the list: each row carries the daemon's own
+  // index, so every act on a row names the turn the daemon holds rather than the row's place on screen.
+  const rows = turns.map((turn, index) => ({ turn, index })).filter(({ turn }) => !withdrawnTurn(turn));
   // A thread the card is created with is drawn as history, so this paint is the last one that can say
   // the conversation is opening: read before `threadSeen` is seeded below.
   const firstPaint = entry.threadSeen === undefined;
@@ -1841,7 +1853,8 @@ function paintThread(entry, data) {
   const opened = !firstPaint && seen.count === 0 && turns.length > 0;
   const fresh = turns.length > seen.count || (Boolean(last?.reply) && !seen.answered);
   entry.threadSeen = { count: turns.length, answered: Boolean(last?.reply) };
-  entry.thread.hidden = turns.length === 0;
+  // A card whose every turn was taken back has nothing to read, so its strip takes no border and no padding.
+  entry.thread.hidden = rows.length === 0;
   // Reading position: an answer growing under someone who is already at the bottom keeps them
   // there; someone who scrolled up to read is left where they are.
   const atBottom = entry.scroll.scrollHeight - entry.scroll.scrollTop - entry.scroll.clientHeight < 24;
@@ -1850,11 +1863,11 @@ function paintThread(entry, data) {
   // moves, only that answer is repainted.
   const drawn = entry.turnNodes ?? (entry.turnNodes = []);
   const settled =
-    drawn.length === turns.length && turns.every((turn, at) => turnShape(turn) === turnShape(drawn[at].turn));
+    drawn.length === rows.length && rows.every(({ turn }, at) => turnShape(turn) === turnShape(drawn[at].turn));
   if (settled) {
     // The run writes into the turn it was asked about, which is not always the last one: a message
     // queued behind the run sits after it, and the answer under it keeps arriving while it waits.
-    const moved = turns.findIndex((turn, at) => {
+    const moved = rows.findIndex(({ turn }, at) => {
       const before = drawn[at].turn;
       return (
         turn.reply !== before.reply ||
@@ -1863,8 +1876,8 @@ function paintThread(entry, data) {
       );
     });
     if (moved >= 0) {
-      paintAnswer(drawn[moved].node, turns[moved]);
-      drawn[moved].turn = { ...turns[moved] };
+      paintAnswer(drawn[moved].node, rows[moved].turn);
+      drawn[moved].turn = { ...rows[moved].turn };
     }
   } else if (entry.thread.querySelector(".turn-edit")) {
     // Someone is rewriting a queued message. Rebuilding the conversation under the field would take
@@ -1872,9 +1885,9 @@ function paintThread(entry, data) {
     // it closes, and the next broadcast draws the turn once the edit is done.
     entry.threadHeldBack = true;
   } else {
-    const nodes = turns.map((turn, at) => turnNode(entry, turn, at));
+    const nodes = rows.map(({ turn, index }) => turnNode(entry, turn, index));
     entry.thread.replaceChildren(...nodes);
-    entry.turnNodes = turns.map((turn, at) => ({ turn: { ...turn }, node: nodes[at] }));
+    entry.turnNodes = rows.map(({ turn }, at) => ({ turn: { ...turn }, node: nodes[at] }));
   }
   if (!firstPaint && !fresh && !(Boolean(last?.streaming) && atBottom)) return;
   // The first paint opens the conversation at the bottom, and the pin holds it there through the
