@@ -12,6 +12,9 @@
     --text: #e6edf3; --muted: #7d8590;
     --accent: #58a6ff; --accent-dim: #1f6feb;
     --green: #3fb950; --amber: #d29922; --pink: #db61a2; --red: #f85149;
+    /* The two tints the composer's send and stop wear: the same hues, lifted so they read as words on
+       a dark chip rather than as a fill of their own. */
+    --green-soft: #7ee08c; --red-soft: #ff9189;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
     --lh: 20px;
     /* One number the rail, the canvas and the composer all agree on. */
@@ -794,13 +797,18 @@
   }
   /* Steering cuts a run short, so the button wears the warning colour while that is what it would do. */
   .composer .modes button.steer { color: #0d1117; background: var(--amber); border-color: var(--amber); }
-  .composer .send { font: 12px var(--mono); color: #0d1117; background: var(--green);
-    border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  /* Send and stop wear the box every other chip in the row wears, and say what they do with the colour
+     of their words alone. A solid block stood out of a strip of quiet presses and grew taller than all
+     of them; this pair keeps the row level, and the green and the red still name the two actions. */
+  .composer .send { font: 11px var(--mono); color: var(--green-soft); background: #161b22;
+    border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+  .composer .send:hover:not(:disabled), .composer .send:focus-visible { border-color: var(--border-bright); }
   .composer .send:disabled { opacity: .5; cursor: default; }
   /* The stop is the send's twin in the run's own colour, and is there only while there is a run
      to end, so the field can still steer or queue a message beside it. */
-  .composer .stop { font: 12px var(--mono); color: #0d1117; background: var(--red);
-    border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  .composer .stop { font: 11px var(--mono); color: var(--red-soft); background: #161b22;
+    border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+  .composer .stop:hover:not(:disabled), .composer .stop:focus-visible { border-color: var(--border-bright); }
   .composer .stop:disabled { opacity: .5; cursor: default; }
   /* The context figure is also the compact button, and the fill behind the words is how much of the
      window that thread has spent. It wears its neighbours' box, so the row keeps one rhythm. */
