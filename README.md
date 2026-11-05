@@ -52,7 +52,7 @@ That is also what makes the app checkable:
 npm install     # once, for the checks only; running the daemon needs nothing
 npm run check   # syntax, the import graph, tsc, node --test, then the smoke suite
 npm test        # the unit and route tests on their own
-npm run smoke   # boots two daemons against scratch folders, runs 20 checks, exits 1 on the first failure
+npm run smoke   # boots two daemons against scratch folders, runs its checks, exits 1 on the first failure
 ```
 
 ## How it works
@@ -64,9 +64,9 @@ npm run smoke   # boots two daemons against scratch folders, runs 20 checks, exi
 - **The first row is always the scratch one.** A folder in the machine's temp spot, made again whenever
   it is gone, for the question that deserves no project and for the scripts that are all thrash. Its
   threads work in that folder directly — it is not a repository, so there is no branch to cut — and the
-  `empty` button on its row deletes everything in the folder and every card on its board. That press
-  asks twice: the first one only arms the button, which turns red and says `empty?` for four seconds.
-  The board's settings stay.
+  `empty` button on its row stops whatever is still running there, then deletes everything in the folder
+  and every card on its board. That press asks twice: the first one only arms the button, which turns
+  red and says `empty?` for four seconds. The board's settings stay.
 - **Threads** are cards. A thread is created with `+` and starts its agent on the first message. A
   thread's pi session is written under `~/.pi/agent/state/pi-studio/sessions/<workspace>/`, so a
   restart of the daemon resumes the conversation instead of starting over.
