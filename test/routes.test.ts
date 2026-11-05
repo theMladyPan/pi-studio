@@ -2087,3 +2087,79 @@ test("an expired session stays refused after a restart, and a changed token drop
 		rmSync(state, { recursive: true, force: true });
 	}
 });
+
+test("the store keeps at most 32 sessions, and the oldest is the one that goes", async () => {
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-cookie-"));
+	const daemon = await boot(state);
+	try {
+		// One sign-in is one session, and each answer carries the cookie for its own.
+		const cookies: string[] = [];
+		for (let made = 0; made < 33; made++) cookies.push((await signIn(daemon)).cookie);
+		const kept = JSON.parse(readFileSync(join(state, "sessions.json"), "utf8")).sessions;
+		assert.equal(Object.keys(kept).length, 32, "the store grew past its cap");
+		// The cookie made one past the cap is the oldest that survives, and the newest signs in beside it.
+		assert.equal((await get(daemon, "/workspaces", asCookie(cookies[0]))).status, 403);
+		assert.equal((await get(daemon, "/workspaces", asCookie(cookies[1]))).status, 200);
+		assert.equal((await get(daemon, "/workspaces", asCookie(cookies[32]))).status, 200);
+	} finally {
+		daemon.child.kill();
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("a thread's token opens no session from the page", async () => {
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-cookie-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-cookie-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const daemon = await boot(state, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" })).status, 200);
+		const child = await childEnvOf(daemon, stub.envFile);
+		// The page is served, as it is to anyone who carries no credential, and nothing comes back with it:
+		// only the human's own token is traded for a session.
+		const page = await fetch(`${daemon.base}/?token=${child.token}`, { redirect: "manual" });
+		assert.equal(page.status, 200);
+		assert.equal(page.headers.get("set-cookie"), null);
+		assert.equal(page.headers.get("location"), null);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [state, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+test("logout cannot be forged, because a cookie carries no word of its own origin with it", async () => {
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-cookie-"));
+	const daemon = await boot(state);
+	try {
+		const { cookie } = await signIn(daemon);
+		// The shape a form on another site posts: neither `Sec-Fetch-Site` nor `Origin`. Logout changes state
+		// on the strength of a cookie, so the same-origin rule decides it like any other POST.
+		assert.equal(await rawPost(daemon, "/logout", { cookie }), 403);
+		// The refusal ends nothing.
+		assert.equal((await get(daemon, "/workspaces", asCookie(cookie))).status, 200);
+	} finally {
+		daemon.child.kill();
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("the redirect after a sign-in stays a path on this daemon", async () => {
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-cookie-"));
+	const daemon = await boot(state);
+	try {
+		// The query is carried over as it arrived, so what it holds cannot steer the browser at another host:
+		// the answer is this page's own path, and the `//` in the query is a value, not a host.
+		const res = await fetch(`${daemon.base}/?token=${daemon.token}&next=//evil.com`, { redirect: "manual" });
+		assert.equal(res.status, 303);
+		const location = res.headers.get("location") ?? "";
+		assert.equal(location, "/?next=%2F%2Fevil.com");
+		assert.ok(location.startsWith("/") && !location.startsWith("//"), `the redirect left this daemon: ${location}`);
+		// Resolved the way a browser resolves it, it lands on this daemon.
+		assert.equal(new URL(location, daemon.base).origin, daemon.base);
+	} finally {
+		daemon.child.kill();
+		rmSync(state, { recursive: true, force: true });
+	}
+});
