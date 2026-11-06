@@ -70,6 +70,34 @@ const postAs = (daemon: Daemon, token: string, board: string, path: string, body
 		body: JSON.stringify(body ?? {}),
 	});
 
+/**
+ * A POST held open as a raw request, so a check can watch when its headers and its body arrive rather than only
+ * what the whole answer turned out to be. `fetch` hands back one finished body, which is the wrong shape for
+ * watching a response that is still being written.
+ */
+function heldPost(daemon: Daemon, board: string, path: string, body: unknown) {
+	const seen = { status: 0, headersAt: null as number | null, endedAt: null as number | null, chunks: [] as string[] };
+	const done = new Promise<typeof seen>((resolve, reject) => {
+		const req = request(
+			`${daemon.base}${path}?token=${daemon.token}&workspace=${board}`,
+			{ method: "POST", headers: { "content-type": "application/json" } },
+			(res) => {
+				seen.status = res.statusCode ?? 0;
+				seen.headersAt = Date.now();
+				res.setEncoding("utf8");
+				res.on("data", (chunk: string) => seen.chunks.push(chunk));
+				res.on("end", () => {
+					seen.endedAt = Date.now();
+					resolve(seen);
+				});
+			},
+		);
+		req.on("error", reject);
+		req.end(JSON.stringify(body));
+	});
+	return { seen, done };
+}
+
 /** The question card the daemon wrote, read back until it is on the board. */
 async function questionCard(daemon: Daemon, board: string) {
 	for (let tries = 0; tries < 100; tries++) {
@@ -1032,6 +1060,48 @@ test("a question the human has seen keeps waiting after its window has passed", 
 		assert.equal(JSON.parse(reply.body).answer, "b");
 		// Settled, and no longer saying anything is being watched.
 		assert.equal((await cardState(daemon, board.id, card.id)).paused, false);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a paused question keeps its response alive past the ask window", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-ask-keepalive-"));
+	// The window and the keep-alive tick are policy constants of minutes; the check shortens both through the
+	// environment rather than sit one out.
+	const daemon = await boot(folder, { PI_STUDIO_ASK_TIMEOUT_MS: "400", PI_STUDIO_ASK_KEEPALIVE_MS: "100" });
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		const board = JSON.parse(opened.body).board;
+		const askedAt = Date.now();
+		const held = heldPost(daemon, board.id, "/card/ask", { question: "which one?", options: ["a", "b"] });
+		const card = await questionCard(daemon, board.id);
+		assert.ok(card, "the question never reached the board");
+		// A question nobody is reading is answered in one piece, so nothing has come back yet.
+		assert.equal(held.seen.headersAt, null, "the hold answered before the question was settled");
+
+		// The human has the card on their screen, and from here the wait may outlive any client's deadline on a
+		// response that has said nothing: the headers arrive at the pause, not at the answer.
+		assert.equal((await postTo(daemon, board.id, "/card/pause", { cardId: card.id })).status, 200);
+		await new Promise((done) => setTimeout(done, 150));
+		assert.equal(held.seen.status, 200, "no response headers arrived when the question was paused");
+
+		// Past the window the question was given, and still waiting: the body went quiet for longer than a client
+		// waits on a quiet body, so what arrived so far is whitespace and nothing else.
+		await new Promise((done) => setTimeout(done, 500));
+		assert.ok(Date.now() - askedAt > 400, "the check did not wait past the ask window");
+		assert.equal((await cardState(daemon, board.id, card.id)).status, "open", "a question the human was reading expired anyway");
+		assert.equal(held.seen.endedAt, null, "the hold ended before the question was answered");
+		const waiting = held.seen.chunks.join("");
+		assert.ok(waiting.length > 1, `only ${waiting.length} keep-alive bytes arrived while the question waited`);
+		assert.match(waiting, /^ +$/, "the body said something other than keep-alive whitespace");
+
+		assert.equal((await postTo(daemon, board.id, "/answer", { cardId: card.id, answer: "b" })).status, 200);
+		const read = await held.done;
+		assert.equal(read.status, 200);
+		// Whitespace before a JSON body is legal, so the child that asked parses its answer out of the same call.
+		assert.equal(JSON.parse(read.chunks.join("")).answer, "b");
 	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });

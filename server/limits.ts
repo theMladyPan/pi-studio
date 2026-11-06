@@ -39,6 +39,21 @@ export function askTimeoutMs() {
 }
 
 
+/**
+ * How often a held question says nothing in particular. A question the human has seen waits as long as reading
+ * takes, and a client gives up on a body that has gone quiet, `fetch` after five minutes, so a space this often
+ * keeps the request alive until the answer. `PI_STUDIO_ASK_KEEPALIVE_MS` shortens it so the checks can watch a
+ * keep-alive land without waiting a minute for it.
+ */
+export const ASK_KEEPALIVE_MS = 60_000;
+
+
+export function askKeepAliveMs() {
+	const wanted = Number(process.env.PI_STUDIO_ASK_KEEPALIVE_MS);
+	return Number.isFinite(wanted) && wanted > 0 ? wanted : ASK_KEEPALIVE_MS;
+}
+
+
 /** A child that has reported is spent, and its card goes this long after the answer is read. */
 export const CHILD_CLOSE_DELAY_MS = 20_000;
 
