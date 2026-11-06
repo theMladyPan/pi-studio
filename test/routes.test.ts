@@ -7,6 +7,8 @@ import { delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { MAX_WORKSPACE_PROMPT_CHARS } from "../server/limits.ts";
+
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 /**
  * The shells a check names outright, so that what it asserts does not depend on the `SHELL` of whoever runs
@@ -1972,6 +1974,59 @@ test("a prompt file's own bytes go back through POST /prompt, and the repository
 		assert.equal(refused.status, 400);
 	} finally {
 		writeFileSync(path, original);
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a workspace's two instruction files are read and saved where they sit, and nothing else is", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-workspace-prompt-"));
+	const daemon = await boot(folder);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		// A workspace nobody has written anything in yet answers with an empty box rather than a refusal.
+		const quiet = await get(daemon, `/workspace-prompt?token=${daemon.token}&workspace=${board.id}&name=STUDIO.md`);
+		assert.equal(quiet.status, 200, quiet.body);
+		assert.deepEqual(JSON.parse(quiet.body), { name: "STUDIO.md", text: "" });
+		assert.ok(!existsSync(join(folder, "STUDIO.md")), "reading created the file");
+
+		const said = "# Studio\n\nCards on this project carry the build number.";
+		const wrote = await postTo(daemon, board.id, "/workspace-prompt", { name: "STUDIO.md", text: said });
+		assert.equal(wrote.status, 200, wrote.body);
+		// The file is the workspace's own, beside its code, which is what lets it travel with the repository.
+		assert.equal(readFileSync(join(folder, "STUDIO.md"), "utf8"), said);
+		const read = await get(daemon, `/workspace-prompt?token=${daemon.token}&workspace=${board.id}&name=STUDIO.md`);
+		assert.equal(JSON.parse(read.body).text, said);
+		// The same two steps for the project's own file, which the page edits and pi reads.
+		assert.equal((await postTo(daemon, board.id, "/workspace-prompt", { name: "AGENTS.md", text: "run the tests with npm test\n" })).status, 200);
+		assert.match(readFileSync(join(folder, "AGENTS.md"), "utf8"), /npm test/);
+
+		// pi reads an override file ahead of AGENTS.md, so the answer says the box is not the file a run reads.
+		writeFileSync(join(folder, "AGENTS.override.md"), "prefer this one\n");
+		const overridden = JSON.parse((await get(daemon, `/workspace-prompt?token=${daemon.token}&workspace=${board.id}&name=AGENTS.md`)).body);
+		assert.equal(overridden.override, true);
+
+		// Two names, and no request ever carries a path: a file the workspace page does not offer is not one
+		// a route may read or write.
+		for (const name of ["../../etc/passwd", "notes.md", "STUDIO.md/../x", "", "studio.md"]) {
+			const refused = await postTo(daemon, board.id, "/workspace-prompt", { name, text: "x" });
+			assert.equal(refused.status, 400, `${name} was accepted`);
+		}
+		const asked = await get(daemon, `/workspace-prompt?token=${daemon.token}&workspace=${board.id}&name=notes.md`);
+		assert.equal(asked.status, 400);
+		// A save that would grow the file without end is refused with the reason rather than cut short.
+		const tooLong = await postTo(daemon, board.id, "/workspace-prompt", { name: "STUDIO.md", text: "x".repeat(MAX_WORKSPACE_PROMPT_CHARS + 1) });
+		assert.equal(tooLong.status, 413);
+		assert.equal(readFileSync(join(folder, "STUDIO.md"), "utf8"), said, "a refused save changed the file");
+
+		// The page is drawn from the document, and it offers exactly these two leaves and no studio file.
+		const document = JSON.parse((await get(daemon, `/settings/board?token=${daemon.token}&workspace=${board.id}`)).body);
+		const prompts = document.groups.find((group: any) => group.id === "prompts");
+		const leaves = prompts.fields ?? [];
+		assert.deepEqual(leaves.map((leaf: any) => leaf.label), ["STUDIO.md", "AGENTS.md"]);
+		assert.ok(leaves.every((leaf: any) => leaf.write.route === "/workspace-prompt"));
+		assert.ok(!JSON.stringify(document.groups).includes("prompt-roles-"), "the studio's prompt files are on a board's page");
+	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });
 	}

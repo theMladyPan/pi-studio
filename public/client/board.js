@@ -7322,8 +7322,81 @@ function typedLeaf(field) {
   return !field.pick && (field.type === "combo" || field.type === "text" || field.type === "number");
 }
 
+/**
+ * A whole text saved to a route rather than picked from a list: the two instruction files a workspace keeps
+ * beside its code. The box holds the file, and the file changes only when its own save is pressed, because a
+ * text written on every keystroke is not a file anybody meant.
+ *
+ * Nothing here knows a field by name: the text is read from the route the document names and written back
+ * through the same leaf's `write` template, so one control serves either file.
+ */
+function renderProseLeaf(field) {
+  const row = el("div", "cfg-row is-prose");
+  row.title = field.help ?? "";
+  const head = el("div", "cfg-prose-head");
+  const label = el("span");
+  label.textContent = field.label ?? field.id;
+  const state = el("b");
+  head.append(label, state);
+  const area = el("textarea", "cfg-prose");
+  area.id = `field-${field.id}`;
+  area.rows = 8;
+  area.spellcheck = false;
+  area.setAttribute("aria-label", field.label ?? field.id);
+  const actions = el("div", "cfg-prose-actions");
+  const size = el("span", "cfg-prose-size", "");
+  const save = el("button", "cfg-prose-save", "save");
+  save.type = "button";
+  save.disabled = true;
+  actions.append(size, save);
+  row.append(head, area, actions);
+  // What the file last said. A save is worth pressing only when the box differs from it.
+  let saved = "";
+  const say = (text) => (state.textContent = text);
+  const paint = () => {
+    const lines = area.value ? area.value.split("\n").length : 0;
+    size.textContent = `${area.value.length.toLocaleString()} chars · ${lines} line${lines === 1 ? "" : "s"}`;
+    save.disabled = area.value === saved;
+  };
+  area.addEventListener("input", () => {
+    say(area.value === saved ? "" : "unsaved");
+    paint();
+  });
+  save.addEventListener("click", async () => {
+    const wrote = await writeLeaf(field, area.value);
+    if (!wrote) return;
+    saved = area.value;
+    say("saved");
+    paint();
+  });
+  // The file is read once, when the box is drawn. A workspace that has not written one yet answers with
+  // empty text, which is a box waiting to be filled rather than an error to read.
+  (async () => {
+    say("reading…");
+    try {
+      const response = await fetch(`${field.source}${field.source.includes("?") ? "&" : "?"}${auth}`);
+      if (!response.ok) throw new Error((await response.text()).slice(0, 120) || response.statusText);
+      const answer = await response.json();
+      saved = String(answer.text ?? "");
+      area.value = saved;
+      // pi reads an override file instead of AGENTS.md when one sits beside it, so this box would be
+      // editing a file nothing reads. The line says so; it is not a refusal.
+      say(answer.override ? "AGENTS.override.md is read instead" : "saved");
+    } catch (error) {
+      say(`could not read it: ${error.message || error}`);
+    }
+    paint();
+  })();
+  // A repaint of the panel must not take the box from under the human, so this leaf's text is its own.
+  const leaf = { field, row, value: area, set: () => {} };
+  treeLeaves.push(leaf);
+  return leaf;
+}
+
 /** One leaf: a label, its value, and the click that changes it. */
 function renderLeaf(field) {
+  // A whole text is not a row with a value on its right: it is a box that holds a file, and its own save.
+  if (field.type === "prose") return renderProseLeaf(field);
   if (typedLeaf(field)) return renderTypedLeaf(field);
   const row = el("button", "cfg-row");
   row.type = "button";
@@ -7393,7 +7466,7 @@ function leafShown(field) {
     const off = Array.isArray(field.value) ? field.value.length : 0;
     return off ? `${off} off` : "all on";
   }
-  if (field.type === "prompt") return "";
+  if (field.type === "prompt" || field.type === "prose") return "";
   const text = String(field.value ?? "");
   return text ? shortModel(text) : "";
 }

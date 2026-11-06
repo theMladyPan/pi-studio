@@ -7,6 +7,7 @@ import { AGENTS_DIR, shortId, workdirOf } from "../worktrees/make.ts";
 import { cardsBlock } from "../card-settings.ts";
 import { INTEGRATION_COMMAND, integrationOf } from "../integration.ts";
 import { promptText } from "./modes.ts";
+import { STUDIO_FILE, workspacePromptText } from "../workspace-prompt.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -87,6 +88,11 @@ const NO_CONVENTIONS =
  * `[[key]]` resolves to the card whose key is that same string, and the card rules are the last thing a
  * thread reads. The taste — pointer style, one kind of thing per card, mermaid before svg — is
  * `prompts/board/conventions.md`, because a human may want it in their own words.
+ *
+ * A workspace adds one file of its own to that, `STUDIO.md` in its folder: the studio's own instructions
+ * for that project, which pi does not read on its own account. It is read here rather than kept, so an
+ * edit lands on the next run of a thread already on the board. A spawned child is given its own frame
+ * instead and reads none of it.
  */
 export function boardPrompt(board, thread) {
 	if (thread.parentThread) return childPrompt(board, thread);
@@ -99,6 +105,8 @@ export function boardPrompt(board, thread) {
 		// A board whose conventions file was deleted still has every mechanic below, so it still gets told
 		// what to do with a card rather than being left with the identity lines and nothing else.
 		promptText("board", "conventions") || NO_CONVENTIONS,
+		// The workspace's own words to the studio, from the folder rather than from a value on the board.
+		workspacePromptText(board, STUDIO_FILE),
 		"A [[key]] only works if the card carries that exact key, so pass a short key to board_note every time and name the card by it.",
 		"Once the children you spawned are merged or otherwise brought in, board_collect frees their worktrees and branches.",
 		"How many cards this thread writes, and what may be inside one, is set at the end of this prompt.",
@@ -107,7 +115,7 @@ export function boardPrompt(board, thread) {
 		// that carries it out, so the boss reads the rule rather than three it has to choose between.
 		`The board brings a child's work back with: ${integration} — ${INTEGRATION_COMMAND[integration]}.`,
 		cardsBlock(board.config),
-	].join("\n");
+	].filter(Boolean).join("\n");
 }
 
 

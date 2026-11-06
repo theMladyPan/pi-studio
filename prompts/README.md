@@ -44,3 +44,19 @@ keep them plain markdown with no front matter and one idea per paragraph.
 A spawned child reads no board prompt. `server/child/prompts.ts` gives it `childPrompt` instead of
 `boardPrompt`, so it reads no conventions either, and it is not started with the bridge at all: it draws
 nothing on the board, and its last message is the whole report.
+
+## The two files a workspace adds
+
+Everything under this folder is one copy for the whole studio, edited on the crossroads settings page.
+A workspace contributes two files of its own, both read straight out of its folder rather than kept here:
+
+- `STUDIO.md` is the studio's instructions for that project. pi does not look for this name, so it reaches
+a thread on a board and never a plain pi session in the same folder. `boardPrompt` reads it at the start of
+every run, for a thread the human talks to; a spawned child is given its own frame instead and reads none
+of it. A workspace without one is told exactly what it was told before.
+- `AGENTS.md` is the project's own file and belongs to pi, not to the board, which never writes it. pi
+reads it in the folder a session starts in, which for a thread is its own worktree copy. The settings page
+edits it in place and says so when an `AGENTS.override.md` beside it is what a run would read.
+
+Both are named in `server/workspace-prompt.ts`, which is also the guard the two routes use: a name is one
+of those two or the route refuses it, so no request ever carries a path.

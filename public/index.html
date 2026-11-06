@@ -1077,6 +1077,24 @@
     border-radius: 5px; font: 11px var(--mono); padding: 2px 8px; cursor: pointer; }
   #boardConfig .omni-browse:hover { background: #30363d; }
   #boardConfig .omni-browse:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  /* A leaf that holds a whole file: a name, how much of it there is, and the box. The box grows with the
+     panel rather than scrolling sideways, and its save is the only thing that writes. */
+  #boardConfig .cfg-row.is-prose { display: block; cursor: default; padding: 4px 8px 8px; }
+  #boardConfig .cfg-row.is-prose:hover { background: transparent; }
+  #boardConfig .cfg-prose-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+    margin-bottom: 4px; }
+  #boardConfig .cfg-prose-head b { color: var(--muted); font: 10.5px var(--mono); font-weight: 500; text-align: right; }
+  #boardConfig .cfg-prose { width: 100%; box-sizing: border-box; min-height: 96px; max-height: 320px; resize: vertical;
+    background: #0d1117; color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 6px;
+    font: 11.5px/1.5 var(--mono); outline: none; }
+  #boardConfig .cfg-prose:focus { border-color: var(--accent-dim); }
+  #boardConfig .cfg-prose-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+  #boardConfig .cfg-prose-size { color: var(--muted); font: 10.5px var(--mono); }
+  #boardConfig .cfg-prose-save { background: #21262d; color: var(--text); border: 1px solid var(--border-bright);
+    border-radius: 5px; font: 11px var(--mono); padding: 2px 8px; cursor: pointer; }
+  #boardConfig .cfg-prose-save:hover { background: #30363d; }
+  #boardConfig .cfg-prose-save:disabled { opacity: .45; cursor: default; }
+  #boardConfig .cfg-prose-save:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   #boardConfig .cfg-note { margin: 8px 4px 0; color: var(--muted); font: 11px/1.5 var(--mono); }
   #cfgTree { display: flex; flex-direction: column; }
   #boardConfig .cfg-sub { margin: -3px 8px 4px; color: var(--muted); font: 10.5px var(--mono); }

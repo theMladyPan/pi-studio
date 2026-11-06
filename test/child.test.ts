@@ -148,6 +148,32 @@ test("the board's conventions are the file a human edits, whole, and only once",
 	assert.match(plain, /one unbroken word/, "the conventions do not say a label takes no space");
 });
 
+test("a workspace's own instruction file is read where it sits, for the human's thread and not for a child", () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-studio-md-"));
+	try {
+		const own = { ...board, folder };
+		const before = boardPrompt(own, thread);
+		const said = "This project numbers its builds, and a card quotes the number it is about.";
+		writeFileSync(join(folder, "STUDIO.md"), said);
+		const after = boardPrompt(own, thread);
+		// Read off the disk when the prompt is built, not when the board was born: an edit lands on the next
+		// run of a thread that is already on the board.
+		assert.doesNotMatch(before, /numbers its builds/);
+		assert.match(after, /numbers its builds/);
+		// One paragraph, right after the conventions and before the mechanics: a workspace's own rule is the
+		// last thing the shared advice says rather than something a later block talks over.
+		const conventions = readFileSync(new URL("../prompts/board/conventions.md", import.meta.url), "utf8").trim();
+		const at = before.indexOf(conventions);
+		assert.ok(at >= 0, "the conventions are not in the prompt");
+		const cut = at + conventions.length;
+		assert.equal(after, `${before.slice(0, cut)}\n${said}${before.slice(cut)}`);
+		// A spawned child is given its own frame instead, so the studio's file is not part of what it reads.
+		assert.doesNotMatch(boardPrompt(own, { ...thread, parentThread: "master-1" }), /numbers its builds/);
+	} finally {
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
 test("a spawned child is told it draws nothing, and the pointer convention is not said to it", () => {
 	const said = boardPrompt(board, { ...thread, parentThread: "master-1" });
 	assert.match(said, /draw nothing/);

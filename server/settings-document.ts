@@ -13,6 +13,7 @@
  */
 import { CARD_AUDIENCE, CARD_DEFAULTS, CARD_LEVELS, CARD_VERBOSITY } from "./card-settings.ts";
 import { PATH_NAMES, PROMPT_FOLDERS, promptFiles } from "./child/modes.ts";
+import { AGENTS_FILE, STUDIO_FILE } from "./workspace-prompt.ts";
 import { CHILD_INTEGRATION, INTEGRATION_DEFAULT } from "./integration.ts";
 import { THINKING_LEVELS } from "./models.ts";
 import { programOnPath } from "./paths.ts";
@@ -49,7 +50,7 @@ export type SettingsPick =
 export type SettingsField = {
 	id: string;
 	label: string;
-	type: "combo" | "select" | "toggle" | "list" | "prompt";
+	type: "combo" | "select" | "toggle" | "list" | "prompt" | "prose";
 	value: string | boolean | string[];
 	pick?: SettingsPick;
 	/** The ids a picker offers, where the daemon already knows them. */
@@ -239,6 +240,30 @@ function promptGroups(): SettingsGroup[] {
 }
 
 /**
+ * The two files a workspace may carry, which is all a workspace's page offers: the studio's own file and
+ * the project's. Every other prompt is one copy for the whole studio, read the same way by every board, so
+ * it is edited on the crossroads page alone.
+ *
+ * These are files in the workspace folder rather than under `prompts/`, which is why a leaf carries a
+ * `prose` box reading its own route: the text is a whole file and is saved by a press, not on a keystroke.
+ */
+function workspacePromptFields(): SettingsField[] {
+	const files = [
+		{ name: STUDIO_FILE, help: "the studio's own instructions: read by every thread on this board, at the start of each run" },
+		{ name: AGENTS_FILE, help: "the project's instructions: read by pi in this folder and in every copy of it, with or without the studio" },
+	];
+	return files.map((file) => ({
+		id: `workspace-${file.name.replace(/\.md$/, "").toLowerCase()}`,
+		label: file.name,
+		type: "prose",
+		value: "",
+		source: `/workspace-prompt?name=${encodeURIComponent(file.name)}`,
+		help: file.help,
+		write: { route: "/workspace-prompt", body: { name: file.name, text: "@value" } },
+	}));
+}
+
+/**
  * The document a settings page renders, for the scope it was asked about. Read fresh on every call,
  * because the prompt leaves are whatever is in `prompts/` right now and the values are the object the
  * caller just read; a cached copy would answer yesterday's tree.
@@ -401,8 +426,11 @@ export function settingsDocument({ scope, values, title, subtitle, foot }: Setti
 				id: "prompts",
 				label: "prompts",
 				open: false,
-				help: "files read when a run starts",
-				groups: promptGroups(),
+				// A workspace's page offers the two files that belong to it, and the studio's page offers the
+				// files that belong to every board: one copy of each, edited where it lives.
+				help: scope === "board" ? "the two files this workspace may carry" : "files read when a run starts",
+				// A board's page offers two files and no folders, so they sit in the group itself.
+				...(scope === "board" ? { fields: workspacePromptFields() } : { groups: promptGroups() }),
 			},
 		],
 	};

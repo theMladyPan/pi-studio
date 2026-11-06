@@ -93,9 +93,29 @@ test("the defaults document is five groups in the order the panel draws them", (
 	);
 });
 
-test("the two scopes build one tree: the same five groups, the same fourteen leaves, the same words", () => {
+test("the two scopes build one tree, and part only where the prompts belong", () => {
 	assert.equal(boardDocument.version, document.version);
-	assert.deepEqual(withoutWrites(boardDocument.groups), withoutWrites(document.groups));
+	// Every group but the prompts is the same document in both scopes: a setting is a setting wherever it
+	// is edited, and only the object the caller hands in decides what a control is worth.
+	const settingsOnly = (doc: any) => doc.groups.filter((group: any) => group.id !== "prompts");
+	assert.deepEqual(withoutWrites(settingsOnly(boardDocument)), withoutWrites(settingsOnly(document)));
+	// The prompts group is the one place the pages part: the studio's files on the crossroads, which every
+	// board reads, and the two files a workspace carries on a board's own page.
+	assert.deepEqual(
+		boardDocument.groups.map((group) => group.id),
+		document.groups.map((group) => group.id),
+	);
+	const promptGroup = (doc: any) => doc.groups.find((group: any) => group.id === "prompts");
+	assert.deepEqual(
+		promptGroup(document).groups.map((group: any) => group.id),
+		PROMPT_FOLDERS,
+	);
+	// A board offers its own two files in the group itself, so there is nothing to fold inside it.
+	assert.deepEqual(
+		(promptGroup(boardDocument).fields ?? []).map((field: any) => field.label),
+		["STUDIO.md", "AGENTS.md"],
+	);
+	assert.equal(promptGroup(boardDocument).groups, undefined);
 	// Fourteen setting leaves: five for the thread, two for the tools, six for the cards, one for the canvas.
 	assert.deepEqual(
 		settingLeaves.map((field) => field.id),

@@ -2,16 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { boardSettingsValues, settingsDocument } from "../server/settings-document.ts";
-import { PATH_NAMES, PROMPT_FOLDERS, promptFiles } from "../server/child/modes.ts";
+import { PATH_NAMES, PROMPT_FOLDERS } from "../server/child/modes.ts";
 import { CARD_AUDIENCE, CARD_LEVELS, CARD_VERBOSITY } from "../server/card-settings.ts";
 import { CHILD_INTEGRATION } from "../server/integration.ts";
 import { THINKING_LEVELS } from "../server/models.ts";
 
 /**
  * The board's settings document is a view of what `activeConfig(board)` answers, so it is read here from
- * that shape of object: no daemon, no state folder, no child. The prompt leaves are the one thing read
- * off the disk, because a prompt file that exists is a leaf the panel has to offer, and counting them
- * from `promptFiles()` keeps this test from knowing how many there are.
+ * that shape of object: no daemon, no state folder, no child, and nothing read off the disk — the two
+ * prompt leaves a board offers are named rather than listed, because a workspace carries two files and
+ * not a folder of them.
  */
 
 /** The model this board answers with: the id holds a slash of its own, which is what `split` is about. */
@@ -78,7 +78,7 @@ test("the document is five groups in the order the panel draws them", () => {
 			["tools", true, "what a new child may touch"],
 			["cards", false, "cardsBlock(config) → the prompt"],
 			["canvas", false, "painted by the browser"],
-			["prompts", false, "files read when a run starts"],
+			["prompts", false, "the two files this workspace may carry"],
 		],
 	);
 	const contents = document.groups.find((group) => group.id === "cards")?.groups ?? [];
@@ -165,36 +165,29 @@ test("a one-key body carries the control's value, and the model leaf splits at t
 	);
 });
 
-test("the prompts group is one subgroup per folder, one leaf per file, each posting to /prompt", () => {
+test("the prompts group is this workspace's two files, each read from its own route and saved by its own press", () => {
 	const prompts = document.groups.find((group) => group.id === "prompts");
 	assert.ok(prompts);
+	// Two leaves in the group itself: a workspace carries one pair of files, so there is no folder to fold.
+	assert.deepEqual(prompts.groups ?? [], []);
+	const leaves = prompts.fields ?? [];
+	// The studio's file first, then the project's: the one the studio reads, then the one pi reads.
 	assert.deepEqual(
-		(prompts.groups ?? []).map((group) => group.id),
-		PROMPT_FOLDERS,
+		leaves.map((leaf) => leaf.label),
+		["STUDIO.md", "AGENTS.md"],
 	);
-	const seen: string[] = [];
-	for (const folder of prompts.groups ?? []) {
-		assert.ok((folder.fields ?? []).length > 0, `no prompt leaf in prompts/${folder.id}`);
-		for (const leaf of folder.fields ?? []) {
-			assert.equal(leaf.type, "prompt");
-			// A prompt is a file, so the leaf names it and the editor writes it; it carries no value.
-			assert.equal(leaf.value, "");
-			assert.equal(leaf.pick, undefined, `${leaf.id} opens a picker`);
-			const name = `${folder.id}/${leaf.id.slice(`prompt-${folder.id}-`.length)}.md`;
-			assert.equal(leaf.file, name);
-			assert.equal(leaf.label, leaf.file.slice(folder.id.length + 1));
-			assert.ok(typeof leaf.help === "string" && leaf.help.length > 0, `${leaf.id} has no help`);
-			assert.deepEqual(leaf.write, { route: "/prompt", body: { name, text: "@value" } });
-			seen.push(leaf.file);
-		}
+	for (const leaf of leaves) {
+		// A whole text, so the box holds the file and nothing is filled in from the board's config.
+		assert.equal(leaf.type, "prose");
+		assert.equal(leaf.value, "");
+		assert.equal(leaf.file, undefined, `${leaf.id} names a file under prompts/`);
+		assert.ok(typeof leaf.help === "string" && leaf.help.length > 0, `${leaf.id} has no help`);
+		assert.equal(leaf.source, `/workspace-prompt?name=${leaf.label}`);
+		assert.deepEqual(leaf.write, { route: "/workspace-prompt", body: { name: leaf.label, text: "@value" } });
 	}
-	// Whatever is in `prompts/` is a leaf, so a new file needs no change here.
-	assert.deepEqual(
-		seen.sort(),
-		promptFiles()
-			.map((one) => one.name)
-			.sort(),
-	);
+	// The studio's prompt files are one copy for every board, so this page does not offer them at all.
+	const shown = JSON.stringify(document.groups);
+	for (const folder of PROMPT_FOLDERS) assert.ok(!shown.includes(`prompt-${folder}-`), `prompts/${folder} is on the board's page`);
 });
 
 test("every leaf carries a value, and the board's own choices are the ones the panel shows", () => {
