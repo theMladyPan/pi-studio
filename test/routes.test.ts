@@ -1028,7 +1028,7 @@ test("a question nobody looks at expires, and the child that asked is told so", 
 });
 
 
-test("a question the human has seen keeps waiting after its window has passed", async () => {
+test("a question the human has touched keeps waiting after its window has passed", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-ask-pause-"));
 	const daemon = await boot(folder, { PI_STUDIO_ASK_TIMEOUT_MS: "200" });
 	try {
@@ -1038,7 +1038,7 @@ test("a question the human has seen keeps waiting after its window has passed", 
 		const card = await questionCard(daemon, board.id);
 		assert.ok(card, "the question never reached the board");
 
-		// The card is on the human's screen: the clock stops there, and saying so twice is not an error.
+		// The human touched the card: the clock stops there, and saying so twice is not an error.
 		const paused = await postTo(daemon, board.id, "/card/pause", { cardId: card.id });
 		assert.equal(paused.status, 200);
 		assert.equal(JSON.parse(paused.body).cardId, card.id);
@@ -1050,7 +1050,7 @@ test("a question the human has seen keeps waiting after its window has passed", 
 		// Longer than the window the question was given, and it is still there to answer.
 		await new Promise((done) => setTimeout(done, 400));
 		const stillThere = await cardState(daemon, board.id, card.id);
-		assert.equal(stillThere.status, "open", "a question the human had seen expired anyway");
+		assert.equal(stillThere.status, "open", "a question the human had touched expired anyway");
 		assert.equal(stillThere.paused, true);
 
 		// Answering it after the window has passed is the whole point: the child gets its answer.
@@ -1081,7 +1081,7 @@ test("a paused question keeps its response alive past the ask window", async () 
 		// A question nobody is reading is answered in one piece, so nothing has come back yet.
 		assert.equal(held.seen.headersAt, null, "the hold answered before the question was settled");
 
-		// The human has the card on their screen, and from here the wait may outlive any client's deadline on a
+		// The human touched the card, and from here the wait may outlive any client's deadline on a
 		// response that has said nothing: the headers arrive at the pause, not at the answer.
 		assert.equal((await postTo(daemon, board.id, "/card/pause", { cardId: card.id })).status, 200);
 		await new Promise((done) => setTimeout(done, 150));
@@ -1091,7 +1091,7 @@ test("a paused question keeps its response alive past the ask window", async () 
 		// waits on a quiet body, so what arrived so far is whitespace and nothing else.
 		await new Promise((done) => setTimeout(done, 500));
 		assert.ok(Date.now() - askedAt > 400, "the check did not wait past the ask window");
-		assert.equal((await cardState(daemon, board.id, card.id)).status, "open", "a question the human was reading expired anyway");
+		assert.equal((await cardState(daemon, board.id, card.id)).status, "open", "a question the human had touched expired anyway");
 		assert.equal(held.seen.endedAt, null, "the hold ended before the question was answered");
 		const waiting = held.seen.chunks.join("");
 		assert.ok(waiting.length > 1, `only ${waiting.length} keep-alive bytes arrived while the question waited`);

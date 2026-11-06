@@ -40,7 +40,7 @@ export function askTimeoutMs() {
 
 
 /**
- * How often a held question says nothing in particular. A question the human has seen waits as long as reading
+ * How often a held question says nothing in particular. A question the human has touched waits as long as answering
  * takes, and a client gives up on a body that has gone quiet, `fetch` after five minutes, so a space this often
  * keeps the request alive until the answer. `PI_STUDIO_ASK_KEEPALIVE_MS` shortens it so the checks can watch a
  * keep-alive land without waiting a minute for it.

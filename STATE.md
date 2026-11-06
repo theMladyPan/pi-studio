@@ -227,8 +227,10 @@ commit's own account rather than on a check run now, the section below says so.
   response carries both `answer` ("The diff, The file list") and `answers`, and with
   `allowFreeText: false` a pick that is not on the option list is refused with 400. Five minutes with
   no answer expires it, closing the tab expires it, and a question restored from disk is always
-  expired because the agent that was waiting is gone. A question nobody answered is not a failure:
-  the tool tells the child to decide and say what it assumed.
+  expired because the agent that was waiting is gone. A question the human touches — pressing its
+  card, typing in its box, or picking with a key or a click — holds its expiry indefinitely, because
+  a card in use must not expire out from under the person using it. A question nobody answered is not
+  a failure: the tool tells the child to decide and say what it assumed.
 - **One map for cards without a child**: notes, sources and questions live in `board.cards`, saved
   under `cards` and read from an older file's `notes` too.
 - **Commenting on a card**: a thread answers in itself. A card without a child is asked of the thread
