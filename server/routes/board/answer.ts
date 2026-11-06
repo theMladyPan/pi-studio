@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import { anchorOf, field, rootOf } from "./thread.ts";
 import { makeRoom } from "./lifecycle.ts";
 import { randomUUID } from "node:crypto";
-import { ASK_TIMEOUT_MS, MAX_ASK_QUESTIONS } from "../../limits.ts";
+import { askTimeoutMs, MAX_ASK_QUESTIONS } from "../../limits.ts";
 
 
 
@@ -27,6 +27,19 @@ export function settleQuestion(board, card, status, answer, picks = []) {
 	const waiting = board.askers.get(card.id);
 	board.askers.delete(card.id);
 	if (waiting) waiting.resolve({ status, answer, ...(picks.length ? { answers: picks } : {}) });
+}
+
+
+
+/**
+ * Stop a question's clock for good. What was left of the window is kept on the card, so a reader can say how
+ * long the question had when it stopped, and the question itself stays open and answerable.
+ */
+function stopClock(card) {
+	if (card.paused === true) return;
+	card.paused = true;
+	if (Number.isFinite(card.expiresAt)) card.pausedRemainingMs = Math.max(0, card.expiresAt - Date.now());
+	card.updatedAt = Date.now();
 }
 
 
@@ -95,7 +108,7 @@ export async function onAsk(req, res, board) {
 			: { questions: asked }),
 		status: "open",
 		at: Date.now(),
-		expiresAt: Date.now() + ASK_TIMEOUT_MS,
+		expiresAt: Date.now() + askTimeoutMs(),
 		...(rootOf(board, body)
 			? { threadRoot: anchorOf(board, rootOf(board, body)), ownerThread: rootOf(board, body) }
 			: {}),
@@ -107,11 +120,17 @@ export async function onAsk(req, res, board) {
 	const settled = await new Promise((resolve) => {
 		const timer = setTimeout(() => {
 			settleQuestion(board, card, "expired");
-		}, ASK_TIMEOUT_MS);
+		}, askTimeoutMs());
 		board.askers.set(card.id, {
 			resolve: (value) => {
 				clearTimeout(timer);
 				resolve(value);
+			},
+			// The clock runs for a question nobody has looked at. Once a human has the card in front of them it
+			// stops for good: the answer is theirs to give whenever they get to it, and the child keeps waiting.
+			pause: () => {
+				clearTimeout(timer);
+				stopClock(card);
 			},
 		});
 		// A closed tab must not leave the child's turn waiting for a click nobody can make.
@@ -192,5 +211,31 @@ export async function onAnswer(req, res, board) {
 	const reply = card.multiple ? picks.join(", ") : field(body.answer, 2000);
 	if (!reply) return void fail(res, 400, "empty answer");
 	settleQuestion(board, card, "answered", reply, picks);
+	answer(res, 200, { cardId: card.id });
+}
+
+
+
+/**
+ * The human's own clock: this question is on their screen, so it stops waiting on a stopwatch.
+ *
+ * Deliberately not in `THREAD_ROUTES`: whether a question still expires is the human's to decide, and a child
+ * that could pause its own question would hold a turn open for as long as it liked.
+ */
+export async function onPause(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const card = board.cards.get(String(body.cardId ?? ""));
+	if (!card || card.type !== "question") return void fail(res, 404, "no such question");
+	if (card.status !== "open") return void fail(res, 409, "that question is already settled");
+	// A card already seen keeps the clock it stopped: a second look changes nothing, and the client that
+	// reports every view of it is not an error.
+	if (card.paused === true) return void answer(res, 200, { cardId: card.id });
+	const waiting = board.askers.get(card.id);
+	// A question nobody is waiting on any more has no timer to clear, and is still the human's to keep open.
+	if (waiting?.pause) waiting.pause();
+	else stopClock(card);
+	broadcast(board, { type: "update", card: plainCardFor(card, board) });
+	scheduleSave(board);
 	answer(res, 200, { cardId: card.id });
 }
