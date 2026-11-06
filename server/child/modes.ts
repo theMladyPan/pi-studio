@@ -28,6 +28,9 @@ export const PROMPT_DIR = fileURLToPath(new URL("../../prompts/", import.meta.ur
  * `audiences/` is chosen by a board's card settings rather than by a spawn, and the page edits it like
  * any other: the ids a board may hold are in `card-settings.ts`, the words are here. `board/` is what
  * every thread the human starts reads before it writes anything, `conventions.md` being the general one.
+ *
+ * These files are one copy for the whole studio, so they are edited on the crossroads page alone. The two
+ * files a single workspace may add are in its own folder and are named in `workspace-prompt.ts`.
  */
 export const PROMPT_FOLDERS = ["board", "roles", "modes", "flows", "verbosity", "audiences", "skills"];
 

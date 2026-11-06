@@ -24,6 +24,13 @@ export const MAX_SOURCE_CHARS = 200_000;
 export const MAX_TITLE_CHARS = 200;
 
 
+/**
+ * A workspace's own instruction file is a page of prose and not a book: a save past this is refused with
+ * the reason, so one workspace cannot grow the file it is read from without end.
+ */
+export const MAX_WORKSPACE_PROMPT_CHARS = 40_000;
+
+
 /** A question whose agent is waiting holds that child's turn open, so it cannot wait forever. */
 export const ASK_TIMEOUT_MS = 5 * 60_000;
 

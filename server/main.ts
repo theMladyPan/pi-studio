@@ -27,7 +27,7 @@ import { onMode, onPath, onThread, onThreadSpawn } from "./routes/board/thread.t
 import { onAnswer, onAsk, onPause } from "./routes/board/answer.ts";
 import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.ts";
 import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
-import { onPrompt, onPromptWrite, onPrompts } from "./routes/board/prompts.ts";
+import { onPrompt, onPromptWrite, onPrompts, onWorkspacePrompt, onWorkspacePromptWrite } from "./routes/board/prompts.ts";
 import { onSkill } from "./routes/board/skill.ts";
 import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onThreadCollect, onUndo } from "./routes/board/lifecycle.ts";
 import { onShell } from "./routes/board/shell.ts";
@@ -424,6 +424,14 @@ export const server = createServer((req, res) => {
 			onPrompt(url, res);
 			return;
 		}
+		if (req.method === "GET" && url.pathname === "/workspace-prompt") {
+			// The two instruction files a workspace may keep in its own folder. They belong to a board rather
+			// than to the studio's `prompts/`, so the folder is the board's and the name is one of two.
+			const board = boardFrom(url, res);
+			if (!board) return;
+			onWorkspacePrompt(url, res, board);
+			return;
+		}
 		if (req.method === "GET" && url.pathname === "/state") {
 			const board = boardFrom(url, res);
 			if (!board) return;
@@ -511,6 +519,9 @@ export const server = createServer((req, res) => {
 				"/fragments/remove": onFragmentRemove,
 				// The Closed panel's one button: every card put away, retired with the proof `clean` uses.
 				"/thread/clean-closed": onCleanClosed,
+				// The two instruction files a workspace keeps beside its code. The human's page writes them,
+				// so neither is in THREAD_ROUTES: a thread reads its instructions, it does not set them.
+				"/workspace-prompt": onWorkspacePromptWrite,
 			};
 			const handler = routing[url.pathname];
 			if (handler) {
