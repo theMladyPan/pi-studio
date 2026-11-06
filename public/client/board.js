@@ -7042,6 +7042,9 @@ async function postThreadField(route, body) {
 // serves, so a setting the daemon gains is a setting this panel shows.
 const configBtn = document.getElementById("configBtn");
 const configPanel = document.getElementById("boardConfig");
+const keysBtn = document.getElementById("keysBtn");
+const keysPanel = document.getElementById("shortcutPanel");
+const shortcutList = document.getElementById("shortcutList");
 const cfgTree = document.getElementById("cfgTree");
 // The document the panel is drawn from, and what was drawn from it: every leaf in document order, and
 // every group with the leaves under it, so a config that arrives repaints all of them.
@@ -7100,6 +7103,88 @@ function shownConfig(on) {
   configBtn.setAttribute("aria-expanded", on ? "true" : "false");
   // The prompt editor was opened from this panel and belongs to it, so it leaves when the panel does.
   if (!on) pePanel.hidden = true;
+}
+
+// ---------- every key the board listens for -------------------------------
+// One list, and the panel is drawn from it: a key the board learns is a line here, or the map on screen
+// starts lying. `keys` is what the hand presses and `does` is what happens, in words read once.
+const SHORTCUTS = [
+  {
+    group: "board",
+    rows: [
+      { keys: "f", does: "fit every card on the screen" },
+      { keys: "0", does: "back to real size, 100%" },
+      { keys: "m", does: "hide or show the small overview map" },
+      { keys: "n", does: "jump to the next new card or waiting question" },
+      { keys: "o", does: "flip the thread order, newest first or oldest first" },
+      { keys: "t", does: "start a new thread" },
+      { keys: "r", does: "reply to the card you are reading" },
+      { keys: "p", does: "pin the card you are reading, or unpin it" },
+      { keys: "q", does: "close the card you are reading" },
+      { keys: "esc", does: "close whatever panel is open, then let go of the selected card" },
+      { keys: "ctrl+z", does: "undo a close and put the card back" },
+    ],
+  },
+  {
+    group: "answering a question",
+    rows: [{ keys: "1 - 6", does: "answer that option of the question on screen" }],
+  },
+  {
+    group: "lists and pickers",
+    rows: [
+      { keys: "↑ ↓", does: "walk the rows of a list" },
+      { keys: "enter", does: "take the row you walked to" },
+      { keys: "tab", does: "take the first row of a list, or step along the form" },
+      { keys: "tab / shift+tab", does: "cycle through the buttons of an open sheet" },
+      { keys: "→", does: "open a folder in the file picker" },
+      { keys: "esc", does: "close the list and keep what you typed" },
+    ],
+  },
+  {
+    group: "writing",
+    rows: [
+      { keys: "enter", does: "send the message" },
+      { keys: "shift+enter", does: "start a new line instead of sending" },
+      { keys: "esc", does: "hand the keyboard back to the board and keep the text" },
+      { keys: "@", does: "list the files and folders you can name" },
+      { keys: "!", does: "at the start of a line, run it as a shell command" },
+      { keys: "ctrl+v", does: "paste an image and it goes with the message" },
+      { keys: "ctrl+enter", does: "save a note" },
+      { keys: "enter", does: "save a card name you are changing" },
+      { keys: "double-click a message title", does: "rewrite that message" },
+    ],
+  },
+  {
+    group: "mouse",
+    rows: [
+      { keys: "ctrl + wheel", does: "zoom the board in and out" },
+      { keys: "drag the background", does: "move the board around" },
+      { keys: "middle-drag", does: "move the board from anywhere on it" },
+      { keys: "shift + drag", does: "select the cards inside a rectangle" },
+      { keys: "shift / ctrl + click", does: "add a card to the selection" },
+      { keys: "card corner", does: "resize the card" },
+      { keys: "double-click a card title", does: "rename the card" },
+    ],
+  },
+];
+
+/** The panel, drawn once from that list: a heading per group, then a row of keys beside what it does. */
+function paintShortcuts() {
+  shortcutList.replaceChildren(
+    ...SHORTCUTS.flatMap((group) => [
+      Object.assign(el("p", "cfg-head"), { textContent: group.group }),
+      ...group.rows.map((row) => {
+        const line = el("div", "cfg-row");
+        line.append(Object.assign(el("b"), { textContent: row.keys }), Object.assign(el("span"), { textContent: row.does }));
+        return line;
+      }),
+    ]),
+  );
+}
+
+function shownKeys(on) {
+  keysPanel.hidden = !on;
+  keysBtn.setAttribute("aria-expanded", on ? "true" : "false");
 }
 
 // ---------- the settings tree ---------------------------------------------
@@ -8030,10 +8115,23 @@ leftPanel.addEventListener("keydown", (event) => {
   }
 });
 
+// The map of every key is drawn at load from the one list above, so opening it is a flip and not a build.
+paintShortcuts();
+
+keysBtn.addEventListener("click", () => {
+  closePick();
+  const on = keysPanel.hidden;
+  shownKeys(on);
+  // Both panels hang in the same corner, so the one being opened is the only one left standing.
+  if (on) shownConfig(false);
+});
+
 configBtn.addEventListener("click", () => {
   closePick();
   const on = configPanel.hidden;
   shownConfig(on);
+  // Both panels hang in the same corner, so the one being opened is the only one left standing.
+  if (on) shownKeys(false);
   if (!on) return;
   // A document already in hand is drawn at once, so the panel never opens blank; the read that follows
   // is what it settles on.
@@ -8100,9 +8198,10 @@ document.addEventListener(
   (event) => {
     // The prompt editor is opened from this panel and is part of it: a press inside it is not a press
     // outside the settings, which would otherwise shut the panel the editor was opened from.
-    if (event.target.closest("#runtimePick, .composer, #boardConfig, #configBtn, #promptEditor")) return;
+    if (event.target.closest("#runtimePick, .composer, #boardConfig, #configBtn, #shortcutPanel, #keysBtn, #promptEditor")) return;
     if (!runtimePick.hidden) closePick();
     if (!configPanel.hidden) shownConfig(false);
+    if (!keysPanel.hidden) shownKeys(false);
   },
   true,
 );
@@ -8116,9 +8215,10 @@ document.addEventListener(
       closePick();
       return;
     }
-    if (configPanel.hidden) return;
+    if (keysPanel.hidden && configPanel.hidden) return;
     event.stopPropagation();
-    shownConfig(false);
+    if (keysPanel.hidden) shownConfig(false);
+    else shownKeys(false);
   },
   true,
 );
