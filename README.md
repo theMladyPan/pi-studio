@@ -40,10 +40,28 @@ pi-studio
 ```
 
 Node 22.18 or newer runs the `.ts` files directly, and `pi` has to be on the same machine: that is the
-whole requirement. There is no build step and nothing to install.
+whole requirement, given a Node whose build reads TypeScript — a distribution package often does not.
+There is no build step and nothing to install.
 
 `npm install` is for the checks only: TypeScript is a dev dependency, and `npm run check` uses it to
 type check the code.
+
+### Where Node comes from
+
+On a fresh Ubuntu the system's Node does not run the daemon, on either release, and it fails differently
+each time. 24.04 ships Node 18, below the version above, so the first command here answers
+`node: command not found` unless another Node is already on the path; pi brings an official one there,
+but adds only its own `bin` to the login path. 26.04 ships 22.22, which passes every version check and
+still cannot run the daemon, because the distribution builds Node with TypeScript support compiled out:
+`node server.ts` answers `Node.js is not compiled with TypeScript support` when asked to strip types,
+and `ERR_UNKNOWN_FILE_EXTENSION` when it is not asked. Both read like a fault in this repository.
+
+So the Node to have is an official build — the archive from nodejs.org, or a version manager — and a
+machine where pi brought one needs that folder on the path ahead of the distribution's:
+
+```bash
+export PATH="$HOME/.local/share/pi-node/current/bin:$PATH"
+```
 
 ### Two at once
 
