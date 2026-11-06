@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import { anchorOf, field, rootOf } from "./thread.ts";
 import { makeRoom } from "./lifecycle.ts";
 import { randomUUID } from "node:crypto";
-import { askTimeoutMs, MAX_ASK_QUESTIONS } from "../../limits.ts";
+import { askKeepAliveMs, askTimeoutMs, MAX_ASK_QUESTIONS } from "../../limits.ts";
 
 
 
@@ -32,13 +32,12 @@ export function settleQuestion(board, card, status, answer, picks = []) {
 
 
 /**
- * Stop a question's clock for good. What was left of the window is kept on the card, so a reader can say how
- * long the question had when it stopped, and the question itself stays open and answerable.
+ * Stop a question's clock for good. The window it was given stays on the card as `expiresAt`, so a reader can
+ * still see what it had, and the question itself stays open and answerable.
  */
 function stopClock(card) {
 	if (card.paused === true) return;
 	card.paused = true;
-	if (Number.isFinite(card.expiresAt)) card.pausedRemainingMs = Math.max(0, card.expiresAt - Date.now());
 	card.updatedAt = Date.now();
 }
 
@@ -77,6 +76,13 @@ function askQuestions(body) {
  *
  * The response stays open for as long as the child's turn is waiting, because the answer travels
  * back in it: option clicked, words typed, or a failure the tool can read and act on.
+ *
+ * A question a human has seen waits for as long as their reading takes, and that outruns the deadline a
+ * client puts on a response that has said nothing: `fetch` gives up on missing headers after five minutes, and
+ * on a body that has gone quiet after the same. So the hold turns into a stream the moment the clock stops —
+ * its headers go out there and then, and a space follows every keep-alive tick. A JSON body may legally be
+ * preceded by whitespace, so the answer still reads as the answer. A question nobody has looked at is answered
+ * in one piece, exactly as before.
  */
 export async function onAsk(req, res, board) {
 	const body = await readJson(req, res);
@@ -121,9 +127,27 @@ export async function onAsk(req, res, board) {
 		const timer = setTimeout(() => {
 			settleQuestion(board, card, "expired");
 		}, askTimeoutMs());
+		// Nothing here outlives the wait it feeds: the clock, the answer and a closed tab all stop the keep-alive
+		// before it can write into a response nobody is reading.
+		let beat = null;
+		const quiet = () => {
+			if (beat) clearInterval(beat);
+			beat = null;
+		};
+		const keepAlive = () => {
+			quiet();
+			if (res.writableEnded || res.destroyed) return;
+			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+			res.write(" ");
+			beat = setInterval(() => {
+				if (res.writableEnded || res.destroyed) return quiet();
+				res.write(" ");
+			}, askKeepAliveMs());
+		};
 		board.askers.set(card.id, {
 			resolve: (value) => {
 				clearTimeout(timer);
+				quiet();
 				resolve(value);
 			},
 			// The clock runs for a question nobody has looked at. Once a human has the card in front of them it
@@ -131,20 +155,26 @@ export async function onAsk(req, res, board) {
 			pause: () => {
 				clearTimeout(timer);
 				stopClock(card);
+				keepAlive();
 			},
 		});
 		// A closed tab must not leave the child's turn waiting for a click nobody can make.
 		res.on("close", () => {
+			quiet();
 			if (card.status !== "open") return;
 			settleQuestion(board, card, "expired");
 		});
 	});
-	if (settled.status === "answered")
-		answer(res, 200, {
-			cardId: card.id,
-			answer: settled.answer ?? "",
-			...(settled.answers ? { answers: settled.answers } : {}),
-		});
+	// A hold that became a stream has already promised its status, so what is left to write is the rest of its
+	// body: the whitespace it has been kept alive with, then the outcome. Only an answer reaches a stream, because
+	// a question a human was reading has no clock left to expire, and the refusal keeps its words in case one does.
+	const reply =
+		settled.status === "answered"
+			? { cardId: card.id, answer: settled.answer ?? "", ...(settled.answers ? { answers: settled.answers } : {}) }
+			: { error: "nobody answered this question" };
+	if (res.headersSent) {
+		if (!res.writableEnded && !res.destroyed) res.end(JSON.stringify(reply));
+	} else if (settled.status === "answered") answer(res, 200, reply);
 	else fail(res, 409, "nobody answered this question");
 }
 
