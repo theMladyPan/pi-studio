@@ -95,7 +95,7 @@ import { spawnSync } from "node:child_process";
  * @property {string} name
  * @property {Map<string, Thread>} threads
  * @property {Map<string, PlainCard>} cards
- * @property {Map<string, {resolve: (value: {status: string, answer?: string, answers?: string[]}) => void}>} askers
+ * @property {Map<string, {resolve: (value: {status: string, answer?: string, answers?: string[]}) => void, pause?: () => void}>} askers
  * @property {object[]} activity
  * @property {Map<string, import("node:child_process").ChildProcess>} children
  * @property {Set<import("node:http").ServerResponse>} clients
