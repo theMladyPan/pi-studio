@@ -7596,8 +7596,10 @@ function renderProseLeaf(field) {
   area.setAttribute("aria-label", field.label ?? field.id);
   const actions = el("div", "cfg-prose-actions");
   const size = el("span", "cfg-prose-size", "");
-  const save = el("button", "cfg-prose-save", "save");
+  const save = el("button", "cfg-prose-save");
   save.type = "button";
+  save.textContent = "save";
+  save.title = `write this file (POST ${field.write?.route})`;
   save.disabled = true;
   actions.append(size, save);
   row.append(head, area, actions);
