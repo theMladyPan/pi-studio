@@ -1126,8 +1126,8 @@ function sourceBody(data) {
 /**
  * The questions a card asks, in the one shape that draws them.
  *
- * One question is the card the board always had: its options answer it where they are drawn, and a
- * click is the answer. A card that asks several draws a tab per question and one send under them,
+ * One question is the card the board always had: its options pick the one answer and the send under
+ * them sends it. A card that asks several draws a tab per question and one send under them,
  * because the call that asked is held until every tab has an answer.
  */
 function questionBody(data, entry) {
@@ -1135,6 +1135,43 @@ function questionBody(data, entry) {
   if (asked.length > 1) return tabbedQuestions(data, entry, asked);
   // A card that carries its one question in the list form reads the same once it is spread flat.
   return oneQuestion(asked.length ? { ...data, ...asked[0] } : data, entry);
+}
+
+/** The next choice's id: the ring is named on the list by the id of the choice it sits on. */
+let choiceSeq = 0;
+
+/**
+ * The choice list, wearing the roles its marks promise: a question of one answer is a radio group and a
+ * question of boxes is a group of toggles, so a screen reader says which kind it is reading instead of
+ * calling both of them a button. The list holds the focus, and the ring is named on it as the active
+ * descendant, so walking the choices is announced without moving a focus the browser would press.
+ */
+function choiceList(multiple) {
+  const list = el("div", "q-options");
+  list.tabIndex = -1;
+  list.setAttribute("role", multiple ? "group" : "radiogroup");
+  list.setAttribute("aria-label", multiple ? "answers, pick any" : "answers, pick one");
+  return list;
+}
+
+/** One choice: a radio in a question of one answer, a toggle button in a question of boxes. */
+function choiceButton(option, multiple) {
+  const button = el("button", multiple ? "q-opt q-check" : "q-opt");
+  button.id = `q-opt-${++choiceSeq}`;
+  button.textContent = option;
+  if (multiple) button.setAttribute("aria-pressed", "false");
+  else {
+    button.setAttribute("role", "radio");
+    button.setAttribute("aria-checked", "false");
+  }
+  return button;
+}
+
+/** Say whether a choice is taken, in the state that choice's own role carries. */
+function setChoice(button, on) {
+  const said = on ? "true" : "false";
+  if (button.getAttribute("role") === "radio") button.setAttribute("aria-checked", said);
+  else button.setAttribute("aria-pressed", said);
 }
 
 /** A settled question names its answer, and the boxes it left ticked keep their ticks. */
@@ -1151,8 +1188,7 @@ function oneQuestion(data, entry) {
   holder.appendChild(text);
 
   // The arrival lands the keyboard here, so a focused option cannot answer on Space or Enter.
-  const buttons = el("div", "q-options");
-  buttons.tabIndex = -1;
+  const buttons = choiceList(multiple);
   // What this card says was chosen. A question saved before the picks were kept has only the one
   // joined line, and that line is the whole answer.
   const chosen = new Set(
@@ -1160,12 +1196,12 @@ function oneQuestion(data, entry) {
   );
 
   // Built before the options are wired: every answer path hands the row to submitAnswer, which
-  // takes it out of the card while the send is in flight and puts it back if the send fails. A
-  // question that takes several answers always has the row, because that is where `send` lives.
+  // takes it out of the card while the send is in flight and puts it back if the send fails. Every
+  // open question has the row, because a click only picks an option and this is where it is sent.
   let freeRow = null;
   let input = null;
   let send = null;
-  if (!settled && (data.allowFreeText || multiple)) {
+  if (!settled) {
     freeRow = el("div", "q-free");
     if (data.allowFreeText) {
       input = el("input");
@@ -1174,55 +1210,83 @@ function oneQuestion(data, entry) {
     }
     send = el("button", "q-opt");
     send.textContent = "send";
-    // Nothing ticked and nothing typed is not an answer, so the button says so by being dead.
-    if (multiple) send.disabled = true;
+    // Nothing picked and nothing typed is not an answer, so the button says so by being dead.
+    send.disabled = true;
     freeRow.appendChild(send);
   }
 
-  // The ticks, in the order the options are drawn, plus whatever was typed beside them.
+  // The marks, in the order the options are drawn, plus whatever was typed beside them. Typing and
+  // picking are two ways to say one thing: a question of one answer takes the words in place of the
+  // mark, and a question of boxes takes them as one more box.
   const picksNow = () => [...buttons.querySelectorAll(".q-opt.picked")].map((button) => button.textContent);
   const typedNow = () => (input ? input.value.trim() : "");
-  const sendPicks = () => {
-    const picks = picksNow();
+  const chosenNow = () => {
     const typed = typedNow();
-    if (typed) picks.push(typed);
-    if (picks.length) submitAnswer(entry, picks, buttons, freeRow);
+    if (multiple) return typed ? [...picksNow(), typed] : picksNow();
+    return typed || picksNow()[0] || "";
   };
-  const sendTyped = () => {
-    const typed = typedNow();
-    if (typed) submitAnswer(entry, typed, buttons, freeRow);
+  const sendNow = () => {
+    const answer = chosenNow();
+    if (Array.isArray(answer) ? answer.length : answer) submitAnswer(entry, answer, buttons, freeRow, refreshSend);
   };
   const refreshSend = () => {
-    if (send) send.disabled = !picksNow().length && !typedNow();
+    if (!send) return;
+    const answer = chosenNow();
+    send.disabled = Array.isArray(answer) ? answer.length === 0 : !answer;
   };
   if (input) {
     input.addEventListener("keydown", (event) => {
       if (event.key !== "Enter") return;
-      if (multiple) sendPicks();
-      else sendTyped();
+      sendNow();
     });
-    if (multiple) input.addEventListener("input", refreshSend);
+    input.addEventListener("input", () => {
+      // One question has one answer, so typed words clear the marked option and the mark clears them.
+      if (!multiple) {
+        for (const other of buttons.children) {
+          other.classList.remove("picked");
+          setChoice(other, false);
+        }
+      }
+      refreshSend();
+    });
   }
-  if (send) send.addEventListener("click", multiple ? sendPicks : sendTyped);
+  if (send) send.addEventListener("click", sendNow);
 
   for (const option of data.options || []) {
-    const button = el("button", multiple ? "q-opt q-check" : "q-opt");
-    button.textContent = option;
+    const button = choiceButton(option, multiple);
     if (settled) {
       button.disabled = true;
       if (chosen.has(option)) button.classList.add("picked");
-      // A settled box still says which way it was left, so the card reads the same before and after.
-      if (multiple) button.setAttribute("aria-pressed", chosen.has(option) ? "true" : "false");
+      // A settled question still says which way it was left, so the card reads the same before and
+      // after, and the answer it carries is the one a screen reader reports as taken.
+      setChoice(button, chosen.has(option));
     } else if (multiple) {
       // A box, not an answer: clicking it fills the question in and lets the human pick a second.
-      button.setAttribute("aria-pressed", "false");
       button.addEventListener("click", () => {
-        const on = button.classList.toggle("picked");
-        button.setAttribute("aria-pressed", on ? "true" : "false");
+        // A click that arrives without a press or a key — a screen reader activating the box, or a script
+        // calling `click` — picks the choice just the same, so it is the card being used either way.
+        pauseQuestion(entry);
+        setChoice(button, button.classList.toggle("picked"));
         refreshSend();
+        // The press ticks it, and the keyboard stays on the list so enter sends the picks.
+        markChoice(entry, [...buttons.children].indexOf(button));
       });
     } else {
-      button.addEventListener("click", () => submitAnswer(entry, option, buttons, freeRow));
+      // A ring is a choice, not an answer: a pick fills it in and the send under it is what answers,
+      // so a second thought costs no more than another click.
+      button.addEventListener("click", () => {
+        pauseQuestion(entry);
+        for (const other of buttons.children) {
+          other.classList.remove("picked");
+          setChoice(other, false);
+        }
+        button.classList.add("picked");
+        setChoice(button, true);
+        if (input) input.value = "";
+        refreshSend();
+        // The press picks it, and the keyboard stays on the list so enter sends what was just picked.
+        markChoice(entry, [...buttons.children].indexOf(button));
+      });
     }
     buttons.appendChild(button);
   }
@@ -1304,13 +1368,16 @@ function tabbedQuestions(data, entry, asked) {
     send.disabled = missing > 0;
   };
 
-  // The arrows walk the tab row, as a tab list is expected to.
+  // Left and right walk the tab row, as a tab list is expected to. Up and down belong to the choices
+  // inside the open tab, which is what the shortcut list promises, so they are left to it.
   tabs.addEventListener("keydown", (event) => {
     const at = tabButtons.indexOf(document.activeElement);
     if (at < 0) return;
-    const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
     if (!step) return;
     event.preventDefault();
+    // Reading the next question is touching the card, so the arrows stop its clock as a press does.
+    pauseQuestion(entry);
     setTab((at + step + tabButtons.length) % tabButtons.length, true);
   });
 
@@ -1319,7 +1386,14 @@ function tabbedQuestions(data, entry, asked) {
     tab.type = "button";
     tab.setAttribute("role", "tab");
     tab.textContent = String(at + 1);
-    tab.addEventListener("click", () => setTab(at, false));
+    // A mouse press on a tab reads that question, so the keyboard goes to its choices: a focus left on
+    // the tab button would give up and down to the tab row instead of to the choices. A settled card is
+    // read, not answered, so there is nothing to walk and the focus stays where the press left it.
+    tab.addEventListener("click", () => {
+      pauseQuestion(entry);
+      setTab(at, false);
+      if (!settled) markChoice(entry, 0);
+    });
     tabs.appendChild(tab);
     tabButtons.push(tab);
 
@@ -1332,9 +1406,8 @@ function tabbedQuestions(data, entry, asked) {
     text.innerHTML = inlineMd(one.question || "");
     panel.appendChild(text);
 
-    const buttons = el("div", "q-options");
-    buttons.tabIndex = -1;
     const multiple = one.multiple === true;
+    const buttons = choiceList(multiple);
     // A settled tab shows what was ticked rather than a form nobody can send again.
     const chosen = new Set(settled && said[at] ? String(said[at]).split(", ") : []);
     let input = null;
@@ -1345,7 +1418,12 @@ function tabbedQuestions(data, entry, asked) {
       input.placeholder = multiple ? "or add a note…" : "or type an answer…";
       input.addEventListener("input", () => {
         // One question has one answer, so typed words clear the picked option and the option clears them.
-        if (!multiple) for (const button of buttons.children) button.classList.remove("picked");
+        if (!multiple) {
+          for (const button of buttons.children) {
+            button.classList.remove("picked");
+            setChoice(button, false);
+          }
+        }
         refresh();
       });
       input.addEventListener("keydown", (event) => {
@@ -1357,40 +1435,39 @@ function tabbedQuestions(data, entry, asked) {
     }
 
     for (const option of one.options || []) {
-      const button = el("button", multiple ? "q-opt q-check" : "q-opt");
+      const button = choiceButton(option, multiple);
       button.type = "button";
-      button.textContent = option;
       if (settled) {
         button.disabled = true;
         if (chosen.has(option)) button.classList.add("picked");
-        if (multiple) button.setAttribute("aria-pressed", chosen.has(option) ? "true" : "false");
+        setChoice(button, chosen.has(option));
       } else if (multiple) {
         // A box, not an answer: clicking it fills the tab in and lets the human tick a second.
-        button.setAttribute("aria-pressed", "false");
         button.addEventListener("click", () => {
-          const on = button.classList.toggle("picked");
-          button.setAttribute("aria-pressed", on ? "true" : "false");
+          pauseQuestion(entry);
+          setChoice(button, button.classList.toggle("picked"));
           refresh();
+          // The press ticks it, and the keyboard stays on the list so enter sends the picks.
+          markChoice(entry, [...buttons.children].indexOf(button));
         });
       } else {
-        button.setAttribute("aria-pressed", "false");
         button.addEventListener("click", () => {
+          pauseQuestion(entry);
           for (const other of buttons.children) {
             other.classList.remove("picked");
-            other.setAttribute("aria-pressed", "false");
+            setChoice(other, false);
           }
           button.classList.add("picked");
-          button.setAttribute("aria-pressed", "true");
+          setChoice(button, true);
           if (input) input.value = "";
           refresh();
           // One click is the whole answer to a question with one answer, so the empty tab after it is
-          // where the reader goes next. The keyboard lands on the options, not on a button Space presses.
+          // where the reader goes next. The keyboard lands on that tab's choices, not on a button Space
+          // presses and not on the option just clicked, so enter sends and the arrows still walk.
           const after = asked.findIndex((other, index) => index > at && !answeredAt(index));
           const next = after > -1 ? after : asked.findIndex((other, index) => !answeredAt(index));
-          if (next > -1) {
-            setTab(next, false);
-            panels[next].querySelector(".q-options")?.focus({ preventScroll: true });
-          }
+          if (next > -1) setTab(next, false);
+          markChoice(entry, next > -1 ? 0 : [...buttons.children].indexOf(button));
         });
       }
       buttons.appendChild(button);
@@ -1412,6 +1489,9 @@ function tabbedQuestions(data, entry, asked) {
     send.type = "button";
     send.textContent = "send answers";
     send.addEventListener("click", () => {
+      // Pressing send is the card being used, and a send refused for a missing tab must not leave the
+      // clock running either.
+      pauseQuestion(entry);
       // A send that left a tab empty would wake the child with half a form, so the button walks to the
       // question it is waiting on instead of sending.
       const missing = asked.findIndex((one, at) => !answeredAt(at));
@@ -1471,7 +1551,7 @@ function showProblem(holder, problem) {
   warn.textContent = problem;
 }
 
-async function submitAnswer(entry, answer, buttons, freeRow) {
+async function submitAnswer(entry, answer, buttons, freeRow, refresh) {
   // An answer that is a list came from the boxes. The ticks stay on screen while the send is in
   // flight: they are the question being filled in, and a failed send must not undo them.
   const multi = Array.isArray(answer);
@@ -1480,7 +1560,11 @@ async function submitAnswer(entry, answer, buttons, freeRow) {
   if (freeRow) freeRow.remove();
   if (!multi) {
     for (const button of options) {
-      if (button.textContent === answer) button.classList.add("picked");
+      // The mark and the state a screen reader hears are the same claim, so they are set together.
+      if (button.textContent === answer) {
+        button.classList.add("picked");
+        setChoice(button, true);
+      }
     }
   }
   const problem = await postAnswer(entry, multi ? { answers: answer } : { answer });
@@ -1489,8 +1573,15 @@ async function submitAnswer(entry, answer, buttons, freeRow) {
   // dead buttons would read as sent. On a question with boxes the ticks are the human's work, so
   // only the buttons come back to life.
   for (const button of options) button.disabled = false;
-  if (!multi) for (const button of options) button.classList.remove("picked");
+  if (!multi) {
+    for (const button of options) {
+      button.classList.remove("picked");
+      setChoice(button, false);
+    }
+  }
   if (freeRow) buttons.after(freeRow);
+  // The picks are gone, so the send that would take nothing is dead again rather than a live button.
+  if (refresh) refresh();
   showProblem(buttons.parentElement, problem);
 }
 
@@ -2730,13 +2821,74 @@ function questionSub(data) {
   const tabs = Array.isArray(data.questions) && data.questions.length > 1 ? `${data.questions.length} questions · ` : "";
   if (data.status === "answered") return `${tabs}answered`;
   if (data.status === "expired") return `${tabs}expired — no answer sent`;
-  if (!data.expiresAt) return `${tabs}waiting for you`;
-  return `${tabs}expires ${new Date(data.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  // A card whose countdown a human stopped has no deadline left to print: it waits for the answer
+  // however long the answer takes.
+  if (data.paused || !data.expiresAt) return `${tabs}waiting for you`;
+  // A running clock says what stops it, because being seen no longer does: the card waits only once
+  // the human touches it.
+  return `${tabs}expires ${new Date(data.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · press the card to hold it open`;
+}
+
+/** The cards already asked to stop their clock, so one card touched sends one request and no more. */
+const pauseSent = new Set();
+
+/**
+ * Touching the card is the pause. A question the human presses or answers stops counting down for good,
+ * so nothing expires out from under whoever is working on it; a question only seen keeps its clock and
+ * expires, because an ask that merely appeared is the accidental one worth letting go. There is no
+ * button for this on purpose: the card holding while it is used is the whole of it.
+ */
+function pauseQuestion(record) {
+  if (!record) return;
+  // A card the daemon has already stopped has nothing left to ask.
+  if (record.data?.paused === true) return;
+  if (pauseSent.has(record.id)) return;
+  pauseSent.add(record.id);
+  void postPause(record.id);
+}
+
+async function postPause(cardId) {
+  try {
+    const response = await fetch(`/card/pause?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId }),
+    });
+    // A card that was answered, expired or paused already has no clock to stop, so a refusal is as
+    // good as a yes and the card is never asked again.
+    if (response.ok || response.status === 404 || response.status === 409) return;
+  } catch {
+    // Unreachable daemon: the clock keeps running and the card keeps reading as it did.
+  }
+  // Anything else may still be waiting on a real answer, so the card stays armed and the next touch of
+  // that card asks again.
+  pauseSent.delete(cardId);
+}
+
+/**
+ * A card that only gained a pause has nothing new drawn on it but its sub line. Rebuilding the body for
+ * that would land in the same frame as the keyboard's arrival and take the ring, the focus and the tab
+ * the human was on with it, so the pause is written where it shows and the body is left alone.
+ */
+function pausedOnly(before, after) {
+  if (!before || after.paused !== true || before.paused === true) return false;
+  // Stopping the clock also stamps the card as changed. That stamp is not drawn on the card — the head
+  // counts from the arrival, not from it — so it is left out of what counts as a change here.
+  const stamped = new Set(["paused", "updatedAt"]);
+  const fields = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...fields].every(
+    (field) => stamped.has(field) || JSON.stringify(before[field] ?? null) === JSON.stringify(after[field] ?? null),
+  );
 }
 
 function paintCard(entry, data) {
   const isSource = data.type === "source";
   const isOpenQuestion = questionWants(data);
+  if (pausedOnly(entry.data, data)) {
+    entry.data = data;
+    entry.subEl.textContent = questionSub(data);
+    return;
+  }
   entry.data = data;
   // The pin is the server's word, so a reload paints the card the way the click left it.
   setPinned(entry.card, data.pinned === true);
@@ -2865,7 +3017,7 @@ function cardChanged(before, after) {
   // A mode or a flow is repainted too: `/mode` and `/thread/path` change nothing else on the card.
   // `modeAtRun` is in the list because a mode lands when the next child starts: that broadcast carries the
   // corrected badge and nothing else, and a card that ignores it keeps the wrong colour for the whole run.
-  const fields = ["title", "markdown", "details", "text", "question", "reply", "status", "mode", "modeAtRun", "path", "pathChosenBy"];
+  const fields = ["title", "markdown", "details", "text", "question", "reply", "status", "mode", "modeAtRun", "path", "pathChosenBy", "paused"];
   if (fields.some((field) => before[field] !== after[field])) return true;
   if (JSON.stringify(before.worktree ?? null) !== JSON.stringify(after.worktree ?? null)) return true;
   // A follow-up's answer settles into the turn it was asked with, so the thread changes without
@@ -2918,14 +3070,17 @@ function applyMessage(data, quiet = false) {
   const existing = byId.get(data.id);
   if (existing) {
     if (!replaying && !quiet) {
+      // A card whose only news is that its clock stopped is repainted for its sub line, and nothing else on
+      // it moved: a ring and a new stamp would say it changed, and it looks exactly as it did.
+      const held = pausedOnly(existing.data, data);
       // An identical re-broadcast would only wipe a selection and reset a scrolled body.
-      if (!cardChanged(existing.data, data)) {
+      if (!held && !cardChanged(existing.data, data)) {
         // The paint is skipped, but the record still has to be current: what answers a card is not
         // drawn on it, and a stale copy would leave the composer's pickers showing an old model.
         existing.data = data;
         return;
       }
-      markUpdated(existing);
+      if (!held) markUpdated(existing);
     }
     if (quiet && !replaying && bodySame(existing.data, data)) {
       existing.data = data;
@@ -3464,15 +3619,106 @@ function centerOn(record) {
   selectCard(card);
 }
 
-/** Centre a question and put the keyboard on its options, so the number keys are one press away. */
+/** Centre a question and put the keyboard on its choices, so the number keys are one press away. */
 function centreQuestion(record) {
   // The rule jumpToFresh uses: never arrive so far out that the ring and the text stop reading.
   view.k = Math.min(1.1, Math.max(view.k, 0.6));
   centerOn(record);
-  // A card of tabs starts on its tab row; a single question has only its options. preventScroll:
-  // centring already moved the canvas, and a second jump would fight it.
-  const target = record.body.querySelector(".q-tab.on") || record.body.querySelector(".q-options");
-  target?.focus({ preventScroll: true });
+  // The list holds the focus rather than a button or a tab: space on a button presses it, and the ring
+  // on the first choice says where the keyboard is. preventScroll: centring already moved the canvas,
+  // and a second jump would fight it.
+  markChoice(record, 0);
+}
+
+/** The part of a question the keyboard is answering: the open tab of a card of questions, or its body. */
+function visibleQuestion(record) {
+  return record.body.querySelector(".q-panel:not([hidden])") || record.body;
+}
+
+/** The choices the keyboard may land on, in the order they are drawn. */
+function questionOptions(record) {
+  return [...visibleQuestion(record).querySelectorAll(".q-options .q-opt")].filter((button) => !button.disabled);
+}
+
+/**
+ * Where the keyboard is among the choices. The list holds the focus and one choice wears the ring, so a
+ * space cannot press a button by accident and a clear outline still says which choice enter will send.
+ */
+function markChoice(record, at) {
+  const options = questionOptions(record);
+  options.forEach((button, index) => button.classList.toggle("hl", index === at));
+  const list = visibleQuestion(record).querySelector(".q-options");
+  if (list) {
+    // The ring is drawn on the choice and named on the list, so a reader walking with the arrows hears
+    // which choice it sits on. A list with nothing left to walk names nothing.
+    if (options[at]) list.setAttribute("aria-activedescendant", options[at].id);
+    else list.removeAttribute("aria-activedescendant");
+    list.focus({ preventScroll: true });
+  }
+  options[at]?.scrollIntoView({ block: "nearest" });
+}
+
+/** Up and down walk the choices of the open question, wrapping at both ends. */
+function stepChoice(record, step) {
+  const options = questionOptions(record);
+  if (!options.length) return false;
+  pauseQuestion(record);
+  const at = options.findIndex((button) => button.classList.contains("hl"));
+  const next = at < 0 ? (step > 0 ? 0 : options.length - 1) : (at + step + options.length) % options.length;
+  markChoice(record, next);
+  return true;
+}
+
+/** Space takes the choice the ring is on: it picks it, or on a question of boxes ticks and unticks it. */
+function pickChoice(record) {
+  const options = questionOptions(record);
+  const at = options.findIndex((button) => button.classList.contains("hl"));
+  if (at < 0) return false;
+  pauseQuestion(record);
+  // The choice carries its own click handler, so this reuses the whole pick path and its marks.
+  options[at].click();
+  return true;
+}
+
+/** Left and right walk the questions of a card that asks several, as the tab row does. */
+function stepQuestionTab(record, step) {
+  const tabs = [...record.body.querySelectorAll(".q-tab")];
+  if (tabs.length < 2) return false;
+  pauseQuestion(record);
+  const at = tabs.findIndex((tab) => tab.classList.contains("on"));
+  tabs[(at + step + tabs.length) % tabs.length].click();
+  markChoice(record, 0);
+  return true;
+}
+
+/**
+ * Enter sends the open question: one answer where it asks one, or every tab at once where it asks
+ * several. A tab still waiting for an answer is where the keyboard goes instead of a half-filled send.
+ */
+function sendFocusedQuestion(record) {
+  const tabbed = record.body.querySelector(".q-send");
+  if (tabbed) {
+    pauseQuestion(record);
+    const tabs = [...record.body.querySelectorAll(".q-tab")];
+    const waiting = tabs.findIndex((tab) => !tab.classList.contains("done"));
+    if (waiting > -1 && tabbed.disabled) {
+      tabs[waiting].click();
+      markChoice(record, 0);
+      return true;
+    }
+    tabbed.click();
+    return true;
+  }
+  const send = record.body.querySelector(".q-free .q-opt");
+  if (!send) return false;
+  // A card that says what is missing answers the key as truly as one that sends, so it spends the clock.
+  pauseQuestion(record);
+  if (send.disabled) {
+    footNote("pick an option first: enter sends the pick");
+    return true;
+  }
+  send.click();
+  return true;
 }
 
 /** True while the keystroke belongs to a field the user is typing in. */
@@ -7129,8 +7375,11 @@ const SHORTCUTS = [
   {
     group: "answering a question",
     rows: [
-      { keys: "1 - 6", does: "answer that option of the question on the selected card" },
-      { keys: "← →", does: "walk the tabs of a question" },
+      { keys: "↑ ↓", does: "walk the choices of the question on the selected card, wrapping at both ends" },
+      { keys: "space", does: "pick the ringed choice, and on a question of boxes tick or untick it" },
+      { keys: "enter", does: "send the pick, or on a card of questions send them all at once" },
+      { keys: "← →", does: "move between the questions of a card that asks several" },
+      { keys: "1 - 4", does: "jump the ring to that choice, then enter sends it" },
     ],
   },
   {
@@ -7172,6 +7421,8 @@ const SHORTCUTS = [
       { keys: "shift / ctrl + click", does: "add a card to the selection" },
       { keys: "card corner", does: "resize the card" },
       { keys: "double-click a card title", does: "rename the card" },
+      { keys: "click a choice", does: "pick it, and enter or the send button under the choices answers it" },
+      { keys: "press a question card", does: "hold its expiry, so a question you touch waits for your answer" },
     ],
   },
 ];
@@ -9372,20 +9623,94 @@ document.addEventListener("keydown", (event) => {
   undoClose();
 });
 
-// `1`–`6` answer the question the agent is waiting on, so a decision needs no mouse. A card of tabs
-// answers inside the tab the human is reading, not the first one of five.
+// A question holds its clock only while the human is touching that card: a press anywhere on it — the
+// whole card selects, so a press that only picks it up counts — a key typed into its own box, or a key
+// or a click the card itself acts on, which the board's own handlers spend. A press or a key that lands
+// elsewhere on the board touches no ask, so a card that merely appeared on a visible tab keeps counting
+// down and expires.
+
+/** The open question a node belongs to, when the node sits inside a card that still counts down. */
+function touchedQuestion(node) {
+  const card = node instanceof Element ? node.closest(".card") : null;
+  const record = card ? byId.get(card.dataset.id) : null;
+  return record && questionWants(record.data) ? record : null;
+}
+
+document.addEventListener(
+  "pointerdown",
+  (event) => {
+    // The primary button only: a middle press pans the board, and panning across a card touches nothing.
+    if (event.button !== 0) return;
+    const record = touchedQuestion(event.target);
+    if (record) pauseQuestion(record);
+  },
+  true,
+);
+
+document.addEventListener(
+  "keydown",
+  (event) => {
+    // A key typed into a field belongs to the card that holds the field. Read before the modifiers go
+    // by, because a paste into the card's box is the human typing there like any other key.
+    const typed = event.target instanceof Element ? event.target.closest("input, textarea") : null;
+    if (!typed) return;
+    const held = touchedQuestion(typed);
+    if (held) pauseQuestion(held);
+  },
+  true,
+);
+
+// The open question is answered from the keyboard without a mouse, and the ring on the choice says
+// where enter and space will land. Up and down walk the choices, space picks one, enter sends, and
+// left and right move between the questions of a card that asks several.
 document.addEventListener("keydown", (event) => {
-  if (event.metaKey || event.ctrlKey || event.altKey || !/^[1-6]$/.test(event.key)) return;
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (typingSomewhere()) return;
+  if (panelUp() || openSheet() || !picker.hidden || !atPick.hidden) return;
+  // A tab row, a picker or a list takes its own arrows first, and has already said so.
+  if (event.defaultPrevented) return;
+  const record = openQuestion();
+  if (!record) return;
+  const key = event.key;
+  if (key === "ArrowDown" || key === "ArrowUp") {
+    if (!questionOptions(record).length) return;
+    event.preventDefault();
+    stepChoice(record, key === "ArrowDown" ? 1 : -1);
+    return;
+  }
+  if (key === "ArrowLeft" || key === "ArrowRight") {
+    if (!stepQuestionTab(record, key === "ArrowRight" ? 1 : -1)) return;
+    event.preventDefault();
+    return;
+  }
+  // A button, a field or a link that holds the focus keeps its own enter and its own space, because the
+  // browser would press the button, type the space or follow the link.
+  const held = document.activeElement;
+  if (held && held.closest("button, input, textarea, a")) return;
+  if (key === "Enter") {
+    if (sendFocusedQuestion(record)) event.preventDefault();
+    return;
+  }
+  if (key === " " || key === "Spacebar") {
+    // Space picks the ringed choice, so the same key ticks a box and unticks it.
+    if (pickChoice(record)) event.preventDefault();
+  }
+});
+
+// `1`–`4` jump the ring to that choice of the question the agent is waiting on, so a decision needs no
+// mouse and no walking down a list; enter then sends the pick. Four is every choice a question may carry.
+// A card of tabs jumps inside the tab the human is reading, not the first one of five.
+document.addEventListener("keydown", (event) => {
+  if (event.metaKey || event.ctrlKey || event.altKey || !/^[1-4]$/.test(event.key)) return;
   if (typingSomewhere()) return;
   if (panelUp() || openSheet() || !atPick.hidden) return;
   const record = openQuestion();
   if (!record) return;
-  // The option buttons carry their own click handler, so this reuses the whole answer path.
-  const shown = record.body.querySelector(".q-panel:not([hidden])") || record.body;
-  const button = shown.querySelectorAll(".q-options .q-opt")[Number(event.key) - 1];
-  if (!button || button.disabled) return;
+  const options = questionOptions(record);
+  if (!options[Number(event.key) - 1]) return;
   event.preventDefault();
-  button.click();
+  pauseQuestion(record);
+  markChoice(record, Number(event.key) - 1);
 });
 
 // The board is drivable without a mouse: `f` frames it, `0` is real size, `m` the map, `n` is
@@ -9519,7 +9844,8 @@ function stopFlash() {
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
   stopFlash();
-  // A hidden tab schedules nothing, so what is on screen now starts its countdown from here.
+  // A hidden tab schedules nothing, so what is on screen now starts its countdown from here. A question
+  // is not paused by coming back into view: only touching that card holds its clock.
   for (const card of inView) armSeen(card);
 });
 addEventListener("focus", stopFlash);

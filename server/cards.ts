@@ -140,6 +140,10 @@ export function plainCardFor(card, board = null) {
 		text: "",
 		status: "answered",
 		mode: "queue",
+		// A question the human has touched has no clock on it any more, and the browser draws the
+		// countdown from this: a settled card is never waiting on one. Every card carries it rather than the
+		// question cards alone, so the browser reads one shape.
+		paused: card.type === "question" && card.status === "open" && card.paused === true,
 		...(card.turns?.length ? { turns: card.turns } : {}),
 		...(card.type === "note"
 			? { markdown: card.markdown }

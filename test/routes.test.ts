@@ -70,6 +70,34 @@ const postAs = (daemon: Daemon, token: string, board: string, path: string, body
 		body: JSON.stringify(body ?? {}),
 	});
 
+/**
+ * A POST held open as a raw request, so a check can watch when its headers and its body arrive rather than only
+ * what the whole answer turned out to be. `fetch` hands back one finished body, which is the wrong shape for
+ * watching a response that is still being written.
+ */
+function heldPost(daemon: Daemon, board: string, path: string, body: unknown) {
+	const seen = { status: 0, headersAt: null as number | null, endedAt: null as number | null, chunks: [] as string[] };
+	const done = new Promise<typeof seen>((resolve, reject) => {
+		const req = request(
+			`${daemon.base}${path}?token=${daemon.token}&workspace=${board}`,
+			{ method: "POST", headers: { "content-type": "application/json" } },
+			(res) => {
+				seen.status = res.statusCode ?? 0;
+				seen.headersAt = Date.now();
+				res.setEncoding("utf8");
+				res.on("data", (chunk: string) => seen.chunks.push(chunk));
+				res.on("end", () => {
+					seen.endedAt = Date.now();
+					resolve(seen);
+				});
+			},
+		);
+		req.on("error", reject);
+		req.end(JSON.stringify(body));
+	});
+	return { seen, done };
+}
+
 /** The question card the daemon wrote, read back until it is on the board. */
 async function questionCard(daemon: Daemon, board: string) {
 	for (let tries = 0; tries < 100; tries++) {
@@ -964,6 +992,166 @@ test("a card asks up to five questions on tabs, and settles them all at once", a
 	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a question nobody looks at expires, and the child that asked is told so", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-ask-expire-"));
+	// The window is a policy constant of five minutes; the checks shorten it through the environment rather
+	// than sit one out.
+	const daemon = await boot(folder, { PI_STUDIO_ASK_TIMEOUT_MS: "200" });
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		const board = JSON.parse(opened.body).board;
+		const held = postTo(daemon, board.id, "/card/ask", { question: "which one?", options: ["a", "b"] });
+		const card = await questionCard(daemon, board.id);
+		assert.ok(card, "the question never reached the board");
+		// The window the browser counts down is the shortened one, so nothing here waits minutes.
+		assert.ok(
+			Number.isFinite(card.expiresAt) && card.expiresAt - card.at <= 1000,
+			`the question was given ${card.expiresAt - card.at}ms rather than the shortened window`,
+		);
+		assert.equal(card.paused, false);
+
+		const reply = await Promise.race([
+			held,
+			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the question never expired")), 5000)),
+		]);
+		assert.equal(reply.status, 409);
+		const settled = await cardState(daemon, board.id, card.id);
+		assert.equal(settled.status, "expired");
+		assert.equal(settled.paused, false, "an expired question still says it is being watched");
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+
+test("a question the human has touched keeps waiting after its window has passed", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-ask-pause-"));
+	const daemon = await boot(folder, { PI_STUDIO_ASK_TIMEOUT_MS: "200" });
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		const board = JSON.parse(opened.body).board;
+		const held = postTo(daemon, board.id, "/card/ask", { question: "which one?", options: ["a", "b"] });
+		const card = await questionCard(daemon, board.id);
+		assert.ok(card, "the question never reached the board");
+
+		// The human touched the card: the clock stops there, and saying so twice is not an error.
+		const paused = await postTo(daemon, board.id, "/card/pause", { cardId: card.id });
+		assert.equal(paused.status, 200);
+		assert.equal(JSON.parse(paused.body).cardId, card.id);
+		assert.equal((await postTo(daemon, board.id, "/card/pause", { cardId: card.id })).status, 200);
+		const seen = await cardState(daemon, board.id, card.id);
+		assert.equal(seen.status, "open");
+		assert.equal(seen.paused, true);
+
+		// Longer than the window the question was given, and it is still there to answer.
+		await new Promise((done) => setTimeout(done, 400));
+		const stillThere = await cardState(daemon, board.id, card.id);
+		assert.equal(stillThere.status, "open", "a question the human had touched expired anyway");
+		assert.equal(stillThere.paused, true);
+
+		// Answering it after the window has passed is the whole point: the child gets its answer.
+		assert.equal((await postTo(daemon, board.id, "/answer", { cardId: card.id, answer: "b" })).status, 200);
+		const reply = await held;
+		assert.equal(reply.status, 200);
+		assert.equal(JSON.parse(reply.body).answer, "b");
+		// Settled, and no longer saying anything is being watched.
+		assert.equal((await cardState(daemon, board.id, card.id)).paused, false);
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a paused question keeps its response alive past the ask window", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-ask-keepalive-"));
+	// The window and the keep-alive tick are policy constants of minutes; the check shortens both through the
+	// environment rather than sit one out.
+	const daemon = await boot(folder, { PI_STUDIO_ASK_TIMEOUT_MS: "400", PI_STUDIO_ASK_KEEPALIVE_MS: "100" });
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		const board = JSON.parse(opened.body).board;
+		const askedAt = Date.now();
+		const held = heldPost(daemon, board.id, "/card/ask", { question: "which one?", options: ["a", "b"] });
+		const card = await questionCard(daemon, board.id);
+		assert.ok(card, "the question never reached the board");
+		// A question nobody is reading is answered in one piece, so nothing has come back yet.
+		assert.equal(held.seen.headersAt, null, "the hold answered before the question was settled");
+
+		// The human touched the card, and from here the wait may outlive any client's deadline on a
+		// response that has said nothing: the headers arrive at the pause, not at the answer.
+		assert.equal((await postTo(daemon, board.id, "/card/pause", { cardId: card.id })).status, 200);
+		await new Promise((done) => setTimeout(done, 150));
+		assert.equal(held.seen.status, 200, "no response headers arrived when the question was paused");
+
+		// Past the window the question was given, and still waiting: the body went quiet for longer than a client
+		// waits on a quiet body, so what arrived so far is whitespace and nothing else.
+		await new Promise((done) => setTimeout(done, 500));
+		assert.ok(Date.now() - askedAt > 400, "the check did not wait past the ask window");
+		assert.equal((await cardState(daemon, board.id, card.id)).status, "open", "a question the human had touched expired anyway");
+		assert.equal(held.seen.endedAt, null, "the hold ended before the question was answered");
+		const waiting = held.seen.chunks.join("");
+		assert.ok(waiting.length > 1, `only ${waiting.length} keep-alive bytes arrived while the question waited`);
+		assert.match(waiting, /^ +$/, "the body said something other than keep-alive whitespace");
+
+		assert.equal((await postTo(daemon, board.id, "/answer", { cardId: card.id, answer: "b" })).status, 200);
+		const read = await held.done;
+		assert.equal(read.status, 200);
+		// Whitespace before a JSON body is legal, so the child that asked parses its answer out of the same call.
+		assert.equal(JSON.parse(read.chunks.join("")).answer, "b");
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a pause on an unknown or settled question is refused, and a thread cannot pause its own", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-ask-pause-refused-"));
+	const daemon = await boot(folder);
+	try {
+		const opened = await post(daemon, "/workspace", { folder });
+		const board = JSON.parse(opened.body).board;
+		// Nothing on the board has that id, and a pause is not a way to ask whether a card exists.
+		const unknown = await postTo(daemon, board.id, "/card/pause", { cardId: "nobody" });
+		assert.equal(unknown.status, 404);
+
+		const held = postTo(daemon, board.id, "/card/ask", { question: "which one?", options: ["a", "b"] });
+		const card = await questionCard(daemon, board.id);
+		assert.ok(card, "the question never reached the board");
+		assert.equal((await postTo(daemon, board.id, "/answer", { cardId: card.id, answer: "a" })).status, 200);
+		assert.equal((await held).status, 200);
+		// A settled question has no clock left to stop.
+		const late = await postTo(daemon, board.id, "/card/pause", { cardId: card.id });
+		assert.equal(late.status, 409);
+		assert.equal(late.body, "that question is already settled");
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a thread's own token cannot pause the clock on its own question", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-ask-pause-token-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-ask-pause-token-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" })).status, 200);
+		const child = await childEnvOf(daemon, stub.envFile);
+
+		// The clock on a question is the human's, so the route is not in THREAD_ROUTES and the refusal comes
+		// before the body is read: a thread that could pause would never be timed out.
+		const peeked = await postAs(daemon, child.token, board.id, "/card/pause", { cardId: "any" });
+		assert.equal(peeked.status, 403);
+		assert.equal(peeked.body, "a thread may not use that");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
 	}
 });
 

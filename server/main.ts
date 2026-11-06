@@ -24,7 +24,7 @@ import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
 import { LOOPBACK, bindHost, boardUrls, isLoopback } from "./listen.ts";
 import { onMode, onPath, onThread, onThreadSpawn } from "./routes/board/thread.ts";
-import { onAnswer, onAsk } from "./routes/board/answer.ts";
+import { onAnswer, onAsk, onPause } from "./routes/board/answer.ts";
 import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.ts";
 import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
 import { onPrompt, onPromptWrite, onPrompts } from "./routes/board/prompts.ts";
@@ -484,6 +484,9 @@ export const server = createServer((req, res) => {
 				"/edit": onEdit,
 				"/rename": onRename,
 				"/answer": onAnswer,
+				// The human's clock on a question they are reading. Not in THREAD_ROUTES: a child may ask, and may
+				// not take the stopwatch off its own question.
+				"/card/pause": onPause,
 				"/message": onMessage,
 				"/message/edit": onMessageEdit,
 				"/message/drop": onMessageDrop,

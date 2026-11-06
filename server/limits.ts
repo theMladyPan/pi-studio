@@ -28,6 +28,32 @@ export const MAX_TITLE_CHARS = 200;
 export const ASK_TIMEOUT_MS = 5 * 60_000;
 
 
+/**
+ * How long a question may wait for a human who has not looked at it. The constant is the policy; this reads it,
+ * and `PI_STUDIO_ASK_TIMEOUT_MS` shortens it so the checks can watch a question expire without sitting five
+ * minutes for it.
+ */
+export function askTimeoutMs() {
+	const wanted = Number(process.env.PI_STUDIO_ASK_TIMEOUT_MS);
+	return Number.isFinite(wanted) && wanted > 0 ? wanted : ASK_TIMEOUT_MS;
+}
+
+
+/**
+ * How often a held question says nothing in particular. A question the human has touched waits as long as answering
+ * takes, and a client gives up on a body that has gone quiet, `fetch` after five minutes, so a space this often
+ * keeps the request alive until the answer. `PI_STUDIO_ASK_KEEPALIVE_MS` shortens it so the checks can watch a
+ * keep-alive land without waiting a minute for it.
+ */
+export const ASK_KEEPALIVE_MS = 60_000;
+
+
+export function askKeepAliveMs() {
+	const wanted = Number(process.env.PI_STUDIO_ASK_KEEPALIVE_MS);
+	return Number.isFinite(wanted) && wanted > 0 ? wanted : ASK_KEEPALIVE_MS;
+}
+
+
 /** A child that has reported is spent, and its card goes this long after the answer is read. */
 export const CHILD_CLOSE_DELAY_MS = 20_000;
 

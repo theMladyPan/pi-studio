@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import { anchorOf, field, rootOf } from "./thread.ts";
 import { makeRoom } from "./lifecycle.ts";
 import { randomUUID } from "node:crypto";
-import { ASK_TIMEOUT_MS, MAX_ASK_QUESTIONS } from "../../limits.ts";
+import { askKeepAliveMs, askTimeoutMs, MAX_ASK_QUESTIONS } from "../../limits.ts";
 
 
 
@@ -27,6 +27,18 @@ export function settleQuestion(board, card, status, answer, picks = []) {
 	const waiting = board.askers.get(card.id);
 	board.askers.delete(card.id);
 	if (waiting) waiting.resolve({ status, answer, ...(picks.length ? { answers: picks } : {}) });
+}
+
+
+
+/**
+ * Stop a question's clock for good. The window it was given stays on the card as `expiresAt`, so a reader can
+ * still see what it had, and the question itself stays open and answerable.
+ */
+function stopClock(card) {
+	if (card.paused === true) return;
+	card.paused = true;
+	card.updatedAt = Date.now();
 }
 
 
@@ -64,6 +76,13 @@ function askQuestions(body) {
  *
  * The response stays open for as long as the child's turn is waiting, because the answer travels
  * back in it: option clicked, words typed, or a failure the tool can read and act on.
+ *
+ * A question the human has touched waits for as long as it takes them to answer it, and that outruns the deadline a
+ * client puts on a response that has said nothing: `fetch` gives up on missing headers after five minutes, and
+ * on a body that has gone quiet after the same. So the hold turns into a stream the moment the clock stops —
+ * its headers go out there and then, and a space follows every keep-alive tick. A JSON body may legally be
+ * preceded by whitespace, so the answer still reads as the answer. A question nobody has touched is answered
+ * in one piece, exactly as before.
  */
 export async function onAsk(req, res, board) {
 	const body = await readJson(req, res);
@@ -95,7 +114,7 @@ export async function onAsk(req, res, board) {
 			: { questions: asked }),
 		status: "open",
 		at: Date.now(),
-		expiresAt: Date.now() + ASK_TIMEOUT_MS,
+		expiresAt: Date.now() + askTimeoutMs(),
 		...(rootOf(board, body)
 			? { threadRoot: anchorOf(board, rootOf(board, body)), ownerThread: rootOf(board, body) }
 			: {}),
@@ -107,25 +126,55 @@ export async function onAsk(req, res, board) {
 	const settled = await new Promise((resolve) => {
 		const timer = setTimeout(() => {
 			settleQuestion(board, card, "expired");
-		}, ASK_TIMEOUT_MS);
+		}, askTimeoutMs());
+		// Nothing here outlives the wait it feeds: the clock, the answer and a closed tab all stop the keep-alive
+		// before it can write into a response nobody is reading.
+		let beat = null;
+		const quiet = () => {
+			if (beat) clearInterval(beat);
+			beat = null;
+		};
+		const keepAlive = () => {
+			quiet();
+			if (res.writableEnded || res.destroyed) return;
+			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+			res.write(" ");
+			beat = setInterval(() => {
+				if (res.writableEnded || res.destroyed) return quiet();
+				res.write(" ");
+			}, askKeepAliveMs());
+		};
 		board.askers.set(card.id, {
 			resolve: (value) => {
 				clearTimeout(timer);
+				quiet();
 				resolve(value);
+			},
+			// The clock runs for a question nobody has looked at. Once a human has the card in front of them it
+			// stops for good: the answer is theirs to give whenever they get to it, and the child keeps waiting.
+			pause: () => {
+				clearTimeout(timer);
+				stopClock(card);
+				keepAlive();
 			},
 		});
 		// A closed tab must not leave the child's turn waiting for a click nobody can make.
 		res.on("close", () => {
+			quiet();
 			if (card.status !== "open") return;
 			settleQuestion(board, card, "expired");
 		});
 	});
-	if (settled.status === "answered")
-		answer(res, 200, {
-			cardId: card.id,
-			answer: settled.answer ?? "",
-			...(settled.answers ? { answers: settled.answers } : {}),
-		});
+	// A hold that became a stream has already promised its status, so what is left to write is the rest of its
+	// body: the whitespace it has been kept alive with, then the outcome. Only an answer reaches a stream, because
+	// a question a human was reading has no clock left to expire, and the refusal keeps its words in case one does.
+	const reply =
+		settled.status === "answered"
+			? { cardId: card.id, answer: settled.answer ?? "", ...(settled.answers ? { answers: settled.answers } : {}) }
+			: { error: "nobody answered this question" };
+	if (res.headersSent) {
+		if (!res.writableEnded && !res.destroyed) res.end(JSON.stringify(reply));
+	} else if (settled.status === "answered") answer(res, 200, reply);
 	else fail(res, 409, "nobody answered this question");
 }
 
@@ -192,5 +241,31 @@ export async function onAnswer(req, res, board) {
 	const reply = card.multiple ? picks.join(", ") : field(body.answer, 2000);
 	if (!reply) return void fail(res, 400, "empty answer");
 	settleQuestion(board, card, "answered", reply, picks);
+	answer(res, 200, { cardId: card.id });
+}
+
+
+
+/**
+ * The human's own clock: the human touched this question, so it stops waiting on a stopwatch.
+ *
+ * Deliberately not in `THREAD_ROUTES`: whether a question still expires is the human's to decide, and a child
+ * that could pause its own question would hold a turn open for as long as it liked.
+ */
+export async function onPause(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const card = board.cards.get(String(body.cardId ?? ""));
+	if (!card || card.type !== "question") return void fail(res, 404, "no such question");
+	if (card.status !== "open") return void fail(res, 409, "that question is already settled");
+	// A card already touched keeps the clock it stopped: a second touch changes nothing, and the client that
+	// reports the card being used again is not an error.
+	if (card.paused === true) return void answer(res, 200, { cardId: card.id });
+	const waiting = board.askers.get(card.id);
+	// A question nobody is waiting on any more has no timer to clear, and is still the human's to keep open.
+	if (waiting?.pause) waiting.pause();
+	else stopClock(card);
+	broadcast(board, { type: "update", card: plainCardFor(card, board) });
+	scheduleSave(board);
 	answer(res, 200, { cardId: card.id });
 }
