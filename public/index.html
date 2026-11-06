@@ -431,11 +431,23 @@
   .q-opt:focus-visible { outline: none; border-color: var(--accent-dim); background: #1f2631; }
   .q-opt:disabled { cursor: default; opacity: .55; }
   .q-opt.picked { border-color: var(--accent); background: rgba(88,166,255,.12); opacity: 1; }
-  /* A question that takes several answers draws its options as boxes, so a click fills the
-     question in instead of answering it. The glyph is the button's own state, which is why it is
-     a pseudo element and not a second node the answer matching has to skip over. */
-  .q-opt.q-check::before { content: "☐ "; color: var(--muted); }
-  .q-opt.q-check.picked::before { content: "☑ "; color: var(--accent); }
+  /* Where the keyboard is among the choices. The list holds the focus rather than an option, so the
+     ring is the option's own, and it reads the same on a picked choice and on one only reached. */
+  .q-opt.hl { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* Every option carries its mark: a round one for a question that takes one answer, a square tick for
+     a question that takes several. The shape tells the two kinds apart before anything is pressed and
+     the fill says what is picked. It is a pseudo element, so the answer matching still reads the
+     option's own text, and it is drawn here rather than on the free row's send button. */
+  .q-options .q-opt::before {
+    content: ""; display: inline-block; box-sizing: border-box;
+    width: 13px; height: 13px; margin-right: 8px; vertical-align: -2px;
+    border: 1.5px solid var(--muted); border-radius: 50%; background: transparent;
+  }
+  .q-options .q-opt.picked::before { border-color: var(--accent); background: var(--accent); }
+  .q-options .q-check::before { border-radius: 3px; }
+  .q-options .q-check.picked::before {
+    content: "✓"; color: #0d1117; font: 700 10px/10px system-ui, sans-serif; text-align: center;
+  }
   .q-free { display: flex; gap: 6px; }
   .q-free input {
     flex: 1; font: 13px system-ui, sans-serif; color: var(--text); background: #0d1117;
