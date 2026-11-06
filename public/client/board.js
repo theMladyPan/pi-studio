@@ -7112,30 +7112,35 @@ const SHORTCUTS = [
   {
     group: "board",
     rows: [
+      { keys: "ctrl", does: "is ⌘ on a Mac, wherever this list says ctrl" },
       { keys: "f", does: "fit every card on the screen" },
       { keys: "0", does: "back to real size, 100%" },
       { keys: "m", does: "hide or show the small overview map" },
       { keys: "n", does: "jump to the next new card or waiting question" },
       { keys: "o", does: "flip the thread order, newest first or oldest first" },
-      { keys: "t", does: "start a new thread" },
+      { keys: "t", does: "start a new thread, on a board of threads with no card selected" },
       { keys: "r", does: "reply to the card you are reading" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
       { keys: "q", does: "close the card you are reading" },
-      { keys: "esc", does: "close whatever panel is open, then let go of the selected card" },
+      { keys: "esc", does: "close the open panel, or with no panel open, let go of the selected card" },
       { keys: "ctrl+z", does: "undo a close and put the card back" },
     ],
   },
   {
     group: "answering a question",
-    rows: [{ keys: "1 - 6", does: "answer that option of the question on screen" }],
+    rows: [
+      { keys: "1 - 6", does: "answer that option of the question on the selected card" },
+      { keys: "← →", does: "walk the tabs of a question" },
+    ],
   },
   {
     group: "lists and pickers",
     rows: [
       { keys: "↑ ↓", does: "walk the rows of a list" },
       { keys: "enter", does: "take the row you walked to" },
+      { keys: "enter / space", does: "on a row in the activity list, open its detail" },
       { keys: "tab", does: "take the first row of a list, or step along the form" },
-      { keys: "tab / shift+tab", does: "cycle through the buttons of an open sheet" },
+      { keys: "tab / shift+tab", does: "cycle through the buttons of the panel that is open" },
       { keys: "→", does: "open a folder in the file picker" },
       { keys: "esc", does: "close the list and keep what you typed" },
     ],
@@ -7158,8 +7163,11 @@ const SHORTCUTS = [
     group: "mouse",
     rows: [
       { keys: "ctrl + wheel", does: "zoom the board in and out" },
+      { keys: "wheel", does: "on the background, pan the board" },
       { keys: "drag the background", does: "move the board around" },
       { keys: "middle-drag", does: "move the board from anywhere on it" },
+      { keys: "drag a card", does: "move it, and move the whole group when the card is one of several selected" },
+      { keys: "ctrl + drag", does: "read the text of a message instead of moving its card" },
       { keys: "shift + drag", does: "select the cards inside a rectangle" },
       { keys: "shift / ctrl + click", does: "add a card to the selection" },
       { keys: "card corner", does: "resize the card" },
@@ -7186,6 +7194,12 @@ function shownKeys(on) {
   keysPanel.hidden = !on;
   keysBtn.setAttribute("aria-expanded", on ? "true" : "false");
 }
+
+/**
+ * Whether a panel of the header is reading the screen. Both of them cover the board, so the letters the
+ * map on screen teaches are not the letters a board key may act on behind it.
+ */
+const panelUp = () => !keysPanel.hidden || !configPanel.hidden;
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
@@ -8130,7 +8144,6 @@ configBtn.addEventListener("click", () => {
   closePick();
   const on = configPanel.hidden;
   shownConfig(on);
-  // Both panels hang in the same corner, so the one being opened is the only one left standing.
   if (on) shownKeys(false);
   if (!on) return;
   // A document already in hand is drawn at once, so the panel never opens blank; the read that follows
@@ -9315,6 +9328,9 @@ document.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
   if ((key !== "r" && key !== "q" && key !== "p") || event.metaKey || event.ctrlKey || event.altKey) return;
   if (typingSomewhere()) return;
+  // The map of the keys is a thing to read, not to press through: while either header panel is up, the
+  // letters below wait.
+  if (panelUp()) return;
   // The panel covers the board, so its closing key wins over the card it hides. The other sheet has no
   // closing key of its own, so every board key waits behind it.
   const sheet = openSheet();
@@ -9351,7 +9367,7 @@ document.addEventListener("keydown", (event) => {
 // back the one that went by mistake. A field keeps its own undo, so half-typed text is never replaced.
 document.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() !== "z" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
-  if (typingSomewhere() || !atPick.hidden || openSheet()) return;
+  if (typingSomewhere() || panelUp() || !atPick.hidden || openSheet()) return;
   event.preventDefault();
   undoClose();
 });
@@ -9361,7 +9377,7 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey || !/^[1-6]$/.test(event.key)) return;
   if (typingSomewhere()) return;
-  if (openSheet() || !atPick.hidden) return;
+  if (panelUp() || openSheet() || !atPick.hidden) return;
   const record = openQuestion();
   if (!record) return;
   // The option buttons carry their own click handler, so this reuses the whole answer path.
@@ -9379,7 +9395,7 @@ document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (typingSomewhere()) return;
   // The picker is its own surface: a board shortcut behind it would move what is out of reach.
-  if (!picker.hidden || openSheet() || !atPick.hidden) return;
+  if (panelUp() || !picker.hidden || openSheet() || !atPick.hidden) return;
   if (event.key === "f") {
     event.preventDefault();
     fitAll();
