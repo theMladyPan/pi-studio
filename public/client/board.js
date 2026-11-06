@@ -1376,6 +1376,8 @@ function tabbedQuestions(data, entry, asked) {
     const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
     if (!step) return;
     event.preventDefault();
+    // Reading the next question is touching the card, so the arrows stop its clock as a press does.
+    pauseQuestion(entry);
     setTab((at + step + tabButtons.length) % tabButtons.length, true);
   });
 
@@ -1487,6 +1489,9 @@ function tabbedQuestions(data, entry, asked) {
     send.type = "button";
     send.textContent = "send answers";
     send.addEventListener("click", () => {
+      // Pressing send is the card being used, and a send refused for a missing tab must not leave the
+      // clock running either.
+      pauseQuestion(entry);
       // A send that left a tab empty would wake the child with half a form, so the button walks to the
       // question it is waiting on instead of sending.
       const missing = asked.findIndex((one, at) => !answeredAt(at));
