@@ -420,6 +420,10 @@
   .q-body { padding: 12px 12px 14px; display: flex; flex-direction: column; gap: 10px; }
   .q-text { color: var(--text); font-size: 14px; }
   .q-options { display: flex; flex-direction: column; gap: 6px; }
+  /* The list holds the focus so a space cannot press a button, but it is not itself a control: what says
+     where the keyboard is, is the ring on the choice under it. The ring a control wears would draw a
+     second, unmeant band around the whole list, so the list carries none of its own. */
+  .q-options:focus-visible { outline: none; }
   .q-opt {
     text-align: left; font: 13px/1.4 system-ui, sans-serif; color: var(--text);
     background: #1c2128; border: 1px solid var(--border); border-radius: 7px;
@@ -445,8 +449,13 @@
   }
   .q-options .q-opt.picked::before { border-color: var(--accent); background: var(--accent); }
   .q-options .q-check::before { border-radius: 3px; }
+  /* The tick is drawn inside the box that is already there and never as text that arrives with the pick:
+     a glyph would become the mark's own baseline and lift the row while the box filled. The mark is the
+     same 13px by 13px in both states, so a tick changes no shape and moves nothing. */
   .q-options .q-check.picked::before {
-    content: "✓"; color: #0d1117; font: 700 10px/10px system-ui, sans-serif; text-align: center;
+    background: var(--accent)
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2.2 5.4 4.2 7.4 7.9 2.7' fill='none' stroke='%230d1117' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+      center / 8px 8px no-repeat;
   }
   .q-free { display: flex; gap: 6px; }
   .q-free input {
