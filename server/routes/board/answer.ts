@@ -77,11 +77,11 @@ function askQuestions(body) {
  * The response stays open for as long as the child's turn is waiting, because the answer travels
  * back in it: option clicked, words typed, or a failure the tool can read and act on.
  *
- * A question a human has seen waits for as long as their reading takes, and that outruns the deadline a
+ * A question the human has touched waits for as long as it takes them to answer it, and that outruns the deadline a
  * client puts on a response that has said nothing: `fetch` gives up on missing headers after five minutes, and
  * on a body that has gone quiet after the same. So the hold turns into a stream the moment the clock stops —
  * its headers go out there and then, and a space follows every keep-alive tick. A JSON body may legally be
- * preceded by whitespace, so the answer still reads as the answer. A question nobody has looked at is answered
+ * preceded by whitespace, so the answer still reads as the answer. A question nobody has touched is answered
  * in one piece, exactly as before.
  */
 export async function onAsk(req, res, board) {
@@ -247,7 +247,7 @@ export async function onAnswer(req, res, board) {
 
 
 /**
- * The human's own clock: this question is on their screen, so it stops waiting on a stopwatch.
+ * The human's own clock: the human touched this question, so it stops waiting on a stopwatch.
  *
  * Deliberately not in `THREAD_ROUTES`: whether a question still expires is the human's to decide, and a child
  * that could pause its own question would hold a turn open for as long as it liked.
@@ -258,8 +258,8 @@ export async function onPause(req, res, board) {
 	const card = board.cards.get(String(body.cardId ?? ""));
 	if (!card || card.type !== "question") return void fail(res, 404, "no such question");
 	if (card.status !== "open") return void fail(res, 409, "that question is already settled");
-	// A card already seen keeps the clock it stopped: a second look changes nothing, and the client that
-	// reports every view of it is not an error.
+	// A card already touched keeps the clock it stopped: a second touch changes nothing, and the client that
+	// reports the card being used again is not an error.
 	if (card.paused === true) return void answer(res, 200, { cardId: card.id });
 	const waiting = board.askers.get(card.id);
 	// A question nobody is waiting on any more has no timer to clear, and is still the human's to keep open.
