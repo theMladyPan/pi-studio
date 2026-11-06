@@ -2812,27 +2812,24 @@ function questionSub(data) {
   // A card whose countdown a human stopped has no deadline left to print: it waits for the answer
   // however long the answer takes.
   if (data.paused || !data.expiresAt) return `${tabs}waiting for you`;
-  return `${tabs}expires ${new Date(data.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  // A running clock says what stops it, because being seen no longer does: the card waits only once
+  // the human touches it.
+  return `${tabs}expires ${new Date(data.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · press the card to hold it open`;
 }
 
-/** The question cards whose countdown is still running, by id: the first press or look stops them. */
-const liveQuestions = new Set();
-/** The cards already asked to stop their clock, so one seen card sends one request and no more. */
+/** The cards already asked to stop their clock, so one card touched sends one request and no more. */
 const pauseSent = new Set();
 
 /**
- * Arriving on the board is the pause. A question the human can see stops counting down for good, so
- * nothing expires out from under whoever is reading it. There is no button for this on purpose: the
- * card stopping when it is seen is the whole of it.
+ * Touching the card is the pause. A question the human presses or answers stops counting down for good,
+ * so nothing expires out from under whoever is working on it; a question only seen keeps its clock and
+ * expires, because an ask that merely appeared is the accidental one worth letting go. There is no
+ * button for this on purpose: the card holding while it is used is the whole of it.
  */
 function pauseQuestion(record) {
   if (!record) return;
-  // A card leaves the list only once its clock is stopped, so a press on the board still has it to ask
-  // about when the request went nowhere. A card the daemon has already stopped has nothing left to ask.
-  if (record.data?.paused === true) {
-    liveQuestions.delete(record.id);
-    return;
-  }
+  // A card the daemon has already stopped has nothing left to ask.
+  if (record.data?.paused === true) return;
   if (pauseSent.has(record.id)) return;
   pauseSent.add(record.id);
   void postPause(record.id);
@@ -2847,15 +2844,12 @@ async function postPause(cardId) {
     });
     // A card that was answered, expired or paused already has no clock to stop, so a refusal is as
     // good as a yes and the card is never asked again.
-    if (response.ok || response.status === 404 || response.status === 409) {
-      liveQuestions.delete(cardId);
-      return;
-    }
+    if (response.ok || response.status === 404 || response.status === 409) return;
   } catch {
     // Unreachable daemon: the clock keeps running and the card keeps reading as it did.
   }
-  // Anything else may still be waiting on a real answer, so the card stays on the list and the next
-  // press on the board asks again.
+  // Anything else may still be waiting on a real answer, so the card stays armed and the next touch of
+  // that card asks again.
   pauseSent.delete(cardId);
 }
 
@@ -2880,18 +2874,10 @@ function paintCard(entry, data) {
   const isOpenQuestion = questionWants(data);
   if (pausedOnly(entry.data, data)) {
     entry.data = data;
-    liveQuestions.delete(entry.id);
     entry.subEl.textContent = questionSub(data);
     return;
   }
   entry.data = data;
-  // A question the human is looking at stops counting down. A card the daemon has not stopped yet is
-  // also remembered here, so the first press anywhere on the board catches one that arrived while the
-  // human was already clicking around. A tab nobody can see is nobody looking, so a card that arrives
-  // in a background tab keeps its clock until the tab comes back and the human shows up.
-  if (isOpenQuestion && data.paused !== true) liveQuestions.add(entry.id);
-  else liveQuestions.delete(entry.id);
-  if (isOpenQuestion && !document.hidden) pauseQuestion(entry);
   // The pin is the server's word, so a reload paints the card the way the click left it.
   setPinned(entry.card, data.pinned === true);
   if (entry.editing) return;
@@ -7414,6 +7400,7 @@ const SHORTCUTS = [
       { keys: "shift / ctrl + click", does: "add a card to the selection" },
       { keys: "card corner", does: "resize the card" },
       { keys: "double-click a card title", does: "rename the card" },
+      { keys: "press a question card", does: "hold its expiry, so a question you touch waits for your answer" },
     ],
   },
 ];
@@ -9614,18 +9601,48 @@ document.addEventListener("keydown", (event) => {
   undoClose();
 });
 
-// A question that arrives while the human is already clicking around is still seen when the next
-// press lands, so the first press of either kind on the board stops its countdown too.
-const pauseLiveQuestions = () => {
-  for (const id of [...liveQuestions]) {
-    const record = byId.get(id);
-    if (record) pauseQuestion(record);
-    else liveQuestions.delete(id);
-  }
-};
+// A question holds its clock only while the human is touching that card: a press anywhere on it — the
+// whole card selects, so a press that only picks it up counts — or a key the board answers it with, or a
+// key typed into its own box. A press or a key that lands elsewhere on the board touches no ask, so a
+// card that merely appeared on a visible tab keeps counting down and expires.
+const ANSWER_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", " ", "Spacebar", "1", "2", "3", "4", "5", "6"]);
 
-document.addEventListener("pointerdown", pauseLiveQuestions, true);
-document.addEventListener("keydown", pauseLiveQuestions, true);
+/** The open question a node belongs to, when the node sits inside a card that still counts down. */
+function touchedQuestion(node) {
+  const card = node instanceof Element ? node.closest(".card") : null;
+  const record = card ? byId.get(card.dataset.id) : null;
+  return record && questionWants(record.data) ? record : null;
+}
+
+document.addEventListener(
+  "pointerdown",
+  (event) => {
+    const record = touchedQuestion(event.target);
+    if (record) pauseQuestion(record);
+  },
+  true,
+);
+
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    // A key typed into a field belongs to the card that holds the field.
+    const typed = event.target instanceof Element ? event.target.closest("input, textarea") : null;
+    if (typed) {
+      const held = touchedQuestion(typed);
+      if (held) pauseQuestion(held);
+      return;
+    }
+    // An answer key belongs to the question the card is focused on, which is the one the board answers.
+    // A panel, a sheet or a list takes its own keys, so the board answers nothing behind one.
+    if (!ANSWER_KEYS.has(event.key)) return;
+    if (panelUp() || openSheet() || !picker.hidden || !atPick.hidden) return;
+    const record = openQuestion();
+    if (record) pauseQuestion(record);
+  },
+  true,
+);
 
 // The open question is answered from the keyboard without a mouse, and the ring on the choice says
 // where enter and space will land. Up and down walk the choices, space picks one, enter sends, and
@@ -9810,10 +9827,8 @@ function stopFlash() {
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
   stopFlash();
-  // A hidden tab is nobody looking, so a question that arrived while it was hidden stops its clock now
-  // that the human is back, and a press anywhere on the board is what stops the rest.
-  pauseLiveQuestions();
-  // A hidden tab schedules nothing, so what is on screen now starts its countdown from here.
+  // A hidden tab schedules nothing, so what is on screen now starts its countdown from here. A question
+  // is not paused by coming back into view: only touching that card holds its clock.
   for (const card of inView) armSeen(card);
 });
 addEventListener("focus", stopFlash);
