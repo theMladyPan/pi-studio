@@ -2380,6 +2380,9 @@ function makeCard(data, quiet = false) {
       }
       card.style.zIndex = z++;
       selectCard(card);
+      // Reading a question is where the keyboard goes, the same as when the card lands: a press that picks
+      // the card up and never placed the ring would leave space with no choice to take.
+      if (questionWants(entry.data) && !event.target.closest("input, textarea, button, a")) ringChoice(entry);
     },
     true,
   );
@@ -3656,6 +3659,18 @@ function markChoice(record, at) {
     list.focus({ preventScroll: true });
   }
   options[at]?.scrollIntoView({ block: "nearest" });
+}
+
+/**
+ * Make sure a choice wears the ring, without moving one the keyboard has already placed. Space is the only
+ * key that needs the ring to be there already — the arrows and the digits put it there themselves — so the
+ * press that reads a question places it, as the card landing on the board does.
+ */
+function ringChoice(record) {
+  const options = questionOptions(record);
+  if (!options.length) return;
+  if (options.some((button) => button.classList.contains("hl"))) return;
+  markChoice(record, 0);
 }
 
 /** Up and down walk the choices of the open question, wrapping at both ends. */
