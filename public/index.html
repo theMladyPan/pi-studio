@@ -1099,6 +1099,21 @@
   #boardConfig .cfg-kids { display: flex; flex-direction: column; margin-left: 10px; padding-left: 6px;
     border-left: 1px solid #1b2029; }
   #boardConfig .cfg-failure { margin: 6px 8px; color: #f85149; font: 11px/1.5 var(--mono); }
+  /* Every key the board listens for, in the frame the settings wear and hanging in the same corner:
+     taller than a screen it scrolls, because a map missing its last line reads as a map with no such key. */
+  #shortcutPanel { position: fixed; z-index: 2000; top: 46px; right: 12px; display: flex; flex-direction: column;
+    width: 430px; max-height: calc(100vh - 70px); overflow-y: auto; padding: 10px 10px 12px; background: #0d1117;
+    border: 1px solid var(--border-bright); border-radius: 10px; box-shadow: 0 12px 32px rgba(1, 4, 9, .55); }
+  #shortcutPanel[hidden] { display: none; }
+  #shortcutPanel .cfg-head { margin: 0; padding: 8px 8px 5px; color: var(--muted); font: 10.5px var(--mono);
+    text-transform: uppercase; letter-spacing: .8px; border-top: 1px solid #1b2029; }
+  #shortcutPanel .cfg-head:first-child { border-top: 0; padding-top: 2px; }
+  /* Keys left, what they do right: the keys are one short word and never wrap, so the sentence gets
+     the rest of the line and the rows line up down the panel. */
+  #shortcutPanel .cfg-row { display: flex; gap: 12px; align-items: baseline; padding: 3px 8px; }
+  #shortcutPanel .cfg-row b { flex: none; min-width: 104px; color: var(--accent); font: 12px var(--mono);
+    font-weight: 500; }
+  #shortcutPanel .cfg-row span { color: #c9d1d9; font: 11.5px/1.45 var(--mono); }
   /* The prompt files are plain markdown, so the editor is a list and a textarea: what is saved is what
      the daemon reads on the next thread that starts. */
   #promptEditor { position: fixed; z-index: 2100; top: 46px; right: 374px; display: flex;
@@ -1131,7 +1146,7 @@
 </head>
 <body>
 <header>
-  <span class="brand" title="ctrl+wheel: zoom · wheel or drag background: pan · middle-drag anywhere: pan · drag a card: move · shift+drag background: select with a rectangle · shift+click or ctrl+click a card: add to selection · drag a selected card: move the group · ctrl+drag a card: select its text · corner: resize · esc: unselect · f: fit · 0: 100% · m: map · n: next · r: reply · q: close · ctrl+z: undo close · o: thread order">pi</span>
+  <span class="brand" title="every keyboard shortcut is listed under the keys button">pi</span>
   <button class="sess" id="sess" type="button" title="switch workspace"></button>
   <!-- Polite, so the state is spoken when it changes; the elapsed clock is decoration that ticks
        every second and is hidden, so it is never read out. -->
@@ -1150,6 +1165,7 @@
   <button id="cleanBtn" title="forget dead threads and their logs">clean</button>
   <button id="leftBtn" title="folders and branches the board left behind, cleared one at a time">leftovers</button>
   <button id="newBtn" title="start over in this workspace: same folder, same settings, empty board">new</button>
+  <button id="keysBtn" title="every keyboard shortcut" aria-haspopup="dialog" aria-expanded="false">keys</button>
   <button id="configBtn" title="this board's settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
 </header>
 
@@ -1170,6 +1186,12 @@
      in the whole app. -->
 <div id="boardConfig" hidden role="dialog" aria-label="this board's settings">
   <div id="cfgTree"></div>
+</div>
+
+<!-- Every key the board listens for, drawn from the one list in the client: a heading per group and a
+     row of keys beside what they do, so the map on screen is never a rule the code has forgotten. -->
+<div id="shortcutPanel" hidden role="dialog" aria-label="every keyboard shortcut">
+  <div id="shortcutList"></div>
 </div>
 
 <div id="promptEditor" hidden role="dialog" aria-label="prompt files">
