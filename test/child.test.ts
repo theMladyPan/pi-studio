@@ -142,6 +142,10 @@ test("the board's conventions are the file a human edits, whole, and only once",
 	assert.equal(plain.match(/Do not narrate/g)?.length, 1, "the no-narration rule is said twice");
 	// The mechanics stay in code, where the file cannot take them away.
 	assert.match(plain, /pass a short key to board_note/);
+	// A reference is one colon away from dead prose: a thread that copies the placeholder without the
+	// colon writes a card whose markers print as typed and whose sources stay in the body.
+	assert.match(plain, /\[\^label\]: /, "the conventions never show a reference with its colon");
+	assert.match(plain, /one unbroken word/, "the conventions do not say a label takes no space");
 });
 
 test("a spawned child is told it draws nothing, and the pointer convention is not said to it", () => {
