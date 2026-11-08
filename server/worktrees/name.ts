@@ -22,12 +22,13 @@ export const TITLE_FROM_REQUEST_CHARS = 48;
 
 /**
  * The model that names a thread once its first request is in hand. Empty turns naming off.
- * `inception/mercury-3` was the first choice and answered 404 when naming was built, so the default
- * moved to a flash model; it answers now, and with the `:nitro` routing it names in 1.3-1.7s against
- * 2.1-3.0s for `z-ai/glm-5.3-flash` and 3.1-8.9s for `nvidia/nemotron-3.5-lightning`, on names the
- * gate accepts and at a lower price. Any other model is a `PI_STUDIO_NAME_MODEL` away.
+ * `openrouter/inception/mercury-3:nitro` named this until OpenRouter withdrew the model: a call comes
+ * back 404 in 70ms, and every card since has kept the opening words of its own request. The flash model
+ * the daemon already routes its other work to replaces it, asked with thinking off, which names in
+ * 1.2-1.5s against 2.0s for `z-ai/glm-5.3` and 4.2s for `z-ai/glm-5.3-flash`. Any other model is a
+ * `PI_STUDIO_NAME_MODEL` away.
  */
-export const NAME_MODEL = process.env.PI_STUDIO_NAME_MODEL ?? "openrouter/inception/mercury-3:nitro";
+export const NAME_MODEL = process.env.PI_STUDIO_NAME_MODEL ?? "openrouter/deepseek/deepseek-v4.1-flash-1017";
 
 
 export const NAME_TIMEOUT_MS = 8000;
@@ -127,7 +128,9 @@ export function askOnce(argv, timeoutMs) {
 export async function nameThread(board, thread, request) {
 	const asked = request.slice(0, 2000);
 	const cli = piCli();
-	const argv = [cli.command, ...cli.args, "-p", "--no-session", "-ne", "-nt", "-nc", "-ns", "--model", NAME_MODEL];
+	// Thinking off is part of the name rather than a preference: a naming model that reasons about four
+	// words spends the whole 8s budget on the question, and this one answers in 1.2s with it off.
+	const argv = [cli.command, ...cli.args, "-p", "--no-session", "-ne", "-nt", "-nc", "-ns", "--model", NAME_MODEL, "--thinking", "off"];
 	const said = await askOnce([...argv, namePrompt(asked)], NAME_TIMEOUT_MS);
 	const picked = plausibleTitle(said);
 	if (!picked) {
