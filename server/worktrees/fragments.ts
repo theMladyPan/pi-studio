@@ -4,9 +4,17 @@
  */
 import { existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
-import { baseRef, gitIn, repoOf } from "../git/repo.ts";
+import { baseRefSoon, gitIn, gitSoon, repoOf, repoOfSoon } from "../git/repo.ts";
 import { AGENTS_DIR, DEFAULT_WORK_TYPE, WORK_TYPES } from "./make.ts";
-import { branchRefusal, discardBranch, discardTree, registrations, sameFolder, treeBranch, treeRepo } from "./retire.ts";
+import {
+	branchRefusal,
+	discardBranch,
+	discardTree,
+	registrationsSoon,
+	sameFolder,
+	treeBranch,
+	treeRepo,
+} from "./retire.ts";
 
 
 
@@ -85,20 +93,83 @@ export function stepsNote(steps: Step[]): string | null {
 
 
 
+/** How many git commands a scan runs at once: a wide board must not start a hundred programs in one breath. */
+const GIT_AT_ONCE = 8;
+
+
+
+/** Run one promise per item, a few at a time, and answer in the order the items came in. */
+async function atMost<T, R>(items: T[], atOnce: number, work: (item: T) => Promise<R>): Promise<R[]> {
+	const out = new Array<R>(items.length);
+	let next = 0;
+	const hands = Array.from({ length: Math.min(atOnce, items.length) }, async () => {
+		while (next < items.length) {
+			const at = next++;
+			out[at] = await work(items[at]);
+		}
+	});
+	await Promise.all(hands);
+	return out;
+}
+
+
+
 /** How many paths a folder holds uncommitted, untracked ones among them: `git status` counts both. */
-function changesIn(path: string): number {
+async function changesIn(path: string): Promise<number> {
 	if (!existsSync(path)) return 0;
-	const status = gitIn(path, ["status", "--porcelain"], 10_000);
+	const status = await gitSoon(path, ["status", "--porcelain"], 10_000);
 	return status.ok ? status.out.split("\n").filter(Boolean).length : 0;
 }
 
 
 
 /** How many commits a ref holds past a base, read in a folder that can see both. */
-function commitsPast(at: string, base: string, ref: string): number {
+async function commitsPast(at: string, base: string, ref: string): Promise<number> {
 	if (!base) return 0;
-	const read = gitIn(at, ["rev-list", "--count", `${base}..${ref}`], 10_000);
+	const read = await gitSoon(at, ["rev-list", "--count", `${base}..${ref}`], 10_000);
 	return read.ok ? Number(read.out) || 0 : 0;
+}
+
+
+
+/**
+ * Every local branch, and how many commits each holds past `from`. One `for-each-ref` answers both halves
+ * when git can count `ahead` itself; a git too old for that names the branches in one call and then counts
+ * only the ones holding anything, a few at a time, instead of once per branch on the board.
+ */
+async function branchFacts(repo: string, from: string): Promise<{ names: string[]; ahead: Map<string, number> }> {
+	const ahead = new Map<string, number>();
+	const ascend = (out: string) => out.split("\n").map((line) => line.trim()).filter(Boolean);
+	if (!from) {
+		const plain = await gitSoon(repo, ["for-each-ref", "refs/heads", "--format=%(refname:short)"], 10_000);
+		return { names: plain.ok ? ascend(plain.out) : [], ahead };
+	}
+	const one = await gitSoon(repo, ["for-each-ref", "refs/heads", `--format=%(refname:short)\t%(ahead-behind:${from})`], 10_000);
+	if (one.ok && one.out) {
+		let read = true;
+		const names: string[] = [];
+		for (const line of one.out.split("\n")) {
+			const [name, counts] = line.split("\t");
+			const [up] = (counts ?? "").split(" ");
+			if (!name) continue;
+			if (!/^\d+$/.test(up ?? "")) {
+				read = false;
+				break;
+			}
+			names.push(name.trim());
+			ahead.set(name.trim(), Number(up));
+		}
+		if (read) return { names, ahead };
+		ahead.clear();
+	}
+	const [plain, merged] = await Promise.all([
+		gitSoon(repo, ["for-each-ref", "refs/heads", "--format=%(refname:short)"], 10_000),
+		gitSoon(repo, ["for-each-ref", `--no-merged=${from}`, "refs/heads", "--format=%(refname:short)"], 10_000),
+	]);
+	const holders = merged.ok ? ascend(merged.out) : [];
+	const counts = await atMost(holders, GIT_AT_ONCE, async (name: string) => [name, await commitsPast(repo, from, name)] as const);
+	for (const [name, count] of counts) ahead.set(name, count);
+	return { names: plain.ok ? ascend(plain.out) : [], ahead };
 }
 
 
@@ -192,37 +263,73 @@ function restorable(board: BoardLike): Set<string> {
 
 
 
+/** How long one scan stands: long enough for the sheet and the clear pressed under it to share one answer. */
+export const SCAN_FRESH_MS = 10_000;
+
+/** The last scan of each board, so the sheet and a press under it do not make git answer the same twice. */
+const scans = new WeakMap<object, { at: number; items: Fragment[] }>();
+
+
+
 /**
  * What the board can still clear away: a record whose thread is gone and whose folder git still has, a folder
  * in `.agents` that git holds and the board never recorded, and a thread's branch with no thread left to hold
- * it. A trunk is never one of them, and neither is a branch a human named.
+ * it. A trunk is never one of them, and neither is a branch a human named. A scan is kept for a few seconds,
+ * because the sheet that lists the leftovers and the press that clears one ask the same question twice.
  */
-export function fragmentsOf(board: BoardLike): Fragment[] {
-	const repo = repoOf(board.folder);
+export async function fragmentsOf(board: BoardLike): Promise<Fragment[]> {
+	const held = scans.get(board);
+	if (held && Date.now() - held.at < SCAN_FRESH_MS) return held.items;
+	const items = await scanFragments(board);
+	scans.set(board, { at: Date.now(), items });
+	return items;
+}
+
+
+
+/** Drop the scan held for a board: the next read is the disk's, not an answer older than the last removal. */
+export function forgetFragments(board: BoardLike): void {
+	scans.delete(board);
+}
+
+
+
+/** One pass over the disk: one question per folder, and one for every branch at once. */
+async function scanFragments(board: BoardLike): Promise<Fragment[]> {
+	const repo = await repoOfSoon(board.folder);
 	if (!repo) return [];
-	const registered = registrations(repo) ?? [];
+	const [listed, from] = await Promise.all([registrationsSoon(repo), baseRefSoon(repo)]);
+	const registered = listed ?? [];
+	// Every branch and its own count, started now and read at the end: the folders below are the slow part,
+	// and this answer is ready long before they are.
+	const branchesHeld = branchFacts(repo, from);
 	// A branch belongs to a folder item when that folder is still standing: the folder goes first and takes
 	// its branch with it, so listing the name again would offer to remove a thing twice.
 	const covered = new Set<string>(board.trees.map((tree) => tree.branch).filter((name): name is string => Boolean(name)));
 	for (const entry of registered) if (entry.branch && existsSync(entry.path)) covered.add(entry.branch);
-	// The base a folder's own commits are counted past: the branch its work would merge into, read once.
-	const from = baseRef(repo);
 	const back = restorable(board);
 	// A thread the trash still holds keeps its branch off this list as well as its folder: a child that cut
 	// its own branch never taught the tree record the name, so this loop is the last place a branch the undo
 	// has promised back could still be offered for removal.
 	const live = new Set([...board.threads.keys(), ...back].map((id) => String(id).slice(0, 8)));
+	// Every folder this scan will name, read at once: its branch off the disk, and what it still holds. A
+	// thread the trash still holds comes back whole on `ctrl+z`, and its folder with it, so it is no leftover
+	// at all — only its branch's name is read, because that name keeps the folder's own off the list.
+	const chased = board.trees.filter(
+		(tree) => !(tree.thread && board.threads.has(tree.thread)) && registered.some((entry) => sameFolder(entry.path, tree.path)),
+	);
+	const facts = await atMost(chased, GIT_AT_ONCE, async (tree) => {
+		const entry = registered.find((one) => sameFolder(one.path, tree.path));
+		// The name the disk answers with is the one that goes with the folder, recorded or not: `worktree list`
+		// read it off every folder in one call, so no folder is asked for its own HEAD here.
+		const branch: string = entry?.branch || tree.branch || "";
+		const promised = Boolean(tree.thread && back.has(String(tree.thread)));
+		return { tree, branch, promised, why: promised ? "" : await whyKept(tree) };
+	});
 	const items: Fragment[] = [];
-	for (const tree of board.trees) {
-		if (tree.thread && board.threads.has(tree.thread)) continue;
-		if (!registered.some((entry) => sameFolder(entry.path, tree.path))) continue;
-		const branch = treeBranch(repo, tree) || tree.branch || "";
-		// The name the disk answers with is the one that goes with the folder, recorded or not.
+	for (const { tree, branch, promised, why } of facts) {
 		if (branch) covered.add(branch);
-		// A thread the trash still holds comes back whole on `ctrl+z`, and its folder with it. Clearing it
-		// here would take a folder the board has promised to put back, so it is not a leftover at all.
-		if (tree.thread && back.has(String(tree.thread))) continue;
-		const why = whyKept(tree);
+		if (promised) continue;
 		items.push({
 			kind: "tree",
 			label: branch || basename(tree.path),
@@ -233,13 +340,18 @@ export function fragmentsOf(board: BoardLike): Fragment[] {
 		});
 	}
 	const kept = join(repo, AGENTS_DIR) + sep;
-	for (const entry of registered) {
-		// The main checkout is a registration of its own, and a tree outside `.agents` is where a human put it.
-		if (sameFolder(entry.path, repo) || !resolve(entry.path).startsWith(kept)) continue;
-		if (board.trees.some((tree) => sameFolder(tree.path, entry.path))) continue;
-		// The folder's commits are counted past the base its work would merge into. A repository that cannot
-		// name one leaves the count unreadable, and unreadable is not a folder holding nothing.
-		const why = whyKept({ path: entry.path, base: from }) || (from ? "" : "whose commits the board cannot count");
+	// The main checkout is a registration of its own, and a tree outside `.agents` is where a human put it.
+	const orphaned = registered.filter(
+		(entry) =>
+			!sameFolder(entry.path, repo) &&
+			resolve(entry.path).startsWith(kept) &&
+			!board.trees.some((tree) => sameFolder(tree.path, entry.path)),
+	);
+	// The folder's commits are counted past the base its work would merge into. A repository that cannot name
+	// one leaves the count unreadable, and unreadable is not a folder holding nothing.
+	const orphanWhy = await atMost(orphaned, GIT_AT_ONCE, (entry) => whyKept({ path: entry.path, base: from }));
+	for (const [at, entry] of orphaned.entries()) {
+		const why = orphanWhy[at] || (from ? "" : "whose commits the board cannot count");
 		items.push({
 			kind: "orphan",
 			label: entry.branch || basename(entry.path),
@@ -249,19 +361,19 @@ export function fragmentsOf(board: BoardLike): Fragment[] {
 			work: Boolean(why),
 		});
 	}
-	const named = gitIn(repo, ["for-each-ref", "refs/heads", "--format=%(refname:short)"], 10_000);
-	for (const name of (named.ok ? named.out.split("\n") : []).map((line) => line.trim()).filter(Boolean)) {
+	const { names, ahead } = await branchesHeld;
+	for (const name of names) {
 		const suffix = name.match(THREAD_BRANCH)?.[1];
 		if (!suffix || live.has(suffix) || covered.has(name)) continue;
-		const ahead = commitsPast(repo, from, name);
-		const why = ahead ? `it holds ${counted(ahead, "commit")} that ${ahead === 1 ? "is" : "are"} not in ${from}` : "";
+		const aheadOf = ahead.get(name) ?? 0;
+		const why = aheadOf ? `it holds ${counted(aheadOf, "commit")} that ${aheadOf === 1 ? "is" : "are"} not in ${from}` : "";
 		items.push({
 			kind: "branch",
 			label: name,
 			note: `a branch named after a thread the board no longer has${why ? `, and ${why}` : ""}`,
 			path: null,
 			branch: name,
-			work: Boolean(why),
+			work: Boolean(aheadOf),
 		});
 	}
 	return items;
@@ -275,9 +387,11 @@ export function fragmentsOf(board: BoardLike): Fragment[] {
  * for once the folder is really gone: a branch deleted under a folder git would not remove leaves the work
  * with no name to reach it by.
  */
-export function removeFragment(board: BoardLike, asked: { kind: string; path: string; branch: string }) {
-	const item = fragmentsOf(board).find((candidate) => sameFragment(candidate, asked));
+export async function removeFragment(board: BoardLike, asked: { kind: string; path: string; branch: string }) {
+	const item = (await fragmentsOf(board)).find((candidate) => sameFragment(candidate, asked));
 	if (!item) return null;
+	// The list held for the board is the one from before this removal, so the next read asks the disk again.
+	forgetFragments(board);
 	const repo = repoOf(board.folder);
 	const steps: Step[] = [];
 	if (item.kind === "branch") {
@@ -303,9 +417,9 @@ function sameFragment(item: Fragment, asked: { kind: string; path: string; branc
 
 
 /** Why a sweep left this folder standing: the work nobody has merged, said as one short phrase. */
-function whyKept(tree: TreeRecord): string {
-	const changes = changesIn(tree.path);
+async function whyKept(tree: TreeRecord): Promise<string> {
+	const changes = await changesIn(tree.path);
 	if (changes) return `it holds ${counted(changes, "uncommitted change")}`;
-	const commits = commitsPast(tree.path, tree.base ?? "", "HEAD");
+	const commits = await commitsPast(tree.path, tree.base ?? "", "HEAD");
 	return commits ? `it holds ${counted(commits, "commit")} that ${commits === 1 ? "is" : "are"} not in ${tree.base}` : "";
 }

@@ -704,7 +704,7 @@ function unlinkStep(file) {
 /** What earlier trash actions left behind: worktrees, folders and branches no thread answers for. */
 export async function onFragments(req, res, board) {
 	req.resume();
-	answer(res, 200, { items: fragmentsOf(board) });
+	answer(res, 200, { items: await fragmentsOf(board) });
 }
 
 
@@ -714,7 +714,7 @@ export async function onFragmentRemove(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const asked = { kind: String(body.kind ?? ""), path: body.path ? String(body.path) : "", branch: body.branch ? String(body.branch) : "" };
-	const result = removeFragment(board, asked);
+	const result = await removeFragment(board, asked);
 	if (!result) return void fail(res, 404, "no such fragment");
 	// The record of a tree that just went has to leave the board's file with it.
 	scheduleSave(board);

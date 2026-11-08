@@ -3,7 +3,7 @@
  * What git is being asked about: the repository a thread's worktree came from, the worktree itself,
  * and the ref a branch is cut from. Read only, so every function here is safe to call twice.
  */
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
@@ -17,6 +17,45 @@ export function gitIn(folder, args, timeout = 5000) {
 	} catch (error) {
 		return { ok: false, out: "", err: error.message };
 	}
+}
+
+
+
+/**
+ * One git command, waited for without holding the event loop. A read that asks git a dozen questions must
+ * not make every other tab, agent and poll wait for a dozen processes it never asked for, so the reads that
+ * add up — the leftovers scan, the facts a folder's row is drawn from — come through here.
+ */
+export function gitSoon(folder, args, timeout = 5000) {
+	return new Promise<{ ok: boolean; out: string; err: string }>((done) => {
+		execFile(
+			"git",
+			["-C", folder, ...args],
+			{ encoding: "utf8", timeout, maxBuffer: 32 * 1024 * 1024 },
+			(error, stdout, stderr) => {
+				const err = String(stderr ?? "").trim() || (error ? error.message : "");
+				done({ ok: !error, out: String(stdout ?? "").trim(), err });
+			},
+		);
+	});
+}
+
+
+
+/** The same question as `repoOf`, asked without holding the event loop. */
+export async function repoOfSoon(folder) {
+	if (!folder || !existsSync(folder)) return "";
+	const found = await gitSoon(folder, ["rev-parse", "--show-toplevel"]);
+	return found.ok && found.out ? found.out : "";
+}
+
+
+
+/** The same answer as `baseRef`, asked without holding the event loop. */
+export async function baseRefSoon(repo) {
+	if ((await gitSoon(repo, ["rev-parse", "--verify", "--quiet", "refs/heads/dev"])).ok) return "dev";
+	const head = await gitSoon(repo, ["rev-parse", "--abbrev-ref", "HEAD"]);
+	return head.ok && head.out && head.out !== "HEAD" ? head.out : "";
 }
 
 
