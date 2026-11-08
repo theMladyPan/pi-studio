@@ -452,7 +452,9 @@ export const server = createServer((req, res) => {
 		if (req.method === "GET" && url.pathname === "/fragments") {
 			const board = boardFrom(url, res);
 			if (!board) return;
-			onFragments(req, res, board);
+			// Awaited: the scan is a read that runs while the daemon keeps answering, and a failure in it
+			// reaches the catch below instead of the process.
+			await onFragments(req, res, board);
 			return;
 		}
 		// This board's settings as one document: the tree the panel draws, the value each control holds, and

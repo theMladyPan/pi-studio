@@ -4,7 +4,7 @@
  * still holds work nobody has seen.
  */
 import { existsSync, realpathSync, rmdirSync } from "node:fs";
-import { baseRef, gitIn, mainRepoOf, repoOf } from "../git/repo.ts";
+import { baseRef, gitIn, gitSoon, mainRepoOf, repoOf } from "../git/repo.ts";
 import { basename, dirname, resolve } from "node:path";
 import { AGENTS_DIR } from "./make.ts";
 
@@ -262,9 +262,24 @@ function patchProof(repo, target, head) {
 export function registrations(repo) {
 	const list = gitIn(repo, ["worktree", "list", "--porcelain", "-z"]);
 	if (!list.ok) return null;
+	return readRegistrations(list.out);
+}
+
+
+
+/** The same list, asked without holding the event loop. */
+export async function registrationsSoon(repo) {
+	const list = await gitSoon(repo, ["worktree", "list", "--porcelain", "-z"]);
+	return list.ok ? readRegistrations(list.out) : null;
+}
+
+
+
+/** What `git worktree list --porcelain -z` printed, as the entries both readers above answer with. */
+function readRegistrations(out) {
 	const entries = [];
 	let entry = null;
-	for (const field of list.out.split("\0")) {
+	for (const field of out.split("\0")) {
 		if (field.startsWith("worktree ")) {
 			if (entry) entries.push(entry);
 			entry = { path: field.slice("worktree ".length), head: "", branch: "" };
