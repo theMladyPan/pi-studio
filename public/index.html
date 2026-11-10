@@ -717,6 +717,11 @@
      on a line of its own below the stop. The chips keep the whole of the first line to fold into. */
   .composer .side { order: 2; flex: 1 1 100%; display: flex; flex-wrap: wrap;
     justify-content: flex-end; align-items: center; gap: 6px 8px; }
+  /* A file dragged over the field: the composer takes the accent frame, so the drop reads as landing in
+     the message rather than anywhere on the board. The bottom bar paints itself `background: none` under an
+     id, which outranks the rule above, so its own tint is set again here. */
+  .composer.dropping { box-shadow: inset 0 0 0 1px var(--accent-dim); background: rgba(88,166,255,.08); }
+  #composerHome .composer.dropping { background: rgba(88,166,255,.08); }
   .composer .modes { display: flex; gap: 5px; flex-wrap: wrap; margin-right: auto; }
   /* The group holds the hint and the two buttons, and never breaks: it sits at the right end of the
      row while the chips leave it room, and drops to the next line whole when they do not. Inside it
@@ -1269,7 +1274,7 @@
       <div class="refs" hidden></div>
       <div class="paths"></div>
       <div class="shots"></div>
-      <textarea class="msg" rows="1" placeholder="message the agent…  (enter sends, shift+enter for a new line, paste an image or pick files)"></textarea>
+      <textarea class="msg" rows="1" placeholder="message the agent…  (enter sends, shift+enter for a new line, drop a file or pick one)"></textarea>
     </div>
     <div class="side">
       <div class="modes">

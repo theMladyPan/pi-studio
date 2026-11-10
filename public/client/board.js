@@ -6009,10 +6009,13 @@ function makeComposer(entry) {
     stopping: false,
     /** The cards this message names beside the one it is written in. */
     named: [],
-    /** Images pasted into this field and paths picked for it: both travel with the message. */
+    /** Images pasted or dropped into this field, and paths picked for it: both travel with the message. */
     images: [],
-    /** The pastes still being read and shrunk, which a send waits for so its picture is not left behind. */
-    encodes: [],
+    /**
+     * The pastes and drops still being read, which a send waits for so the picture or the file it was
+     * about goes with the message rather than being left behind in the field.
+     */
+    pending: [],
     picked: new Map(),
   };
   wireComposer(inst);
@@ -6112,35 +6115,39 @@ function wireComposer(inst) {
     addEventListener("blur", lost);
   });
   inst.msg.addEventListener("paste", (event) => {
-    const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
+    const files = [...(event.clipboardData?.files ?? [])].filter(isPicture);
     if (files.length === 0) return;
     event.preventDefault();
-    // One message goes with four pictures, and the field holds no more than that: a paste that would make
-    // a fifth keeps the ones it can carry and says why.
-    const room = Math.max(0, MAX_PENDING_IMAGES - inst.images.length);
-    if (files.length > room) hintLine("only four pictures go with one message", true, inst);
-    for (const file of files.slice(0, room)) {
-      // The read and the shrink are asynchronous, so the field holds the promise: a message sent one
-      // instant after the paste waits for it and goes with the picture rather than the words alone.
-      const landing = readPastedImage(file).then((shot) => {
-        if (!shot) return;
-        // A picture with no thumbnail is one the daemon would drop on its way in: it reaches neither the
-        // model nor the history, so the human is told rather than left with a chip that sends nothing.
-        if (!shot.thumb) {
-          hintLine("this picture cannot be shown on the board — try a screenshot or a PNG", true, inst);
-          return;
-        }
-        // Two pastes in flight at once each saw their own room, so the list is capped here too.
-        if (inst.images.length >= MAX_PENDING_IMAGES) {
-          hintLine("only four pictures go with one message", true, inst);
-          return;
-        }
-        inst.images.push(shot);
-        drawAttachments(inst);
-      });
-      inst.encodes.push(landing);
-      landing.then(() => dropEncode(inst, landing), () => dropEncode(inst, landing));
-    }
+    for (const file of files) takePicture(inst, file);
+  });
+  // A file dragged from the desktop lands on the field the same way a paste does. A browser hands over
+  // the bytes and no path, so a picture joins the message as a picture and anything else is copied to the
+  // daemon's temp folder, where the message names the path the agent reads.
+  const dragsFiles = (event) => [...(event.dataTransfer?.types ?? [])].includes("Files");
+  // A drag that walks over the field's own buttons leaves the field and comes back as it goes, so the
+  // pointer's place is what says whether the mark stays up rather than the leaving itself.
+  const within = (event) => {
+    const box = inst.root.getBoundingClientRect();
+    return event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
+  };
+  inst.root.addEventListener("dragover", (event) => {
+    if (!dragsFiles(event)) return;
+    // Without this the browser leaves the page and opens the file, and the board goes with it.
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    inst.root.classList.add("dropping");
+  });
+  inst.root.addEventListener("dragleave", (event) => {
+    if (within(event)) return;
+    inst.root.classList.remove("dropping");
+  });
+  inst.root.addEventListener("drop", (event) => {
+    if (!dragsFiles(event)) return;
+    event.preventDefault();
+    inst.root.classList.remove("dropping");
+    // The caret follows the drop: the words typed next are about the file that just landed here.
+    inst.msg.focus();
+    takeDropped(inst, event.dataTransfer);
   });
   inst.send.addEventListener("click", () => void sendMessage(inst));
   inst.stopBtn.addEventListener("click", () => void stopRun(inst));
@@ -6174,6 +6181,20 @@ composerHome.appendChild(makeComposer(null).root);
 new ResizeObserver(() => {
   document.documentElement.style.setProperty("--composer-h", `${composerHome.offsetHeight}px`);
 }).observe(composerHome);
+// A file dropped anywhere but a field would otherwise open in the tab and take the whole board with it,
+// and the board is a page the human did not ask to leave. The browser's own handling is turned off for
+// the page, and a drop that landed nowhere says where one lands.
+window.addEventListener("dragover", (event) => {
+  if (![...(event.dataTransfer?.types ?? [])].includes("Files")) return;
+  event.preventDefault();
+});
+window.addEventListener("drop", (event) => {
+  if (![...(event.dataTransfer?.types ?? [])].includes("Files")) return;
+  // A field took it already: the composer's own listener ran on the way up, and its press stands.
+  const landed = event.defaultPrevented;
+  event.preventDefault();
+  if (!landed) footNote("drop a file on a message field", true);
+});
 
 // ---------- hints ---------------------------------------------------------
 /**
@@ -8659,6 +8680,9 @@ function shrinkImage(dataUrl, mimeType) {
   });
 }
 
+/** The files the picture pipeline takes: what a model reads as a picture rather than as a path. */
+const isPicture = (file) => (file?.type ?? "").startsWith("image/");
+
 /** One pasted file as the picture the field carries, or null for a file the browser cannot read. */
 function readPastedImage(file) {
   return new Promise((resolve) => {
@@ -8669,6 +8693,88 @@ function readPastedImage(file) {
     reader.addEventListener("abort", () => resolve(null));
     reader.readAsDataURL(file);
   });
+}
+
+/**
+ * One picture into the field: read, shrunk, and given a thumbnail. A paste and a drop both come here, so
+ * the two behave alike. The read is asynchronous, so the field holds the promise: a message sent one
+ * instant after the picture landed waits for it and goes with the picture rather than the words alone.
+ */
+function takePicture(inst, file) {
+  // One message goes with four pictures, and the field holds no more than that.
+  if (inst.images.length >= MAX_PENDING_IMAGES) {
+    hintLine("only four pictures go with one message", true, inst);
+    return;
+  }
+  const landing = readPastedImage(file).then((shot) => {
+    if (!shot) return;
+    // A picture with no thumbnail is one the daemon would drop on its way in: it reaches neither the
+    // model nor the history, so the human is told rather than left with a chip that sends nothing.
+    if (!shot.thumb) {
+      hintLine("this picture cannot be shown on the board — try a screenshot or a PNG", true, inst);
+      return;
+    }
+    // Two pastes or drops in flight at once each saw their own room, so the list is capped here too.
+    if (inst.images.length >= MAX_PENDING_IMAGES) {
+      hintLine("only four pictures go with one message", true, inst);
+      return;
+    }
+    inst.images.push(shot);
+    drawAttachments(inst);
+  });
+  inst.pending.push(landing);
+  landing.then(() => settle(inst, landing), () => settle(inst, landing));
+}
+
+/**
+ * What one dropped file becomes. A picture is a picture, and anything else is a file the browser cannot
+ * name by path: the daemon keeps a copy of it and the message carries where that copy is, exactly as the
+ * files button attaches a path. The transfer is read before anything is awaited, because the browser
+ * empties it once the event that carried it is over.
+ */
+function takeDropped(inst, transfer) {
+  const folders = new Set(
+    [...(transfer?.items ?? [])]
+      .map((one) => (one.kind === "file" ? one.webkitGetAsEntry?.() : null))
+      .filter((entry) => entry?.isDirectory)
+      .map((entry) => entry.name),
+  );
+  // A folder cannot be read by a browser, so it is named rather than sent as an empty file.
+  if (folders.size) hintLine("a folder cannot be dropped — use files to attach one", true, inst);
+  for (const file of [...(transfer?.files ?? [])]) {
+    if (folders.has(file.name)) continue;
+    if (isPicture(file)) takePicture(inst, file);
+    else takeFile(inst, file);
+  }
+}
+
+/**
+ * One dropped file that is not a picture. The bytes go up, the daemon keeps its copy, and the path comes
+ * back as a chip on the field, so the message names the file the agent's own tools read.
+ */
+function takeFile(inst, file) {
+  const landing = (async () => {
+    hintLine(`keeping ${file.name}\u2026`, false, inst);
+    try {
+      const response = await fetch(`/drop?${auth}&name=${encodeURIComponent(file.name)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file,
+      });
+      if (!response.ok) throw new Error((await response.text()).trim().slice(0, 80) || response.statusText);
+      const kept = await response.json();
+      const path = String(kept?.path ?? "");
+      if (!path) throw new Error("the daemon kept no copy");
+      inst.picked.set(path, { dir: false });
+      drawChips(inst);
+      if (!picker.hidden) drawList();
+      hintLine(`${file.name} goes with the message`, false, inst);
+    } catch (error) {
+      hintLine(`could not keep ${file.name}: ${error.message || error}`, true, inst);
+    }
+  })();
+  inst.pending.push(landing);
+  landing.then(() => settle(inst, landing), () => settle(inst, landing));
 }
 
 /** One picture re-encoded smaller from the source the field holds, for a body that would not otherwise fit. */
@@ -8685,10 +8791,10 @@ function reencodeImage(image, maxEdge, quality) {
   });
 }
 
-/** A landed paste leaves the field's list, so a long session of them holds no finished work. */
-function dropEncode(inst, landing) {
-  const at = inst.encodes.indexOf(landing);
-  if (at >= 0) inst.encodes.splice(at, 1);
+/** A landed paste or drop leaves the field's list, so a long session of them holds no finished work. */
+function settle(inst, landing) {
+  const at = inst.pending.indexOf(landing);
+  if (at >= 0) inst.pending.splice(at, 1);
 }
 
 // ---------- file picker --------------------------------------------------
@@ -9356,9 +9462,12 @@ window.addEventListener("resize", () => {
 });
 
 // ---------- sending ------------------------------------------------------
-/** Paths travel as text, which the agent's own file tools read directly. */
-function pickedPathsText() {
-  const lines = [...pickPaths()].map(([path, meta]) => `${path}${meta.dir ? "/" : ""}`);
+/**
+ * Paths travel as text, which the agent's own file tools read directly. A path picked with the files
+ * button and one a dropped file was copied to are the same thing here.
+ */
+function pickedPathsText(inst) {
+  const lines = [...inst.picked].map(([path, meta]) => `${path}${meta.dir ? "/" : ""}`);
   return `Files and folders:\n${lines.join("\n")}`;
 }
 
@@ -9390,12 +9499,12 @@ async function messageBody(fields, images) {
 async function sendMessage(inst = activeComposer) {
   if (!inst || inst.send.disabled) return;
   // Enter fires again while the first send is in flight; a second body would carry a new id,
-  // slip past the server's duplicate guard and deliver the message twice. A paste is read and shrunk after
+  // slip past the server's duplicate guard and deliver the message twice. A paste or a drop is read after
   // the event that made it, so the button is claimed before that wait too: a message sent one instant after
-  // a paste goes with the picture, and a second Enter during the wait sends nothing twice.
+  // one goes with its picture or its file, and a second Enter during the wait sends nothing twice.
   inst.send.disabled = true;
   try {
-    if (inst.encodes.length) await Promise.allSettled([...inst.encodes]);
+    if (inst.pending.length) await Promise.allSettled([...inst.pending]);
     const draft = inst.msg.value;
     const typed = draft.trim();
     if (!typed && inst.images.length === 0 && inst.picked.size === 0) return;
@@ -9403,7 +9512,7 @@ async function sendMessage(inst = activeComposer) {
     // newline in it is prose that happens to start with `!` — nobody types a two-line command — and stays a
     // message, and a space before the `!` is a message too, so "!important" in a sentence is never run.
     if (draft.startsWith("!") && !draft.includes("\n")) return runCommand(inst, draft, draft.slice(1).trim());
-    const text = inst.picked.size === 0 ? typed : `${typed}${typed ? "\n\n" : ""}${pickedPathsText()}`;
+    const text = inst.picked.size === 0 ? typed : `${typed}${typed ? "\n\n" : ""}${pickedPathsText(inst)}`;
     // What this message carries, so a pick or a keystroke made while it travels is still there.
     const sentPaths = [...inst.picked.keys()];
     const sentImages = [...inst.images];

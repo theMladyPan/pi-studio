@@ -72,7 +72,17 @@ export function send(target, payload) {
 
 // ---------- http plumbing --------------------------------------------------
 
+/** Read a body as text, or `undefined` when it outgrew the limit. */
 export function readBody(req, limit = MAX_BODY_BYTES) {
+	return readBytes(req, limit).then((bytes) => bytes?.toString("utf8"));
+}
+
+
+/**
+ * Read a body as the bytes that arrived, or `undefined` when it outgrew the limit. A dropped file is not
+ * text, so the body is kept whole rather than decoded into a string a write would mangle.
+ */
+export function readBytes(req, limit = MAX_BODY_BYTES) {
 	return new Promise((done) => {
 		const chunks = [];
 		let size = 0;
@@ -82,7 +92,7 @@ export function readBody(req, limit = MAX_BODY_BYTES) {
 			if (size > limit) oversized = true;
 			else chunks.push(chunk);
 		});
-		req.on("end", () => done(oversized ? undefined : Buffer.concat(chunks).toString("utf8")));
+		req.on("end", () => done(oversized ? undefined : Buffer.concat(chunks)));
 		req.on("error", () => done(undefined));
 	});
 }

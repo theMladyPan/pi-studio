@@ -26,6 +26,7 @@ import { LOOPBACK, bindHost, boardUrls, isLoopback } from "./listen.ts";
 import { onMode, onPath, onThread, onThreadSpawn } from "./routes/board/thread.ts";
 import { onAnswer, onAsk, onPause } from "./routes/board/answer.ts";
 import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.ts";
+import { onDrop } from "./routes/board/drop.ts";
 import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
 import { onPrompt, onPromptWrite, onPrompts, onWorkspacePrompt, onWorkspacePromptWrite } from "./routes/board/prompts.ts";
 import { onSkill } from "./routes/board/skill.ts";
@@ -536,6 +537,14 @@ export const server = createServer((req, res) => {
 				const board = boardFrom(url, res);
 				if (!board) return;
 				await onStop(req, res, board);
+				return;
+			}
+			// A file dropped onto a message field. The body is the file itself and the name rides in the query,
+			// so this one is read here rather than from `routing`: a handler there is handed no query.
+			if (url.pathname === "/drop") {
+				const board = boardFrom(url, res);
+				if (!board) return;
+				await onDrop(req, res, board, url.searchParams.get("name") ?? "");
 				return;
 			}
 		}

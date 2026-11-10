@@ -526,6 +526,18 @@ commit's own account rather than on a check run now, the section below says so.
   the amber ring (`.card:has(.composer:focus-within)`); a folded card shows only its head, so the field
   is hidden with the body and comes back with it. A panel or an editor takes Escape first and stops it
   there, so closing one costs neither the selection nor the draft.
+- **A file dropped on a field goes with the message.** Dragging one from the desktop onto a message
+  field marks the field and the drop lands there: a picture is read and shrunk the way a paste is and
+  drawn as a thumbnail, and anything else — a PDF, a deck, a spreadsheet, a page of markdown — is sent up
+  as bytes, because a browser hands over a dropped file's contents and no path. The daemon keeps a copy in
+  its temp folder, clear of the workspace so a drop is not a change in the human's own tree, and the field
+  carries that path as a chip, exactly as the files button attaches one. A reboot clears the folder; a
+  daemon holding its own state keeps its drops beside it, the way the scratch row does; the newest 40
+  drops up to 200 MB are kept and the rest go, a name that would climb out of that folder is taken as a
+  name alone, and a folder cannot be dropped at all because a browser cannot read one, which the field
+  says. A send waits for the read or the copy, so a message sent the instant after a drop goes with its
+  picture or its file, and a drop that misses every field is caught at the window: the browser would
+  otherwise open the file and take the board with it.
 - **One message can name several cards.** `r` on a selected card names it in a field instead of moving
   the field: a thread card takes the caret to its own field, and any other card joins the message being
   written, or the message of the thread that answers it when nothing is focused. The named cards sit as

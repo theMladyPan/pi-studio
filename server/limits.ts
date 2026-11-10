@@ -16,6 +16,22 @@ export const MAX_ROW_CHARS = 64_000;
 export const MAX_NOTE_CHARS = 100_000;
 
 
+/**
+ * What one file dropped onto a message field may weigh. It is uploaded whole in one request, and a copy
+ * of it is kept for the agent to read, so the ceiling is generous enough for a deck, a spreadsheet or a
+ * scanned page and small enough that a video does not land in the temp folder.
+ */
+export const MAX_DROP_BYTES = 20_000_000;
+
+
+/**
+ * The dropped files kept at once. Each drop is a copy, and a board that lives for weeks would otherwise
+ * grow a folder nothing ever empties: the oldest go quietly once there are more than fit here.
+ */
+export const MAX_DROPPED_FILES = 40;
+export const MAX_DROPPED_TOTAL = 200_000_000;
+
+
 /** A source card carries a whole file, so the ceiling is higher and still finite. */
 export const MAX_SOURCE_CHARS = 200_000;
 

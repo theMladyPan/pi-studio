@@ -91,6 +91,20 @@ export function boardFile(workspace: { id: string }) {
 	return join(STATE_DIR, "boards", `${workspace.id}.json`);
 }
 
+/**
+ * Where a file dropped onto a message field waits for the agent to read it.
+ *
+ * A drop is temporary. The bytes came from the human's own disk and the copy exists only so the message
+ * can name a path, so it sits in the machine's temp folder where a reboot clears it — and a daemon with a
+ * state folder of its own keeps its drops beside that state, the way its scratch row does.
+ */
+export const DROP_DIR = INSTANCE ? join(STATE_DIR, "drops") : join(tmpdir(), "pi-studio-drops");
+
+/** One folder per board inside it, so two boards never explain away each other's files. */
+export function droppedDir(boardId: string) {
+	return join(DROP_DIR, String(boardId ?? "").replace(/[^0-9a-z]/gi, "") || "board");
+}
+
 /** Read a JSON file, or the fallback when it is missing, unreadable or not JSON at all. */
 export function readJsonFile<T>(file: string, fallback: T): T {
 	try {
