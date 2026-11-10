@@ -301,6 +301,25 @@ commit's own account rather than on a check run now, the section below says so.
   keeps the one the card had. `POST /rename {cardId, title}` stores it on the card, or on the thread
   when the id names a thread, because a thread is drawn as a card of its own. The press that starts a
   rename belongs to the name, so the card does not also drag, and one press still drags it.
+- **A note leaves as a page.** A note's head carries the download press, and `POST /card/pdf {cardId}`
+  lays its markdown out on A4 and writes it to `$TMPDIR/pi-studio/<title>-<id6>.pdf`, then opens the
+  desktop's folder browser with the file in it. The PDF is written by the daemon itself — `server/pdf/`
+  holds the writer and the layout, drawing with the fonts every reader already carries — so nothing is
+  installed and no browser is asked to print. Text stays text, which is what makes it selectable and
+  searchable. The blocks a note is read by are the card's own: headings, prose, lists, quotes, tables
+  and code keep their order, a footnote is numbered where the body pointed at it and printed at the
+  foot, and bold, italic and monospaced are the faces the page asks for. Two things a page cannot draw
+  are named instead of dropped: a chart fence becomes the one line `auditMarkdown` already gives it, and
+  a diagram or a drawing says how many lines it was and that the card holds the picture. Characters the
+  standard fonts have no glyph for are said in characters they do have (`→` is `->`, `✓` is `[x]`, a
+  box character becomes `+ - |`), because a row of empty boxes reads worse than a stand-in. The page
+  breaks where a block stops fitting, a code block fills the page it is on and carries on at the top of
+  the next, a table too long for one page repeats its header, and every page carries the title and
+  `page n / m`. Which browser opens is the desktop's own answer to `xdg-mime query default
+  inode/directory`, asked first: a browser whose `--help` offers `--select` is handed the file, one
+  that does not is given the folder, and a machine with neither opens nothing and the footer says so
+  with the file's own name. The press is not in `THREAD_ROUTES`: a child may write a card, and may not
+  put a file on the human's disk.
 - **A card draws only what it has.** A thread card's `text` is empty by design — the turns are the
   conversation — so an empty text draws no bubble and no state line.
 - **A card in the rail sits under the card it follows from.** The list is still newest first, but a

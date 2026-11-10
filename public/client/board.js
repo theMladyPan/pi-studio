@@ -2197,6 +2197,14 @@ const TRASH_GLYPH =
 const OPEN_GLYPH =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6.4 1.8H1.9v8.3h8.3V5.6M7.2 1.8h3v3M10.2 1.8 5.4 6.6"/></svg>';
 
+/**
+ * An arrow going down into a tray: the press that saves a note as a pdf. A page drawn around it at eleven
+ * pixels reads as a smudge, so the shape is the plain one every file manager uses for "save this", and the
+ * button's own title says what the file is. Drawn for the reason the pin and the bin are.
+ */
+const PDF_GLYPH =
+  '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.7v5.4M3.8 5.2 6 7.4l2.2-2.2M2.2 8.4v2.1h7.6V8.4"/></svg>';
+
 function makeCard(data, quiet = false) {
   const isSource = data.type === "source";
   const isQuestion = data.type === "question";
@@ -2252,6 +2260,7 @@ function makeCard(data, quiet = false) {
     <span class="chip"></span>
     <button type="button" class="copy-id" title="copy this card's id">⧉</button>
     <button type="button" class="open-editor" title="open this file in the text editor" aria-label="open this file in the text editor">${OPEN_GLYPH}</button>
+    <button type="button" class="save-pdf" title="save this note as a pdf" aria-label="save this note as a pdf">${PDF_GLYPH}</button>
     <button class="pin" title="pin this card" aria-label="pin this card">${PIN_GLYPH}</button>
     <button class="min" title="minimize this card" aria-label="minimize this card">▾</button>
     <button class="reply" title="ask a follow-up about this card" aria-label="ask a follow-up about this card">↩</button>
@@ -2344,6 +2353,12 @@ function makeCard(data, quiet = false) {
   head.querySelector(".open-editor").addEventListener("click", (event) => {
     event.stopPropagation();
     void openCardFile(entry);
+  });
+  // A note leaves as a page: the daemon lays its markdown out and writes the file, then opens the folder
+  // browser on it. The press only asks, so what the file became is the daemon's sentence to say.
+  head.querySelector(".save-pdf").addEventListener("click", (event) => {
+    event.stopPropagation();
+    void saveCardPdf(entry);
   });
   if (data.mini) setMini(card, true);
   capField(card, height);
@@ -2954,6 +2969,9 @@ function paintCard(entry, data) {
   // Only a source card holds a file, so only a source card offers the press that opens one.
   const openBtn = entry.head.querySelector(".open-editor");
   if (openBtn) openBtn.style.display = isSource ? "" : "none";
+  // A note is the one card that is a document, so it is the one that leaves as a pdf.
+  const pdfBtn = entry.head.querySelector(".save-pdf");
+  if (pdfBtn) pdfBtn.style.display = data.type === "note" ? "" : "none";
   // A thread is sent without `pinned`, so its head shows no pin rather than one that forgets itself.
   const pinBtn = entry.head.querySelector(".pin");
   if (pinBtn) pinBtn.style.display = data.type === "sticky" ? "none" : "";
@@ -3469,6 +3487,30 @@ async function openCardFile(entry) {
     footNote(`opened ${data.file ?? "the card's file"} in the text editor`);
   } catch (error) {
     footNote(`could not open the file: ${error.message || error}`, true);
+  }
+}
+
+/**
+ * The note as a page on disk. The daemon writes it into the machine's temp folder and opens the folder
+ * browser with the file picked out, so the footer names the file and who opened it.
+ */
+async function saveCardPdf(entry) {
+  try {
+    const response = await fetch(`/card/pdf?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: entry.id }),
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
+    const data = await response.json();
+    // A browser that cannot pick a file out opens the folder it is in, so the line says which of the two
+    // happened rather than promising a selection it did not make.
+    const shown = data.opener
+      ? `pdf saved · ${data.opener} is open ${data.selected ? "on it" : "on the folder"} · ${data.file}`
+      : `pdf saved, but no file browser answered · ${data.file}`;
+    footNote(shown, !data.opener);
+  } catch (error) {
+    footNote(`could not save the pdf: ${error.message || error}`, true);
   }
 }
 

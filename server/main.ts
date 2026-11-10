@@ -30,6 +30,7 @@ import { onDrop } from "./routes/board/drop.ts";
 import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
 import { onPrompt, onPromptWrite, onPrompts, onWorkspacePrompt, onWorkspacePromptWrite } from "./routes/board/prompts.ts";
 import { onSkill } from "./routes/board/skill.ts";
+import { onCardPdf } from "./routes/board/pdf.ts";
 import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onThreadCollect, onUndo } from "./routes/board/lifecycle.ts";
 import { onShell } from "./routes/board/shell.ts";
 
@@ -490,6 +491,9 @@ export const server = createServer((req, res) => {
 				// Opening a file in the human's editor starts a program on their desktop, so this one is not in
 				// THREAD_ROUTES: a child may draw a card, and may not run what a card names.
 				"/card/open": onOpenCard,
+				// The press that saves a note as a pdf. It writes into the human's temp folder and opens their file
+				// browser, so it is not in THREAD_ROUTES: a child may write a card, and may not put a file on disk.
+				"/card/pdf": onCardPdf,
 				"/skill": onSkill,
 				"/card/ask": onAsk,
 				"/edit": onEdit,
