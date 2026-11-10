@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { answer, fail, readJson } from "../../http.ts";
 import { notePdf } from "../../pdf/card-pdf.ts";
+import { drawFigures } from "../../pdf/figures.ts";
 import { programOnPath } from "../../paths.ts";
 
 /** The folder the exports land in, so a press does not scatter files through the temp area. */
@@ -109,8 +110,9 @@ export async function revealFile(file: string, find: (name: string) => string = 
 }
 
 /**
- * The press on a note's pdf button: read the card, write its page into the temp folder, and open the file
- * browser on it. Only a note answers: a source card holds a file, and a thread is not a document.
+ * The press on a note's pdf button: read the card, draw whatever pictures its browser can, write the page into
+ * the temp folder, and open the file browser on it. Only a note answers: a source card holds a file, and a
+ * thread is not a document.
  */
 /** A card as this route reads it: the words, the name, and when it was written. */
 type Held = { id: string; type: string; title?: string; markdown?: string; at?: number };
@@ -140,16 +142,21 @@ export async function cardPdf(
 	if (!held) return void fail(res, 409, "no such card");
 	if (held.type !== "note") return void fail(res, 409, "only a note becomes a pdf");
 	const file = join(tmpdir(), FOLDER, pdfName(held.title || "note", held.id));
+	const markdown = String(held.markdown ?? "");
+	// The one decision a page makes about its pictures: a browser on this machine draws the charts and
+	// diagrams, and a machine without one keeps the description each of them already carries.
+	const pictures = await drawFigures(markdown);
 	try {
 		mkdirSync(dirname(file), { recursive: true });
 		writeFileSync(
 			file,
 			notePdf({
 				title: held.title || "note",
-				markdown: String(held.markdown ?? ""),
+				markdown,
 				board: String(board.name ?? ""),
 				at: Number(held.at) || Date.now(),
 				id: held.id,
+				pictures,
 			}),
 		);
 	} catch (error) {

@@ -9,6 +9,8 @@
  * nearest thing the page can say rather than as a row of empty boxes.
  */
 
+import { deflateSync } from "node:zlib";
+
 /** A4 portrait, the page a note is read on. */
 export const PAGE_WIDTH = 595.28;
 export const PAGE_HEIGHT = 841.89;
@@ -229,6 +231,9 @@ function num(value: number): string {
 	return String(Object.is(rounded, -0) ? 0 : rounded);
 }
 
+/** A picture as a page can take it: pixels the reader draws, without a file behind them. */
+export type Picture = { width: number; height: number; rgb: Buffer };
+
 /**
  * One page's worth of drawing. The calls are collected as operators and handed over when the document is
  * assembled, so a page can be drawn in the order the reader's eye takes it.
@@ -239,6 +244,10 @@ export type Sheet = {
 	text(face: Face, size: number, x: number, y: number, value: string): void;
 	box(x: number, y: number, width: number, height: number): void;
 	line(x1: number, y1: number, x2: number, y2: number, thickness: number): void;
+	/** Pixels on the page, from the bottom left corner, the way every other drawing call places itself. */
+	image(x: number, y: number, width: number, height: number, picture: Picture): void;
+	/** The pictures this page drew, in the order it drew them: what the page has to declare. */
+	pictures(): Picture[];
 	/** The operators themselves, which the assembler writes into the page's one stream. */
 	operators(): string;
 };
@@ -246,6 +255,7 @@ export type Sheet = {
 /** A blank page, drawn on from the bottom left the way the format counts. */
 export function sheet(): Sheet {
 	const ops: string[] = [];
+	const drawn: Picture[] = [];
 	return {
 		paint(grey) {
 			ops.push(`${num(grey)} g`, `${num(grey)} G`);
@@ -261,6 +271,15 @@ export function sheet(): Sheet {
 		},
 		line(x1, y1, x2, y2, thickness) {
 			ops.push(`${num(thickness)} w`, `${num(x1)} ${num(y1)} m ${num(x2)} ${num(y2)} l S`);
+		},
+		image(x, y, width, height, picture) {
+			// The unit square a picture is drawn in is mapped onto the place it goes, which is the one
+			// transformation the format needs for this.
+			drawn.push(picture);
+			ops.push(`q ${num(width)} 0 0 ${num(height)} ${num(x)} ${num(y)} cm /Im${drawn.length} Do Q`);
+		},
+		pictures() {
+			return drawn;
 		},
 		operators() {
 			return `${ops.join("\n")}\n`;
@@ -278,46 +297,73 @@ const FACE_ID: Record<Face, string> = {
 };
 
 /**
- * The pages as one file: a catalog, a tree of pages, the five fonts, then each page and its stream, and
- * the table a reader looks everything up in. The streams are written as they are rather than compressed,
- * because a card is a few pages of text and a file a person can open in an editor is worth more than the
- * few kilobytes a deflate would save.
+ * The pages as one file: a catalog, a tree of pages, the five fonts, then each page and its stream, then
+ * every picture the pages drew, and the table a reader looks everything up in.
+ *
+ * The text streams are written as they are rather than compressed, because a card is a few pages of text
+ * and a file a person can open in an editor is worth more than the few kilobytes a deflate would save. A
+ * picture is the exception: pixels are already the largest thing in the file, so they are deflated.
  */
 export function documentOf(sheets: Sheet[]): Buffer {
-	const bodies: string[] = [];
-	// 1 is the catalog, 2 the page tree, then one object per face, then two per page.
+	// 1 is the catalog, 2 the page tree, one object per face, two per page, then one per picture. A picture
+	// used on two pages is one object, so its bytes are paid for once.
 	const firstFace = 3;
 	const firstPage = firstFace + FACES.length;
+	const firstPicture = firstPage + sheets.length * 2;
 	const pageId = (index: number) => firstPage + index * 2;
 	const kids = sheets.map((_sheet, index) => `${pageId(index)} 0 R`).join(" ");
 
-	bodies.push("<< /Type /Catalog /Pages 2 0 R >>");
-	bodies.push(`<< /Type /Pages /Kids [${kids}] /Count ${sheets.length} >>`);
+	const pictures = new Map<Picture, number>();
+	for (const one of sheets) {
+		for (const picture of one.pictures()) if (!pictures.has(picture)) pictures.set(picture, firstPicture + pictures.size);
+	}
+
+	const objects: Buffer[] = [];
+	objects.push(Buffer.from("<< /Type /Catalog /Pages 2 0 R >>", "latin1"));
+	objects.push(Buffer.from(`<< /Type /Pages /Kids [${kids}] /Count ${sheets.length} >>`, "latin1"));
 	for (const face of FACES) {
-		bodies.push(`<< /Type /Font /Subtype /Type1 /BaseFont /${FACE_NAME[face]} /Encoding /WinAnsiEncoding >>`);
+		objects.push(Buffer.from(`<< /Type /Font /Subtype /Type1 /BaseFont /${FACE_NAME[face]} /Encoding /WinAnsiEncoding >>`, "latin1"));
 	}
 	for (const [index, one] of sheets.entries()) {
 		const stream = one.operators();
-		const resources = FACES.map((face) => `/${FACE_ID[face]} ${firstFace + FACES.indexOf(face)} 0 R`).join(" ");
-		bodies.push(
-			`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(PAGE_WIDTH)} ${num(PAGE_HEIGHT)}] ` +
-				`/Resources << /Font << ${resources} >> >> /Contents ${pageId(index) + 1} 0 R >>`,
+		const fonts = FACES.map((face) => `/${FACE_ID[face]} ${firstFace + FACES.indexOf(face)} 0 R`).join(" ");
+		const xobjects = one.pictures().map((picture, at) => `/Im${at + 1} ${pictures.get(picture)} 0 R`).join(" ");
+		objects.push(
+			Buffer.from(
+				`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(PAGE_WIDTH)} ${num(PAGE_HEIGHT)}] ` +
+					`/Resources << /Font << ${fonts} >>${xobjects ? ` /XObject << ${xobjects} >>` : ""} >> ` +
+					`/Contents ${pageId(index) + 1} 0 R >>`,
+				"latin1",
+			),
 		);
-		bodies.push(`<< /Length ${Buffer.byteLength(stream, "latin1")} >>\nstream\n${stream}endstream`);
+		objects.push(Buffer.from(`<< /Length ${Buffer.byteLength(stream, "latin1")} >>\nstream\n${stream}endstream`, "latin1"));
 	}
+	for (const [picture] of pictures) objects.push(pictureObject(picture));
 
 	const parts: Buffer[] = [Buffer.from("%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3\n", "latin1")];
 	const offsets: number[] = [];
 	let at = parts[0].length;
-	for (const [index, body] of bodies.entries()) {
+	for (const [index, body] of objects.entries()) {
 		offsets.push(at);
-		const bytes = Buffer.from(`${index + 1} 0 obj\n${body}\nendobj\n`, "latin1");
+		const bytes = Buffer.concat([Buffer.from(`${index + 1} 0 obj\n`, "latin1"), body, Buffer.from("\nendobj\n", "latin1")]);
 		parts.push(bytes);
 		at += bytes.length;
 	}
-	const xref = [`xref`, `0 ${bodies.length + 1}`, `0000000000 65535 f `];
+	const xref = [`xref`, `0 ${objects.length + 1}`, `0000000000 65535 f `];
 	for (const offset of offsets) xref.push(`${String(offset).padStart(10, "0")} 00000 n `);
-	const trailer = [`trailer`, `<< /Size ${bodies.length + 1} /Root 1 0 R >>`, `startxref`, String(at), `%%EOF`, ""];
+	const trailer = [`trailer`, `<< /Size ${objects.length + 1} /Root 1 0 R >>`, `startxref`, String(at), `%%EOF`, ""];
 	parts.push(Buffer.from(`${xref.join("\n")}\n${trailer.join("\n")}`, "latin1"));
 	return Buffer.concat(parts);
+}
+
+/**
+ * One picture as an object a page can point at. The pixels go in as a deflated run of RGB rows, which is
+ * the shape a reader wants and the shape a browser's own encoding has to be taken apart into.
+ */
+function pictureObject(picture: Picture): Buffer {
+	const data = deflateSync(picture.rgb);
+	const head =
+		`<< /Type /XObject /Subtype /Image /Width ${picture.width} /Height ${picture.height} ` +
+		`/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length ${data.length} >>\nstream\n`;
+	return Buffer.concat([Buffer.from(head, "latin1"), data, Buffer.from("\nendstream", "latin1")]);
 }

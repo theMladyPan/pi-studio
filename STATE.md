@@ -308,18 +308,23 @@ commit's own account rather than on a check run now, the section below says so.
   installed and no browser is asked to print. Text stays text, which is what makes it selectable and
   searchable. The blocks a note is read by are the card's own: headings, prose, lists, quotes, tables
   and code keep their order, a footnote is numbered where the body pointed at it and printed at the
-  foot, and bold, italic and monospaced are the faces the page asks for. Two things a page cannot draw
-  are named instead of dropped: a chart fence becomes the one line `auditMarkdown` already gives it, and
-  a diagram or a drawing says how many lines it was and that the card holds the picture. Characters the
-  standard fonts have no glyph for are said in characters they do have (`→` is `->`, `✓` is `[x]`, a
-  box character becomes `+ - |`), because a row of empty boxes reads worse than a stand-in. The page
-  breaks where a block stops fitting, a code block fills the page it is on and carries on at the top of
-  the next, a table too long for one page repeats its header, and every page carries the title and
-  `page n / m`. Which browser opens is the desktop's own answer to `xdg-mime query default
-  inode/directory`, asked first: a browser whose `--help` offers `--select` is handed the file, one
-  that does not is given the folder, and a machine with neither opens nothing and the footer says so
-  with the file's own name. The press is not in `THREAD_ROUTES`: a child may write a card, and may not
-  put a file on the human's disk.
+  foot, and bold, italic and monospaced are the faces the page asks for. A chart, a diagram and a
+  drawing are pictures the board's own two bundles make, so the page asks the browser on this machine
+  for them, one headless run per fence: the chart bundle draws at the card's size in the light palette
+  a page needs, the diagram bundle draws in a light theme, and the empty paper around each comes off
+  before it is placed. What comes back is a PNG, which the daemon takes apart into the rows a PDF holds
+  and deflates itself. **The one decision a page makes is whether a browser is installed.** On a machine
+  with none — and for a fence the bundle refuses, or past the eighth fence of a note — the description
+  stands in: a chart becomes the line `auditMarkdown` already gives it, and a diagram or a drawing says
+  how many lines it was. Characters the standard fonts have no glyph for are said in characters they do
+  have (`→` is `->`, `✓` is `[x]`, a box character becomes `+ - |`), because a row of empty boxes reads
+  worse than a stand-in. The page breaks where a block stops fitting, a code block fills the page it is on
+  and carries on at the top of the next, a table too long for one page repeats its header, and every page
+  carries the title and `page n / m`. Which browser opens is the desktop's own answer to
+  `xdg-mime query default inode/directory`, asked first: a browser whose `--help` offers `--select` is
+  handed the file, one that does not is given the folder, and a machine with neither opens nothing and the
+  footer says so with the file's own name. The press is not in `THREAD_ROUTES`: a child may write a card,
+  and may not put a file on the human's disk.
 - **A card draws only what it has.** A thread card's `text` is empty by design — the turns are the
   conversation — so an empty text draws no bubble and no state line.
 - **A card in the rail sits under the card it follows from.** The list is still newest first, but a

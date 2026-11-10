@@ -9,7 +9,8 @@
  */
 import { auditMarkdown } from "../chart-audit.ts";
 import { PAGE_HEIGHT, PAGE_WIDTH, documentOf, measure, sheet } from "./write.ts";
-import type { Face, Sheet } from "./write.ts";
+import type { Face, Picture, Sheet } from "./write.ts";
+import { SCALE } from "./chrome.ts";
 
 /** What a note becomes: the card's own words, and enough about where they came from to find the card again. */
 export type PdfNote = {
@@ -21,6 +22,11 @@ export type PdfNote = {
 	at: number;
 	/** The card's id, shortened under the title: how its owner says which card this is. */
 	id?: string;
+	/**
+	 * The pictures a browser drew for the note's charts and diagrams, by the place the fence holds among them.
+	 * A fence with no picture here keeps the description the page would have carried anyway.
+	 */
+	pictures?: Map<number, Picture>;
 };
 
 /** One stretch of words in one face. A line of the page is a row of these. */
@@ -57,6 +63,23 @@ const HEADING = [
 
 type Align = "left" | "center" | "right";
 
+/** The three fences a page cannot draw as text. A chart and a diagram are drawn by a browser, or described. */
+export type Figure = { lang: "chart" | "mermaid" | "svg"; body: string };
+
+/**
+ * The fences of a note that are a picture, in the order the reader meets them. The page numbers them by that
+ * order, which is how a picture drawn by a browser is matched to the place it belongs on the page.
+ */
+export function figuresOf(markdown: string): Figure[] {
+	const found: Figure[] = [];
+	const fence = /(`{3,})([a-zA-Z0-9_-]*)\n([\s\S]*?)\1/g;
+	for (const match of String(markdown ?? "").matchAll(fence)) {
+		const lang = match[2].toLowerCase();
+		if (lang === "chart" || lang === "mermaid" || lang === "svg") found.push({ lang, body: match[3] });
+	}
+	return found;
+}
+
 type Block =
 	| { kind: "para"; pieces: Piece[] }
 	| { kind: "heading"; level: number; pieces: Piece[] }
@@ -64,7 +87,7 @@ type Block =
 	| { kind: "quote"; paras: Piece[][] }
 	| { kind: "rule" }
 	| { kind: "code"; lines: string[] }
-	| { kind: "figure"; label: string }
+	| { kind: "figure"; lang: Figure["lang"]; index: number; label: string }
 	| { kind: "table"; head: Piece[][]; rows: Piece[][][]; align: Align[] };
 
 /** The footnotes of one body: what the labels say, and the order the reader meets them in. */
@@ -224,19 +247,22 @@ function blocksOf(markdown: string, notes: Notes): Block[] {
 	}
 
 	const blocks: Block[] = [];
+	// The count a picture is drawn by: the same order figuresOf reads the note in, because it is the same rule.
+	let figureIndex = 0;
 	for (const chunk of body.join("\n").split(/\n{2,}/)) {
 		const fence = chunk.match(/^\u0000FENCE(\d+)\u0000$/);
 		const held = fence ? fences[Number(fence[1])] : undefined;
 		if (held) {
-			if (held.lang === "chart") {
-				// The card draws the chart from the config; a page can only say what shape it was, and the
-				// audit is what already knows how to say it.
+			if (held.lang === "chart" || held.lang === "mermaid" || held.lang === "svg") {
+				// Without a picture this line is what the reader gets, so it says as much as one sentence can.
 				const { summary } = auditMarkdown(["```chart", held.body, "```"].join("\n"));
-				blocks.push({ kind: "figure", label: summary || "chart: drawn on the board, not in this file" });
-			} else if (held.lang === "mermaid") {
-				blocks.push({ kind: "figure", label: `diagram — ${held.body.trim().split("\n").length} lines, drawn on the board` });
-			} else if (held.lang === "svg") {
-				blocks.push({ kind: "figure", label: "drawing — drawn on the board, not in this file" });
+				const label =
+					held.lang === "chart"
+						? summary || "chart: drawn on the board, not in this file"
+						: held.lang === "mermaid"
+							? `diagram — ${held.body.trim().split("\n").length} lines, drawn on the board`
+							: "drawing — drawn on the board, not in this file";
+				blocks.push({ kind: "figure", lang: held.lang, index: figureIndex++, label });
 			} else {
 				blocks.push({ kind: "code", lines: held.body.replace(/\n$/, "").split("\n") });
 			}
@@ -499,11 +525,36 @@ function drawCode(page: Page, lines: string[]) {
 	page.y -= PARAGRAPH.after;
 }
 
+/** The most of a page a picture may take, so a tall diagram still leaves the text around it somewhere to go. */
+const FIGURE_HEIGHT = 460;
+
 /**
- * A picture the page cannot draw, said in one line: what it was, and that the card holds the drawing. It is
- * marked with a bar rather than a panel, so it reads as a note about the card instead of as content of it.
+ * A picture on the page. The column is what it fits in, and the drawing keeps its own shape: a chart drawn on
+ * a card 400 pixels wide is 400 points wide here, which is how its own type stays the size it was drawn at. A
+ * picture taller than the room left on a page is scaled down rather than cut, and it never runs past a page.
  */
-function drawFigure(page: Page, label: string) {
+function drawPicture(page: Page, picture: Picture) {
+	const natural = picture.width / SCALE;
+	const heightOf = (width: number) => (width * picture.height) / picture.width;
+	let width = Math.min(WIDTH, natural);
+	if (heightOf(width) > FIGURE_HEIGHT) width = (FIGURE_HEIGHT * picture.width) / picture.height;
+	const height = heightOf(width);
+	room(page, height + PARAGRAPH.after);
+	page.y -= height;
+	page.sheet.image(MARGIN + (WIDTH - width) / 2, page.y, width, height, picture);
+	page.y -= PARAGRAPH.after;
+}
+
+/**
+ * A fence that is drawn rather than read: the picture when a browser drew one, and otherwise one line saying
+ * what stood there and that the card holds it. The line is marked with a bar rather than a panel, so it reads
+ * as a note about the card instead of as content of it.
+ */
+function drawFigure(page: Page, label: string, picture?: Picture) {
+	if (picture) {
+		drawPicture(page, picture);
+		return;
+	}
 	const lines = wrap([{ text: label, face: "italic" }], 9.4, WIDTH - 18);
 	room(page, 6 + lines.length * 13 + PARAGRAPH.after);
 	const top = page.y - 3;
@@ -647,7 +698,7 @@ export function notePdf(note: PdfNote): Buffer {
 				drawCode(page, block.lines);
 				break;
 			case "figure":
-				drawFigure(page, block.label);
+				drawFigure(page, block.label, note.pictures?.get(block.index));
 				break;
 			case "table":
 				drawTable(page, block.head, block.rows, block.align);
