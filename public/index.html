@@ -354,6 +354,8 @@
     font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
   .card .edit:hover, .card .copy-id:hover, .card .open-editor:hover, .card .save-pdf:hover { background: #21262d; color: var(--text); }
   .card .open-editor, .card .save-pdf { display: flex; align-items: center; }
+  /* The press that makes a pdf runs a browser per picture, so it says it is working and takes no second press. */
+  .card .save-pdf.busy { opacity: .55; cursor: progress; }
   .card .open-editor svg, .card .save-pdf svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
     stroke-width: 1.2; stroke-linejoin: round; }
   /* A pin is the human's: the card is kept when the board has to make room, and no thread may close it.

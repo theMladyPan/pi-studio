@@ -16,6 +16,23 @@ const card = (markdown: string, title = "a note") => notePdf({ title, markdown, 
 /** The whole file as text: every stream in it is plain, so the drawn words are searchable as they stand. */
 const textOf = (bytes: Buffer) => bytes.toString("latin1");
 
+/**
+ * Every place a piece of text is put, as the numbers the page wrote for it. A page that places a line at a
+ * coordinate no reader can use is a page whose rest is unreadable, so this is the check every case below runs.
+ */
+function placements(bytes: Buffer): { x: number; y: number }[] {
+	return [...textOf(bytes).matchAll(/1 0 0 1 (-?[\d.]+) (-?[\d.]+) Tm/g)].map((match) => ({ x: Number(match[1]), y: Number(match[2]) }));
+}
+
+/** A page is usable only while every number in it is one: a `NaN` makes a reader drop everything after it. */
+function sound(bytes: Buffer) {
+	assert.ok(!textOf(bytes).includes("NaN"), "no coordinate is a NaN");
+	for (const at of placements(bytes)) {
+		assert.ok(at.x >= 40 && at.x <= 556, `x ${at.x} is inside the margins`);
+		assert.ok(at.y >= 0 && at.y <= 842, `y ${at.y} is on the sheet`);
+	}
+}
+
 /** A request and a response a handler writes to, with a promise for the one answer it gives. */
 function wire(body: unknown) {
 	const req = Readable.from([Buffer.from(JSON.stringify(body))]);
@@ -189,4 +206,52 @@ test("a card that is not a note is refused, and so is an id nobody holds", async
 	await onCardPdf(missing.req, missing.res, board([]));
 	await missing.done;
 	assert.equal(missing.status, 409);
+});
+
+test("a table too narrow for its columns or too ragged for them stays on the sheet", () => {
+	// Twenty columns: every one of them hits the floor at once, which is where a share of the width was worked
+	// out by dividing by the space that was left, and none was. `NaN` in a stream costs the reader the rest.
+	const twenty = [0, 1, 2].map((row) =>
+		`| ${Array.from({ length: 20 }, (_none, column) => (row === 0 ? `c${column}` : `${column}`)).join(" | ")} |`,
+	);
+	twenty.splice(1, 0, `|${Array.from({ length: 20 }, () => ":--:|").join("")}`);
+	sound(card(twenty.join("\n")));
+
+	// More cells in a row than columns in the header, and a row shorter than the header: both are drawn, and
+	// neither is drawn past the page.
+	sound(card(["| a | b |", "|---|---|", "| 1 | 2 | 3 | 4 | 5 |", "| only |"].join("\n")));
+
+	// One cell holding a paragraph, which is taller than the page it starts on.
+	const tall = ["| a | b |", "|---|---|", `| ${"word ".repeat(400)} | short |`].join("\n");
+	const spill = card(tall);
+	sound(spill);
+	assert.ok(textOf(spill).includes("(short) Tj"), "the cell beside it is drawn once, not once per page");
+});
+
+test("a heading with no row under it is not left alone at the foot of a page", () => {
+	const filler = Array.from({ length: 30 }, (_none, index) => `Paragraph ${index + 1}, filler for the page.`).join("\n\n");
+	const table = ["| leftover | what happens |", "|---|---|", "| a merged branch | freed |"].join("\n");
+	const text = textOf(card(`${filler}\n\n${table}`));
+	const pages = text.split("/Type /Page ").slice(1);
+	const headed = pages.filter((page) => page.includes("(leftover)"));
+	assert.ok(headed.length >= 1, "the header is drawn");
+	for (const page of headed) {
+		assert.ok(page.includes("(merged)"), "and every page that carries the header carries a row under it");
+	}
+});
+
+test("a footnote pointed at from inside a footnote keeps the number it was given", () => {
+	const text = textOf(card("Text.[^one]\n\n[^one]: First, and this points at the second.[^two]\n\n[^two]: Second."));
+	assert.ok(text.includes("(2) Tj"), "the marker inside the first note is the second note's number");
+	// The second note is printed because the first one reached it, and it is numbered 2 there as well.
+	assert.ok(text.includes("(Second.) Tj"), "and the note it points at is printed");
+});
+
+test("a quote that crosses a page keeps its bar on both pages", () => {
+	const long = `> ${"a quoted line that keeps going and going, long enough to cross a page. ".repeat(220)}`;
+	const bytes = card(`Intro.\n\n${long}\n\nAfter the quote.`);
+	sound(bytes);
+	// One bar for each page the quote reached: a bar is a filled box, and a box the writer skips is no bar.
+	const bars = [...textOf(bytes).matchAll(/([\d.]+) ([\d.]+) 1\.6 ([\d.]+) re f/g)].map((match) => Number(match[3]));
+	assert.ok(bars.filter((height) => height > 0).length >= 2, "both pages carry a bar");
 });

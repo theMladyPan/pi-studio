@@ -2354,8 +2354,8 @@ function makeCard(data, quiet = false) {
     event.stopPropagation();
     void openCardFile(entry);
   });
-  // A note leaves as a page: the daemon lays its markdown out and writes the file, then opens the folder
-  // browser on it. The press only asks, so what the file became is the daemon's sentence to say.
+  // A note leaves as a page: the daemon lays its markdown out and answers with the file, which the browser
+  // saves the way it saves anything. The press only asks, so a refusal is the daemon's sentence to say.
   head.querySelector(".save-pdf").addEventListener("click", (event) => {
     event.stopPropagation();
     void saveCardPdf(entry);
@@ -3506,6 +3506,14 @@ function downloadName(response) {
  * and nothing on this machine is written or opened by the board.
  */
 async function saveCardPdf(entry) {
+  // Drawing a note's pictures runs a browser per picture, so a press takes a moment: the arrow says so and
+  // stops taking presses until the answer is back, because a second press would start the work again.
+  const button = entry.head.querySelector(".save-pdf");
+  if (button?.disabled) return;
+  if (button) {
+    button.disabled = true;
+    button.classList.add("busy");
+  }
   try {
     const response = await fetch(`/card/pdf?${auth}`, {
       method: "POST",
@@ -3528,6 +3536,11 @@ async function saveCardPdf(entry) {
     footNote(`pdf saved by the browser · ${name}`);
   } catch (error) {
     footNote(`could not save the pdf: ${error.message || error}`, true);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("busy");
+    }
   }
 }
 
