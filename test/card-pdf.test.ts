@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 
 import { notePdf } from "../server/pdf/card-pdf.ts";
-import { cardPdf, pdfName, revealFile } from "../server/routes/board/pdf.ts";
+import { onCardPdf, pdfName } from "../server/routes/board/pdf.ts";
 
 /**
  * A card's page is written by the daemon itself, so what is checked here is the page: the objects a reader
@@ -23,15 +20,17 @@ const textOf = (bytes: Buffer) => bytes.toString("latin1");
 function wire(body: unknown) {
 	const req = Readable.from([Buffer.from(JSON.stringify(body))]);
 	let status = 0;
-	let said = "";
+	let headers: Record<string, string> = {};
+	let said: Buffer = Buffer.alloc(0);
 	let settle: () => void = () => {};
 	const done = new Promise<void>((resolve) => (settle = resolve));
 	const res = {
-		writeHead(code: number) {
+		writeHead(code: number, given?: Record<string, string>) {
 			status = code;
+			headers = given ?? {};
 		},
 		end(chunk?: unknown) {
-			said = String(chunk ?? "");
+			said = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk ?? ""));
 			settle();
 		},
 	};
@@ -41,6 +40,9 @@ function wire(body: unknown) {
 		done,
 		get status() {
 			return status;
+		},
+		get headers() {
+			return headers;
 		},
 		get body() {
 			return said;
@@ -119,6 +121,17 @@ test("a marker with no definition stays as it was typed rather than becoming a n
 	assert.ok(!text.includes("(1) Tj"), "and nothing is numbered");
 });
 
+test("a letter the standard font has no byte for is folded to the letter it is built on", () => {
+	// The words a page in Polish or Czech is made of. Dropping the diacritic instead of folding it would turn
+	// `Przegląd` into `Przegld`, which reads as a typo rather than as the word.
+	const text = textOf(card("Przegląd čísel a řádků, Łódź"));
+	assert.ok(text.includes("(Przeglad) Tj"), "a letter with a tail is folded to the letter it is built on");
+	assert.ok(text.includes("(císel) Tj"), "and the word around it is whole");
+	assert.ok(text.includes("(rádku,) Tj") && text.includes("(Lódz) Tj"), "a stroked letter becomes the letter it is");
+	// A letter the Latin set already holds keeps its own byte, so the word is drawn with its accent whole.
+	assert.ok(text.includes("císel"), "a letter the font does hold is kept as it is");
+});
+
 test("characters the standard font has no glyph for are said in characters it does", () => {
 	const text = textOf(card("an arrow → and a dash — and a quote “like this” ✓"));
 	assert.ok(text.includes("(arrow) Tj"), "the words around them survive");
@@ -145,70 +158,35 @@ test("a note with nothing in it is still one page, named after the fallback titl
 
 test("a file is named after the card, in the shape a file system takes", () => {
 	assert.equal(pdfName("Where the leftovers went, and why", "abcdef012345"), "where-the-leftovers-went-and-why-abcdef.pdf");
-	assert.equal(pdfName("  !!!  ", "abcdef012345"), "note-abcdef.pdf");
 });
 
-test("the press writes the page into the temp folder and says who opened it", async () => {
-	const held = {
-		id: "abcdef012345",
-		type: "note",
-		title: "a note on disk",
-		markdown: "The sweep names the leftovers.",
-		at: Date.UTC(2025, 2, 14),
-	};
+test("the press answers with the page itself, named after the card and marked a download", async () => {
+	const held = { id: "abcdef012345", type: "note", title: "a note on disk", markdown: "The sweep names the leftovers.", at: Date.UTC(2025, 2, 14) };
 	const answer = wire({ cardId: held.id });
-	await cardPdf(answer.req, answer.res, board([held]), async (file: string) => {
-		assert.ok(existsSync(file), "the file is written before the browser is asked to show it");
-		assert.ok(statSync(file).size > 800, "and it holds a page");
-		return { program: "test-browser", selected: true };
-	});
+	await onCardPdf(answer.req, answer.res, board([held]));
 	await answer.done;
 	assert.equal(answer.status, 200);
-	const said = JSON.parse(answer.body);
-	assert.equal(said.opener, "test-browser");
-	assert.equal(said.selected, true);
-	assert.match(said.file, /pi-studio[/\\]a-note-on-disk-abcdef\.pdf$/);
-	assert.ok(readFileSync(said.file).toString("latin1").startsWith("%PDF-1.4"), "what landed is a pdf");
-	// The file is the one this test asked for, and nothing else in the folder is touched.
-	rmSync(said.file, { force: true });
+	assert.equal(answer.headers["Content-Type"], "application/pdf");
+	assert.equal(answer.headers["Content-Disposition"], 'attachment; filename="a-note-on-disk-abcdef.pdf"');
+	assert.equal(Number(answer.headers["Content-Length"]), answer.body.length, "the length is the file's own");
+	assert.ok(answer.body.toString("latin1").startsWith("%PDF-1.4"), "and the body is the pdf");
 });
 
-test("a browser that takes a file is handed the file, and one that cannot opens the folder", async () => {
-	const folder = mkdtempSync(join(tmpdir(), "pi-studio-reveal-"));
-	// Two stand-ins for a file browser: one says it offers `--select`, the other says nothing at all.
-	const picky = join(folder, "picky");
-	writeFileSync(picky, "#!/bin/sh\necho '  -s, --select  Select specified URI in parent folder.'\n", { mode: 0o755 });
-	const plain = join(folder, "plain");
-	writeFileSync(plain, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-
-	const choosing = await revealFile("/tmp/pi-studio/a-note.pdf", (name) => (name === "nautilus" ? picky : ""));
-	assert.deepEqual(choosing, { program: "nautilus", selected: true }, "the browser that offers the flag gets the file");
-
-	const opening = await revealFile("/tmp/pi-studio/a-note.pdf", (name) =>
-		name === "nautilus" ? plain : name === "xdg-open" ? plain : "",
-	);
-	assert.equal(opening.selected, false, "a browser without the flag is given the folder");
-	assert.ok(opening.program, "and the answer still names what opened");
-
-	const asked: string[] = [];
-	const nothing = await revealFile("/tmp/pi-studio/a-note.pdf", (name) => {
-		asked.push(name);
-		return "";
-	});
-	assert.deepEqual(nothing, { program: "", selected: false }, "a machine with no browser opens nothing");
-	assert.ok(asked.includes("xdg-open"), "and the last thing it asks for is the folder itself");
-	rmSync(folder, { recursive: true, force: true });
+test("a note with a title outside ascii is saved under a name a header can carry", () => {
+	assert.equal(pdfName("Przegląd — karta", "abcdef012345"), "przeglad-karta-abcdef.pdf", "an accent is folded to its letter");
+	assert.equal(pdfName("日本語のタイトル", "abcdef012345"), "note-abcdef.pdf", "a title with no ascii in it keeps the fallback name");
+	assert.equal(pdfName("  !!!  ", "abcdef012345"), "note-abcdef.pdf");
 });
 
 test("a card that is not a note is refused, and so is an id nobody holds", async () => {
 	const source = { id: "aaaaaa111111", type: "source", title: "a file", path: "src/a.ts" };
 	const wrong = wire({ cardId: source.id });
-	await cardPdf(wrong.req, wrong.res, board([source]), async () => ({ program: "", selected: false }));
+	await onCardPdf(wrong.req, wrong.res, board([source]));
 	await wrong.done;
 	assert.equal(wrong.status, 409);
 
 	const missing = wire({ cardId: "nobody" });
-	await cardPdf(missing.req, missing.res, board([]), async () => ({ program: "", selected: false }));
+	await onCardPdf(missing.req, missing.res, board([]));
 	await missing.done;
 	assert.equal(missing.status, 409);
 });

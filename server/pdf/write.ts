@@ -165,11 +165,41 @@ const STAND_IN: Record<string, string> = {
 	"\u2026": "...",
 };
 
-/** A capital letter keeps its accent where the byte for it exists, and loses it where it does not. */
+/**
+ * Letters the standard fonts have no byte for, said as the letter they are built on. A title in Polish or
+ * Czech is made of these, and dropping them turns `Przegląd` into `Przegld`: a word with a letter missing
+ * reads as a typo, where the same word with the accent folded away reads as itself.
+ */
+const BASE_LETTER: Record<string, string> = {
+	"\u0111": "d", // đ
+	"\u0110": "D", // Đ
+	"\u0142": "l", // ł
+	"\u0141": "L", // Ł
+	"\u0127": "h", // ħ
+	"\u0167": "t", // ŧ
+	"\u0131": "i", // ı
+	"\u0138": "k", // ĸ
+	"\u014b": "n", // ŋ
+	"\u0153": "oe", // œ
+	"\u0152": "OE", // Œ
+	"\u0133": "ij", // ĳ
+	"\u0132": "IJ", // Ĳ
+};
+
+/**
+ * A character the font cannot draw, said as the nearest thing it can. A letter that sits inside the Latin
+ * set keeps its own byte; a letter built on another — `ą`, `č`, `ř`, `ü` outside Latin-1 — is folded to the
+ * letter its accent is drawn on; anything else with no letter of its own is dropped rather than guessed.
+ */
 function fallback(char: string): string {
 	const code = char.codePointAt(0) ?? 0;
 	if (code >= 0xa1 && code <= 0xff) return char;
 	if (code === 0x09 || code === 0x0a) return " ";
+	const built = BASE_LETTER[char];
+	if (built) return built;
+	// A combining mark on its own says nothing the page can draw, so it goes before the letter is read.
+	const base = char.normalize("NFD").replace(/\p{M}+/gu, "");
+	if (base && base !== char && /^[\x20-\x7e]*$/.test(base)) return base;
 	return "";
 }
 
