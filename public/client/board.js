@@ -2354,8 +2354,8 @@ function makeCard(data, quiet = false) {
     event.stopPropagation();
     void openCardFile(entry);
   });
-  // A note leaves as a page: the daemon lays its markdown out and writes the file, then opens the folder
-  // browser on it. The press only asks, so what the file became is the daemon's sentence to say.
+  // A note leaves as a page: the daemon lays its markdown out and answers with the file, which the browser
+  // saves the way it saves anything. The press only asks, so a refusal is the daemon's sentence to say.
   head.querySelector(".save-pdf").addEventListener("click", (event) => {
     event.stopPropagation();
     void saveCardPdf(entry);
@@ -3491,10 +3491,29 @@ async function openCardFile(entry) {
 }
 
 /**
- * The note as a page on disk. The daemon writes it into the machine's temp folder and opens the folder
- * browser with the file picked out, so the footer names the file and who opened it.
+ * The name a download is saved under, as the daemon wrote it into the answer's own header. Falls back to a
+ * plain name, because a name that cannot be read is worth less than a file that arrives.
+ */
+function downloadName(response) {
+  const said = response.headers.get("content-disposition") || "";
+  const named = /filename="([^"]+)"/.exec(said);
+  return named ? named[1] : "note.pdf";
+}
+
+/**
+ * The note as a page the browser takes. The daemon answers with the file itself, and the tab hands it to the
+ * browser's own download: the folder is whichever that browser saves to, the receipt is its download list,
+ * and nothing on this machine is written or opened by the board.
  */
 async function saveCardPdf(entry) {
+  // Drawing a note's pictures runs a browser per picture, so a press takes a moment: the arrow says so and
+  // stops taking presses until the answer is back, because a second press would start the work again.
+  const button = entry.head.querySelector(".save-pdf");
+  if (button?.disabled) return;
+  if (button) {
+    button.disabled = true;
+    button.classList.add("busy");
+  }
   try {
     const response = await fetch(`/card/pdf?${auth}`, {
       method: "POST",
@@ -3502,15 +3521,26 @@ async function saveCardPdf(entry) {
       body: JSON.stringify({ cardId: entry.id }),
     });
     if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
-    const data = await response.json();
-    // A browser that cannot pick a file out opens the folder it is in, so the line says which of the two
-    // happened rather than promising a selection it did not make.
-    const shown = data.opener
-      ? `pdf saved · ${data.opener} is open ${data.selected ? "on it" : "on the folder"} · ${data.file}`
-      : `pdf saved, but no file browser answered · ${data.file}`;
-    footNote(shown, !data.opener);
+    const name = downloadName(response);
+    const url = URL.createObjectURL(await response.blob());
+    // A link nobody sees, pressed once: that is the one way a script asks a browser to save a file, and the
+    // `download` name is what it saves it under.
+    const link = el("a");
+    link.href = url;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // The bytes are the browser's from here, so the object behind the link has nothing left to hold.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    footNote(`pdf saved by the browser · ${name}`);
   } catch (error) {
     footNote(`could not save the pdf: ${error.message || error}`, true);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("busy");
+    }
   }
 }
 

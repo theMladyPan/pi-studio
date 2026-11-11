@@ -60,9 +60,20 @@ sets.forEach(function (set, index) {
 });
 `;
 
-/** The head every drawn page starts with: white paper, no margin of its own, and no scrollbar to lose pixels. */
-function start(): string {
-	return `<!doctype html><meta charset="utf-8"><style>
+/**
+ * The head every drawn page starts with: white paper, no margin of its own, no scrollbar to lose pixels, and a
+ * rule about what the page may reach for. A fence is a note's own text, and a note can be written by a model or
+ * pasted from anywhere, so the page is told the one thing it is allowed to load: the bundle beside it, named by
+ * `script`. Everything else — a picture at an address, a stylesheet, an iframe, a font — is refused by the
+ * engine before the request leaves the machine, whatever markup the fence carried in.
+ */
+function start(script = false): string {
+	// A page that draws with a bundle allows inline script and a script from a file, which is where the bundle
+	// is. A page that only holds a drawing allows no script at all: nothing in a fence has any business running.
+	const sources = `default-src 'none'; script-src ${script ? "'unsafe-inline' file:" : "'none'"}; style-src 'unsafe-inline'; img-src data:`;
+	return `<!doctype html><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="${sources}">
+<style>
 html, body { margin: 0; padding: 0; background: #fff; overflow: hidden; }
 body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 </style>`;
@@ -70,7 +81,7 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 
 /** A chart fence, handed to the bundle the board draws it with. */
 function chartPage(body: string): string {
-	return `${start()}<canvas id="chart" width="${CHART.width}" height="${CHART.height}"></canvas>
+	return `${start(true)}<canvas id="chart" width="${CHART.width}" height="${CHART.height}"></canvas>
 <script src="${served("chart-umd-min.js")}"></script>
 <script>
 Chart.defaults.color = "#57606a";
@@ -93,7 +104,7 @@ new Chart(document.getElementById("chart"), {
 
 /** A diagram fence, drawn by the bundle the card draws it with, in the light theme a page needs. */
 function diagramPage(body: string): string {
-	return `${start()}<div id="out"></div><script src="${served("mermaid-min.js")}"></script>
+	return `${start(true)}<div id="out"></div><script src="${served("mermaid-min.js")}"></script>
 <script>
 mermaid.initialize({
   startOnLoad: false,
@@ -129,13 +140,59 @@ mermaid.parse(said).then(function (read) {
 </script>`;
 }
 
-/** A drawing fence: what the card inlines, inlined here with the one thing a page must never run taken out. */
+/**
+ * What a drawing fence may keep: the elements a diagram is drawn with. An allowlist rather than a list of the
+ * things to take out, because the things to take out are every element the format may grow next year — a
+ * `<script>` that never closes, an `<img>` at an address, a `<foreignObject>` carrying html, a `<use>` pointing
+ * off the page. A tag that is not named here is dropped with its content, so what is left is a picture.
+ */
+const SVG_ELEMENTS = new Set([
+	"svg", "g", "defs", "symbol", "marker", "pattern", "clipPath", "mask", "linearGradient", "radialGradient",
+	"stop", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "text", "tspan", "textPath",
+	"title", "desc", "use", "filter", "feGaussianBlur", "feOffset", "feMerge", "feMergeNode", "feColorMatrix",
+	"feBlend", "feDropShadow",
+]);
+
+/** Elements whose content is code rather than drawing, so the content goes with the tag. */
+const SVG_WITH_CONTENT = new Set(["script", "style", "foreignObject", "iframe", "object", "embed"]);
+
+/**
+ * A drawing fence with everything but drawing taken out. Attributes go the same way: an `on…` is an event, and
+ * a `href` or `src` is a place the page would reach for. The page's own rule refuses those anyway, so this is
+ * the second lock on the same door, and the one that holds if the first is ever loosened.
+ */
+export function cleanSvg(body: string): string {
+	let out = "";
+	let at = 0;
+	while (at < body.length) {
+		const open = body.indexOf("<", at);
+		if (open < 0) break;
+		out += body.slice(at, open);
+		const close = body.indexOf(">", open);
+		if (close < 0) break;
+		const tag = body.slice(open, close + 1);
+		const name = /^<\/?\s*([a-zA-Z][\w:-]*)/.exec(tag);
+		const drawn = name && SVG_ELEMENTS.has(name[1]);
+		if (drawn) {
+			out += tag.replace(/\s+([a-zA-Z_:][\w:.-]*)\s*=\s*("[^"]*"|'[^']*')/g, (whole, key: string) => (/^(on|href|src|xlink:href|style$)/i.test(key) ? "" : whole));
+			at = close + 1;
+			continue;
+		}
+		// A tag the page does not draw: a script, a stylesheet or an embedded document goes with everything
+		// inside it, and any other unknown tag goes alone, so its words are kept and its effect is not.
+		if (name && SVG_WITH_CONTENT.has(name[1]) && !tag.startsWith("</")) {
+			const end = body.toLowerCase().indexOf(`</${name[1].toLowerCase()}`, close);
+			at = end < 0 ? body.length : end;
+			continue;
+		}
+		at = close + 1;
+	}
+	return out;
+}
+
+/** A drawing fence: what the card inlines, inlined here once everything but the drawing is gone. */
 function drawingPage(body: string): string {
-	const clean = body
-		.replace(/<\s*script[\s\S]*?<\s*\/\s*script\s*>/gi, "")
-		.replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
-		.replace(/javascript:/gi, "");
-	return `${start()}<style>svg { max-width: ${DIAGRAM.width - 60}px; height: auto; }</style><div id="out">${clean}</div>`;
+	return `${start()}<style>svg { max-width: ${DIAGRAM.width - 60}px; height: auto; }</style><div id="out">${cleanSvg(body)}</div>`;
 }
 
 /** The page a fence becomes, and the size of paper it is drawn on. */

@@ -4,6 +4,7 @@ import { test } from "node:test";
 
 import { notePdf, figuresOf } from "../server/pdf/card-pdf.ts";
 import { chromeOnPath, cropToInk, decodePng } from "../server/pdf/chrome.ts";
+import { cleanSvg } from "../server/pdf/figures.ts";
 import { drawFigures } from "../server/pdf/figures.ts";
 
 /**
@@ -162,4 +163,29 @@ test("a browser on this machine draws a chart and a diagram into pictures", { sk
 test("a basket case is left as a sentence, even when a browser is there to try", { skip: chrome ? false : "no browser installed" }, async () => {
 	assert.equal((await drawFigures("```chart\n{not json}\n```")).size, 0, "a chart the bundle refuses is no picture");
 	assert.equal((await drawFigures("```mermaid\nthis is not a diagram at all\n```")).size, 0, "and neither is a diagram");
+});
+
+test("a drawing fence keeps its drawing and loses every way out of the page", () => {
+	// Every one of these is a way a fence could make the browser reach for something, asked of the allowlist
+	// rather than of the regex it replaced: the regex only knew how to take out a `<script>` that closed.
+	for (const attack of [
+		'<script src="http://host/beacon.js">',
+		'<img src="http://host/x.png">',
+		'<link rel=stylesheet href="http://h/x.css">',
+		'<style>@import url("http://h/x.css")</style>',
+		'<meta http-equiv=refresh content="0;http://h">',
+		'<iframe src="file:///etc/passwd"></iframe>',
+		'<object data="file:///etc/passwd"></object>',
+		'<img/onerror=alert(1)>',
+		'<foreignObject><div>html here</div></foreignObject>',
+	]) {
+		assert.equal(cleanSvg(attack), "", `nothing of ${attack} survives`);
+	}
+	const drawn = '<svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" onload="alert(1)" fill="#333"/><text x="2" y="5">kept</text></svg>';
+	const kept = cleanSvg(drawn);
+	assert.ok(kept.includes("<rect"), "the shape is kept");
+	assert.ok(kept.includes('fill="#333"'), "with the paint it asked for");
+	assert.ok(!kept.includes("onload"), "and not the event it hung on it");
+	assert.ok(kept.includes(">kept<"), "and the words inside it");
+	assert.ok(!cleanSvg('<use href="http://h/s.svg#a"/>').includes("http"), "a reference off the page is dropped");
 });

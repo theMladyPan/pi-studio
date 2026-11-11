@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 
 import { notePdf } from "../server/pdf/card-pdf.ts";
-import { cardPdf, pdfName, revealFile } from "../server/routes/board/pdf.ts";
+import { onCardPdf, pdfName } from "../server/routes/board/pdf.ts";
 
 /**
  * A card's page is written by the daemon itself, so what is checked here is the page: the objects a reader
@@ -19,19 +16,38 @@ const card = (markdown: string, title = "a note") => notePdf({ title, markdown, 
 /** The whole file as text: every stream in it is plain, so the drawn words are searchable as they stand. */
 const textOf = (bytes: Buffer) => bytes.toString("latin1");
 
+/**
+ * Every place a piece of text is put, as the numbers the page wrote for it. A page that places a line at a
+ * coordinate no reader can use is a page whose rest is unreadable, so this is the check every case below runs.
+ */
+function placements(bytes: Buffer): { x: number; y: number }[] {
+	return [...textOf(bytes).matchAll(/1 0 0 1 (-?[\d.]+) (-?[\d.]+) Tm/g)].map((match) => ({ x: Number(match[1]), y: Number(match[2]) }));
+}
+
+/** A page is usable only while every number in it is one: a `NaN` makes a reader drop everything after it. */
+function sound(bytes: Buffer) {
+	assert.ok(!textOf(bytes).includes("NaN"), "no coordinate is a NaN");
+	for (const at of placements(bytes)) {
+		assert.ok(at.x >= 40 && at.x <= 556, `x ${at.x} is inside the margins`);
+		assert.ok(at.y >= 0 && at.y <= 842, `y ${at.y} is on the sheet`);
+	}
+}
+
 /** A request and a response a handler writes to, with a promise for the one answer it gives. */
 function wire(body: unknown) {
 	const req = Readable.from([Buffer.from(JSON.stringify(body))]);
 	let status = 0;
-	let said = "";
+	let headers: Record<string, string> = {};
+	let said: Buffer = Buffer.alloc(0);
 	let settle: () => void = () => {};
 	const done = new Promise<void>((resolve) => (settle = resolve));
 	const res = {
-		writeHead(code: number) {
+		writeHead(code: number, given?: Record<string, string>) {
 			status = code;
+			headers = given ?? {};
 		},
 		end(chunk?: unknown) {
-			said = String(chunk ?? "");
+			said = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk ?? ""));
 			settle();
 		},
 	};
@@ -41,6 +57,9 @@ function wire(body: unknown) {
 		done,
 		get status() {
 			return status;
+		},
+		get headers() {
+			return headers;
 		},
 		get body() {
 			return said;
@@ -119,6 +138,17 @@ test("a marker with no definition stays as it was typed rather than becoming a n
 	assert.ok(!text.includes("(1) Tj"), "and nothing is numbered");
 });
 
+test("a letter the standard font has no byte for is folded to the letter it is built on", () => {
+	// The words a page in Polish or Czech is made of. Dropping the diacritic instead of folding it would turn
+	// `Przegląd` into `Przegld`, which reads as a typo rather than as the word.
+	const text = textOf(card("Przegląd čísel a řádků, Łódź"));
+	assert.ok(text.includes("(Przeglad) Tj"), "a letter with a tail is folded to the letter it is built on");
+	assert.ok(text.includes("(císel) Tj"), "and the word around it is whole");
+	assert.ok(text.includes("(rádku,) Tj") && text.includes("(Lódz) Tj"), "a stroked letter becomes the letter it is");
+	// A letter the Latin set already holds keeps its own byte, so the word is drawn with its accent whole.
+	assert.ok(text.includes("císel"), "a letter the font does hold is kept as it is");
+});
+
 test("characters the standard font has no glyph for are said in characters it does", () => {
 	const text = textOf(card("an arrow → and a dash — and a quote “like this” ✓"));
 	assert.ok(text.includes("(arrow) Tj"), "the words around them survive");
@@ -145,70 +175,83 @@ test("a note with nothing in it is still one page, named after the fallback titl
 
 test("a file is named after the card, in the shape a file system takes", () => {
 	assert.equal(pdfName("Where the leftovers went, and why", "abcdef012345"), "where-the-leftovers-went-and-why-abcdef.pdf");
-	assert.equal(pdfName("  !!!  ", "abcdef012345"), "note-abcdef.pdf");
 });
 
-test("the press writes the page into the temp folder and says who opened it", async () => {
-	const held = {
-		id: "abcdef012345",
-		type: "note",
-		title: "a note on disk",
-		markdown: "The sweep names the leftovers.",
-		at: Date.UTC(2025, 2, 14),
-	};
+test("the press answers with the page itself, named after the card and marked a download", async () => {
+	const held = { id: "abcdef012345", type: "note", title: "a note on disk", markdown: "The sweep names the leftovers.", at: Date.UTC(2025, 2, 14) };
 	const answer = wire({ cardId: held.id });
-	await cardPdf(answer.req, answer.res, board([held]), async (file: string) => {
-		assert.ok(existsSync(file), "the file is written before the browser is asked to show it");
-		assert.ok(statSync(file).size > 800, "and it holds a page");
-		return { program: "test-browser", selected: true };
-	});
+	await onCardPdf(answer.req, answer.res, board([held]));
 	await answer.done;
 	assert.equal(answer.status, 200);
-	const said = JSON.parse(answer.body);
-	assert.equal(said.opener, "test-browser");
-	assert.equal(said.selected, true);
-	assert.match(said.file, /pi-studio[/\\]a-note-on-disk-abcdef\.pdf$/);
-	assert.ok(readFileSync(said.file).toString("latin1").startsWith("%PDF-1.4"), "what landed is a pdf");
-	// The file is the one this test asked for, and nothing else in the folder is touched.
-	rmSync(said.file, { force: true });
+	assert.equal(answer.headers["Content-Type"], "application/pdf");
+	assert.equal(answer.headers["Content-Disposition"], 'attachment; filename="a-note-on-disk-abcdef.pdf"');
+	assert.equal(Number(answer.headers["Content-Length"]), answer.body.length, "the length is the file's own");
+	assert.ok(answer.body.toString("latin1").startsWith("%PDF-1.4"), "and the body is the pdf");
 });
 
-test("a browser that takes a file is handed the file, and one that cannot opens the folder", async () => {
-	const folder = mkdtempSync(join(tmpdir(), "pi-studio-reveal-"));
-	// Two stand-ins for a file browser: one says it offers `--select`, the other says nothing at all.
-	const picky = join(folder, "picky");
-	writeFileSync(picky, "#!/bin/sh\necho '  -s, --select  Select specified URI in parent folder.'\n", { mode: 0o755 });
-	const plain = join(folder, "plain");
-	writeFileSync(plain, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-
-	const choosing = await revealFile("/tmp/pi-studio/a-note.pdf", (name) => (name === "nautilus" ? picky : ""));
-	assert.deepEqual(choosing, { program: "nautilus", selected: true }, "the browser that offers the flag gets the file");
-
-	const opening = await revealFile("/tmp/pi-studio/a-note.pdf", (name) =>
-		name === "nautilus" ? plain : name === "xdg-open" ? plain : "",
-	);
-	assert.equal(opening.selected, false, "a browser without the flag is given the folder");
-	assert.ok(opening.program, "and the answer still names what opened");
-
-	const asked: string[] = [];
-	const nothing = await revealFile("/tmp/pi-studio/a-note.pdf", (name) => {
-		asked.push(name);
-		return "";
-	});
-	assert.deepEqual(nothing, { program: "", selected: false }, "a machine with no browser opens nothing");
-	assert.ok(asked.includes("xdg-open"), "and the last thing it asks for is the folder itself");
-	rmSync(folder, { recursive: true, force: true });
+test("a note with a title outside ascii is saved under a name a header can carry", () => {
+	assert.equal(pdfName("Przegląd — karta", "abcdef012345"), "przeglad-karta-abcdef.pdf", "an accent is folded to its letter");
+	assert.equal(pdfName("日本語のタイトル", "abcdef012345"), "note-abcdef.pdf", "a title with no ascii in it keeps the fallback name");
+	assert.equal(pdfName("  !!!  ", "abcdef012345"), "note-abcdef.pdf");
 });
 
 test("a card that is not a note is refused, and so is an id nobody holds", async () => {
 	const source = { id: "aaaaaa111111", type: "source", title: "a file", path: "src/a.ts" };
 	const wrong = wire({ cardId: source.id });
-	await cardPdf(wrong.req, wrong.res, board([source]), async () => ({ program: "", selected: false }));
+	await onCardPdf(wrong.req, wrong.res, board([source]));
 	await wrong.done;
 	assert.equal(wrong.status, 409);
 
 	const missing = wire({ cardId: "nobody" });
-	await cardPdf(missing.req, missing.res, board([]), async () => ({ program: "", selected: false }));
+	await onCardPdf(missing.req, missing.res, board([]));
 	await missing.done;
 	assert.equal(missing.status, 409);
+});
+
+test("a table too narrow for its columns or too ragged for them stays on the sheet", () => {
+	// Twenty columns: every one of them hits the floor at once, which is where a share of the width was worked
+	// out by dividing by the space that was left, and none was. `NaN` in a stream costs the reader the rest.
+	const twenty = [0, 1, 2].map((row) =>
+		`| ${Array.from({ length: 20 }, (_none, column) => (row === 0 ? `c${column}` : `${column}`)).join(" | ")} |`,
+	);
+	twenty.splice(1, 0, `|${Array.from({ length: 20 }, () => ":--:|").join("")}`);
+	sound(card(twenty.join("\n")));
+
+	// More cells in a row than columns in the header, and a row shorter than the header: both are drawn, and
+	// neither is drawn past the page.
+	sound(card(["| a | b |", "|---|---|", "| 1 | 2 | 3 | 4 | 5 |", "| only |"].join("\n")));
+
+	// One cell holding a paragraph, which is taller than the page it starts on.
+	const tall = ["| a | b |", "|---|---|", `| ${"word ".repeat(400)} | short |`].join("\n");
+	const spill = card(tall);
+	sound(spill);
+	assert.ok(textOf(spill).includes("(short) Tj"), "the cell beside it is drawn once, not once per page");
+});
+
+test("a heading with no row under it is not left alone at the foot of a page", () => {
+	const filler = Array.from({ length: 30 }, (_none, index) => `Paragraph ${index + 1}, filler for the page.`).join("\n\n");
+	const table = ["| leftover | what happens |", "|---|---|", "| a merged branch | freed |"].join("\n");
+	const text = textOf(card(`${filler}\n\n${table}`));
+	const pages = text.split("/Type /Page ").slice(1);
+	const headed = pages.filter((page) => page.includes("(leftover)"));
+	assert.ok(headed.length >= 1, "the header is drawn");
+	for (const page of headed) {
+		assert.ok(page.includes("(merged)"), "and every page that carries the header carries a row under it");
+	}
+});
+
+test("a footnote pointed at from inside a footnote keeps the number it was given", () => {
+	const text = textOf(card("Text.[^one]\n\n[^one]: First, and this points at the second.[^two]\n\n[^two]: Second."));
+	assert.ok(text.includes("(2) Tj"), "the marker inside the first note is the second note's number");
+	// The second note is printed because the first one reached it, and it is numbered 2 there as well.
+	assert.ok(text.includes("(Second.) Tj"), "and the note it points at is printed");
+});
+
+test("a quote that crosses a page keeps its bar on both pages", () => {
+	const long = `> ${"a quoted line that keeps going and going, long enough to cross a page. ".repeat(220)}`;
+	const bytes = card(`Intro.\n\n${long}\n\nAfter the quote.`);
+	sound(bytes);
+	// One bar for each page the quote reached: a bar is a filled box, and a box the writer skips is no bar.
+	const bars = [...textOf(bytes).matchAll(/([\d.]+) ([\d.]+) 1\.6 ([\d.]+) re f/g)].map((match) => Number(match[3]));
+	assert.ok(bars.filter((height) => height > 0).length >= 2, "both pages carry a bar");
 });

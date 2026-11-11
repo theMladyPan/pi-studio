@@ -472,20 +472,38 @@ function drawItem(page: Page, block: { marker: string; depth: number; pieces: Pi
 	page.y -= ITEM.after;
 }
 
+/**
+ * A quote with a bar down its left edge. The bar is drawn a page at a time: a quote long enough to cross a
+ * break gets a bar on both pages, each running from the first line it drew on that page to the last, which is
+ * what a reader takes for one quote cut in two.
+ */
 function drawQuote(page: Page, paras: Piece[][]) {
 	const x = MARGIN + 12;
 	const width = WIDTH - 24;
-	const box = { size: QUOTE.size, lead: QUOTE.lead, after: QUOTE.after };
-	const height = paras.reduce((total, one) => total + wrap(one, QUOTE.size, width).length * QUOTE.lead + 4, 0);
-	room(page, height + 4);
-	const top = page.y;
+	let top = -1;
+	let bottom = -1;
+	const close = () => {
+		if (top < 0) return;
+		page.sheet.paint(0.72);
+		page.sheet.box(MARGIN + 2, bottom, 1.6, Math.max(0, top - bottom));
+		top = -1;
+		bottom = -1;
+	};
 	for (const one of paras) {
-		drawParagraph(page, one, box.size, box.lead, x, width);
+		for (const line of wrap(one, QUOTE.size, width)) {
+			if (page.y - QUOTE.lead < FLOOR) {
+				close();
+				newPage(page);
+			}
+			if (top < 0) top = page.y + 2;
+			page.y -= QUOTE.lead;
+			bottom = page.y - 1;
+			page.sheet.paint(MUTED);
+			drawPieces(page, line, QUOTE.size, x, page.y + QUOTE.lead * 0.28);
+		}
 		page.y -= 4;
 	}
-	// The bar is drawn last, when both ends of the quote are known.
-	page.sheet.paint(0.72);
-	page.sheet.box(MARGIN + 2, page.y + 2, 1.6, top - page.y - 2);
+	close();
 	page.y -= QUOTE.after;
 }
 
@@ -570,9 +588,15 @@ function drawFigure(page: Page, label: string, picture?: Picture) {
 	page.y = bottom - PARAGRAPH.after;
 }
 
-/** The columns a table is drawn in: what each one needs, shared out so the table fills the page's width. */
+/**
+ * The columns a table is drawn in: what each one needs, shared out so the table fills the page's width. A
+ * column never goes below a floor of about five characters, and when the floor is all there is — a table
+ * with eighteen columns or more — every column gets the same share of the page rather than a number worked
+ * out by dividing by the space that is left, which is none.
+ */
 function columnWidths(head: Piece[][], rows: Piece[][][]): number[] {
 	const count = head.length;
+	const least = Math.min(34, WIDTH / count);
 	const natural = new Array<number>(count).fill(28);
 	for (const row of [head, ...rows]) {
 		for (const [index, cell] of row.entries()) {
@@ -580,57 +604,87 @@ function columnWidths(head: Piece[][], rows: Piece[][][]): number[] {
 			natural[index] = Math.max(natural[index], Math.min(piecesWidth(cell, TABLE.size), 240));
 		}
 	}
-	const total = natural.reduce((sum, one) => sum + one, 0);
-	const widths = natural.map((one) => Math.max(34, (one / total) * WIDTH));
+	const total = natural.reduce((sum, one) => sum + one, 0) || 1;
+	const widths = natural.map((one) => Math.max(least, (one / total) * WIDTH));
 	const over = widths.reduce((sum, one) => sum + one, 0) - WIDTH;
 	if (over <= 0) return widths;
 	// Whatever the floor pushed past the page is taken back from the columns that have room to spare.
-	const spare = widths.reduce((sum, one) => sum + Math.max(0, one - 34), 0);
-	return widths.map((one) => one - (Math.max(0, one - 34) / spare) * over);
+	const spare = widths.reduce((sum, one) => sum + Math.max(0, one - least), 0);
+	if (spare <= 0) return new Array<number>(count).fill(WIDTH / count);
+	return widths.map((one) => one - (Math.max(0, one - least) / spare) * over);
+}
+
+/** A table row as wide as its header, because a row with more cells than columns has nowhere to put them. */
+function fitRow(row: Piece[][], count: number): Piece[][] {
+	return row.length > count ? row.slice(0, count) : row;
 }
 
 function drawTable(page: Page, head: Piece[][], rows: Piece[][][], align: Align[]) {
+	const count = head.length;
 	const widths = columnWidths(head, rows);
-	const heightOf = (row: Piece[][]) =>
-		Math.max(...row.map((cell, index) => wrap(cell, TABLE.size, (widths[index] ?? 34) - TABLE.padX * 2).length)) * TABLE.lead +
-		TABLE.padY * 2;
-	const drawRow = (row: Piece[][], top: number, bold: boolean) => {
-		const height = heightOf(row);
-		let x = MARGIN;
-		for (const [index, cell] of row.entries()) {
-			const width = widths[index] ?? 34;
-			const lines = wrap(cell, TABLE.size, width - TABLE.padX * 2);
-			let y = top - TABLE.padY;
-			for (const line of lines) {
-				y -= TABLE.lead;
-				const drawn = bold ? line.map((piece) => ({ ...piece, face: stronger(piece.face, "bold") })) : line;
-				const reach = piecesWidth(drawn, TABLE.size);
-				const where = align[index] === "center" ? x + (width - reach) / 2 : align[index] === "right" ? x + width - TABLE.padX - reach : x + TABLE.padX;
-				drawPieces(page, drawn, TABLE.size, where, y + TABLE.lead * 0.28);
+	const columnWidth = (index: number) => widths[index] ?? widths[widths.length - 1] ?? 34;
+	/** Each cell's own lines, which is what gives a row its height and what makes a tall row splittable. */
+	const linesOf = (row: Piece[][]) => row.map((cell, index) => wrap(cell, TABLE.size, Math.max(1, columnWidth(index) - TABLE.padX * 2)));
+	const heightOf = (row: Piece[][]) => Math.max(...linesOf(row).map((lines) => lines.length)) * TABLE.lead + TABLE.padY * 2;
+
+	/**
+	 * A row, however tall it is. The lines that fit are drawn, and the rest start again at the top of the next
+	 * page inside the same row: a cell holding a paragraph must not draw past the bottom of the sheet, and a
+	 * table with one long cell in it must not lose the cells beside it.
+	 */
+	const drawRow = (row: Piece[][], bold: boolean) => {
+		// Whatever the rule under the last row left the ink as, the text of this row is the page's own.
+		page.sheet.paint(INK);
+		const cells = linesOf(row).map((lines) =>
+			bold ? lines.map((line) => line.map((piece) => ({ ...piece, face: stronger(piece.face, "bold") }))) : lines,
+		);
+		const drawn = cells.map(() => 0);
+		const left = () => Math.max(...cells.map((lines, index) => lines.length - drawn[index]));
+		while (left() > 0) {
+			const fits = Math.floor((page.y - FLOOR - TABLE.padY * 2) / TABLE.lead);
+			if (fits < 1) {
+				newPage(page);
+				page.sheet.paint(INK);
+				continue;
 			}
-			x += width;
+			const used = Math.min(fits, left());
+			let x = MARGIN;
+			for (const [index, lines] of cells.entries()) {
+				const width = columnWidth(index);
+				for (let line = 0; line < used; line += 1) {
+					const pieces = lines[drawn[index] + line];
+					if (!pieces?.length) continue;
+					const reach = piecesWidth(pieces, TABLE.size);
+					const where =
+						align[index] === "center"
+							? x + (width - reach) / 2
+							: align[index] === "right"
+								? x + width - TABLE.padX - reach
+								: x + TABLE.padX;
+					const y = page.y - TABLE.padY - (line + 1) * TABLE.lead;
+					drawPieces(page, pieces, TABLE.size, where, y + TABLE.lead * 0.28);
+				}
+				drawn[index] += used;
+				x += width;
+			}
+			page.y -= used * TABLE.lead + TABLE.padY * 2;
+			if (left() > 0) {
+				newPage(page);
+				page.sheet.paint(INK);
+			}
 		}
-		return height;
 	};
 
-	let top = page.y;
+	// A header with no row under it is a heading pretending to be a table, so it moves with its first row.
+	const headHeight = heightOf(fitRow(head, count));
+	const firstHeight = rows.length ? Math.min(heightOf(fitRow(rows[0], count)), PAGE_HEIGHT - MARGIN * 2 - FLOOR) : 0;
+	room(page, headHeight + firstHeight + 4);
 	page.sheet.paint(INK);
-	page.y -= drawRow(head, top, true);
+	drawRow(fitRow(head, count), true);
 	page.sheet.paint(0.55);
 	page.sheet.line(MARGIN, page.y, PAGE_WIDTH - MARGIN, page.y, 0.7);
 	for (const [index, row] of rows.entries()) {
-		const height = heightOf(row);
-		if (page.y - height < FLOOR) {
-			// A table too long for one page carries its header over, so the rest still says what it is.
-			newPage(page);
-			top = page.y;
-			page.sheet.paint(INK);
-			page.y -= drawRow(head, top, true);
-			page.sheet.paint(0.55);
-			page.sheet.line(MARGIN, page.y, PAGE_WIDTH - MARGIN, page.y, 0.7);
-		}
-		page.sheet.paint(INK);
-		page.y -= drawRow(row, page.y, false);
+		drawRow(fitRow(row, count), false);
 		if (index < rows.length - 1) {
 			page.sheet.paint(0.87);
 			page.sheet.line(MARGIN, page.y, PAGE_WIDTH - MARGIN, page.y, 0.4);
@@ -712,10 +766,15 @@ export function notePdf(note: PdfNote): Buffer {
 		page.sheet.paint(HAIRLINE);
 		page.sheet.line(MARGIN + 14, page.y, PAGE_WIDTH - MARGIN, page.y, 0.5);
 		page.y -= 12;
-		// The order is read once: a footnote that points at another one must not grow the list it is drawn from.
-		for (const [index, label] of [...notes.order].entries()) {
-			const defs = notes.defs;
-			const pieces: Piece[] = [{ text: `${index + 1}`, face: "regular", sup: true }, { text: " ", face: "regular" }, ...inline(defs.get(label) ?? "", { defs, order: [] })];
+		// The list is walked by index rather than copied, so a footnote that points at one the body never
+		// reached is numbered and printed too, and a marker already numbered keeps that number.
+		for (let index = 0; index < notes.order.length; index += 1) {
+			const label = notes.order[index];
+			const pieces: Piece[] = [
+				{ text: `${index + 1}`, face: "regular", sup: true },
+				{ text: " ", face: "regular" },
+				...inline(notes.defs.get(label) ?? "", notes),
+			];
 			page.sheet.paint(MUTED);
 			const lines = wrap(pieces, 8.8, WIDTH - 14);
 			for (const [position, line] of lines.entries()) {
