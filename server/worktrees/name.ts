@@ -35,7 +35,24 @@ export const NAME_TIMEOUT_MS = 8000;
 
 
 /** Names that describe the fact that a job exists rather than the job. */
-export const DULL_TITLES = new Set(["work", "job", "task", "thread", "new thread", "change", "update", "stuff", "question"]);
+export const DULL_TITLES = new Set([
+	"work",
+	"job",
+	"task",
+	"thread",
+	"new thread",
+	"change",
+	"update",
+	"stuff",
+	"question",
+	"bug",
+	"feature",
+	"fix",
+	"issue",
+	"error",
+	"help",
+	"request",
+]);
 
 
 
@@ -65,29 +82,49 @@ export function titleFromRequest(text) {
  */
 export function namePrompt(request) {
 	return [
-		"Name this job for a card on a board of work. Answer with two to four plain words and nothing else.",
+		"Name this job for a card on a board of work. Answer with one to four plain words and nothing else.",
 		"Examples:",
 		'- request: "why does the parser reject empty input?" -> ok: empty input rejection / not ok: parser (says nothing) or: The Parser Rejects Empty Input Because The Tokenizer Splits Wrong (a sentence)',
 		'- request: "add a dark theme to the board" -> ok: board dark theme / not ok: add a dark theme to the board (the request repeated)',
 		'- request: "the rail keeps no detail for a row" -> ok: rail row detail / not ok: bug (a category, not the work)',
+		// A one-word request is what makes the model answer in one word, or answer the greeting instead of
+		// naming it. The quick model answered "greeting", "hello" and "hi — how can I help?" without this.
+		'- request: "hi" -> ok: greeting reply / not ok: hi (the request repeated) or: hi — how can I help? (a reply to the request)',
 		`Request: ${request}`,
 	].join("\n");
 }
 
 
 
-/** A name as a card title, or "" when it is not one: two to four words that say something. */
+/**
+ * A name as a card title, or "" when it is not one: one to five words that say something.
+ *
+ * The answer arrives with the newline that ended it and sometimes in quotes or a bullet, so the shape is
+ * stripped before the words are counted. One word is enough: the quick model names a one-word request
+ * "tuist" or "greeting reply", and throwing those away left the card with its own opening words and a
+ * line on stderr instead.
+ */
 export function plausibleTitle(answer) {
 	const first =
 		String(answer ?? "")
 			.split("\n")
 			.map((line) => line.trim())
 			.find(Boolean) ?? "";
-	const words = first.replace(/[`*_"']/g, "").replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+	// A question is a reply to the request rather than a name for it: "hi — how can I help?" is what the
+	// model says when it reads a greeting as a person instead of a job.
+	if (first.includes("?")) return "";
+	const words = first
+		.replace(/^[#>*\s-]+/, "")
+		.replace(/^\d+[.)]\s*/, "")
+		.replace(/[`*_"']/g, "")
+		.replace(/[-_]+/g, " ")
+		.replace(/\s+/g, " ")
+		.replace(/[.,;:!\s]+$/, "")
+		.trim();
 	const lower = words.toLowerCase();
 	if (!lower || DULL_TITLES.has(lower) || /^thread (\d+|[0-9a-f]{8})$/.test(lower)) return "";
 	const count = lower.split(" ").length;
-	return count >= 2 && count <= 4 ? words : "";
+	return count >= 1 && count <= 5 ? words : "";
 }
 
 
@@ -131,8 +168,15 @@ export async function nameThread(board, thread, request) {
 	// Thinking off is part of the name rather than a preference: a naming model that reasons about four
 	// words spends the whole 8s budget on the question, and this one answers in 1.2s with it off.
 	const argv = [cli.command, ...cli.args, "-p", "--no-session", "-ne", "-nt", "-nc", "-ns", "--model", NAME_MODEL, "--thinking", "off"];
-	const said = await askOnce([...argv, namePrompt(asked)], NAME_TIMEOUT_MS);
-	const picked = plausibleTitle(said);
+	const prompt = namePrompt(asked);
+	// Two samples of four words each: a model that reads a short request as something to answer gives a
+	// reply on the first call and a name on the second, and the second call costs a background turn.
+	let said = "";
+	let picked = "";
+	for (let attempt = 0; attempt < 2 && !picked; attempt += 1) {
+		said = (await askOnce([...argv, prompt], NAME_TIMEOUT_MS)).trim();
+		picked = plausibleTitle(said);
+	}
 	if (!picked) {
 		// Said out loud because a name that never arrives looks exactly like a model that is not here.
 		console.error(`pi-studio: naming gave no usable name (${JSON.stringify(said.slice(0, 80))})`);

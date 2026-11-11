@@ -67,7 +67,8 @@ commit's own account rather than on a check run now, the section below says so.
   the card nameless, and its head shows nothing until there is something to show. The first message
   names it twice over: `titleFromRequest` takes its opening words at once, and `nameThread` asks
   `PI_STUDIO_NAME_MODEL` (default `openrouter/deepseek/deepseek-v4.1-flash-1017`, asked with thinking
-  off, naming off when empty) beside the turn for two to four better words, keeping the answer only
+  off, naming off when empty) beside the turn for one to five better words, asked twice so a model that
+  answers a short request instead of naming it gets a second sample, keeping the answer only
   when `plausibleTitle` accepts its shape
   and it is not a dull name like "work" or `thread 1a2b3c4d`. `namedBy` records whether the human,
   `request` or the model chose, and only the `request` name is ever replaced, so a rename by hand
