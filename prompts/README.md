@@ -38,7 +38,7 @@ instead, and a boss among those also gets a flow. Two of the board's card settin
   the settings page draws per file and a file added here is editable there with no code in between.
   The four content switches of a card have no file: each is one line in `card-settings.ts`.
 
-Roles today: scout, implement, review, chore, architect. Modes: agent, plan, boss. Flows: auto (a roster,
+Roles today: scout, implement, review, chore, architect. Modes: agent, plan, boss, discuss. Flows: auto (a roster,
 no recipe), simple, advanced, complex. Verbosity: quiet, normal, verbose. Audiences: programmer,
 data-analyst, designer, vibecoder, junior, mathematician. Board: conventions. The board's settings page
 edits these files, so keep them plain markdown with no front matter and one idea per paragraph.
