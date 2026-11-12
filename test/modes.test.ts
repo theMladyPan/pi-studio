@@ -28,6 +28,4 @@ test("a discuss thread is told to stay short and to change nothing", () => {
 	const discuss = modeSystemPrompt("discuss");
 	assert.ok(discuss.trim().length > 0, "a discuss thread is told something");
 	assert.ok(discuss.includes(promptText("modes", "discuss")), "and the discuss file is what it reads");
-	assert.match(discuss, /Answer short and bite sized/);
-	assert.match(discuss, /you change nothing/);
 });

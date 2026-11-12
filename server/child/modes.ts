@@ -15,9 +15,9 @@ export const MODE_NAMES = ["agent", "plan", "boss", "discuss"];
 export const PATH_NAMES = ["auto", "simple", "advanced", "complex"];
 
 /**
- * A planner writes its throwaway scripts with `bash` under `/tmp`, and a boss only spawns: neither may
- * edit the tree it is judging, which is what keeps a plan a plan and a boss a pair of hands that are
- * somebody else's.
+ * A planner writes its throwaway scripts with `bash` under `/tmp`, a boss only spawns, and a discuss thread
+ * only reads and checks: none of them may edit the tree it is judging, which is what keeps a plan a plan,
+ * a boss a pair of hands that are somebody else's, and an answer an answer.
  */
 export const MODE_TOOLS_OFF = { plan: ["write", "edit"], boss: ["write", "edit"], discuss: ["write", "edit"] };
 
