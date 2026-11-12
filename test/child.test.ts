@@ -46,7 +46,7 @@ test("the tool list narrows only when the human asked for it", () => {
 	assert.ok(narrow.length >= wide.length, "narrowing a tool list should not grow it");
 });
 
-test("a boss may not write, and a planner may not either", () => {
+test("a boss may not write, and neither may a planner or a discuss thread", () => {
 	// The mode is behaviour, not advice: a boss that can edit is a boss doing the work it was meant to
 	// hand out, and a planner that can edit has stopped planning.
 	const boss = childArgv(board, { ...thread, mode: "boss", path: "advanced" });
@@ -56,6 +56,11 @@ test("a boss may not write, and a planner may not either", () => {
 	const planner = childArgv(board, { ...thread, mode: "plan" });
 	const planned = planner[planner.indexOf("--exclude-tools") + 1];
 	assert.ok(planned.includes("write") && planned.includes("edit"), `a planner may still write: ${planned}`);
+	// A discuss thread reads and runs its quick checks, and the tree it is asked about is not its to edit.
+	const discuss = childArgv(board, { ...thread, mode: "discuss" });
+	const discussed = discuss[discuss.indexOf("--exclude-tools") + 1];
+	assert.ok(discussed.includes("write") && discussed.includes("edit"), `a discuss thread may still write: ${discussed}`);
+	assert.ok(!discussed.includes("bash") && !discussed.includes("read"), `a discuss thread lost its checks or its reading: ${discussed}`);
 	// An agent is the baseline: it keeps the tools every thread had before modes existed.
 	const agent = childArgv(board, { ...thread, mode: "agent" });
 	const plain = agent.indexOf("--exclude-tools");

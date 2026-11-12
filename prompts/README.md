@@ -22,9 +22,9 @@ instead, and a boss among those also gets a flow. Two of the board's card settin
   implement, review and architect think at high.
 
 - `modes/<mode>.md` is what a human's thread is for: `plan` writes a plan and throwaway checks under
-  `/tmp`, `boss` spawns children and does no work itself. `agent` has no file, because it is the
-  baseline the board already had. The tool rules are `MODE_TOOLS_OFF` in `server/child/modes.ts`:
-  neither a planner nor a boss may write or edit.
+  `/tmp`, `boss` spawns children and does no work itself, `discuss` reads and runs quick checks to answer a
+  question. `agent` has no file, because it is the baseline the board already had. The tool rules are
+  `MODE_TOOLS_OFF` in `server/child/modes.ts`: a planner, a boss and a discuss thread may not write or edit.
 - `flows/<path>.md` is what a boss is told to run, one file per path in `PATH_NAMES`. `simple`,
   `advanced` and `complex` are recipes; `auto` is the roster of agents and nothing else, because a boss on
   `auto` decides the steps itself and has no flow to pick from or to announce. The file is appended to the
@@ -38,7 +38,7 @@ instead, and a boss among those also gets a flow. Two of the board's card settin
   the settings page draws per file and a file added here is editable there with no code in between.
   The four content switches of a card have no file: each is one line in `card-settings.ts`.
 
-Roles today: scout, implement, review, chore, architect. Modes: agent, plan, boss. Flows: auto (a roster,
+Roles today: scout, implement, review, chore, architect. Modes: agent, plan, boss, discuss. Flows: auto (a roster,
 no recipe), simple, advanced, complex. Verbosity: quiet, normal, verbose. Audiences: programmer,
 data-analyst, designer, vibecoder, junior, mathematician. Board: conventions. The board's settings page
 edits these files, so keep them plain markdown with no front matter and one idea per paragraph.

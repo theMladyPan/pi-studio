@@ -2952,8 +2952,9 @@ function paintCard(entry, data) {
         ? `a boss: it spawns children and does no work itself`
         : `a ${mode} thread`
       : "";
-  // An agent is the baseline the board always had, so it wears nothing; a planner and a boss say so, and
-  // a chip whose choice is still waiting has something to say even when that choice is agent.
+  // An agent is the baseline the board always had, so it wears nothing; a planner, a boss and a discuss
+  // thread say so, and a chip whose choice is still waiting has something to say even when that choice is
+  // agent.
   entry.modeEl.style.display = mode && (mode !== "agent" || waits) ? "" : "none";
   // The field's own chip says the same thing as the head, and a mode that lands does so without touching
   // anything else the card draws, so it is repainted from here rather than from a press.
@@ -6641,8 +6642,8 @@ function replyToCard(entry) {
 let modeNext = "agent";
 let pathNext = "";
 
-/** The three names a thread's mode can have. A card's `mode` is also the queue mode of its last turn. */
-const THREAD_MODES = ["agent", "plan", "boss"];
+/** The four names a thread's mode can have. A card's `mode` is also the queue mode of its last turn. */
+const THREAD_MODES = ["agent", "plan", "boss", "discuss"];
 
 /**
  * Whether the mode on a card is still waiting. A mode reaches a thread when its process starts, so a
@@ -6670,7 +6671,7 @@ function modeShown(inst = pickInst ?? activeComposer) {
 }
 
 /**
- * A mode decides whether the thread works, plans, or spawns; a boss also runs a flow. Both are the
+ * A mode decides whether the thread works, plans, spawns, or answers; a boss also runs a flow. Both are the
  * human's choice, so they live in the field beside the model and the thinking level rather than on
  * the board, where a press that spawns work would read like a press that does work. No argument paints
  * every field.
@@ -6694,7 +6695,9 @@ function paintMode(inst) {
       ? "a boss: it spawns children with roles and does no work itself"
       : mode === "plan"
         ? "a planner: a plan and throwaway checks under /tmp, no edits"
-        : "an agent: it does the work itself";
+        : mode === "discuss"
+          ? "a discuss thread: it reads and runs quick checks, and keeps answers short"
+          : "an agent: it does the work itself";
   inst.pickPathBtn.hidden = mode !== "boss";
   inst.pickPathBtn.textContent = path;
   inst.pickPathBtn.title =
@@ -7222,6 +7225,7 @@ const MODE_HINTS = [
   ["agent", "does the work itself"],
   ["plan", "a plan and /tmp checks, no edits"],
   ["boss", "spawns children, does no work"],
+  ["discuss", "reads, runs quick checks, short answers"],
 ];
 const PATH_HINTS = [
   ["auto", "the boss decides its own steps"],

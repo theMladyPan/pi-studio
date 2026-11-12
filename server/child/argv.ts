@@ -119,7 +119,8 @@ export function childArgv(board, thread) {
 	const moved = recorded && !sameFolder(recorded, workdir);
 	const session = thread.sessionId ? [moved ? "--fork" : "--session", thread.sessionId] : [];
 	// Tools a role may not use join the ones the board already leaves out, once each. A mode narrows the
-	// same list: a planner and a boss read and spawn, and neither edits the tree it is judging.
+	// same list: a planner, a boss and a discuss thread read and spawn or check, and none edits the tree it
+	// is judging.
 	const toolsOff = [
 		...new Set([...toolsOffFor(board), ...(ROLE_TOOLS_OFF[thread.role] ?? []), ...(MODE_TOOLS_OFF[thread.mode] ?? [])]),
 	];

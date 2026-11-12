@@ -23,3 +23,9 @@ test("a boss on a named path reads that recipe instead", () => {
 	assert.ok(simple.includes(promptText("flows", "simple")), "and the simple flow is appended whole");
 	assert.ok(!simple.includes(promptText("flows", "auto")), "the roster does not arrive beside a recipe");
 });
+
+test("a discuss thread is told to stay short and to change nothing", () => {
+	const discuss = modeSystemPrompt("discuss");
+	assert.ok(discuss.trim().length > 0, "a discuss thread is told something");
+	assert.ok(discuss.includes(promptText("modes", "discuss")), "and the discuss file is what it reads");
+});
