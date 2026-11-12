@@ -1360,6 +1360,19 @@ const STUB_PI = String.raw`
 const { appendFileSync, existsSync, unlinkSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 
+// The catalogue: pi --list-models is a table for humans, and the daemon reads one. Two models on two
+// providers is enough for a check that a card's own model choice is looked at before it is stored.
+if (process.argv.includes("--list-models")) {
+	const rows = [
+		["github-copilot", "gemini-4-argon", "1.0M", "65.5K", "yes", "yes"],
+		["klotilda", "deepseek-ai/DeepSeek-V4.1-Flash-1017", "1.0M", "65.5K", "yes", "yes"],
+	];
+	const line = (cells) => cells.map((cell, at) => (at < 2 ? cell.padEnd(at ? 37 : 14) : cell)).join("  ");
+	process.stdout.write(line(["provider", "model", "context", "max-out", "thinking", "images"]) + "\n");
+	for (const row of rows) process.stdout.write(line(row) + "\n");
+	process.exit(0);
+}
+
 // A naming run is the other shape of invocation and carries no thread token, so it has nothing to say
 // here and leaves rather than wait on a stdin nobody will write.
 if (!process.env.PI_STUDIO_TOKEN) process.exit(0);
@@ -1463,6 +1476,53 @@ async function childEnvOf(daemon: Daemon, file: string) {
 	}
 	throw new Error(`no child token was written to ${file}: ${daemon.noise.join("").slice(-400)}`);
 }
+
+/**
+ * A card's model is a pair this machine can run, or it is a card that dies at startup. The spawn tool
+ * takes a provider and a model from an agent, and a quote that rode along with a provider name reached
+ * pi as `--provider "github-copilot"`, which pi refuses with `Unknown provider` before the child says
+ * anything at all. So the pair is checked against the catalogue when the card is made.
+ */
+test("a card is not born on a model this machine does not have", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-model-choice-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-model-choice-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		// The catalogue is pi's table, read once and handed to the picker with the scope it resolves.
+		const catalog = JSON.parse((await get(daemon, `/models?token=${daemon.token}`)).body);
+		assert.deepEqual(
+			catalog.models.map((one: { provider: string; model: string }) => `${one.provider}/${one.model}`),
+			["github-copilot/gemini-4-argon", "klotilda/deepseek-ai/DeepSeek-V4.1-Flash-1017"],
+		);
+		assert.equal(catalog.trouble, "", "a table the stub printed was read as trouble");
+
+		// The pair a boss really sent: quotes around both halves, straight out of a tool argument.
+		const quoted = await postTo(daemon, board.id, "/thread", { provider: '"github-copilot"', model: '"gemini-4-argon"' });
+		assert.equal(quoted.status, 409);
+		assert.match(quoted.body, /is not a model this machine has/);
+
+		// Half a pair is a caller that meant one thing and wrote another, and is refused the same way.
+		const half = await postTo(daemon, board.id, "/thread", { provider: "github-copilot" });
+		assert.equal(half.status, 409);
+		assert.match(half.body, /provider and model belong together/);
+
+		// A pair the catalogue names is the card it asked for, provider and all.
+		const good = await postTo(daemon, board.id, "/thread", { provider: "github-copilot", model: "gemini-4-argon" });
+		assert.equal(good.status, 200);
+		const made = JSON.parse(good.body).card;
+		assert.equal(made.provider, "github-copilot");
+		assert.equal(made.model, "gemini-4-argon");
+
+		// A card with no choice of its own still starts on the board's default, and nothing is read for it.
+		const plain = await postTo(daemon, board.id, "/thread", {});
+		assert.equal(plain.status, 200);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
 
 test("a thread's own token reaches /card/ask over http and is refused the human's routes", async () => {
 	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-thread-token-"));
