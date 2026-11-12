@@ -755,6 +755,25 @@ test("a boss starts on the board's flow, whether it was made as one or switched 
 	}
 });
 
+test("a thread can be switched into discuss, and the switch is what it keeps", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-discuss-mode-"));
+	const work = mkdtempSync(join(tmpdir(), "pi-studio-routes-discuss-mode-work-"));
+	const daemon = await boot(folder);
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder: work })).body).board;
+		// A discuss thread is a mode like the other two: a prompt file and a tool rule, chosen on a thread
+		// that already exists, so the route accepts it rather than only the create route that made it.
+		const agent = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "a question" })).body);
+		const switched = await postTo(daemon, board.id, "/mode", { cardId: agent.threadId, mode: "discuss" });
+		assert.equal(switched.status, 200, switched.body.slice(0, 200));
+		assert.equal(JSON.parse(switched.body).card.mode, "discuss");
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+		rmSync(work, { recursive: true, force: true });
+	}
+});
+
 test("how a child's work comes back is a default a new board is born with", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-integration-"));
 	const daemon = await boot(folder);
