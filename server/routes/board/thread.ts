@@ -78,15 +78,15 @@ function threadSpec(board, body, caller) {
 	if (typeof body.mode === "string" && body.mode && !mode) return { error: `unknown mode: ${body.mode}` };
 	if (mode && parent) return { error: "a spawned thread takes a role, not a mode" };
 	if (mode && mode !== "agent" && !promptText("modes", mode)) return { error: `mode prompt missing: prompts/modes/${mode}.md` };
-	// A path is the boss's: it says which flow that thread runs. An agent or a planner with a path would be
-	// a flow nothing is following.
+	// A path is the boss's: it says what that thread is told to run. An agent or a planner with a path
+	// would be a flow nothing is following.
 	const named = PATH_NAMES.includes(body.path) ? body.path : "";
 	if (typeof body.path === "string" && body.path && !named) return { error: `unknown path: ${body.path}` };
 	if (named && mode !== "boss") return { error: "a path belongs to a boss thread" };
-	// A boss starts on the board's own flow unless this thread names one, so a board that always works
-	// the same way says it once instead of on every thread. Where the flow came from decides who chose
-	// it: a named one is the human's, the board's is neither theirs nor the boss's, and `auto` is the
-	// boss's to report. Only the board's leaves a boss free to pick a flow of its own later on.
+	// A boss starts on the board's own path unless this thread names one, so a board that always works
+	// the same way says it once instead of on every thread. Where it came from decides who chose it: a
+	// named one is the human's, the board's is neither theirs nor the boss's, and `auto` is the board's
+	// way of saying the boss decides its own steps.
 	const boardPath = boardFlow(board);
 	const flow = mode === "boss" ? named || boardPath || "auto" : "";
 	if (flow && flow !== "auto" && !promptText("flows", flow)) {
@@ -124,7 +124,7 @@ function newThread(board, body, spec) {
 		...(spec.role ? { role: spec.role } : {}),
 		...(spec.mode ? { mode: spec.mode } : {}),
 		// A path the human pinned is theirs, one the board named is the board's, and `auto` means the boss
-		// decides and says which one it took.
+		// decides its own steps and reports them in its own words.
 		...(spec.path ? { path: spec.path, pathChosenBy: spec.pathBy } : {}),
 		at: Date.now(),
 		turns: [],
@@ -325,25 +325,21 @@ export async function onMode(req, res, board) {
 
 
 /**
- * Which flow a boss runs. The boss itself reports the one it chose when the thread is on `auto`, and
- * the human may pin one; a thread may only ever write this on its own row.
+ * What a boss is told to run. The human picks it and keeps it: a boss on `auto` decides its own steps, so
+ * nothing a thread sends can pin a flow or report one. A named path brings its prompt file with it.
  */
 export async function onPath(req, res, board, caller = { human: true }) {
 	const body = await readJson(req, res);
 	if (!body) return;
+	if (!caller.human) return void fail(res, 403, "a flow is the human's to choose");
 	const path = field(body.path, 20);
 	if (!PATH_NAMES.includes(path)) return void fail(res, 400, `a path is one of ${PATH_NAMES.join(", ")}`);
 	if (path !== "auto" && !promptText("flows", path)) return void fail(res, 409, `flow prompt missing: prompts/flows/${path}.md`);
-	const thread = caller.human ? threadForRuntime(board, body.cardId) : caller.thread;
+	const thread = threadForRuntime(board, body.cardId);
 	if (!thread) return void fail(res, 409, "no such thread");
 	if (thread.mode !== "boss") return void fail(res, 409, "a path belongs to a boss thread");
-	if (!caller.human && path === "auto") return void fail(res, 409, "a boss reports the path it chose, not auto");
-	// A flow the human pinned is already decided, so a boss cannot quietly choose another one.
-	if (!caller.human && thread.pathChosenBy === "human" && thread.path !== "auto") {
-		return void fail(res, 409, "the human already chose this thread's flow");
-	}
 	thread.path = path;
-	thread.pathChosenBy = caller.human ? "human" : "auto";
+	thread.pathChosenBy = "human";
 	update(board, thread);
 	answer(res, 200, { card: cardFor(thread, board) });
 }

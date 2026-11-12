@@ -47,7 +47,7 @@ export { token };
 
 
 /** The routes a child may reach. Everything else on this daemon belongs to the human. */
-export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/path", "/thread/collect", "/skill", "/close"]);
+export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/collect", "/skill", "/close"]);
 
 
 

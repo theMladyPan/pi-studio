@@ -25,8 +25,10 @@ instead, and a boss among those also gets a flow. Two of the board's card settin
   `/tmp`, `boss` spawns children and does no work itself. `agent` has no file, because it is the
   baseline the board already had. The tool rules are `MODE_TOOLS_OFF` in `server/child/modes.ts`:
   neither a planner nor a boss may write or edit.
-- `flows/<path>.md` is the flow a boss runs: `simple`, `advanced`, `complex`. A boss on `auto` reads
-  none of them, picks one, and says which with the `board_path` tool, so its card can show it.
+- `flows/<path>.md` is what a boss is told to run, one file per path in `PATH_NAMES`. `simple`,
+  `advanced` and `complex` are recipes; `auto` is the roster of agents and nothing else, because a boss on
+  `auto` decides the steps itself and has no flow to pick from or to announce. The file is appended to the
+  boss prompt, so a path whose file is missing leaves the boss with its mode prompt alone.
 - `skills/<name>.md` is a document a thread pulls in on demand by calling `board_skill` with that name,
   never as part of a spawn: `chart.md` is the grammar and the rules for a ```chart block, and a thread
   reads it once before it writes its first chart.
@@ -36,10 +38,10 @@ instead, and a boss among those also gets a flow. Two of the board's card settin
   the settings page draws per file and a file added here is editable there with no code in between.
   The four content switches of a card have no file: each is one line in `card-settings.ts`.
 
-Roles today: scout, implement, review, chore, architect. Modes: agent, plan, boss. Flows: simple,
-advanced, complex. Verbosity: quiet, normal, verbose. Audiences: programmer, data-analyst, designer,
-vibecoder, junior, mathematician. Board: conventions. The board's settings page edits these files, so
-keep them plain markdown with no front matter and one idea per paragraph.
+Roles today: scout, implement, review, chore, architect. Modes: agent, plan, boss. Flows: auto (a roster,
+no recipe), simple, advanced, complex. Verbosity: quiet, normal, verbose. Audiences: programmer,
+data-analyst, designer, vibecoder, junior, mathematician. Board: conventions. The board's settings page
+edits these files, so keep them plain markdown with no front matter and one idea per paragraph.
 
 A spawned child reads no board prompt. `server/child/prompts.ts` gives it `childPrompt` instead of
 `boardPrompt`, so it reads no conventions either, and it is not started with the bridge at all: it draws

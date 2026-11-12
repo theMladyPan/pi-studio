@@ -1,15 +1,16 @@
 # The boss and its children
 
-A boss thread does no work of its own. It reads the request, decides which flow to run, and spawns
+A boss thread does no work of its own. It reads the request, decides what the work needs, and spawns
 children with `board_thread`; each child carries one role, gets a worktree cut from the boss's own, and
 answers once. What a child keeps it commits, because a retired tree is wiped clean. A tree that still
 holds uncommitted changes is kept for now rather than wiped, so read that as the rule a child follows,
-not as what a collect does today. What the boss reads is that answer, so the flow is the shape of the work
-and the roles are the hands.
+not as what a collect does today. What the boss reads is that answer, so the shape of the work is the
+boss's to choose and the roles are the hands.
 
-The three flows below are the three shapes a task can take. Each is a file under `prompts/flows/`,
-appended to the boss prompt when the flow is known, and each is drawn once here so the diagram and the
-steps can be read together.
+The three flows below are three shapes a task can take, and one person's answer to how a boss should
+choose. Each is a file under `prompts/flows/`, appended to the boss prompt when that path is in force,
+and each is drawn once here so the diagram and the steps can be read together. A boss on `auto` gets the
+fourth file and no recipe at all: the roster of agents, and the decisions left to it.
 
 ## What a thread is told to be
 
@@ -39,10 +40,11 @@ judging. Tool rules live in `server/child/roles.ts` beside `ROLE_THINKING`; the 
 
 ## Choosing a flow
 
-A boss starts on `auto` or on a named flow. On `auto` it reads none of the three files, decides from
-the request, and says which with `board_path` before it spawns anything, so its card carries the flow
-it is running. The prompt for the chosen flow is appended to the boss prompt, and a boss told `simple`
-runs `simple` even where `complex` would fit.
+A boss starts on the board's path or on one the human pinned, and the human may change it later. A path is
+only what the boss is told to run: `simple`, `advanced` and `complex` are recipes a human wrote down, and
+`auto` is the roster of agents with no recipe above it. On `auto` the boss decides the steps itself —
+which agents, how many, in what order — and reports what it decided; there is nothing for it to choose
+from and nothing for it to announce. A boss told `simple` runs `simple` even where `complex` would fit.
 
 ### simple — one step with checks
 
@@ -277,12 +279,12 @@ findings is a boss spending the human's money to learn nothing new.
 
 | file | what it holds |
 |---|---|
-| `prompts/modes/boss.md` | what a boss is, how it runs a flow, how it finishes |
-| `prompts/flows/{simple,advanced,complex}.md` | the three flows, as the boss reads them |
+| `prompts/modes/boss.md` | what a boss is, how it runs what it is given, how it finishes |
+| `prompts/flows/{auto,simple,advanced,complex}.md` | what a boss is told to run: a roster on `auto`, a recipe on the other three |
 | `prompts/roles/*.md` | one role per file, the text a child is given |
 | `server/child/modes.ts` | `MODE_NAMES`, `PATH_NAMES`, `MODE_TOOLS_OFF`, the prompt lookup |
 | `server/child/roles.ts` | `ROLE_NAMES`, `ROLE_TOOLS_OFF`, `ROLE_THINKING`, the frame around a role |
-| `bridge/child-bridge.mjs` | `board_thread` and `board_path`, the two tools a boss works with |
+| `bridge/child-bridge.mjs` | `board_thread`, the tool a boss works with |
 | `POST /thread/collect` | frees the worktrees and branches of children whose work is already integrated, and keeps the rest; for now a tree with uncommitted changes is kept like any other, and a tree that is freed is wiped clean |
 | `board_collect` | the boss tool that posts it: no arguments, and it reports what was freed and what was kept and why |
 

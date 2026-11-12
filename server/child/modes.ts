@@ -11,7 +11,7 @@ import { join } from "node:path";
 /** A human thread picks one of these. A spawned thread carries a role instead, never a mode. */
 export const MODE_NAMES = ["agent", "plan", "boss"];
 
-/** The flows a boss can run, and `auto` for the one the model picks at its first turn. */
+/** The paths a boss can be on, one prompt file each. `auto` is the one with no recipe: the boss decides. */
 export const PATH_NAMES = ["auto", "simple", "advanced", "complex"];
 
 /**
@@ -78,13 +78,15 @@ export function promptText(folder: string, name: string): string {
 
 /**
  * What a thread is told about its mode, appended to whatever the board itself says. `agent` is the
- * baseline and adds nothing, so a board that never picks a mode behaves exactly as it did before.
+ * baseline and adds nothing, so a board that never picks a mode behaves exactly as it did before. A boss
+ * also carries a path, and that path's file is what it is told to run: a recipe, or on `auto` the roster
+ * of agents with no recipe above it.
  */
 export function modeSystemPrompt(mode?: string, path?: string): string {
 	if (!mode || !MODE_NAMES.includes(mode) || mode === "agent") return "";
 	const text = promptText("modes", mode);
 	if (!text) return "";
-	const flow = mode === "boss" && path && PATH_NAMES.includes(path) && path !== "auto" ? promptText("flows", path) : "";
+	const flow = mode === "boss" && path && PATH_NAMES.includes(path) ? promptText("flows", path) : "";
 	return [text, flow].filter(Boolean).join("\n\n");
 }
 
