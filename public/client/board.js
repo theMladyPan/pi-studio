@@ -6641,8 +6641,8 @@ function replyToCard(entry) {
 let modeNext = "agent";
 let pathNext = "";
 
-/** The three names a thread's mode can have. A card's `mode` is also the queue mode of its last turn. */
-const THREAD_MODES = ["agent", "plan", "boss"];
+/** The four names a thread's mode can have. A card's `mode` is also the queue mode of its last turn. */
+const THREAD_MODES = ["agent", "plan", "boss", "discuss"];
 
 /**
  * Whether the mode on a card is still waiting. A mode reaches a thread when its process starts, so a
@@ -6694,7 +6694,9 @@ function paintMode(inst) {
       ? "a boss: it spawns children with roles and does no work itself"
       : mode === "plan"
         ? "a planner: a plan and throwaway checks under /tmp, no edits"
-        : "an agent: it does the work itself";
+        : mode === "discuss"
+          ? "a discuss thread: it reads and runs quick checks, and keeps answers short"
+          : "an agent: it does the work itself";
   inst.pickPathBtn.hidden = mode !== "boss";
   inst.pickPathBtn.textContent = path;
   inst.pickPathBtn.title =
@@ -7222,6 +7224,7 @@ const MODE_HINTS = [
   ["agent", "does the work itself"],
   ["plan", "a plan and /tmp checks, no edits"],
   ["boss", "spawns children, does no work"],
+  ["discuss", "reads, runs quick checks, short answers"],
 ];
 const PATH_HINTS = [
   ["auto", "the boss decides its own steps"],

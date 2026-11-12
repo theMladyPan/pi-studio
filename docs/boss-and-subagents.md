@@ -22,6 +22,7 @@ is why a human's thread exists, a role is what one child was asked to be.
 | `agent` | the baseline, nothing added | none |
 | `plan` | writes a plan and throwaway scripts under `/tmp` | `write`, `edit` |
 | `boss` | spawns children and reports what came back | `write`, `edit` |
+| `discuss` | answers questions and runs its own quick checks | `write`, `edit` |
 
 A boss with no `write` and no `edit` cannot quietly do the work itself, so a flow that skipped a child
 would show on the board as a card with nothing on it.
@@ -280,6 +281,7 @@ findings is a boss spending the human's money to learn nothing new.
 | file | what it holds |
 |---|---|
 | `prompts/modes/boss.md` | what a boss is, how it runs what it is given, how it finishes |
+| `prompts/modes/discuss.md` | what a discuss thread is: it reads, runs a check or two, and keeps the answer short |
 | `prompts/flows/{auto,simple,advanced,complex}.md` | what a boss is told to run: a roster on `auto`, a recipe on the other three |
 | `prompts/roles/*.md` | one role per file, the text a child is given |
 | `server/child/modes.ts` | `MODE_NAMES`, `PATH_NAMES`, `MODE_TOOLS_OFF`, the prompt lookup |

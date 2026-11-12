@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
 /** A human thread picks one of these. A spawned thread carries a role instead, never a mode. */
-export const MODE_NAMES = ["agent", "plan", "boss"];
+export const MODE_NAMES = ["agent", "plan", "boss", "discuss"];
 
 /** The paths a boss can be on, one prompt file each. `auto` is the one with no recipe: the boss decides. */
 export const PATH_NAMES = ["auto", "simple", "advanced", "complex"];
@@ -19,7 +19,7 @@ export const PATH_NAMES = ["auto", "simple", "advanced", "complex"];
  * edit the tree it is judging, which is what keeps a plan a plan and a boss a pair of hands that are
  * somebody else's.
  */
-export const MODE_TOOLS_OFF = { plan: ["write", "edit"], boss: ["write", "edit"] };
+export const MODE_TOOLS_OFF = { plan: ["write", "edit"], boss: ["write", "edit"], discuss: ["write", "edit"] };
 
 export const PROMPT_DIR = fileURLToPath(new URL("../../prompts/", import.meta.url));
 
