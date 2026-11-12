@@ -6974,6 +6974,10 @@ function drawModels(query) {
   const scoped = catalog?.scoped ?? [];
   const rows = [];
   if (catalogStale) rows.push(pickNote(catalogStale));
+  // The daemon could not read pi's list and is showing what it knew before: said here so a scope row
+  // that resolves to nothing reads as a list that may be out of date rather than as a machine without
+  // that model.
+  if (catalog?.trouble) rows.push(pickNote(`pi would not list its models: ${catalog.trouble}`));
   // A search is a question about one model, so it asks the whole catalogue whatever the row below
   // says. The scope decides what browsing starts from, not what can be found.
   if (scoped.length && !showAllModels && !needle) {
