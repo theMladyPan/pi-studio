@@ -509,6 +509,14 @@ commit's own account rather than on a check run now, the section below says so.
   scrolls its own body, nothing selected pans. A card with comments is scrollable, so it must not
   take the wheel merely by being under the pointer — that pinned the board to whatever card the
   pointer crossed.
+- **The arrows between cards are read at every zoom.** A card that names `after` draws one curve from
+  each card it follows from, in a single SVG under the cards, so the lines sit in board space and the
+  zoom carries them with the cards. They keep their weight: every length on a line divides by the
+  zoom the script publishes, the way the board's rings do, so a fitted board draws the same 1.5px
+  line as a board at 100%, and the head follows because it is drawn in stroke widths. A link whose
+  run is going is dashed in the same measure. Nothing hides them at a low zoom: a link is what the
+  map of a thread is made of, so the cards and the rail say who follows from whom without the lines
+  stepping out of the way.
 - **The edit pencil toggles, and the editor keeps its card's height.** A press while the editor is
   open closes it, done on `pointerdown` because the press blurs the textarea and the blur commits and
   repaints, after which the card no longer reads as editing and the click would open a fresh editor.
