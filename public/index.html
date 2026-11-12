@@ -178,8 +178,13 @@
     background: rgba(125,133,144,.1); border: 1px solid rgba(125,133,144,.28); border-radius: 999px;
     padding: 0 6px; white-space: nowrap; }
   .mode-chip.on { color: var(--accent); background: rgba(88,166,255,.1); border-color: rgba(88,166,255,.25); }
-  /* At this zoom the board is read as a map of threads, so the arrows step out of the way. */
-  #world > svg.away { opacity: 0; }
+  /* The links between cards are read at every zoom, so they keep their weight: every length on a line
+     divides by the zoom the script publishes, the way the board's rings do, so a fitted board shows the
+     same thin line as a board at 100%. The head is drawn in stroke widths, so it follows the line. */
+  #world > svg.pred-arrows g.links > path { stroke-width: calc(1.5px / var(--zoom, 1)); }
+  #world > svg.pred-arrows g.links > path.running {
+    stroke-dasharray: calc(6px / var(--zoom, 1)) calc(5px / var(--zoom, 1));
+  }
   .spacer { flex: 1; }
   .sticky-status.stopped { color: #f85149; }
   .chip { font: 12px var(--mono); color: var(--accent); background: rgba(88,166,255,.1);

@@ -232,9 +232,6 @@ const applyView = () => {
     // Older browsers only have the bitmap scale, which softens text while it catches up.
     world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.k})`;
   }
-  // Below this zoom a board is a map of its threads, and a fan of arrows over a fan of cards is
-  // noise. The cards and the rail still say who follows from whom.
-  arrows.classList.toggle("away", view.k < ARROW_MIN_ZOOM);
   if (typeof recomputePill === "function") recomputePill();
   resetBtn.textContent = `${Math.round(view.k * 100)}%`;
   // The board's zoom scales the focus ring drawn inside it too, so the rule in index.html
@@ -246,12 +243,14 @@ const applyView = () => {
 
   // ---------- predecessor arrows -------------------------------------------
   // A card may arrive with `after`: the ids of the cards its work follows from. One arrow each,
-  // drawn in a single SVG inside the world, so the lines scale with the board for free.
+  // drawn in a single SVG inside the world, so the lines sit in board space and the zoom scales them
+  // like any other child. Their weight is held in `index.html`, which divides it by the zoom: a link
+  // between two cards is one thin line whether the board is fitted or at 100%, and it never steps out
+  // of the way, because a link is what the map of a thread is made of.
   const ARROW_NS = "http://www.w3.org/2000/svg";
   const ARROW_INK = "#94a3b8";
-  // The zoom under which the arrows stop being drawn: they are read at the size of a conversation.
-  const ARROW_MIN_ZOOM = 0.6;
   const arrows = document.createElementNS(ARROW_NS, "svg");
+  arrows.classList.add("pred-arrows");
   // Under the cards: they carry z-index from 1 up, while this layer stays at 0.
   arrows.style.cssText = "position:absolute;left:0;top:0;overflow:visible;pointer-events:none;z-index:0";
   arrows.setAttribute("aria-hidden", "true");
@@ -259,6 +258,7 @@ const applyView = () => {
     `<defs><marker id="predHead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" markerUnits="strokeWidth" orient="auto">` +
     `<path d="M2,1 L9,5 L2,9" fill="none" stroke="${ARROW_INK}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></marker></defs>`;
   const arrowGroup = document.createElementNS(ARROW_NS, "g");
+  arrowGroup.classList.add("links");
   arrows.append(arrowGroup);
   world.insertBefore(arrows, world.firstChild);
 
@@ -337,10 +337,9 @@ const applyView = () => {
         path.setAttribute("d", line.d);
         path.setAttribute("fill", "none");
         path.setAttribute("stroke", ARROW_INK);
-        path.setAttribute("stroke-width", "1.5");
         path.setAttribute("stroke-linecap", "round");
         path.setAttribute("marker-end", "url(#predHead)");
-        if (line.running) path.setAttribute("stroke-dasharray", "6 5");
+        if (line.running) path.classList.add("running");
         return path;
       }),
     );
