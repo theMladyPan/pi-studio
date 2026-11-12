@@ -28,11 +28,25 @@ export const CATALOG_TTL_MS = 10 * 60_000;
 export const run = promisify(execFile);
 
 
-/** Read once from pi, kept for a while: the picker must work before any thread has a child. */
+/**
+ * Read once from pi, kept for a while: the picker must work before any thread has a child.
+ *
+ * `trouble` is why the last read of pi's table came back useless, and it lives beside the models rather
+ * than inside them: a read that failed says nothing about what this machine has, and the picker has to
+ * be able to say so instead of showing a shorter list as if it were the truth.
+ */
 export let catalog = null;
 
 
 export let catalogAt = 0;
+
+
+/**
+ * How long a failed read is trusted before pi is asked again. Ten minutes of an empty picker is what a
+ * single failed read used to cost, and the human has no way to tell that from a machine that lost its
+ * credentials.
+ */
+export const CATALOG_RETRY_MS = 30_000;
 
 
 /** Scope patterns already reported on stderr, so a stale pattern is not shouted once per picker open. */
@@ -46,14 +60,20 @@ export const saidScopeProblems = new Set();
  * whether a model thinks and takes images.
  */
 export async function modelCatalog() {
-	if (catalog && Date.now() - catalogAt < CATALOG_TTL_MS) return catalog;
+	if (catalog && Date.now() - catalogAt < (catalog.trouble ? CATALOG_RETRY_MS : CATALOG_TTL_MS)) return catalog;
 	const cli = piCli();
 	let table = "";
+	let trouble = "";
 	try {
 		const result = await run(cli.command, [...cli.args, "--list-models"], { maxBuffer: 8 * 1024 * 1024, timeout: 20_000 });
 		table = String(result.stdout ?? "");
 	} catch (error) {
+		// A pi that exits badly has still printed part of its table, and that part is not the answer to
+		// "what can this machine run": a table cut short loses whole providers, which reads as models that
+		// disappeared and as scope patterns that match nothing. So the models already known are kept, and
+		// the reason is carried to the picker instead of being spent on a shorter list.
 		table = String(error.stdout ?? "");
+		trouble = lastLine(String(error.stderr ?? "")) || `pi could not list its models (${error.code ?? (error.killed ? "took too long" : "no answer")})`;
 	}
 	const models = [];
 	for (const line of table.split("\n").slice(1)) {
@@ -71,10 +91,22 @@ export async function modelCatalog() {
 	}
 	// A machine with no credentials still has a board, so an empty table is answered with the levels and
 	// no models rather than with an error. The empty answer is kept too: otherwise every open of the
-	// picker would spawn pi again.
-	catalog = { models, levels: THINKING_LEVELS };
+	// picker would spawn pi again. A failed read is kept for a shorter while, so the next open asks pi
+	// again rather than showing the same hole for ten minutes.
+	catalog = trouble && catalog ? { ...catalog, trouble } : { models, levels: THINKING_LEVELS, trouble };
 	catalogAt = Date.now();
 	return catalog;
+}
+
+
+
+/** The last line of what a program said, which is where a CLI puts the reason it stopped. */
+function lastLine(text) {
+	const lines = String(text ?? "")
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
+	return lines[lines.length - 1]?.slice(0, 200) ?? "";
 }
 
 

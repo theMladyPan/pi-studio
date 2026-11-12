@@ -17,7 +17,7 @@ import { MODE_NAMES, PATH_NAMES, promptText } from "../../child/modes.ts";
 import { runSpawn } from "../../child/spawn.ts";
 import { killChild, threadForRuntime } from "./lifecycle.ts";
 import { predecessorId } from "./content.ts";
-import { THINKING_LEVELS } from "../../models.ts";
+import { THINKING_LEVELS, modelCatalog } from "../../models.ts";
 
 
 
@@ -98,10 +98,29 @@ function threadSpec(board, body, caller) {
 
 
 
-/** The thread row a checked spec describes, before anything is prompted. */
-function newThread(board, body, spec) {
-	const model = field(body.model, 100);
+/**
+ * The model a request names, checked against what this machine has. A pair that is not in the catalogue
+ * is the caller's mistake — a quote that rode along with a provider name, or a model this machine lost
+ * since the thread was planned — and is refused here. Stored instead, it would reach pi as
+ * `--provider` on the day the thread runs, and the card would die at startup with pi's own
+ * `Unknown provider` and no answer at all. A catalogue with no models in it is a machine with no
+ * credentials, and there is nothing to check against, so the pair is taken as given.
+ */
+async function chosenModel(body) {
 	const provider = field(body.provider, 60);
+	const model = field(body.model, 100);
+	// No choice is the usual case: the board's own default decides, and nothing has to be read for it.
+	if (!provider && !model) return {};
+	if (!provider || !model) return { error: "provider and model belong together" };
+	const { models } = await modelCatalog();
+	if (models.length && !models.some((one) => one.provider === provider && one.model === model)) {
+		return { error: `${provider}/${model} is not a model this machine has` };
+	}
+	return { provider, model };
+}
+
+/** The thread row a checked spec describes, before anything is prompted. */
+function newThread(board, body, spec, choice = {}) {
 	return {
 		id: randomUUID(),
 		title: typeof body.title === "string" ? body.title.trim().slice(0, MAX_TITLE_CHARS) : "",
@@ -111,8 +130,8 @@ function newThread(board, body, spec) {
 		status: "idle",
 		...(WORK_TYPES.some(([type]) => type === body.type) ? { type: body.type } : {}),
 		...runtimeDefaults(board),
-		...(provider ? { provider } : {}),
-		...(model ? { model } : {}),
+		...(choice.provider ? { provider: choice.provider } : {}),
+		...(choice.model ? { model: choice.model } : {}),
 		...(THINKING_LEVELS.includes(body.thinking) ? { thinking: body.thinking } : {}),
 		// A role brings its own thinking level; the board's default belongs to threads the human makes.
 		...(spec.role && !THINKING_LEVELS.includes(body.thinking) ? { thinking: ROLE_THINKING[spec.role] } : {}),
@@ -138,7 +157,9 @@ export async function onThread(req, res, board, caller = { human: true }) {
 	if (!body) return;
 	const spec = threadSpec(board, body, caller);
 	if (spec.error) return void fail(res, 409, spec.error);
-	const thread = newThread(board, body, spec);
+	const choice = await chosenModel(body);
+	if (choice.error) return void fail(res, 409, choice.error);
+	const thread = newThread(board, body, spec, choice);
 	// Creation does not spawn: the child starts on the first message, so an empty board costs nothing.
 	board.threads.set(thread.id, thread);
 	card(board, thread);
@@ -156,9 +177,11 @@ export async function onThreadSpawn(req, res, board, caller = { human: true }) {
 	if (!body) return;
 	const spec = threadSpec(board, body, caller);
 	if (spec.error) return void fail(res, 409, spec.error);
+	const choice = await chosenModel(body);
+	if (choice.error) return void fail(res, 409, choice.error);
 	const task = typeof body.task === "string" ? body.task.trim().slice(0, 20_000) : "";
 	if (!task) return void fail(res, 409, "a spawned thread needs a task");
-	const thread = newThread(board, body, spec);
+	const thread = newThread(board, body, spec, choice);
 	board.threads.set(thread.id, thread);
 	card(board, thread);
 	const seconds = Number(body.timeoutSeconds);

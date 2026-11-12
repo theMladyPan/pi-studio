@@ -394,7 +394,7 @@ export const server = createServer((req, res) => {
 		// scope is read here rather than cached with the catalogue, so an edit made in a console pi lands
 		// on the next open of the picker.
 		if (req.method === "GET" && url.pathname === "/models") {
-			const { models, levels } = await modelCatalog();
+			const { models, levels, trouble } = await modelCatalog();
 			const scope = readScope();
 			const { scoped, problems } = resolveScope(scope, models);
 			for (const pattern of problems) {
@@ -402,7 +402,9 @@ export const server = createServer((req, res) => {
 				saidScopeProblems.add(pattern);
 				console.error(`pi-studio: pi's scope pattern ${JSON.stringify(pattern)} matched no model here`);
 			}
-			answer(res, 200, { models, levels, scope, scoped, problems });
+			// `trouble` is read by the picker: a list that pi would not give is a list to explain, never to
+			// pass off as everything this machine has.
+			answer(res, 200, { models, levels, scope, scoped, problems, trouble });
 			return;
 		}
 		if (req.method === "GET" && url.pathname === "/tools") {
