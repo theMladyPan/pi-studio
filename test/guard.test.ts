@@ -38,9 +38,10 @@ const spawned = { human: false, board: { id: "board-a" }, thread: { id: "child-1
 const human = { human: true };
 
 test("a thread that answers for a card may write on its own board, and may ask the human a question there", () => {
-	// `/thread/path` is here because a boss reports the flow it chose on its own row. A hidden thread that
-	// answers a note the human started is not a spawned child, and it keeps every one of these.
-	const allowed = ["/card/note", "/card/source", "/thread/spawn", "/card/ask", "/thread/path", "/thread/collect", "/skill", "/close"];
+	// `/thread/path` is not here: a flow is the human's to pin, and a boss on `auto` decides its own steps. A
+	// hidden thread that answers a note the human started is not a spawned child, and it keeps every one of
+	// these.
+	const allowed = ["/card/note", "/card/source", "/thread/spawn", "/card/ask", "/thread/collect", "/skill", "/close"];
 	for (const path of allowed) assert.equal(threadRefusal(child, "POST", path, "board-a"), null, path);
 	// The list is compared whole, because a route added to it and not to this test would widen what a
 	// child may reach without a single case going red.

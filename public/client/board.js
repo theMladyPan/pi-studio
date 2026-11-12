@@ -2935,11 +2935,11 @@ function paintCard(entry, data) {
   entry.roleEl.textContent = role;
   entry.roleEl.title = role ? `spawned with the ${role} role` : "";
   entry.roleEl.style.display = role ? "" : "none";
-  // A boss is a thread the human started that spawns instead of working, so its chip carries the flow it
-  // runs; `auto` is the boss still deciding. A thread born from a typed message carries no mode of its own
-  // and the card's `mode` is the queue state of its last turn, so only a real mode counts as one. The name
-  // is the plain mode, never a suffix: the chip is quiet while the mode is in force and blue while the
-  // choice waits, so colour alone says which one it is.
+  // A boss is a thread the human started that spawns instead of working, so its chip carries the path it
+  // runs; `auto` is a boss deciding its own steps. A thread born from a typed message carries no mode of
+  // its own and the card's `mode` is the queue state of its last turn, so only a real mode counts as one.
+  // The name is the plain mode, never a suffix: the chip is quiet while the mode is in force and blue while
+  // the choice waits, so colour alone says which one it is.
   const mode = data.type === "sticky" && THREAD_MODES.includes(data.mode) ? data.mode : "";
   const shownMode = mode === "boss" && data.path ? `boss · ${data.path}` : mode;
   const waits = modeWaits(data);
@@ -2949,7 +2949,7 @@ function paintCard(entry, data) {
     ? `takes effect on the next message: this run is still a ${data.modeAtRun}`
     : mode
       ? mode === "boss"
-        ? `a boss: it spawns children and does no work itself${data.pathChosenBy === "auto" && data.path !== "auto" ? `, flow chosen by the model` : ""}`
+        ? `a boss: it spawns children and does no work itself`
         : `a ${mode} thread`
       : "";
   // An agent is the baseline the board always had, so it wears nothing; a planner and a boss say so, and
@@ -6699,7 +6699,7 @@ function paintMode(inst) {
   inst.pickPathBtn.textContent = path;
   inst.pickPathBtn.title =
     path === "auto"
-      ? "the boss picks the flow at its first turn and says which one"
+      ? "the boss decides which agents to call, and what each one is asked for"
       : `the ${path} flow, read from prompts/flows/${path}.md`;
 }
 
@@ -7220,7 +7220,7 @@ const MODE_HINTS = [
   ["boss", "spawns children, does no work"],
 ];
 const PATH_HINTS = [
-  ["auto", "the boss picks, and says which"],
+  ["auto", "the boss decides its own steps"],
   ["simple", "one step with checks"],
   ["advanced", "a plan, a review that reads it"],
   ["complex", "triage, parallel scouts, re-review"],

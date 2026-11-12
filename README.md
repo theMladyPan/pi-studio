@@ -145,9 +145,10 @@ waiting behind it.
 worktree on a branch of its own, and the strip in the corner of the board draws the branches and the
 commits on them.
 
-**A boss thread** spawns children instead of working. It runs one of three flows and gives each child
-one role; [docs/boss-and-subagents.md](docs/boss-and-subagents.md) draws the three flows and says what
-each role may do.
+**A boss thread** spawns children instead of working. It decides what the work needs — on `auto` the
+steps are its own, and a flow a human pinned is a recipe it follows — and gives each child one role;
+[docs/boss-and-subagents.md](docs/boss-and-subagents.md) draws the three flows and says what each role
+may do.
 
 The daemon listens on loopback only, and every data route needs the token it printed.
 
