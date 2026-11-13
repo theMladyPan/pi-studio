@@ -73,10 +73,11 @@ function resolve(commands: SlashCommand[], typed: string): string {
 
 /**
  * The refusal, and the name the human most likely meant. `no command named /ndk-exprot` on its own leaves
- * them staring at a menu they closed, so a name one or two letters from a real one offers that one. A skill
- * is measured by its short name too, because the short name is the one the human had in front of them, and
- * it is offered prefixed, because the prefixed name is the one they can type. Two names equally near are a
- * guess rather than an answer, so they say nothing.
+ * them staring at a menu they closed, so a name one or two letters from a real one offers that one. The offer
+ * leads the sentence because the hint line cuts it at eighty characters, and the name to type is the part
+ * worth keeping when it does. A skill is measured by its short name too, because the short name is the one
+ * the human had in front of them, and it is offered prefixed, because the prefixed name is the one they can
+ * type. Two names equally near are a guess rather than an answer, so they say nothing.
  */
 function refusal(commands: SlashCommand[], typed: string): string {
 	const said = `no command named /${typed}`;
@@ -86,7 +87,7 @@ function refusal(commands: SlashCommand[], typed: string): string {
 		.sort((left, right) => left.off - right.off);
 	const best = near[0];
 	if (!best || near.filter((one) => one.off === best.off).length > 1) return said;
-	return `${said} — did you mean /${best.name}?`;
+	return `did you mean /${best.name}? ${said}`;
 }
 
 /** The name the menu shows a command by: a skill's own, with the prefix pi names it with taken off. */

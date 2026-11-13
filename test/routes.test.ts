@@ -2961,11 +2961,11 @@ test("a skill runs by the short name the menu showed, and a near miss is told th
 		// A name one letter off is refused, and the refusal names what the human most likely meant.
 		const typo = await postTo(daemon, board.id, "/command", { cardId: threadId, name: "probe_templat" });
 		assert.equal(typo.status, 409, typo.body);
-		assert.equal(typo.body, "no command named /probe_templat — did you mean /probe_template?");
+		assert.equal(typo.body, "did you mean /probe_template? no command named /probe_templat");
 		// The same for a skill: the suggestion is the name pi knows it by, so it can be typed and run as it reads.
 		const nearSkill = await postTo(daemon, board.id, "/command", { cardId: threadId, name: "prob" });
 		assert.equal(nearSkill.status, 409, nearSkill.body);
-		assert.equal(nearSkill.body, "no command named /prob — did you mean /skill:probe?");
+		assert.equal(nearSkill.body, "did you mean /skill:probe? no command named /prob");
 		// Nothing close means nothing is guessed at: the refusal is the name alone.
 		const far = await postTo(daemon, board.id, "/command", { cardId: threadId, name: "no_such_command" });
 		assert.equal(far.status, 409, far.body);
