@@ -6065,6 +6065,7 @@ function makeComposer(entry) {
     ctxBtn: root.querySelector(".ctx-btn"),
     ctxLabel: root.querySelector(".ctx-label"),
     filesBtn: root.querySelector(".files"),
+    cmdBtn: root.querySelector(".cmd-pick"),
     // Steering cuts a run short, so it is a choice about this message rather than about the board.
     sendMode: "queue",
     // A fork asks a new thread instead of the one that answers the card, and is one send's choice.
@@ -6079,6 +6080,21 @@ function makeComposer(entry) {
     compacting: "",
     // A run this field has already been asked to stop, so the next press of the same run kills it.
     stopping: false,
+    /**
+     * What the `/` menu last read for this field: the commands pi offers its thread, the reason they
+     * could not be read, and the rows on screen with the one the arrows are on. It lives here because
+     * it is about the thread this field talks to, and two cards must never share it.
+     */
+    cmds: [],
+    cmdTrouble: "",
+    cmdRows: [],
+    cmdEls: [],
+    cmdAt: -1,
+    /**
+     * Whether the human shut the menu with Escape while the `/` draft that opened it still stands: the
+     * next keystroke must not open it again until that draft stops being the one they dismissed.
+     */
+    cmdMute: false,
     /** The cards this message names beside the one it is written in. */
     named: [],
     /** Images pasted or dropped into this field, and paths picked for it: both travel with the message. */
@@ -6115,6 +6131,9 @@ function wireComposer(inst) {
     // The `@` list owns the keys it puts on screen: Enter takes its row, Escape shuts it without
     // giving the keyboard back, and neither may reach the send and blur below.
     if (atPickKey(inst, event)) return;
+    // The `/` menu owns the same three keys, for the same reason: a pick writes the command into the
+    // field and the arguments are typed after it.
+    if (cmdPickKey(inst, event)) return;
     // A `!` command is a terminal: a Tab that stands in one asks for a suggestion, and a Tab anywhere
     // else keeps the browser's meaning of walking the field along.
     if (tabInBang(inst, event)) return;
@@ -6133,6 +6152,7 @@ function wireComposer(inst) {
   });
   inst.msg.addEventListener("input", () => {
     typedInAtPick(inst);
+    typedInCmdPick(inst);
     growComposer(inst);
   });
   // How tall the words have to be depends on the width they wrap at, so a window resize, a dragged rail
@@ -6237,6 +6257,14 @@ function wireComposer(inst) {
   inst.modelBtn.addEventListener("click", () => void openPick("model", inst.modelBtn, false, inst));
   inst.thinkBtn.addEventListener("click", () => void openPick("thinking", inst.thinkBtn, false, inst));
   inst.ctxBtn.addEventListener("click", () => void compactField(inst));
+  // A command runs in the thread behind a card, so a field with no card of its own has none to offer.
+  inst.cmdBtn.hidden = !cardOf(inst);
+  inst.cmdBtn.addEventListener("click", () => {
+    // The menu answers this field, so it becomes the one the board is working with, the way the files
+    // chip makes its own field current: a hint that lands while the list is up then lands here.
+    activeComposer = inst;
+    openCmdPick(inst, true);
+  });
   inst.filesBtn.addEventListener("click", () => {
     // Attaching files is a question the picker asks of one field, so it becomes the current one.
     activeComposer = inst;
@@ -8650,9 +8678,12 @@ window.addEventListener("resize", () => {
 document.addEventListener(
   "pointerdown",
   (event) => {
+    // The `/` menu is shut by a press anywhere outside it, the field included: a press in the field is
+    // a caret the human aimed, so the list that was guiding them is done.
+    if (!cmdPick.hidden && !event.target.closest("#cmdPick")) closeCmdPick();
     // The prompt editor is opened from this panel and is part of it: a press inside it is not a press
     // outside the settings, which would otherwise shut the panel the editor was opened from.
-    if (event.target.closest("#runtimePick, .composer, #boardConfig, #configBtn, #shortcutPanel, #keysBtn, #promptEditor")) return;
+    if (event.target.closest("#runtimePick, #cmdPick, .composer, #boardConfig, #configBtn, #shortcutPanel, #keysBtn, #promptEditor")) return;
     if (!runtimePick.hidden) closePick();
     if (!configPanel.hidden) shownConfig(false);
     if (!keysPanel.hidden) shownKeys(false);
@@ -9540,6 +9571,283 @@ window.addEventListener("resize", () => {
   if (!atPick.hidden) placeAtPick();
 });
 
+// ---------- the `/` menu in a field ------------------------------------------
+// A `/` at the front of a draft asks pi what it can run in this thread. The list is grouped by where
+// each command comes from, narrowed by name and by what each one does, and a row only writes the
+// command into the field: the arguments are the human's to type, and nothing is sent by picking.
+const cmdPick = document.getElementById("cmdPick");
+const cmdSearch = document.getElementById("cmdSearch");
+const cmdList = document.getElementById("cmdList");
+/** The field the menu is serving. One element serves every field, the way the `@` list does. */
+let cmdInst = null;
+/** Every listing bumps this, so a slow reply cannot land on top of a newer one. */
+let cmdSeq = 0;
+/** One heading per source, in the order the list reads: what the board's extensions add first. */
+const CMD_GROUPS = [
+  ["extension", "commands from extensions"],
+  ["prompt", "prompt templates"],
+  ["skill", "skills"],
+];
+
+/**
+ * The text after the slash, or null once the draft is no longer one command being named: a space ends
+ * the name, so the arguments typed after a pick leave the list shut.
+ */
+function cmdQuery(inst) {
+  const value = inst.msg.value;
+  if (!value.startsWith("/") || /\s/.test(value)) return null;
+  return value.slice(1);
+}
+
+/**
+ * The command name a row shows and the field writes. A skill is named `skill:name` on the way to the
+ * daemon and shown as `name`, because the heading above it already says it comes from a skill.
+ */
+function shownCommand(name) {
+  return String(name ?? "").replace(/^skill:/, "");
+}
+
+/** What narrows the list: what the human is typing into the search field, or the `/` draft itself. */
+function cmdFilter(inst) {
+  if (document.activeElement === cmdSearch) return cmdSearch.value;
+  const typed = cmdQuery(inst);
+  return typed === null ? cmdSearch.value : typed;
+}
+
+/**
+ * One command: the name pi knows it by, and under it the line that says what it does. The name is what
+ * the row writes, so a skill's `skill:` prefix stays off the screen and on the way out.
+ */
+function cmdRow(one) {
+  const row = el("button", "pick-row");
+  row.type = "button";
+  // The field keeps the keyboard so arguments can be typed straight after the pick: a row is never a
+  // tab stop and never takes the focus, the same as a row of the `@` list.
+  row.tabIndex = -1;
+  row.title = one.description ? `${one.name} — ${one.description}` : one.name;
+  const name = el("span", "pick-name");
+  name.textContent = shownCommand(one.name);
+  row.appendChild(name);
+  if (one.description) {
+    const said = el("span", "pick-meta");
+    said.textContent = one.description;
+    row.appendChild(said);
+  }
+  // On the press, not the click, for the reason the `@` rows do it: taking a row must not first hand
+  // the selection to the button, because the row writes into the field the caret is already in.
+  row.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    takeCmdRow(one);
+  });
+  return row;
+}
+
+/** Paint the rows for the filter: a heading per source, its commands under it, and why when empty. */
+function drawCmds(inst) {
+  const needle = cmdFilter(inst).trim().toLowerCase();
+  const matches = inst.cmds.filter((one) => !needle || `${one.name} ${one.description ?? ""}`.toLowerCase().includes(needle));
+  // The search field shows the filter the draft is applying, so the panel says what narrowed it. What
+  // the human types there themselves is never written over.
+  const typed = cmdQuery(inst);
+  if (typed !== null && document.activeElement !== cmdSearch) cmdSearch.value = typed;
+  const rows = [];
+  inst.cmdRows = [];
+  inst.cmdEls = [];
+  for (const [source, heading] of CMD_GROUPS) {
+    const group = matches.filter((one) => one.source === source);
+    if (!group.length) continue;
+    rows.push(pickHead(heading));
+    for (const one of group) {
+      const row = cmdRow(one);
+      rows.push(row);
+      inst.cmdRows.push(one);
+      inst.cmdEls.push(row);
+    }
+  }
+  // A list with nothing in it says why it is empty: a list that could not be read offers the one thing
+  // to do about it, and a filter that matched nothing says so rather than looking like a dead panel.
+  if (inst.cmdTrouble) {
+    rows.push(pickNote(`pi would not list its commands: ${inst.cmdTrouble}`));
+    const again = pickRow("try again", "", false, () => void loadCmds(inst, true));
+    again.tabIndex = -1;
+    again.title = "ask pi again, reading its list afresh";
+    rows.push(again);
+  } else if (!matches.length) {
+    rows.push(pickNote("no command matches"));
+  }
+  cmdList.replaceChildren(...rows);
+  markCmd(inst, -1);
+  // The panel is anchored on its own height, which the rows have just changed.
+  if (cmdInst === inst) placeCmdPick(inst);
+}
+
+/** Paint the row the arrows are on, without rebuilding the list under the pointer. */
+function markCmd(inst, at) {
+  inst.cmdAt = at;
+  for (const [index, row] of inst.cmdEls.entries()) row.classList.toggle("hl", index === at);
+  inst.cmdEls[at]?.scrollIntoView({ block: "nearest" });
+}
+
+/** The panel hangs over the field it serves, the same way the model picker hangs off its chip. */
+function placeCmdPick(inst = cmdInst) {
+  if (!inst) return;
+  const box = inst.root.getBoundingClientRect();
+  const width = cmdPick.offsetWidth;
+  const height = cmdPick.offsetHeight;
+  cmdPick.style.left = `${Math.max(10, Math.min(window.innerWidth - width - 10, box.left + 12))}px`;
+  // Above the field unless that would push it off the top, where it goes below instead.
+  const above = box.top - height - 8;
+  const top = above >= 10 ? above : Math.min(window.innerHeight - height - 10, box.bottom + 8);
+  cmdPick.style.top = `${Math.max(10, top)}px`;
+}
+
+function closeCmdPick() {
+  const inst = cmdInst;
+  cmdPick.hidden = true;
+  // Whatever is still in flight belongs to a list that is gone.
+  cmdSeq += 1;
+  cmdList.replaceChildren();
+  cmdSearch.value = "";
+  cmdInst = null;
+  if (!inst) return;
+  inst.cmds = [];
+  inst.cmdTrouble = "";
+  inst.cmdRows = [];
+  inst.cmdEls = [];
+  inst.cmdAt = -1;
+}
+
+/**
+ * Ask the daemon what this thread can run. `fresh` is the retry row's ask: it makes pi read its list
+ * again rather than hand back the one it already had.
+ */
+async function loadCmds(inst, fresh) {
+  const seq = (cmdSeq += 1);
+  const query = new URLSearchParams();
+  if (workspace) query.set("workspace", workspace);
+  if (cardOf(inst)) query.set("cardId", cardOf(inst).id);
+  if (fresh) query.set("fresh", "1");
+  try {
+    const response = await fetch(`/commands?${query}`);
+    if (seq !== cmdSeq) return;
+    const data = response.ok ? await response.json().catch(() => null) : null;
+    if (seq !== cmdSeq) return;
+    inst.cmds = Array.isArray(data?.commands) ? data.commands : [];
+    // A refusal is a reason to say rather than a list to swallow: the panel carries it over the retry.
+    inst.cmdTrouble = String(data?.trouble ?? "") || (response.ok ? "" : response.statusText);
+  } catch {
+    if (seq !== cmdSeq) return;
+    inst.cmds = [];
+    inst.cmdTrouble = "the board server did not answer";
+  }
+  if (cmdInst === inst) drawCmds(inst);
+}
+
+/**
+ * Show the menu for one field. The chip hands the keyboard to the search field, because a press there
+ * is browsing; a `/` typed into the draft keeps the caret in the field, because the draft is the filter.
+ */
+function openCmdPick(inst, fromChip) {
+  // A command runs in a thread, and a board with no thread card has none to run it in.
+  if (!cardOf(inst)) return;
+  cmdInst = inst;
+  inst.cmds = [];
+  inst.cmdTrouble = "";
+  inst.cmdRows = [];
+  inst.cmdEls = [];
+  inst.cmdAt = -1;
+  cmdSearch.value = "";
+  cmdList.replaceChildren();
+  cmdPick.hidden = false;
+  placeCmdPick(inst);
+  if (fromChip) cmdSearch.focus();
+  void loadCmds(inst, false);
+}
+
+/** Write the picked command into the field and leave the caret after its space, where arguments go. */
+function takeCmdRow(one) {
+  const inst = cmdInst;
+  if (!inst) return;
+  inst.msg.value = `/${shownCommand(one.name)} `;
+  // The draft that muted the menu is spent, so the next slash opens it again.
+  inst.cmdMute = false;
+  closeCmdPick();
+  inst.msg.focus();
+  inst.msg.setSelectionRange(inst.msg.value.length, inst.msg.value.length);
+  growComposer(inst);
+}
+
+/**
+ * A keystroke in the field: a `/` draft opens the menu and narrows it as it is typed, and a draft that
+ * is no longer one command name shuts it.
+ */
+function typedInCmdPick(inst) {
+  if (cmdQuery(inst) === null) {
+    // The slash is gone, or the arguments have started: either way this draft no longer names a
+    // command, so the next slash is a new opening.
+    inst.cmdMute = false;
+    if (cmdInst === inst) closeCmdPick();
+    return;
+  }
+  // A menu the human shut with Escape stays shut while the draft they shut it on stands, the way a
+  // dismissed `@` list does.
+  if (inst.cmdMute) return;
+  if (cmdInst !== inst) {
+    openCmdPick(inst, false);
+    return;
+  }
+  drawCmds(inst);
+}
+
+/**
+ * The keys the open menu owns, whether the caret is in the field or in the search box. True means it
+ * took the keystroke, so the field does not send with it and does not give the keyboard back.
+ */
+function cmdPickKey(inst, event) {
+  if (cmdPick.hidden || cmdInst !== inst) return false;
+  const key = event.key;
+  if (key === "ArrowDown" || key === "ArrowUp") {
+    event.preventDefault();
+    event.stopPropagation();
+    if (inst.cmdRows.length === 0) return true;
+    const step = key === "ArrowDown" ? 1 : -1;
+    const next = inst.cmdAt < 0 ? (step > 0 ? 0 : inst.cmdRows.length - 1) : (inst.cmdAt + step + inst.cmdRows.length) % inst.cmdRows.length;
+    markCmd(inst, next);
+    return true;
+  }
+  if (key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    // The draft stays exactly as it is: Escape shuts the list, and the keyboard goes back to the field
+    // the menu was opened for, so the arguments can be typed.
+    inst.cmdMute = true;
+    closeCmdPick();
+    inst.msg.focus();
+    return true;
+  }
+  if (key !== "Enter") return false;
+  event.preventDefault();
+  event.stopPropagation();
+  const taken = inst.cmdRows[inst.cmdAt < 0 ? 0 : inst.cmdAt];
+  // Nothing to take shuts the list rather than sending a line that names no command: the draft stays,
+  // and the next press sends it.
+  if (taken) takeCmdRow(taken);
+  else closeCmdPick();
+  return true;
+}
+
+cmdSearch.addEventListener("keydown", (event) => {
+  if (cmdInst && cmdPickKey(cmdInst, event)) return;
+  // A search field is not a form: Enter belongs to the list above and Tab to the field below.
+  if (event.key === "Enter") event.preventDefault();
+});
+cmdSearch.addEventListener("input", () => {
+  if (cmdInst) drawCmds(cmdInst);
+});
+window.addEventListener("resize", () => {
+  if (!cmdPick.hidden) placeCmdPick();
+});
+
 // ---------- sending ------------------------------------------------------
 /**
  * Paths travel as text, which the agent's own file tools read directly. A path picked with the files
@@ -9591,6 +9899,10 @@ async function sendMessage(inst = activeComposer) {
     // newline in it is prose that happens to start with `!` — nobody types a two-line command — and stays a
     // message, and a space before the `!` is a message too, so "!important" in a sentence is never run.
     if (draft.startsWith("!") && !draft.includes("\n")) return runCommand(inst, draft, draft.slice(1).trim());
+    // A `/` at the very front of a one-line draft is a command pi runs in this thread, the way its own
+    // console reads it. A draft with a newline stays a message, and so does one written in a bar that has
+    // no thread behind it: there is nothing there to run a command in, which is why the chip is hidden too.
+    if (cardOf(inst) && draft.startsWith("/") && !draft.includes("\n")) return runSlash(inst, draft);
     const text = inst.picked.size === 0 ? typed : `${typed}${typed ? "\n\n" : ""}${pickedPathsText(inst)}`;
     // What this message carries, so a pick or a keystroke made while it travels is still there.
     const sentPaths = [...inst.picked.keys()];
@@ -9762,6 +10074,58 @@ async function runCommand(inst, draft, command) {
     // The card carries the output on the board, and the chip is what carries it into the next message.
     nameCardWhenDrawn(inst, ran.cardId);
     hintLine(`!${command.slice(0, 32)} · on the board`, false, inst);
+  } catch (error) {
+    const gone = error instanceof TypeError; // fetch rejects like this when nothing answers
+    hintLine(gone ? "board connection lost — reload the page" : `could not run it: ${error.message || error}`, true, inst);
+  } finally {
+    inst.send.disabled = false;
+  }
+}
+
+/**
+ * A `/command args` from the field: the daemon runs it in the thread behind this card. Picking a row only
+ * writes the name, so this is where a command actually runs, and the daemon's own words are what the hint
+ * says when it will not. The draft is the human's until it is taken: anything the daemon refuses leaves it
+ * where it stands, so the next thing done with it is a fix rather than a retype.
+ */
+async function runSlash(inst, draft) {
+  // The first word is the command, the rest is its arguments, both as typed. A name that survives the
+  // split is what the daemon is asked about; `etc/hosts` from `/etc/hosts is wrong` is one of those, and
+  // its refusal is what turns a line written as prose back into a draft.
+  const rest = draft.slice(1);
+  const cut = rest.search(/\s/);
+  const name = (cut < 0 ? rest : rest.slice(0, cut)).trim();
+  const args = cut < 0 ? "" : rest.slice(cut + 1).trim();
+  if (!name) {
+    hintLine("nothing to run after /", true, inst);
+    return;
+  }
+  inst.send.disabled = true;
+  hintLine(`running /${name.slice(0, 32)}`, false, inst);
+  try {
+    const response = await fetch(`/command?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: cardOf(inst).id, name, args }),
+    });
+    if (!response.ok) {
+      // The daemon answers in plain text: it is the reason, so it is what the hint gives, and the draft
+      // stays. A command this thread does not have is a 409, which is where a `/etc/hosts` typed as prose
+      // lands, so that one has words of its own for the case of an empty body.
+      const said = (await response.text()).trim();
+      hintLine(said.slice(0, 80) || (response.status === 409 ? "no such command in this thread" : response.statusText), true, inst);
+      return;
+    }
+    const ran = await response.json();
+    // Only what was sent leaves the field, so a keystroke made while it travelled stays.
+    if (inst.msg.value === draft) {
+      inst.msg.value = "";
+      growComposer(inst);
+    }
+    // The `/` draft is spent with the menu that led to it, so the next slash opens a fresh one.
+    inst.cmdMute = false;
+    closeCmdPick();
+    hintLine(`/${name.slice(0, 32)} · ${ran.disposition || "sent"}`, false, inst);
   } catch (error) {
     const gone = error instanceof TypeError; // fetch rejects like this when nothing answers
     hintLine(gone ? "board connection lost — reload the page" : `could not run it: ${error.message || error}`, true, inst);
