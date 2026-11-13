@@ -3137,6 +3137,9 @@ function applyMessage(data, quiet = false) {
 }
 
 function clearBoard() {
+  // The cards go with their chips, and a drawing left hanging off a detached chip would never hear the
+  // pointer leave it: a removed element fires no `mouseleave`.
+  hideFlowPeek();
   // Every field lives inside a card, so they go with the cards. A field's words are kept under its card
   // so a snapshot that rebuilds the board puts the same draft back.
   for (const inst of composers.values()) {
@@ -3186,6 +3189,9 @@ function closeCard(entry) {
 
 /** Remove a card from the board and let later cards fill the space it held. */
 function dropCard(entry) {
+  // The card takes its flow chip with it, and a removed chip fires no `mouseleave` to put the drawing
+  // away, so it is put away here.
+  hideFlowPeek();
   const record = byId.get(entry.id);
   if (!record) return;
   // Compared by id: a remote remove arrives as a bare { id } and would never match the entry. A card
@@ -6233,11 +6239,7 @@ function wireComposer(inst) {
     paintHint(inst);
   });
   inst.pickModeBtn.addEventListener("click", () => void openPick("mode", inst.pickModeBtn, false, inst));
-  inst.pickPathBtn.addEventListener("click", () => {
-    // The picker opens where the drawing sits, so a press on the chip puts the drawing away first.
-    hideFlowPeek();
-    void openPick("path", inst.pickPathBtn, false, inst);
-  });
+  inst.pickPathBtn.addEventListener("click", () => void openPick("path", inst.pickPathBtn, false, inst));
   // A flow chip shows its drawing to a pointer and to the keyboard alike, and the row of chips keeps its
   // size either way. `auto` has nothing drawn, so it answers with no panel.
   inst.pickPathBtn.addEventListener("mouseenter", () => void showFlowPeek(inst));
@@ -6912,19 +6914,26 @@ function closePick() {
   if (wasOpen) refreshSettings();
 }
 
+/**
+ * Put a panel where the chip that opened it is, for the picker and the drawing alike. A panel whose chip
+ * has gone falls back to the top left.
+ */
+function placeAnchoredPanel(panel, anchor) {
+  const chip = anchor ? anchor.getBoundingClientRect() : { left: 12, top: 12, bottom: 30 };
+  const width = panel.offsetWidth;
+  const height = panel.offsetHeight;
+  panel.style.left = `${Math.max(10, Math.min(window.innerWidth - width - 10, chip.left))}px`;
+  // Above the thing it hangs off, unless that would push it off the top: then below, so a panel in the
+  // corner does not cover the row that opened it.
+  const above = chip.top - height - 8;
+  const top = above >= 10 ? above : Math.min(window.innerHeight - height - 10, chip.bottom + 8);
+  panel.style.top = `${Math.max(10, top)}px`;
+}
+
 function placeRuntimePick() {
   // The panel hangs off the chip that opened it, which the open call names: a field's own chip, or a
   // row in the board's settings.
-  const anchor = pickAnchor ?? (picking === "thinking" ? pickInst?.thinkBtn : pickInst?.modelBtn);
-  const chip = anchor ? anchor.getBoundingClientRect() : { left: 12, top: 12, bottom: 30 };
-  const width = runtimePick.offsetWidth;
-  const height = runtimePick.offsetHeight;
-  runtimePick.style.left = `${Math.max(10, Math.min(window.innerWidth - width - 10, chip.left))}px`;
-  // Above the thing it hangs off, unless that would push it off the top: then below, so a panel in
-  // the corner does not have its own picker covering the row that opened it.
-  const above = chip.top - height - 8;
-  const top = above >= 10 ? above : Math.min(window.innerHeight - height - 10, chip.bottom + 8);
-  runtimePick.style.top = `${Math.max(10, top)}px`;
+  placeAnchoredPanel(runtimePick, pickAnchor ?? (picking === "thinking" ? pickInst?.thinkBtn : pickInst?.modelBtn));
 }
 
 // ---------- the flow a chip names, drawn while a pointer rests on it -------
@@ -6937,15 +6946,7 @@ let peekAnchor = null;
 let peekWanted = 0;
 
 function placeFlowPeek() {
-  const chip = peekAnchor ? peekAnchor.getBoundingClientRect() : { left: 12, top: 12, bottom: 30 };
-  const width = flowPeek.offsetWidth;
-  const height = flowPeek.offsetHeight;
-  flowPeek.style.left = `${Math.max(10, Math.min(window.innerWidth - width - 10, chip.left))}px`;
-  // Above the chip it hangs off, unless that would push it off the top: then below, so a panel over a
-  // field at the top of the board does not cover the chip that opened it.
-  const above = chip.top - height - 8;
-  const top = above >= 10 ? above : Math.min(window.innerHeight - height - 10, chip.bottom + 8);
-  flowPeek.style.top = `${Math.max(10, top)}px`;
+  placeAnchoredPanel(flowPeek, peekAnchor);
 }
 
 function hideFlowPeek() {
@@ -6957,6 +6958,9 @@ function hideFlowPeek() {
 /** The flow this field is on, if that flow is drawn. `auto` is drawn nowhere: the boss decides there. */
 async function showFlowPeek(inst) {
   const wanted = (peekWanted += 1);
+  // A picker is a list the human asked for, and a pointer resting on a chip beside it must never paint
+  // over the rows it is choosing from.
+  if (!runtimePick.hidden || !atPick.hidden) return;
   const { path } = modeShown(inst);
   if (path === "auto") return;
   const drawn = ((await loadFlows())?.flows ?? []).find((one) => one.path === path);
@@ -7170,6 +7174,9 @@ async function openPick(which, anchor = null, forBoard = false, inst = null) {
   }
   picking = which;
   pickAnchor = anchor;
+  // A picker opens where a drawing sits, so a drawing that is up steps aside for it, and the rule holds
+  // whichever of the two the human reaches first.
+  hideFlowPeek();
   pickBoard = forBoard;
   // A list opened from a field edits that field's thread; one opened from the settings panel edits the
   // board's defaults, and belongs to nobody's card.
@@ -7294,21 +7301,24 @@ const PATH_HINTS = [
 
 /**
  * The drawings of those flows, from the document that draws each one once. Read on the first hover of a
- * flow chip and kept, because the drawings change only when the document does, which a reload shows.
+ * flow chip and kept, because the drawings change only when the document does, which a reload shows. The
+ * read itself is kept: three chips hovered before the drawings land cost one document read.
  */
-let flowCatalogue = null;
-let flowsTrouble = "";
+let flowCatalogueRead = null;
 
-async function loadFlows() {
-  if (flowCatalogue || flowsTrouble) return flowCatalogue;
-  try {
-    const response = await fetch(`/flows?${auth}`);
-    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
-    flowCatalogue = await response.json();
-  } catch (error) {
-    flowsTrouble = error.message || String(error);
-  }
-  return flowCatalogue;
+function loadFlows() {
+  flowCatalogueRead ??= (async () => {
+    try {
+      const response = await fetch(`/flows?${auth}`);
+      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+      return await response.json();
+    } catch {
+      // A read that failed stays failed: the drawings are a document this page does not draw, and a hover
+      // is not where a broken route is discovered.
+      return null;
+    }
+  })();
+  return flowCatalogueRead;
 }
 
 /** How often a card is written, and who it is written for, in the words the picker shows. */
