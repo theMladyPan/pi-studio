@@ -65,7 +65,7 @@ export async function onMessage(req, res, board) {
 	// the whole list rides this one message.
 	const picked = pickedNames(body.commands);
 	if (typeof picked === "string") return void fail(res, 400, picked);
-	// Chips alone are still something to say: a skill's text is the request.
+	// Chips alone are still something to say: a skill's file and the instruction to read it are the request.
 	if (!text && !images.length && !picked.length) return void fail(res, 400, "empty message");
 	// What the turn remembers of them, which is the thumbnail and not the bytes.
 	const thumbs = thumbImages(images);
@@ -139,8 +139,9 @@ export async function onMessage(req, res, board) {
 		}
 	}
 	if (thread.status === "dead") return void fail(res, 409, "thread ended");
-	// What the chips bring to the turn: a skill's text read, an extension command run, both before the
-	// message goes out — one turn and one answer is what the human asked the chips to be.
+	// What the chips bring to the turn: a skill named for the agent to read, a template's text carried, an
+	// extension command run, both before the message goes out — one turn and one answer is what the human asked
+	// the chips to be.
 	const chipped = picked.length ? await chipSections(board, thread, picked) : { sections: "" };
 	if ("error" in chipped) return void fail(res, chipped.status, chipped.error);
 
