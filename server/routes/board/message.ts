@@ -10,22 +10,47 @@ import { runtimeDefaults } from "../../workspaces.ts";
 import { card, update, updateCard } from "../../bus.ts";
 import { acceptedImages, promptImages, thumbImages, threadError } from "../../cards.ts";
 import { prompt } from "../../child/run.ts";
+import { chipSections, MAX_CHIPS } from "./chips.ts";
 
 
 
 /**
- * One turn as the child reads it: what the board has to say, then a named line where the human's words
- * begin. Each section is bracketed by whoever made it and the sections are divided by `---`, so a model
- * never reads the human's request as one more thing the board said, or a quoted card as an order.
+ * One turn as the child reads it: what the board has to say, the commands the human picked, then a named
+ * line where the human's words begin. Each section is bracketed by whoever made it and the sections are
+ * divided by `---`, so a model never reads the human's request as one more thing the board said, a quoted
+ * card as an order, or a skill as something the human wrote.
  *
  * The human's section is always named, even when nothing precedes it: the same shape on every turn is
  * what makes the name mean something, and a turn that changed shape would be the one read as an order.
  */
-function boardSections(board, preamble, naming, text) {
+function boardSections(board, preamble, naming, text, commands = "") {
 	const sections = [cardIndex(board), preamble, naming]
 		.map((one) => String(one ?? "").replace(/\s+$/, ""))
 		.filter(Boolean);
-	return [...sections, `[user message]\n${text}`].join("\n---\n");
+	// The chips sit closest above the words: the message is the pair, and a skill's instructions were written
+	// to be read against what the human then asked for.
+	return [...sections, commands, `[user message]\n${text}`].filter(Boolean).join("\n---\n");
+}
+
+
+
+/**
+ * The chip names a message carries, in the order the human arranged them, or the sentence it is refused
+ * with. A list longer than the composer draws was built by something other than the composer, and trimming
+ * it would run commands the human never saw. A leading slash goes as `/command` drops it, so a chip and a
+ * typed name are read the same way.
+ */
+function pickedNames(held) {
+	if (held === undefined || held === null) return [];
+	if (!Array.isArray(held)) return "commands must be a list of command names";
+	if (held.length > MAX_CHIPS) return `a message carries at most ${MAX_CHIPS} commands`;
+	const names = [];
+	for (const one of held) {
+		const name = typeof one === "string" ? one.trim().replace(/^\//, "") : "";
+		if (!name) return "a chip with no command name";
+		names.push(name);
+	}
+	return names;
 }
 
 
@@ -36,7 +61,12 @@ export async function onMessage(req, res, board) {
 	const text = typeof body.text === "string" ? body.text.trim() : "";
 	// A message may be pictures alone: the words are what a turn says, and a screenshot says something.
 	const images = acceptedImages(body.images);
-	if (!text && !images.length) return void fail(res, 400, "empty message");
+	// The commands the human arranged as chips beside the words, in their order: names the menu offered, and
+	// the whole list rides this one message.
+	const picked = pickedNames(body.commands);
+	if (typeof picked === "string") return void fail(res, 400, picked);
+	// Chips alone are still something to say: a skill's text is the request.
+	if (!text && !images.length && !picked.length) return void fail(res, 400, "empty message");
 	// What the turn remembers of them, which is the thumbnail and not the bytes.
 	const thumbs = thumbImages(images);
 	const mode = body.mode === "steer" ? "steer" : "queue";
@@ -109,6 +139,10 @@ export async function onMessage(req, res, board) {
 		}
 	}
 	if (thread.status === "dead") return void fail(res, 409, "thread ended");
+	// What the chips bring to the turn: a skill's text read, an extension command run, both before the
+	// message goes out — one turn and one answer is what the human asked the chips to be.
+	const chipped = picked.length ? await chipSections(board, thread, picked) : { sections: "" };
+	if ("error" in chipped) return void fail(res, chipped.status, chipped.error);
 
 	// The card shows what the human typed; the child is told what card it is about. The answer is kept
 	// where it will be read: a thread that is drawn has a card of its own, the field is docked in that
@@ -117,7 +151,11 @@ export async function onMessage(req, res, board) {
 	// the answer are read on the card of the thread that answered. A fork is such a thread now. Only a
 	// child a card nobody answers for got has no card of its own, so the card is the only place its turn
 	// can be read, and it keeps the turn there.
-	const message = boardSections(board, preamble, naming, text);
+	// A message may be chips alone. The card shows what the human picked, and the agent is told in words,
+	// because a human section holding a bare `/name` reads as a command to run a second time.
+	const words = text || "(the human sent no words; the commands above are the request)";
+	const said = text || picked.map((one) => `/${one}`).join(" ");
+	const message = boardSections(board, preamble, naming, words, chipped.sections);
 	const holding = askedCard && thread.hidden ? askedCard : null;
 	let target = null;
 	let index;
@@ -125,7 +163,7 @@ export async function onMessage(req, res, board) {
 		holding.turns = holding.turns ?? [];
 		// A steer joins the run in flight, so the turn is already being acted on.
 		holding.turns.push({
-			text: text.slice(0, 4000),
+			text: said.slice(0, 4000),
 			status: mode === "steer" ? "sent" : "queued",
 			mode,
 			at: Date.now(),
@@ -136,7 +174,7 @@ export async function onMessage(req, res, board) {
 		updateCard(board, holding);
 	} else {
 		thread.turns.push({
-			text: text.slice(0, 4000),
+			text: said.slice(0, 4000),
 			status: mode === "steer" ? "sent" : "queued",
 			mode,
 			at: Date.now(),
@@ -164,7 +202,7 @@ export async function onMessage(req, res, board) {
 		// The card quote is kept beside the words the human typed, so a message still waiting can be
 		// rewritten without losing what the child needs to know about the card it is about.
 		// The pictures wait with the words: a run that has not read them yet is not told about them twice.
-		thread.queued.push({ message, text, preamble, target, ...(images.length ? { images } : {}) });
+		thread.queued.push({ message, text: said, preamble, skills: chipped.sections, target, ...(images.length ? { images } : {}) });
 	} else {
 		prompt(board, thread, message, target, images);
 	}
@@ -229,7 +267,7 @@ export async function onMessageEdit(req, res, board) {
 	entry.text = text.slice(0, 4000);
 	// Only the human's own words change: the card quote the message was queued with stays as it was. The
 	// board section is built again, so a message rewritten after a card was added still names that card.
-	entry.message = boardSections(board, entry.preamble ?? "", "", entry.text);
+	entry.message = boardSections(board, entry.preamble ?? "", "", entry.text, entry.skills ?? "");
 	const turn = queuedTurn(board, thread, target);
 	if (turn) turn.text = entry.text;
 	showQueue(board, thread, target);

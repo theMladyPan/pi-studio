@@ -17,18 +17,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { answer, fail, readJson } from "../../http.ts";
 import { workdirOf } from "../../worktrees/make.ts";
-import { commandList } from "../../commands.ts";
-import type { SlashCommand } from "../../commands.ts";
+import { commandList, NAME, refusal, resolve } from "../../commands.ts";
 import { sendCommand } from "../../child/run.ts";
-
-/** The name pi knows a command by: its own, so a `skill:` command keeps its prefix. */
-const NAME = /^[A-Za-z0-9][\w:.-]*$/;
-
-/** The prefix pi puts on a skill's command, and the thing the menu takes off before the field writes it. */
-const SKILL = "skill:";
-
-/** How far a typed name may be from a real one and still be worth answering with it. */
-const NEAR = 2;
 
 export async function onCommand(req: IncomingMessage, res: ServerResponse, board: any): Promise<void> {
 	const body = await readJson(req, res);
@@ -58,58 +48,4 @@ export async function onCommand(req: IncomingMessage, res: ServerResponse, board
 	const outcome = await sent.outcome;
 	if ("error" in outcome) return void fail(res, outcome.status, outcome.error);
 	answer(res, 200, { id: thread.id, name: known, disposition: outcome.disposition });
-}
-
-/**
- * The name pi knows the typed one by: itself when the list has it, the `skill:` form when that is the one
- * command the short name can mean, and nothing when it is neither. Which form to send is the whole question
- * — pi runs the name it was given, so an unprefixed skill is a name it does not have.
- */
-function resolve(commands: SlashCommand[], typed: string): string {
-	if (commands.some((one) => one.name === typed)) return typed;
-	const skills = commands.filter((one) => one.name === `${SKILL}${typed}`);
-	return skills.length === 1 ? skills[0].name : "";
-}
-
-/**
- * The refusal, and the name the human most likely meant. `no command named /ndk-exprot` on its own leaves
- * them staring at a menu they closed, so a name one or two letters from a real one offers that one. The offer
- * leads the sentence because the hint line cuts it at eighty characters, and the name to type is the part
- * worth keeping when it does. A skill is measured by its short name too, because the short name is the one
- * the human had in front of them, and it is offered prefixed, because the prefixed name is the one they can
- * type. Two names equally near are a guess rather than an answer, so they say nothing.
- */
-function refusal(commands: SlashCommand[], typed: string): string {
-	const said = `no command named /${typed}`;
-	const near = commands
-		.map((one) => ({ name: one.name, off: Math.min(away(typed, one.name), away(typed, shown(one.name))) }))
-		.filter((one) => one.off <= NEAR)
-		.sort((left, right) => left.off - right.off);
-	const best = near[0];
-	if (!best || near.filter((one) => one.off === best.off).length > 1) return said;
-	return `did you mean /${best.name}? ${said}`;
-}
-
-/** The name the menu shows a command by: a skill's own, with the prefix pi names it with taken off. */
-function shown(name: string): string {
-	return name.startsWith(SKILL) ? name.slice(SKILL.length) : name;
-}
-
-/**
- * How many letters two names differ by. The whole table, because a name and a list are both short and a
- * suggestion may be a few thousand comparisons — small enough that a cleverer measure would only be harder
- * to read. Two letters swapped cost two, which is enough for `slikll` to reach `skill`.
- */
-function away(left: string, right: string): number {
-	const row = Array.from({ length: right.length + 1 }, (_, at) => at);
-	for (let down = 1; down <= left.length; down++) {
-		let above = row[0];
-		row[0] = down;
-		for (let at = 1; at <= right.length; at++) {
-			const held = row[at];
-			row[at] = Math.min(row[at] + 1, row[at - 1] + 1, above + (left[down - 1] === right[at - 1] ? 0 : 1));
-			above = held;
-		}
-	}
-	return row[right.length];
 }
