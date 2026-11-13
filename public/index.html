@@ -907,25 +907,31 @@
   #newThread:disabled { opacity: .55; cursor: progress; }
   #newThread:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 
-  /* The model and thinking pickers: one panel above the composer, one shape for both. */
-  #runtimePick { position: fixed; z-index: 2000; display: flex; flex-direction: column; gap: 6px;
+  /* The model and thinking pickers: one panel above the composer, one shape for both. The `/` menu in
+     a field borrows the same shell, because a list of names with a line about each reads the same way
+     wherever it is opened. */
+  #runtimePick, #cmdPick { position: fixed; z-index: 2000; display: flex; flex-direction: column; gap: 6px;
     width: 390px; max-height: 52vh; padding: 10px; background: rgba(13,17,23,.98);
     border: 1px solid var(--border-bright); border-radius: 10px; box-shadow: 0 18px 40px rgba(0,0,0,.55); }
-  #runtimePick[hidden] { display: none; }
-  #runtimePick input { font: 12px var(--mono); color: var(--text); background: #0d1117;
+  #runtimePick[hidden], #cmdPick[hidden] { display: none; }
+  #runtimePick input, #cmdPick input { font: 12px var(--mono); color: var(--text); background: #0d1117;
     border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
-  #runtimePick input:focus { outline: none; border-color: var(--accent-dim); }
+  #runtimePick input:focus, #cmdPick input:focus { outline: none; border-color: var(--accent-dim); }
   #runtimePick input[hidden] { display: none; }
-  #runtimeList { overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-  #runtimeList:empty { display: none; }
-  #runtimeList .pick-group { font: 10.5px var(--mono); color: var(--muted); text-transform: uppercase;
+  #runtimeList, #cmdList { overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+  #runtimeList:empty, #cmdList:empty { display: none; }
+  #runtimeList .pick-group, #cmdList .pick-group { font: 10.5px var(--mono); color: var(--muted); text-transform: uppercase;
     letter-spacing: .7px; padding: 8px 6px 3px; }
-  #runtimeList .pick-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  #runtimeList .pick-row, #cmdList .pick-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
     font: 12px var(--mono); color: var(--text); background: transparent; border: 0;
     border-radius: 6px; padding: 6px 8px; cursor: pointer; text-align: left; }
-  #runtimeList .pick-row:hover { background: #161b22; }
+  #runtimeList .pick-row:hover, #cmdList .pick-row:hover, #cmdList .pick-row.hl { background: #161b22; }
   #runtimeList .pick-row.on { color: var(--accent); }
-  #runtimeList .pick-row .pick-meta { color: var(--muted); font: 11px var(--mono); }
+  #runtimeList .pick-row .pick-meta, #cmdList .pick-row .pick-meta { color: var(--muted); font: 11px var(--mono); }
+  /* A command says what it does under its own name: the description is the reason to pick one, so it
+     gets the width of the row rather than a right-hand column that squeezes both. */
+  #cmdList .pick-row { flex-direction: column; align-items: stretch; gap: 2px; }
+  #cmdList .pick-row .pick-meta { line-height: 1.4; }
   /* A tool kept from a new thread: the row says `off` and goes quiet, so a list where most are on
      reads as a list of names rather than a wall of colour. */
   #runtimeList .pick-row.tool-off, #runtimeList .pick-row.tool-off .pick-meta { color: var(--muted); }
@@ -935,7 +941,7 @@
   #runtimeList .pick-more:hover { background: #161b22; }
   #runtimeList .pick-more.last { border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; margin-top: 2px; }
   #runtimeList .pick-more.first { border-bottom: 1px solid var(--border); border-radius: 6px 6px 0 0; margin-bottom: 2px; }
-  #runtimeList .pick-note { color: var(--muted); font: 11px var(--mono); padding: 4px 6px; }
+  #runtimeList .pick-note, #cmdList .pick-note { color: var(--muted); font: 11px var(--mono); padding: 4px 6px; }
 
   #picker { position: fixed; z-index: 2000; display: flex; flex-direction: column; gap: 6px;
     padding: 8px; background: rgba(13,17,23,.98); border: 1px solid var(--border-bright);
@@ -1293,6 +1299,8 @@
         <button class="think-pick" type="button" title="how hard the model thinks before answering">think</button>
         <button class="ctx-btn" type="button" hidden><span class="ctx-label"></span></button>
         <button class="files" type="button" title="attach files or folders from disk">files</button>
+        <!-- A command runs in a thread, so this chip is hidden on the bottom bar, which has none. -->
+        <button class="cmd-pick" type="button" aria-label="run a command from pi" title="run a command from pi (/scan_codebase and friends)">/</button>
       </div>
       <div class="acts">
         <span class="hintline" role="status" aria-live="polite" hidden></span>
@@ -1322,6 +1330,15 @@
 
 <div id="atPick" role="dialog" aria-label="files in this workspace" hidden>
   <div id="atList"></div>
+</div>
+
+<!-- Every command pi offers the thread the field belongs to: extensions, prompt templates and skills,
+     grouped and searchable by name or by what each one does. Body level like the two above, so the
+     board's zoom does not land on it. -->
+<div id="cmdPick" role="dialog" aria-label="commands pi can run in this thread" hidden>
+  <input id="cmdSearch" type="text" placeholder="search commands…" autocomplete="off" spellcheck="false"
+    aria-label="search a command by its name or by what it does" />
+  <div id="cmdList"></div>
 </div>
 
 <div id="viewport">
