@@ -1392,6 +1392,32 @@ if (process.argv.includes("--list-models")) {
 	process.exit(0);
 }
 
+// The command probe: a --no-session pi started for one question and closed again. It is not a thread
+// and carries no thread token, so it is answered here, ahead of the exit just below. The list is handed
+// back unsorted on purpose: the menu reads pi's answer sorted by source then name.
+if (process.argv.includes("--no-session")) {
+	const reply = (frame) => process.stdout.write(JSON.stringify(frame) + "\n");
+	let asked = "";
+	process.stdin.setEncoding("utf8");
+	process.stdin.on("data", (chunk) => {
+		asked += chunk;
+		const parts = asked.split("\n");
+		asked = parts.pop() || "";
+		for (const line of parts) {
+			if (!line.trim()) continue;
+			const frame = JSON.parse(line);
+			if (frame.type !== "get_commands") continue;
+			reply({ type: "response", id: frame.id, command: "get_commands", success: true, data: { commands: [
+				{ name: "skill:probe", description: "a skill the stub offers", source: "skill", sourceInfo: { scope: "user" } },
+				{ name: "probe_template", description: "a prompt template", source: "prompt", sourceInfo: { scope: "project" } },
+				{ name: "ext_cmd", description: "an extension command", source: "extension", sourceInfo: { path: "/nowhere.ts", scope: "user" } },
+			] } });
+		}
+	});
+	process.stdin.on("end", () => process.exit(0));
+	return;
+}
+
 // A naming run is the other shape of invocation and carries no thread token, so it has nothing to say
 // here and leaves rather than wait on a stdin nobody will write.
 if (!process.env.PI_STUDIO_TOKEN) process.exit(0);
@@ -1433,6 +1459,19 @@ process.stdin.on("data", (chunk) => {
 			say({ type: "response", command: "compact", success: true, data: { summary: "a shorter conversation", tokensBefore: 150000, estimatedTokensAfter: 32000 } });
 		}
 		if (frame.type === "prompt") {
+			// A slash command is a prompt frame too, and pi answers it with what it did rather than with a run:
+			// an extension command runs itself, so no turn and no agent_settled follow it. A prompt template is
+			// prose the model answers, so pi answers it "started" and the run that follows ends in its own turn.
+			if (String(frame.id).startsWith("cmd:")) {
+				if (frame.message.startsWith("/probe_template")) {
+					say({ type: "response", id: frame.id, command: "prompt", success: true, data: { disposition: "started" } });
+					say({ type: "turn_end", message: { role: "assistant", content: [{ type: "text", text: "the template answered" }] } });
+					say({ type: "agent_settled" });
+					continue;
+				}
+				say({ type: "response", id: frame.id, command: "prompt", success: true, data: { disposition: "handled" } });
+				continue;
+			}
 			// A "hold" file keeps the run open, which is the state a compaction has to refuse.
 			if (existsSync(flag("hold"))) continue;
 			// A "cut" file is a run the board stopped before it said anything: the empty, aborted answer
@@ -2815,5 +2854,110 @@ test("the redirect after a sign-in stays a path on this daemon", async () => {
 	} finally {
 		daemon.child.kill();
 		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+/**
+ * The composer's `/` menu and the command it runs. The stub pi is the folder's pi, so the probe the menu
+ * makes is the stub too: it answers `get_commands` under `--no-session`, which is the one flag that says
+ * a pi was started to ask a question rather than to be a thread.
+ */
+test("the slash commands pi offers a thread are listed, and one of them runs inside it", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-commands-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-commands-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-commands-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "a thread" })).body).threadId;
+		// The menu. pi answers unsorted, so the order here is the daemon's own: by source, then by name.
+		const listed = JSON.parse((await get(daemon, `/commands?token=${daemon.token}&workspace=${board.id}&cardId=${threadId}`)).body);
+		assert.equal(listed.trouble, "", `the probe's answer was read as trouble: ${listed.trouble}`);
+		assert.deepEqual(listed.commands, [
+			{ name: "ext_cmd", description: "an extension command", source: "extension", scope: "user" },
+			{ name: "probe_template", description: "a prompt template", source: "prompt", scope: "project" },
+			{ name: "skill:probe", description: "a skill the stub offers", source: "skill", scope: "user" },
+		]);
+		// A card no thread answers for is refused: the menu is a thread's, and the board's own folder is only
+		// the answer when the request names no card at all.
+		const stray = await get(daemon, `/commands?token=${daemon.token}&workspace=${board.id}&cardId=nobody`);
+		assert.equal(stray.status, 409);
+		assert.equal(stray.body, "no thread answers this card");
+
+		// The run. What pi is handed is the command as typed: no card index and no `[user message]` around it,
+		// because a wrapped slash command is a message about a command.
+		const ran = await postTo(daemon, board.id, "/command", { cardId: threadId, name: "ext_cmd", args: "a b" });
+		assert.equal(ran.status, 200, ran.body);
+		assert.deepEqual(JSON.parse(ran.body), { id: threadId, name: "ext_cmd", disposition: "handled" });
+		let sent: any[] = [];
+		for (let tries = 0; tries < 100 && !sent.length; tries++) {
+			try {
+				sent = readFileSync(join(dirname(stub.envFile), "frames.jsonl"), "utf8")
+					.split("\n")
+					.filter(Boolean)
+					.map((line) => JSON.parse(line))
+					.filter((frame) => frame.type === "prompt");
+			} catch {
+				// The child has not written its frames yet.
+			}
+			if (!sent.length) await new Promise((done) => setTimeout(done, 50));
+		}
+		assert.deepEqual(sent, [{ id: sent[0]?.id, type: "prompt", message: "/ext_cmd a b" }], "the command reached pi wrapped or rewritten");
+		assert.ok(sent[0].id.startsWith("cmd:"), `a command frame without the prefix is fatal when pi answers handled: ${sent[0].id}`);
+		// The row the human reads, and the thread it ran in: a command that runs itself starts no run, so the
+		// card is idle afterwards and `handled` did not end it.
+		const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board.id}`)).body);
+		const row = state.activity.find((one: any) => one.tool === "command");
+		assert.ok(row, `no command row on the rail: ${JSON.stringify(state.activity)}`);
+		assert.equal(row.label, "/ext_cmd a b");
+		assert.equal(row.status, "ok");
+		const thread = state.threads.find((one: any) => one.id === threadId);
+		assert.equal(thread.status, "idle", `the thread reads ${thread.status} after a handled command`);
+
+		// A name pi does not have is refused here rather than sent to a child as prose about a slash command.
+		const unknown = await postTo(daemon, board.id, "/command", { cardId: threadId, name: "no_such_command" });
+		assert.equal(unknown.status, 409, unknown.body);
+		assert.equal((await postTo(daemon, board.id, "/command", { cardId: "nobody", name: "ext_cmd" })).status, 409);
+		assert.equal((await postTo(daemon, board.id, "/command", { name: "ext_cmd" })).status, 400);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+/**
+ * A prompt template from the menu is prose pi hands the model, so its answer is `started` and a run follows.
+ * Nothing on the thread named the turn that run would answer, so its `turn_end` landed on the newest turn
+ * the thread kept and wrote over the answer already read there.
+ */
+test("a prompt template's `started` answer opens its own turn and leaves the earlier answer alone", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-template-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-template-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-template-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "a thread" })).body).threadId;
+		// An answer the human has already read: this is what the template's run used to write over.
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "first" })).status, 200);
+		const before = await settledThread(daemon, board.id, threadId, 1);
+		assert.equal(before.turns[0].reply, "the stub answered");
+
+		const ran = await postTo(daemon, board.id, "/command", { cardId: threadId, name: "probe_template" });
+		assert.equal(ran.status, 200, ran.body);
+		assert.equal(JSON.parse(ran.body).disposition, "started");
+
+		// The run the template began is the thread's, and the reply belongs to the words that asked for it.
+		const after = await settledThread(daemon, board.id, threadId, 2);
+		assert.equal(after.status, "idle");
+		assert.equal(after.turns.length, 2, `the template's run left the wrong number of turns: ${JSON.stringify(after.turns)}`);
+		assert.equal(after.turns[0].reply, "the stub answered", "the template's answer overwrote the earlier one");
+		assert.equal(after.turns[1].text, "/probe_template");
+		assert.equal(after.turns[1].status, "answered");
+		assert.equal(after.turns[1].reply, "the template answered");
+		assert.equal(after.answering, null, "the thread is still answering a run that settled");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
 	}
 });

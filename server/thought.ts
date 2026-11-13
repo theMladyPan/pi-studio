@@ -18,6 +18,9 @@ import { join } from "node:path";
 import { settleTreeBranch } from "./worktrees/name.ts";
 import { noteGit } from "./git/graph.ts";
 import { finished, compacted, statsArrived } from "./waiters.ts";
+import { COMMAND_PREFIX, settleCommand } from "./child/command.ts";
+import { onExtensionUi } from "./child/dialog.ts";
+import { reportText } from "./child/report.ts";
 
 
 
@@ -227,7 +230,33 @@ export function handleChildLine(board, thread, line) {
 		process.stderr.write(`[${board.name}/${thread.title}] unparsed child line: ${line.slice(0, 200)}\n`);
 		return;
 	}
+	if (event.type === "extension_ui_request") {
+		// What an extension asks the human through `ctx.ui`. It arrives outside any turn, and a dialog left
+		// unanswered blocks the child, so it is answered here rather than dropped.
+		onExtensionUi(board, thread, event);
+		return;
+	}
+	if (event.type === "entry_appended") {
+		// What an extension reports it did. `notify` reaches the human as a reply row through the branch
+		// above; an entry was read as nothing, so a command that scanned a codebase left the board with no
+		// trace of what it found. The entry's own numbers are the row.
+		const report = reportText(event.entry);
+		if (report) addRow(board, { id: randomUUID(), kind: "reply", status: "ok", startedAt: Date.now(), text: report, thread: threadRef(thread) });
+		return;
+	}
 	if (event.type === "response") {
+		// A command's answer, settled before the prompt branches below: they read `handled` as a thread that
+		// never ran, which is right for a message and wrong for the extension command every command answers
+		// that way. The row the human is watching is closed with what pi said, and nothing else happens.
+		if (typeof event.id === "string" && event.id.startsWith(COMMAND_PREFIX)) {
+			settleCommand(
+				event.id,
+				event.success === false
+					? { error: `pi refused the command: ${event.error ?? "unknown reason"}`, status: 409 }
+					: { disposition: String(event.data?.disposition ?? "started") },
+			);
+			return;
+		}
 		if (event.command === "get_session_stats" && event.data?.tokens) {
 			const data = event.data;
 			// pi names the window `contextWindow`. `maxTokens` is the older name a few builds used, and

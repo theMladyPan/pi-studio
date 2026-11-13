@@ -17,6 +17,8 @@ import { NAME_MODEL, nameThread, titleFromRequest } from "../worktrees/name.ts";
 import { broadcast, card, update, updateCard } from "../bus.ts";
 import { compacted } from "../waiters.ts";
 import { modeChangeNote } from "./modes.ts";
+import { beginCommand, flushCommands, settleCommand } from "./command.ts";
+import { cancelDialogs } from "./dialog.ts";
 import { randomUUID } from "node:crypto";
 import { randomToken } from "../paths.ts";
 import { join } from "node:path";
@@ -103,6 +105,11 @@ export function ensureChild(board, thread) {
 		// A compaction waits on this child's answer, and a child that exits first will never give one.
 		// Nobody waiting means nothing happens, so this is said for every exit rather than guessed at.
 		compacted(thread, { error: `the child exited before it answered (${signal ?? code})` });
+		// A command waits on an answer from this child too, and a route with one in hand would sit out its
+		// own clock for it. The exit is the answer, and it says so before the orderly-shutdown return below.
+		flushCommands(thread, `the child exited before it answered the command (${signal ?? code})`);
+		// A dialog this child was blocked on can never be answered now, so the question leaves the board.
+		cancelDialogs(thread);
 		// An exit after `agent_settled` is the orderly shutdown this daemon asked for. An exit while a
 		// run is live is the child dying mid-answer.
 		if (thread.status !== "running") return;
@@ -147,6 +154,32 @@ export function prompt(board, thread, text, target = null, images = []) {
 		update(board, thread);
 		if (NAME_MODEL) void nameThread(board, thread, text);
 	}
+	const message = wireText(thread, text);
+	beginRun(board, thread, target);
+	// The pictures ride beside the words, as pi's RPC takes them: the base64 and the type it is.
+	const pictures = promptImages(images);
+	try {
+		const child = ensureChild(board, thread);
+		child.stdin.write(
+			`${JSON.stringify({ id: randomUUID(), type: "prompt", message, ...(pictures.length ? { images: pictures } : {}) })}\n`,
+		);
+	} catch (error) {
+		threadError(board, thread, `could not send to the child: ${error.message}`);
+	}
+}
+
+
+
+/**
+ * The run a frame that begins one opens: whose turn it is writing, the caret on it, and the clock the card
+ * counts.
+ *
+ * A message does this before it is sent. A command that pi answered `started` reaches it afterwards, because
+ * at the moment of sending nobody knew whether a run would follow — and both end the same way, with a
+ * `turn_end` that has to land on a named turn and an `agent_settled` that settles it, so the two paths are
+ * one rather than two that have to be kept in step.
+ */
+export function beginRun(board, thread, target = null) {
 	// The run in flight remembers which turn it is writing, so the reply lands under the words that
 	// asked for it. That is a card's turn when a hidden child answers for a card, and one of the
 	// thread's own turns otherwise — by index, because a queue can hold more than one message.
@@ -178,17 +211,37 @@ export function prompt(board, thread, text, target = null, images = []) {
 	thread.streamParts = new Map();
 	thinkingRuns.delete(thread);
 	update(board, thread);
-	const message = wireText(thread, text);
-	// The pictures ride beside the words, as pi's RPC takes them: the base64 and the type it is.
-	const pictures = promptImages(images);
+}
+
+
+
+/**
+ * A command, sent as pi's own `/name args` and nothing else.
+ *
+ * A message is wrapped by the composer before it is sent — the card index, then `[user message]`, as
+ * `boardSections` in `routes/board/message.ts` builds it — because a model has to be able to tell the
+ * board's words from the human's. A command is not prose to be read: pi matches the first word against
+ * the commands it knows and hands the rest to the extension. Wrapped, it would be a message about a
+ * slash command instead of the slash command, so the frame carries the text raw.
+ *
+ * Nothing about the turn is touched when pi answers `handled`, which is what an extension command does: it
+ * runs outside a run, no `agent_settled` follows, and a thread marked `running` here would keep a clock and
+ * a caret for work that is already over. What the human gets is one activity row, patched when pi answers.
+ *
+ * A prompt template or a skill command is prose pi hands the model instead, and pi answers it `started`: a
+ * run follows, so the turn it answers is opened when the answer arrives (see `settleCommand`), never here,
+ * where it is not yet known whether a run will follow at all.
+ */
+export function sendCommand(board, thread, text) {
+	const { id, outcome } = beginCommand(board, thread, text);
 	try {
 		const child = ensureChild(board, thread);
-		child.stdin.write(
-			`${JSON.stringify({ id: randomUUID(), type: "prompt", message, ...(pictures.length ? { images: pictures } : {}) })}\n`,
-		);
+		child.stdin.write(`${JSON.stringify({ id, type: "prompt", message: text })}\n`);
 	} catch (error) {
-		threadError(board, thread, `could not send to the child: ${error.message}`);
+		// The row is written and the promise is pending: a write that failed is this command's answer.
+		settleCommand(id, { error: `could not send the command: ${error.message}`, status: 409 });
 	}
+	return { id, outcome };
 }
 
 
