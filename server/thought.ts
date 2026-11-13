@@ -20,6 +20,7 @@ import { noteGit } from "./git/graph.ts";
 import { finished, compacted, statsArrived } from "./waiters.ts";
 import { COMMAND_PREFIX, settleCommand } from "./child/command.ts";
 import { onExtensionUi } from "./child/dialog.ts";
+import { reportText } from "./child/report.ts";
 
 
 
@@ -233,6 +234,14 @@ export function handleChildLine(board, thread, line) {
 		// What an extension asks the human through `ctx.ui`. It arrives outside any turn, and a dialog left
 		// unanswered blocks the child, so it is answered here rather than dropped.
 		onExtensionUi(board, thread, event);
+		return;
+	}
+	if (event.type === "entry_appended") {
+		// What an extension reports it did. `notify` reaches the human as a reply row through the branch
+		// above; an entry was read as nothing, so a command that scanned a codebase left the board with no
+		// trace of what it found. The entry's own numbers are the row.
+		const report = reportText(event.entry);
+		if (report) addRow(board, { id: randomUUID(), kind: "reply", status: "ok", startedAt: Date.now(), text: report, thread: threadRef(thread) });
 		return;
 	}
 	if (event.type === "response") {

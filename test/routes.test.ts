@@ -1460,8 +1460,15 @@ process.stdin.on("data", (chunk) => {
 		}
 		if (frame.type === "prompt") {
 			// A slash command is a prompt frame too, and pi answers it with what it did rather than with a run:
-			// an extension command runs itself, so no turn and no agent_settled follow it.
+			// an extension command runs itself, so no turn and no agent_settled follow it. A prompt template is
+			// prose the model answers, so pi answers it "started" and the run that follows ends in its own turn.
 			if (String(frame.id).startsWith("cmd:")) {
+				if (frame.message.startsWith("/probe_template")) {
+					say({ type: "response", id: frame.id, command: "prompt", success: true, data: { disposition: "started" } });
+					say({ type: "turn_end", message: { role: "assistant", content: [{ type: "text", text: "the template answered" }] } });
+					say({ type: "agent_settled" });
+					continue;
+				}
 				say({ type: "response", id: frame.id, command: "prompt", success: true, data: { disposition: "handled" } });
 				continue;
 			}
@@ -2912,6 +2919,43 @@ test("the slash commands pi offers a thread are listed, and one of them runs ins
 		assert.equal(unknown.status, 409, unknown.body);
 		assert.equal((await postTo(daemon, board.id, "/command", { cardId: "nobody", name: "ext_cmd" })).status, 409);
 		assert.equal((await postTo(daemon, board.id, "/command", { name: "ext_cmd" })).status, 400);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+/**
+ * A prompt template from the menu is prose pi hands the model, so its answer is `started` and a run follows.
+ * Nothing on the thread named the turn that run would answer, so its `turn_end` landed on the newest turn
+ * the thread kept and wrote over the answer already read there.
+ */
+test("a prompt template's `started` answer opens its own turn and leaves the earlier answer alone", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-template-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-template-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-template-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "a thread" })).body).threadId;
+		// An answer the human has already read: this is what the template's run used to write over.
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "first" })).status, 200);
+		const before = await settledThread(daemon, board.id, threadId, 1);
+		assert.equal(before.turns[0].reply, "the stub answered");
+
+		const ran = await postTo(daemon, board.id, "/command", { cardId: threadId, name: "probe_template" });
+		assert.equal(ran.status, 200, ran.body);
+		assert.equal(JSON.parse(ran.body).disposition, "started");
+
+		// The run the template began is the thread's, and the reply belongs to the words that asked for it.
+		const after = await settledThread(daemon, board.id, threadId, 2);
+		assert.equal(after.status, "idle");
+		assert.equal(after.turns.length, 2, `the template's run left the wrong number of turns: ${JSON.stringify(after.turns)}`);
+		assert.equal(after.turns[0].reply, "the stub answered", "the template's answer overwrote the earlier one");
+		assert.equal(after.turns[1].text, "/probe_template");
+		assert.equal(after.turns[1].status, "answered");
+		assert.equal(after.turns[1].reply, "the template answered");
+		assert.equal(after.answering, null, "the thread is still answering a run that settled");
 	} finally {
 		daemon.child.kill();
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });

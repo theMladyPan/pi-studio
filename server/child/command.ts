@@ -5,12 +5,14 @@
  * difference is what that answer means: an extension command answers `handled`, which for a message
  * says the thread never ran and is fatal here — `server/thought.ts` reads it that way and the card is
  * marked dead. So a command's frame carries an id with this prefix, and the reader settles it here
- * before that branch is reached. A plain message's `handled` stays exactly as fatal as it was.
+ * before that branch is reached. A plain message's `handled` stays exactly as fatal as it was. A
+ * `started` answer is the other way round: a run has begun, and the turn it answers is opened here.
  *
  * The map lives beside the frames rather than on the thread: it holds a resolver and a timer, and
  * `/state` serialises whole threads.
  */
 import { addRow, patchRow, threadRef } from "../bus.ts";
+import { beginRun } from "./run.ts";
 import { randomUUID } from "node:crypto";
 
 /** What makes a frame a command: a prompt's answer to settle here instead of a turn's. */
@@ -85,9 +87,34 @@ export function settleCommand(id: string, outcome: Disposition): boolean {
 		durationMs: Date.now() - held.startedAt,
 		summary: said,
 	});
+	if (!("error" in outcome)) beganRun(held, outcome.disposition);
 	held.finish(outcome);
 	return true;
 }
+
+
+
+/**
+ * The run a prompt template or a skill command begins, opened when pi says it began one.
+ *
+ * `handled` is an extension command running itself: no turn and no `agent_settled` follow it, so the thread
+ * is left idle and untouched. `started` is prose pi hands the model, and a run follows — one whose
+ * `turn_end` used to land on whatever turn the thread happened to end with, overwriting an answer someone
+ * had already read, because nothing had named a turn for it. So the command gets a turn of its own, opened
+ * by the same bookkeeping a message opens, and the reply lands under the words that asked for it. A
+ * `queued` command answers inside a run already going, whose turn and `answering` pointer are its own:
+ * opening a second turn there would take the reply of the first.
+ */
+function beganRun(held: Waiting, disposition: string): void {
+	if (disposition === "handled") return;
+	if (held.thread.status === "running") return;
+	held.thread.turns ??= [];
+	held.thread.turns.push({ text: held.label.slice(0, 4000), status: "sent", mode: "queue", at: Date.now() });
+	// No target: the run answers the turn just made, which is the one pushed above.
+	beginRun(held.board, held.thread);
+}
+
+
 
 /**
  * The commands this thread's child will never answer, settled with the reason it is gone: the route that

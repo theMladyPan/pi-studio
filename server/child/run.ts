@@ -154,6 +154,32 @@ export function prompt(board, thread, text, target = null, images = []) {
 		update(board, thread);
 		if (NAME_MODEL) void nameThread(board, thread, text);
 	}
+	const message = wireText(thread, text);
+	beginRun(board, thread, target);
+	// The pictures ride beside the words, as pi's RPC takes them: the base64 and the type it is.
+	const pictures = promptImages(images);
+	try {
+		const child = ensureChild(board, thread);
+		child.stdin.write(
+			`${JSON.stringify({ id: randomUUID(), type: "prompt", message, ...(pictures.length ? { images: pictures } : {}) })}\n`,
+		);
+	} catch (error) {
+		threadError(board, thread, `could not send to the child: ${error.message}`);
+	}
+}
+
+
+
+/**
+ * The run a frame that begins one opens: whose turn it is writing, the caret on it, and the clock the card
+ * counts.
+ *
+ * A message does this before it is sent. A command that pi answered `started` reaches it afterwards, because
+ * at the moment of sending nobody knew whether a run would follow — and both end the same way, with a
+ * `turn_end` that has to land on a named turn and an `agent_settled` that settles it, so the two paths are
+ * one rather than two that have to be kept in step.
+ */
+export function beginRun(board, thread, target = null) {
 	// The run in flight remembers which turn it is writing, so the reply lands under the words that
 	// asked for it. That is a card's turn when a hidden child answers for a card, and one of the
 	// thread's own turns otherwise — by index, because a queue can hold more than one message.
@@ -185,17 +211,6 @@ export function prompt(board, thread, text, target = null, images = []) {
 	thread.streamParts = new Map();
 	thinkingRuns.delete(thread);
 	update(board, thread);
-	const message = wireText(thread, text);
-	// The pictures ride beside the words, as pi's RPC takes them: the base64 and the type it is.
-	const pictures = promptImages(images);
-	try {
-		const child = ensureChild(board, thread);
-		child.stdin.write(
-			`${JSON.stringify({ id: randomUUID(), type: "prompt", message, ...(pictures.length ? { images: pictures } : {}) })}\n`,
-		);
-	} catch (error) {
-		threadError(board, thread, `could not send to the child: ${error.message}`);
-	}
 }
 
 
@@ -209,9 +224,13 @@ export function prompt(board, thread, text, target = null, images = []) {
  * the commands it knows and hands the rest to the extension. Wrapped, it would be a message about a
  * slash command instead of the slash command, so the frame carries the text raw.
  *
- * Nothing about the turn is touched. An extension command runs outside a run: it answers `handled`, no
- * `agent_settled` follows, and a thread marked `running` here would keep a clock and a caret for work
- * that is already over. What the human gets is one activity row, patched when pi answers.
+ * Nothing about the turn is touched when pi answers `handled`, which is what an extension command does: it
+ * runs outside a run, no `agent_settled` follows, and a thread marked `running` here would keep a clock and
+ * a caret for work that is already over. What the human gets is one activity row, patched when pi answers.
+ *
+ * A prompt template or a skill command is prose pi hands the model instead, and pi answers it `started`: a
+ * run follows, so the turn it answers is opened when the answer arrives (see `settleCommand`), never here,
+ * where it is not yet known whether a run will follow at all.
  */
 export function sendCommand(board, thread, text) {
 	const { id, outcome } = beginCommand(board, thread, text);
