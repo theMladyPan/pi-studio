@@ -239,6 +239,12 @@ const applyView = () => {
   document.documentElement.style.setProperty("--zoom", String(view.k));
   // Every pan, zoom and fit comes through here, so the minimap has one place to hear about them.
   scheduleMap();
+  // A drawing hung off a chip is part of the board it hangs off: a pan or a zoom carries its chip
+  // away, and the panel follows it and grows with the zoom, instead of only following a window resize.
+  if (!flowPeek.hidden) {
+    sizeFlowPeek();
+    placeFlowPeek();
+  }
 };
 
   // ---------- predecessor arrows -------------------------------------------
@@ -6970,11 +6976,27 @@ function placeRuntimePick() {
 const flowPeek = document.getElementById("flowPeek");
 /** The chip the panel hangs off, so a resize can put it back where it belongs. */
 let peekAnchor = null;
+/** The drawing now in the panel, so a pan or a zoom can size it again. */
+let peekSvg = "";
 /** Counts shows and hides, so a drawing that arrives after the pointer left never appears. */
 let peekWanted = 0;
 
 function placeFlowPeek() {
   placeAnchoredPanel(flowPeek, peekAnchor);
+}
+
+/**
+ * The panel is sized from the drawing itself, not fixed: a fixed width shrinks a wide drawing to a
+ * few pixels a word, so the width follows the drawing's viewBox, and the board's zoom on top of that.
+ * The zoom factor is held between two bounds, so a board fitted small never shrinks the panel under
+ * a readable size, and a board zoomed far in never pushes it off the screen.
+ */
+function sizeFlowPeek() {
+  const shown = peekSvg.match(/viewBox="[-\d.]+ [-\d.]+ ([\d.]+) [\d.]+"/);
+  const base = Math.min(820, Math.max(460, Math.round(Number(shown?.[1] ?? 620))));
+  const factor = Math.min(1.6, Math.max(0.85, view.k));
+  const width = Math.min(window.innerWidth - 20, Math.round(base * factor));
+  flowPeek.style.width = `${Math.max(280, width)}px`;
 }
 
 function hideFlowPeek() {
@@ -6998,8 +7020,10 @@ async function showFlowPeek(inst) {
   const wrap = el("div", "svg-wrap");
   wrap.innerHTML = sanitizeSvg(drawn.svg);
   flowPeek.replaceChildren(wrap);
+  peekSvg = drawn.svg;
   peekAnchor = inst.pickPathBtn;
   flowPeek.hidden = false;
+  sizeFlowPeek();
   placeFlowPeek();
 }
 
@@ -8761,7 +8785,10 @@ peSave.addEventListener("click", async () => {
 runtimeSearch.addEventListener("input", () => (picking === "tools" ? drawTools(runtimeSearch.value) : drawModels(runtimeSearch.value)));
 window.addEventListener("resize", () => {
   if (!runtimePick.hidden) placeRuntimePick();
-  if (!flowPeek.hidden) placeFlowPeek();
+  if (!flowPeek.hidden) {
+    sizeFlowPeek();
+    placeFlowPeek();
+  }
 });
 document.addEventListener(
   "pointerdown",
