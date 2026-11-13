@@ -931,7 +931,10 @@
   /* A command says what it does under its own name: the description is the reason to pick one, so it
      gets the width of the row rather than a right-hand column that squeezes both. */
   #cmdList .pick-row { flex-direction: column; align-items: stretch; gap: 2px; }
-  #cmdList .pick-row .pick-meta { line-height: 1.4; }
+  /* Two lines is all a row spends on why: a skill's description runs to a paragraph, and the panel is
+     scanned by name. Clamped the way a reply's note is, with the whole text left on the row's `title`. */
+  #cmdList .pick-row .pick-meta { line-height: 1.4; overflow: hidden;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   /* A tool kept from a new thread: the row says `off` and goes quiet, so a list where most are on
      reads as a list of names rather than a wall of colour. */
   #runtimeList .pick-row.tool-off, #runtimeList .pick-row.tool-off .pick-meta { color: var(--muted); }
