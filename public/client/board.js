@@ -3137,6 +3137,9 @@ function applyMessage(data, quiet = false) {
 }
 
 function clearBoard() {
+  // The cards go with their chips, and a drawing left hanging off a detached chip would never hear the
+  // pointer leave it: a removed element fires no `mouseleave`.
+  hideFlowPeek();
   // Every field lives inside a card, so they go with the cards. A field's words are kept under its card
   // so a snapshot that rebuilds the board puts the same draft back.
   for (const inst of composers.values()) {
@@ -3186,6 +3189,9 @@ function closeCard(entry) {
 
 /** Remove a card from the board and let later cards fill the space it held. */
 function dropCard(entry) {
+  // The card takes its flow chip with it, and a removed chip fires no `mouseleave` to put the drawing
+  // away, so it is put away here.
+  hideFlowPeek();
   const record = byId.get(entry.id);
   if (!record) return;
   // Compared by id: a remote remove arrives as a bare { id } and would never match the entry. A card
@@ -6254,6 +6260,16 @@ function wireComposer(inst) {
   });
   inst.pickModeBtn.addEventListener("click", () => void openPick("mode", inst.pickModeBtn, false, inst));
   inst.pickPathBtn.addEventListener("click", () => void openPick("path", inst.pickPathBtn, false, inst));
+  // A flow chip shows its drawing to a pointer and to the keyboard alike, and the row of chips keeps its
+  // size either way. `auto` has nothing drawn, so it answers with no panel.
+  inst.pickPathBtn.addEventListener("mouseenter", () => void showFlowPeek(inst));
+  inst.pickPathBtn.addEventListener("mouseleave", hideFlowPeek);
+  // A press focuses the button on its way to the picker, which opens where the drawing would sit, so only
+  // the focus a keyboard gives asks for the drawing.
+  inst.pickPathBtn.addEventListener("focus", () => {
+    if (inst.pickPathBtn.matches(":focus-visible")) void showFlowPeek(inst);
+  });
+  inst.pickPathBtn.addEventListener("blur", hideFlowPeek);
   inst.modelBtn.addEventListener("click", () => void openPick("model", inst.modelBtn, false, inst));
   inst.thinkBtn.addEventListener("click", () => void openPick("thinking", inst.thinkBtn, false, inst));
   inst.ctxBtn.addEventListener("click", () => void compactField(inst));
@@ -6926,19 +6942,65 @@ function closePick() {
   if (wasOpen) refreshSettings();
 }
 
+/**
+ * Put a panel where the chip that opened it is, for the picker and the drawing alike. A panel whose chip
+ * has gone falls back to the top left.
+ */
+function placeAnchoredPanel(panel, anchor) {
+  const chip = anchor ? anchor.getBoundingClientRect() : { left: 12, top: 12, bottom: 30 };
+  const width = panel.offsetWidth;
+  const height = panel.offsetHeight;
+  panel.style.left = `${Math.max(10, Math.min(window.innerWidth - width - 10, chip.left))}px`;
+  // Above the thing it hangs off, unless that would push it off the top: then below, so a panel in the
+  // corner does not cover the row that opened it.
+  const above = chip.top - height - 8;
+  const top = above >= 10 ? above : Math.min(window.innerHeight - height - 10, chip.bottom + 8);
+  panel.style.top = `${Math.max(10, top)}px`;
+}
+
 function placeRuntimePick() {
   // The panel hangs off the chip that opened it, which the open call names: a field's own chip, or a
   // row in the board's settings.
-  const anchor = pickAnchor ?? (picking === "thinking" ? pickInst?.thinkBtn : pickInst?.modelBtn);
-  const chip = anchor ? anchor.getBoundingClientRect() : { left: 12, top: 12, bottom: 30 };
-  const width = runtimePick.offsetWidth;
-  const height = runtimePick.offsetHeight;
-  runtimePick.style.left = `${Math.max(10, Math.min(window.innerWidth - width - 10, chip.left))}px`;
-  // Above the thing it hangs off, unless that would push it off the top: then below, so a panel in
-  // the corner does not have its own picker covering the row that opened it.
-  const above = chip.top - height - 8;
-  const top = above >= 10 ? above : Math.min(window.innerHeight - height - 10, chip.bottom + 8);
-  runtimePick.style.top = `${Math.max(10, top)}px`;
+  placeAnchoredPanel(runtimePick, pickAnchor ?? (picking === "thinking" ? pickInst?.thinkBtn : pickInst?.modelBtn));
+}
+
+// ---------- the flow a chip names, drawn while a pointer rests on it -------
+// There is no tooltip in this page and a drawing is not a sentence, so the panel carries the card's own
+// ```svg fence: the same sanitizer and the same wrap, hung off the chip the way the picker is.
+const flowPeek = document.getElementById("flowPeek");
+/** The chip the panel hangs off, so a resize can put it back where it belongs. */
+let peekAnchor = null;
+/** Counts shows and hides, so a drawing that arrives after the pointer left never appears. */
+let peekWanted = 0;
+
+function placeFlowPeek() {
+  placeAnchoredPanel(flowPeek, peekAnchor);
+}
+
+function hideFlowPeek() {
+  peekWanted += 1;
+  peekAnchor = null;
+  flowPeek.hidden = true;
+}
+
+/** The flow this field is on, if that flow is drawn. `auto` is drawn nowhere: the boss decides there. */
+async function showFlowPeek(inst) {
+  const wanted = (peekWanted += 1);
+  // A picker is a list the human asked for, and a pointer resting on a chip beside it must never paint
+  // over the rows it is choosing from.
+  if (!runtimePick.hidden || !atPick.hidden) return;
+  const { path } = modeShown(inst);
+  if (path === "auto") return;
+  const drawn = ((await loadFlows())?.flows ?? []).find((one) => one.path === path);
+  // The pointer may be somewhere else by the time the drawing arrives, and a panel about a chip nobody
+  // is on would be worse than no panel at all.
+  if (!drawn || wanted !== peekWanted) return;
+  const wrap = el("div", "svg-wrap");
+  wrap.innerHTML = sanitizeSvg(drawn.svg);
+  flowPeek.replaceChildren(wrap);
+  peekAnchor = inst.pickPathBtn;
+  flowPeek.hidden = false;
+  placeFlowPeek();
 }
 
 function pickRow(text, meta, on, onPick) {
@@ -7140,6 +7202,9 @@ async function openPick(which, anchor = null, forBoard = false, inst = null) {
   }
   picking = which;
   pickAnchor = anchor;
+  // A picker opens where a drawing sits, so a drawing that is up steps aside for it, and the rule holds
+  // whichever of the two the human reaches first.
+  hideFlowPeek();
   pickBoard = forBoard;
   // A list opened from a field edits that field's thread; one opened from the settings panel edits the
   // board's defaults, and belongs to nobody's card.
@@ -7261,6 +7326,28 @@ const PATH_HINTS = [
   ["advanced", "a plan, a review that reads it"],
   ["complex", "triage, parallel scouts, re-review"],
 ];
+
+/**
+ * The drawings of those flows, from the document that draws each one once. Read on the first hover of a
+ * flow chip and kept, because the drawings change only when the document does, which a reload shows. The
+ * read itself is kept: three chips hovered before the drawings land cost one document read.
+ */
+let flowCatalogueRead = null;
+
+function loadFlows() {
+  flowCatalogueRead ??= (async () => {
+    try {
+      const response = await fetch(`/flows?${auth}`);
+      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+      return await response.json();
+    } catch {
+      // A read that failed stays failed: the drawings are a document this page does not draw, and a hover
+      // is not where a broken route is discovered.
+      return null;
+    }
+  })();
+  return flowCatalogueRead;
+}
 
 /** How often a card is written, and who it is written for, in the words the picker shows. */
 const VERBOSITY_HINTS = [
@@ -8674,6 +8761,7 @@ peSave.addEventListener("click", async () => {
 runtimeSearch.addEventListener("input", () => (picking === "tools" ? drawTools(runtimeSearch.value) : drawModels(runtimeSearch.value)));
 window.addEventListener("resize", () => {
   if (!runtimePick.hidden) placeRuntimePick();
+  if (!flowPeek.hidden) placeFlowPeek();
 });
 document.addEventListener(
   "pointerdown",
@@ -8695,6 +8783,11 @@ document.addEventListener(
   "keydown",
   (event) => {
     if (event.key !== "Escape") return;
+    if (!flowPeek.hidden) {
+      event.stopPropagation();
+      hideFlowPeek();
+      return;
+    }
     if (!runtimePick.hidden) {
       event.stopPropagation();
       closePick();

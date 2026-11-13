@@ -287,6 +287,7 @@ findings is a boss spending the human's money to learn nothing new.
 | `server/child/modes.ts` | `MODE_NAMES`, `PATH_NAMES`, `MODE_TOOLS_OFF`, the prompt lookup |
 | `server/child/roles.ts` | `ROLE_NAMES`, `ROLE_TOOLS_OFF`, `ROLE_THINKING`, the frame around a role |
 | `bridge/child-bridge.mjs` | `board_thread`, the tool a boss works with |
+| `GET /flows` | the three drawings above, read out of this document by `server/flow-diagrams.ts` so the flow chip hovers the one picture rather than a copy of it; `auto` is drawn nowhere and gets no panel |
 | `POST /thread/collect` | frees the worktrees and branches of children whose work is already integrated, and keeps the rest; for now a tree with uncommitted changes is kept like any other, and a tree that is freed is wiped clean |
 | `board_collect` | the boss tool that posts it: no arguments, and it reports what was freed and what was kept and why |
 
