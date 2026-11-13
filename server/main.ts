@@ -29,6 +29,7 @@ import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.
 import { onDrop } from "./routes/board/drop.ts";
 import { onCompact, onConfig, onLayout, onModel, onThinking } from "./routes/board/config.ts";
 import { onPrompt, onPromptWrite, onPrompts, onWorkspacePrompt, onWorkspacePromptWrite } from "./routes/board/prompts.ts";
+import { flowDiagrams } from "./flow-diagrams.ts";
 import { onSkill } from "./routes/board/skill.ts";
 import { onCardPdf } from "./routes/board/pdf.ts";
 import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onThreadCollect, onUndo } from "./routes/board/lifecycle.ts";
@@ -426,6 +427,12 @@ export const server = createServer((req, res) => {
 		}
 		if (req.method === "GET" && url.pathname === "/prompt") {
 			onPrompt(url, res);
+			return;
+		}
+		if (req.method === "GET" && url.pathname === "/flows") {
+			// The drawings of the three flows, read from the document that draws each one once. The flow chip
+			// hovers them, so the page shows the board's own picture rather than a second copy kept in code.
+			answer(res, 200, { flows: await flowDiagrams() });
 			return;
 		}
 		if (req.method === "GET" && url.pathname === "/workspace-prompt") {

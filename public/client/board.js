@@ -6233,7 +6233,21 @@ function wireComposer(inst) {
     paintHint(inst);
   });
   inst.pickModeBtn.addEventListener("click", () => void openPick("mode", inst.pickModeBtn, false, inst));
-  inst.pickPathBtn.addEventListener("click", () => void openPick("path", inst.pickPathBtn, false, inst));
+  inst.pickPathBtn.addEventListener("click", () => {
+    // The picker opens where the drawing sits, so a press on the chip puts the drawing away first.
+    hideFlowPeek();
+    void openPick("path", inst.pickPathBtn, false, inst);
+  });
+  // A flow chip shows its drawing to a pointer and to the keyboard alike, and the row of chips keeps its
+  // size either way. `auto` has nothing drawn, so it answers with no panel.
+  inst.pickPathBtn.addEventListener("mouseenter", () => void showFlowPeek(inst));
+  inst.pickPathBtn.addEventListener("mouseleave", hideFlowPeek);
+  // A press focuses the button on its way to the picker, which opens where the drawing would sit, so only
+  // the focus a keyboard gives asks for the drawing.
+  inst.pickPathBtn.addEventListener("focus", () => {
+    if (inst.pickPathBtn.matches(":focus-visible")) void showFlowPeek(inst);
+  });
+  inst.pickPathBtn.addEventListener("blur", hideFlowPeek);
   inst.modelBtn.addEventListener("click", () => void openPick("model", inst.modelBtn, false, inst));
   inst.thinkBtn.addEventListener("click", () => void openPick("thinking", inst.thinkBtn, false, inst));
   inst.ctxBtn.addEventListener("click", () => void compactField(inst));
@@ -6913,6 +6927,50 @@ function placeRuntimePick() {
   runtimePick.style.top = `${Math.max(10, top)}px`;
 }
 
+// ---------- the flow a chip names, drawn while a pointer rests on it -------
+// There is no tooltip in this page and a drawing is not a sentence, so the panel carries the card's own
+// ```svg fence: the same sanitizer and the same wrap, hung off the chip the way the picker is.
+const flowPeek = document.getElementById("flowPeek");
+/** The chip the panel hangs off, so a resize can put it back where it belongs. */
+let peekAnchor = null;
+/** Counts shows and hides, so a drawing that arrives after the pointer left never appears. */
+let peekWanted = 0;
+
+function placeFlowPeek() {
+  const chip = peekAnchor ? peekAnchor.getBoundingClientRect() : { left: 12, top: 12, bottom: 30 };
+  const width = flowPeek.offsetWidth;
+  const height = flowPeek.offsetHeight;
+  flowPeek.style.left = `${Math.max(10, Math.min(window.innerWidth - width - 10, chip.left))}px`;
+  // Above the chip it hangs off, unless that would push it off the top: then below, so a panel over a
+  // field at the top of the board does not cover the chip that opened it.
+  const above = chip.top - height - 8;
+  const top = above >= 10 ? above : Math.min(window.innerHeight - height - 10, chip.bottom + 8);
+  flowPeek.style.top = `${Math.max(10, top)}px`;
+}
+
+function hideFlowPeek() {
+  peekWanted += 1;
+  peekAnchor = null;
+  flowPeek.hidden = true;
+}
+
+/** The flow this field is on, if that flow is drawn. `auto` is drawn nowhere: the boss decides there. */
+async function showFlowPeek(inst) {
+  const wanted = (peekWanted += 1);
+  const { path } = modeShown(inst);
+  if (path === "auto") return;
+  const drawn = ((await loadFlows())?.flows ?? []).find((one) => one.path === path);
+  // The pointer may be somewhere else by the time the drawing arrives, and a panel about a chip nobody
+  // is on would be worse than no panel at all.
+  if (!drawn || wanted !== peekWanted) return;
+  const wrap = el("div", "svg-wrap");
+  wrap.innerHTML = sanitizeSvg(drawn.svg);
+  flowPeek.replaceChildren(wrap);
+  peekAnchor = inst.pickPathBtn;
+  flowPeek.hidden = false;
+  placeFlowPeek();
+}
+
 function pickRow(text, meta, on, onPick) {
   const row = el("button", on ? "pick-row on" : "pick-row");
   row.type = "button";
@@ -7233,6 +7291,25 @@ const PATH_HINTS = [
   ["advanced", "a plan, a review that reads it"],
   ["complex", "triage, parallel scouts, re-review"],
 ];
+
+/**
+ * The drawings of those flows, from the document that draws each one once. Read on the first hover of a
+ * flow chip and kept, because the drawings change only when the document does, which a reload shows.
+ */
+let flowCatalogue = null;
+let flowsTrouble = "";
+
+async function loadFlows() {
+  if (flowCatalogue || flowsTrouble) return flowCatalogue;
+  try {
+    const response = await fetch(`/flows?${auth}`);
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    flowCatalogue = await response.json();
+  } catch (error) {
+    flowsTrouble = error.message || String(error);
+  }
+  return flowCatalogue;
+}
 
 /** How often a card is written, and who it is written for, in the words the picker shows. */
 const VERBOSITY_HINTS = [
@@ -8646,6 +8723,7 @@ peSave.addEventListener("click", async () => {
 runtimeSearch.addEventListener("input", () => (picking === "tools" ? drawTools(runtimeSearch.value) : drawModels(runtimeSearch.value)));
 window.addEventListener("resize", () => {
   if (!runtimePick.hidden) placeRuntimePick();
+  if (!flowPeek.hidden) placeFlowPeek();
 });
 document.addEventListener(
   "pointerdown",
@@ -8664,6 +8742,11 @@ document.addEventListener(
   "keydown",
   (event) => {
     if (event.key !== "Escape") return;
+    if (!flowPeek.hidden) {
+      event.stopPropagation();
+      hideFlowPeek();
+      return;
+    }
     if (!runtimePick.hidden) {
       event.stopPropagation();
       closePick();
