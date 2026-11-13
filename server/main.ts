@@ -34,7 +34,7 @@ import { onCardPdf } from "./routes/board/pdf.ts";
 import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onThreadCollect, onUndo } from "./routes/board/lifecycle.ts";
 import { onShell } from "./routes/board/shell.ts";
 import { onCommand } from "./routes/board/command.ts";
-import { commandList } from "./commands.ts";
+import { commandList, forMenu } from "./commands.ts";
 import { workdirOf } from "./worktrees/make.ts";
 
 
@@ -434,7 +434,7 @@ export const server = createServer((req, res) => {
 			const { commands, trouble } = await commandList(board, thread ? workdirOf(board, thread) : board.folder, url.searchParams.get("fresh") === "1");
 			// A probe that failed is a 200 with no commands and the reason in `trouble`: the menu says what went
 			// wrong, where an error status would read as a daemon that has no such route.
-			answer(res, 200, { commands, trouble });
+			answer(res, 200, { commands: forMenu(commands), trouble });
 			return;
 		}
 		if (req.method === "GET" && url.pathname === "/prompts") {
