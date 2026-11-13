@@ -7517,6 +7517,24 @@ async function chooseMode(mode, cardId) {
   await postThreadField("/mode", { cardId, mode });
 }
 
+/**
+ * What `ctrl+m` moves to: the next mode in `THREAD_MODES` order. The reading card's thread when a thread
+ * card is being read, and the mode the next thread is born with when none is. One press walks one step;
+ * the four modes take three presses to cross.
+ */
+async function cycleMode() {
+  const active = document.querySelector(".card.active");
+  const record = active ? byId.get(active.dataset.id) : null;
+  const target = record && record.data.type === "sticky" ? record : null;
+  const current = target ? (THREAD_MODES.includes(target.data.mode) ? target.data.mode : "agent") : modeNext;
+  const next = THREAD_MODES[(THREAD_MODES.indexOf(current) + 1) % THREAD_MODES.length];
+  if (target) await chooseMode(next, target.id);
+  else modeNext = next;
+  if (next !== "boss") pathNext = "";
+  paintMode();
+  hintLine(`mode: ${next}`);
+}
+
 async function choosePath(path, cardId) {
   if (!cardId) return;
   await postThreadField("/thread/path", { cardId, path });
@@ -7624,6 +7642,7 @@ const SHORTCUTS = [
       { keys: "q", does: "close the card you are reading" },
       { keys: "esc", does: "close the open panel, or with no panel open, let go of the selected card" },
       { keys: "ctrl+z", does: "undo a close and put the card back" },
+      { keys: "ctrl+m", does: "cycle the mode of the card you are reading: agent, plan, boss, discuss, then back on" },
     ],
   },
   {
@@ -10383,6 +10402,15 @@ document.addEventListener("keydown", (event) => {
   if (typingSomewhere() || panelUp() || !atPick.hidden || openSheet()) return;
   event.preventDefault();
   undoClose();
+});
+
+// `ctrl+m` walks the modes in order, one press per step, and wraps from discuss back to agent. It is the
+// picker's list without the picking: a field keeps its own keys, so half-typed text is never cycled away.
+document.addEventListener("keydown", (event) => {
+  if (event.key.toLowerCase() !== "m" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+  if (typingSomewhere() || panelUp() || !atPick.hidden || openSheet()) return;
+  event.preventDefault();
+  void cycleMode();
 });
 
 // A question holds its clock only while the human is touching that card: a press anywhere on it — the
