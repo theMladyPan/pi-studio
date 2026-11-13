@@ -2926,6 +2926,57 @@ test("the slash commands pi offers a thread are listed, and one of them runs ins
 });
 
 /**
+ * A skill is pi's `skill:name` and the menu's `name`: the row hides the prefix, the field writes what the row
+ * showed, so the short name is what the daemon is asked to run. What pi is handed is the name pi knows, and
+ * a name no command has is refused with the name it was near — the human sees the menu, not pi's list.
+ */
+test("a skill runs by the short name the menu showed, and a near miss is told the name it meant", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-skill-cmd-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-skill-cmd-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-skill-cmd-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "a thread" })).body).threadId;
+		// The name the menu writes into the field: `skill:` off, as the human read it.
+		const ran = await postTo(daemon, board.id, "/command", { cardId: threadId, name: "probe", args: "now" });
+		assert.equal(ran.status, 200, ran.body);
+		assert.deepEqual(JSON.parse(ran.body), { id: threadId, name: "skill:probe", disposition: "handled" });
+		// What reached pi: the prefixed name, and the arguments exactly as they were typed.
+		let sent: any[] = [];
+		for (let tries = 0; tries < 100 && !sent.length; tries++) {
+			try {
+				sent = readFileSync(join(dirname(stub.envFile), "frames.jsonl"), "utf8")
+					.split("\n")
+					.filter(Boolean)
+					.map((line) => JSON.parse(line))
+					.filter((frame) => frame.type === "prompt");
+			} catch {
+				// The child has not written its frames yet.
+			}
+			if (!sent.length) await new Promise((done) => setTimeout(done, 50));
+		}
+		assert.deepEqual(sent, [{ id: sent[0]?.id, type: "prompt", message: "/skill:probe now" }], "the short name reached pi unprefixed");
+
+		// A name one letter off is refused, and the refusal names what the human most likely meant.
+		const typo = await postTo(daemon, board.id, "/command", { cardId: threadId, name: "probe_templat" });
+		assert.equal(typo.status, 409, typo.body);
+		assert.equal(typo.body, "did you mean /probe_template? no command named /probe_templat");
+		// The same for a skill: the suggestion is the name pi knows it by, so it can be typed and run as it reads.
+		const nearSkill = await postTo(daemon, board.id, "/command", { cardId: threadId, name: "prob" });
+		assert.equal(nearSkill.status, 409, nearSkill.body);
+		assert.equal(nearSkill.body, "did you mean /skill:probe? no command named /prob");
+		// Nothing close means nothing is guessed at: the refusal is the name alone.
+		const far = await postTo(daemon, board.id, "/command", { cardId: threadId, name: "no_such_command" });
+		assert.equal(far.status, 409, far.body);
+		assert.equal(far.body, "no command named /no_such_command");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+/**
  * A prompt template from the menu is prose pi hands the model, so its answer is `started` and a run follows.
  * Nothing on the thread named the turn that run would answer, so its `turn_end` landed on the newest turn
  * the thread kept and wrote over the answer already read there.
