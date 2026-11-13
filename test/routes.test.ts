@@ -3138,6 +3138,40 @@ test("a message of chips and no words is still a turn, and a chip no menu offere
 });
 
 /**
+ * A card's header names what the human asked. A message carrying chips is composed for the child — the skill's
+ * file text and the line that says who picked it sit above `[user message]` — and a new thread took its title
+ * from that whole composition, so its header read `[skill · probe · picked by the human beside…` instead of the
+ * request. The title is the human's words, and the picked names when the chips were all the message said.
+ */
+test("a thread named by a message with chips is named by the human's words, not by the label above them", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-chips-title-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-chips-title-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-chips-title-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		// A card the human made with no name of its own: the first request is what names it.
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		const asked = "which two skills rode this message?";
+		const sent = await postTo(daemon, board.id, "/message", { cardId: threadId, text: asked, commands: ["skill:probe"] });
+		assert.equal(sent.status, 200, sent.body);
+		const named = await settledThread(daemon, board.id, threadId, 1);
+		assert.equal(named.title, asked, `the title read the composed turn: ${JSON.stringify(named.title)}`);
+		// The first request names the card and no later one renames it.
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "and now the plainer one" })).status, 200);
+		assert.equal((await settledThread(daemon, board.id, threadId, 2)).title, asked, "a second message renamed the card");
+
+		// Chips alone are still something to say, and the name says what the human picked rather than the label.
+		const bareId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: bareId, commands: ["skill:probe"] })).status, 200);
+		assert.equal((await settledThread(daemon, board.id, bareId, 1)).title, "/skill:probe", "a message of chips alone was named by the label");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+/**
  * A skill is written for an agent, not for a menu, so a file longer than one turn takes is cut — and the cut
  * is said in the turn, because an agent that quietly read half a skill would follow half of it.
  */
