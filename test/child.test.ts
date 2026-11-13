@@ -477,3 +477,36 @@ test("a dialog pi asks through ctx.ui becomes a question card, and the answer go
 	clearTimeout(board.saveTimer);
 	board.saveTimer = null;
 });
+
+test("the report an extension appends reaches the rail as a row of numbers", () => {
+	// `/scan_codebase` counts files, sizes and lines and appends them as a `custom` entry, which pi's own TUI
+	// draws with the renderer the extension registered. The daemon has no renderer and dropped the frame, so
+	// a human who pressed the command saw the board say nothing about what had been scanned.
+	const board: any = { id: "b1", folder: "/tmp/board", name: "board", config: {}, children: new Map(), threads: new Map(), cards: new Map(), activity: [], clients: new Set() };
+	const thread: any = { id: "abcdef123456", title: "a thread", status: "idle", turns: [], queued: [], folder: "/tmp/board" };
+	board.threads.set(thread.id, thread);
+	const line = (entry: any) => handleChildLine(board, thread, JSON.stringify({ type: "entry_appended", entry }));
+	line({
+		id: "entry-1",
+		type: "custom",
+		customType: "scan-codebase-report",
+		data: { root: "src", files: 42, size: "1.2 MB", loc: 5100, ignoredFiles: 3, ignoredDirs: 1, preview: "src/\n├── index.ts   1.2 kB   40" },
+	});
+	const row = board.activity.find((one: any) => one.kind === "reply");
+	assert.ok(row, `the report left no row: ${JSON.stringify(board.activity)}`);
+	assert.equal(row.thread.id, thread.id, "the row was filed against another thread");
+	// The row is read rather than counted: every number the extension sent is in it, and the few rows of the
+	// tree are what say what was scanned. The whole tree went to the model, and the row says so.
+	for (const said of ["scan codebase report", "root src", "files 42", "size 1.2 MB", "loc 5100", "ignored files 3", "├── index.ts"])
+		assert.ok(row.text.includes(said), `the row does not say "${said}": ${row.text}`);
+	assert.match(row.text, /agent with the next message/);
+	// The message the extension sends the model is the tree itself, with `display: false`: it is context and
+	// not a report, and a row of it would be a megabyte of code in front of whoever asked for a file count.
+	line({ id: "entry-2", type: "custom_message", customType: "scan-codebase", content: "the whole tree", display: false });
+	// An entry with nothing to count says nothing.
+	line({ id: "entry-3", type: "custom", customType: "nothing-to-say" });
+	assert.equal(board.activity.length, 1, `an entry that is not a report drew a row: ${JSON.stringify(board.activity)}`);
+	assert.equal(thread.status, "idle", "a report started a run");
+	clearTimeout(board.saveTimer);
+	board.saveTimer = null;
+});
