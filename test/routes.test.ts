@@ -8,7 +8,7 @@ import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { MAX_WORKSPACE_PROMPT_CHARS } from "../server/limits.ts";
-import { MAX_SKILL_CHARS } from "../server/routes/board/chips.ts";
+import { MAX_TEMPLATE_CHARS } from "../server/routes/board/chips.ts";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 /**
@@ -1420,10 +1420,10 @@ describe("routes", { concurrency: 8 }, () => {
 					{ name: "probe_template", description: "a prompt template", source: "prompt", sourceInfo: { path: templateFile, scope: "project" } },
 					{ name: "ext_cmd", description: "an extension command", source: "extension", sourceInfo: { path: "/nowhere.ts", scope: "user" } },
 				];
-				// A skill longer than the daemon's ceiling is offered only when a check has written its file, so the
-				// list every other check reads stays the list it expects.
-				const longFile = join(__dirname, "skill-long.md");
-				if (existsSync(longFile)) commands.push({ name: "skill:long", description: "a skill too long to carry whole", source: "skill", sourceInfo: { path: longFile, scope: "user" } });
+				// A prompt template longer than the daemon's ceiling is offered only when a check has written its file,
+				// so the list every other check reads stays the list it expects.
+				const longFile = join(__dirname, "template-long.md");
+				if (existsSync(longFile)) commands.push({ name: "template_long", description: "a template too long to carry whole", source: "prompt", sourceInfo: { path: longFile, scope: "project" } });
 				reply({ type: "response", id: frame.id, command: "get_commands", success: true, data: { commands } });
 			}
 		});
@@ -3046,11 +3046,12 @@ describe("routes", { concurrency: 8 }, () => {
 	}
 
 	/**
-	 * A command picked as a chip is not a turn of its own. A skill is a file of text, so its text is read and
-	 * placed above the human's words in the one message that follows; an extension command does something, so
-	 * it runs before that message goes out. One turn, one answer, whichever kind each chip is.
+	 * A command picked as a chip is not a turn of its own. A skill is a file the agent reads itself, so the turn
+	 * names that file and says to open it; a prompt template is text, so its text is placed above the human's
+	 * words in the one message that follows; an extension command does something, so it runs before that message
+	 * goes out. One turn, one answer, whichever kind each chip is.
 	 */
-	test("the chips on a message ride one turn: a skill's text above the words, an extension run first", async () => {
+	test("the chips on a message ride one turn: a skill to read, a template's text above the words, an extension run first", async () => {
 		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-chips-"));
 		const folder = mkdtempSync(join(tmpdir(), "pi-studio-chips-work-"));
 		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-chips-")));
@@ -3069,12 +3070,15 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(written[0].message, "/ext_cmd", "the extension command did not run first, raw");
 			assert.ok(String(written[0].id).startsWith("cmd:"), `a handled command without the prefix is fatal: ${written[0].id}`);
 			const message = String(written[1].message);
-			// The skill's own file text is in the turn, under a label that says which skill it is, that a human picked
-			// it, and that it is that command's instructions rather than words the human wrote.
-			assert.match(message, /PROBE SKILL: answer in haiku/, `the skill's text never reached the turn: ${message}`);
+			// The skill's file is named, with the instruction to read it: the text is not pasted, so nothing of it can
+			// be cut, and a skill's references stay reachable beside it.
+			assert.ok(!message.includes("PROBE SKILL"), `the skill's text was pasted instead of pointed at: ${message}`);
 			const label = message.split("\n")[0];
 			assert.match(label, /^\[skill · probe · .*not as words the human wrote · .*skill-probe\.md\]$/);
-			assert.ok(message.indexOf("PROBE SKILL") < message.indexOf("[user message]"), "the skill sits below the human's words");
+			const read = message.split("\n")[1];
+			assert.match(read, /Read this skill in full before you answer/, `the turn never said to read the skill: ${read}`);
+			assert.match(read, /sits beside it in .*stub-/, `the folder its references sit in was not named: ${read}`);
+			assert.ok(message.indexOf("skill · probe") < message.indexOf("[user message]"), "the skill sits below the human's words");
 			assert.ok(message.endsWith("[user message]\nwhich one first?"), `the human's words moved: ${message}`);
 			// One answer, on one turn: the skill's text and the words were the same request.
 			const settled = await settledThread(daemon, board.id, threadId, 1);
@@ -3173,26 +3177,27 @@ describe("routes", { concurrency: 8 }, () => {
 	});
 
 	/**
-	 * A skill is written for an agent, not for a menu, so a file longer than one turn takes is cut — and the cut
-	 * is said in the turn, because an agent that quietly read half a skill would follow half of it.
+	 * A prompt template is written as the prompt itself, so a file longer than one turn takes is cut — and the cut
+	 * is said in the turn, because an agent that quietly read half a template would follow half of it. A skill is
+	 * never cut, because it is never carried: the turn names its file instead.
 	 */
-	test("a skill longer than a turn takes is cut, and the turn says where", async () => {
-		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-long-skill-"));
-		const folder = mkdtempSync(join(tmpdir(), "pi-studio-long-skill-work-"));
-		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-long-skill-")));
-		// The stub offers this skill only once its file is written, so the file is here before the daemon probes.
-		writeFileSync(join(dirname(stub.envFile), "skill-long.md"), `${"L".repeat(3000)}\n${"M".repeat(6000)}\n`);
+	test("a template longer than a turn takes is cut and says where, and a long skill is only named", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-long-template-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-long-template-work-"));
+		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-long-template-")));
+		// The stub offers this template only once its file is written, so the file is here before the daemon probes.
+		writeFileSync(join(dirname(stub.envFile), "template-long.md"), `${"L".repeat(3000)}\n${"M".repeat(6000)}\n`);
 		const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
 		try {
 			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
 			const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "a thread" })).body).threadId;
-			const sent = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "use it", commands: ["skill:long"] });
+			const sent = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "use it", commands: ["template_long"] });
 			assert.equal(sent.status, 200, sent.body);
 			const message = String((await promptFrames(stub, 1))[0].message);
-			assert.ok(message.includes("L".repeat(3000)), "the skill's text was cut before its ceiling");
-			assert.ok(!message.includes("M".repeat(6000)), "the skill's text was carried whole past the ceiling");
+			assert.ok(message.includes("L".repeat(3000)), "the template's text was cut before its ceiling");
+			assert.ok(!message.includes("M".repeat(6000)), "the template's text was carried whole past the ceiling");
 			assert.ok(
-				message.includes(`[this text was cut at ${MAX_SKILL_CHARS} of its 9001 characters]`),
+				message.includes(`[this text was cut at ${MAX_TEMPLATE_CHARS} of its 9001 characters]`),
 				`the cut was not said in the turn: ${message.slice(-200)}`,
 			);
 		} finally {
