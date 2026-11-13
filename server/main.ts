@@ -33,6 +33,9 @@ import { onSkill } from "./routes/board/skill.ts";
 import { onCardPdf } from "./routes/board/pdf.ts";
 import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onThreadCollect, onUndo } from "./routes/board/lifecycle.ts";
 import { onShell } from "./routes/board/shell.ts";
+import { onCommand } from "./routes/board/command.ts";
+import { commandList } from "./commands.ts";
+import { workdirOf } from "./worktrees/make.ts";
 
 
 /** Opening a browser is what a desktop app does; a service run asks for `--no-open`. */
@@ -418,6 +421,22 @@ export const server = createServer((req, res) => {
 			});
 			return;
 		}
+		if (req.method === "GET" && url.pathname === "/commands") {
+			// The composer's `/` menu: every slash command pi offers the thread it is typed in. The folder
+			// decides the list — prompt templates and skills come from it — so a card names the thread and a
+			// request without one is asking about the board's own folder. No child is ensured here: making
+			// one cuts a worktree, and an open of the menu is not work.
+			const board = boardFrom(url, res);
+			if (!board) return;
+			const cardId = url.searchParams.get("cardId") ?? "";
+			const thread = cardId ? board.threads.get(cardId) : undefined;
+			if (cardId && !thread) return void fail(res, 409, "no thread answers this card");
+			const { commands, trouble } = await commandList(board, thread ? workdirOf(board, thread) : board.folder, url.searchParams.get("fresh") === "1");
+			// A probe that failed is a 200 with no commands and the reason in `trouble`: the menu says what went
+			// wrong, where an error status would read as a daemon that has no such route.
+			answer(res, 200, { commands, trouble });
+			return;
+		}
 		if (req.method === "GET" && url.pathname === "/prompts") {
 			// The files a role, a mode and a flow are, listed for the settings page. Reading one is a
 			// separate call, so the list stays small even when a prompt is long.
@@ -523,6 +542,9 @@ export const server = createServer((req, res) => {
 				"/new": onNew,
 				// A command the human typed after `!`. Never in THREAD_ROUTES above: a shell is the human's.
 				"/shell": onShell,
+				// A slash command pi offers this thread, run inside it. Not in THREAD_ROUTES either: a command
+				// reaches pi's own extensions, and that is the human's call on their own board.
+				"/command": onCommand,
 				// Removing a thread and its work is the human's, so none of these is in THREAD_ROUTES.
 				"/remove/preview": onRemovePreview,
 				"/remove": onRemove,

@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { childArgv } from "../server/child/argv.ts";
 import { ensureChild, prompt, wireText } from "../server/child/run.ts";
+import { beginCommand } from "../server/child/command.ts";
+import { handleChildLine } from "../server/thought.ts";
+import { settleQuestion } from "../server/routes/board/answer.ts";
 import { modeChangeNote } from "../server/child/modes.ts";
 import { describeTool, firstLine, headline, resultText } from "../server/child/describe.ts";
 import { boardPrompt, worktreePrompt } from "../server/child/prompts.ts";
@@ -385,4 +388,92 @@ test("a message on a thread whose mode changed tells the board the choice has la
 		else process.env.PI_MANAGED_INSTALL_ROOT = was;
 		for (const gone of [repo, stub.root]) rmSync(gone, { recursive: true, force: true });
 	}
+});
+
+test("a command's `handled` is settled, and a message's is still fatal", async () => {
+	// Every extension command answers `handled`, and for a message that means the thread never ran: the card
+	// is marked dead. A command's frame carries the `cmd:` prefix so the two are told apart, which is what
+	// keeps `/scan_codebase` from killing the thread it ran in.
+	const board: any = {
+		id: "b1",
+		folder: "/tmp/board",
+		name: "board",
+		config: {},
+		children: new Map(),
+		threads: new Map(),
+		cards: new Map(),
+		activity: [],
+		clients: new Set(),
+	};
+	const thread: any = { id: "abcdef123456", title: "a thread", status: "idle", turns: [], queued: [], folder: "/tmp/board" };
+	board.threads.set(thread.id, thread);
+	const { id, outcome } = beginCommand(board, thread, "/ext_cmd a b");
+	handleChildLine(board, thread, JSON.stringify({ id, type: "response", command: "prompt", success: true, data: { disposition: "handled" } }));
+	assert.deepEqual(await outcome, { disposition: "handled" });
+	// The row the rail drew says what ran and how it ended, and no reply row pretends a turn ran.
+	const row = board.activity.find((one: any) => one.tool === "command");
+	assert.equal(row?.label, "/ext_cmd a b");
+	assert.equal(row?.status, "ok");
+	assert.equal(board.activity.length, 1, `a command left more rows than its own: ${JSON.stringify(board.activity)}`);
+	assert.equal(thread.status, "idle", "a handled command ended the thread");
+	// The same answer to a frame that is not a command: the daemon's own prompt ids are random, so none of
+	// them carries the prefix, and this stays the end it always was.
+	handleChildLine(board, thread, JSON.stringify({ id: "a-random-uuid", type: "response", command: "prompt", success: true, data: { disposition: "handled" } }));
+	assert.equal(thread.status, "dead");
+	// The board write is the daemon's, and this board has no file of its own to write.
+	clearTimeout(board.saveTimer);
+	board.saveTimer = null;
+});
+
+test("a dialog pi asks through ctx.ui becomes a question card, and the answer goes back to the child", async () => {
+	// `/dump_codebase` asks which files to dump before it reads one, through a dialog that blocks the child
+	// until an `extension_ui_response` arrives. A board has one way of asking the human, so the dialog is a
+	// question card and its answer travels back on the stdin of the child that asked.
+	const frames: any[] = [];
+	const board: any = {
+		id: "b1",
+		folder: "/tmp/board",
+		name: "board",
+		config: {},
+		children: new Map([["abcdef123456", { stdin: { writable: true, write: (frame: string) => frames.push(JSON.parse(frame)) } }]]),
+		threads: new Map(),
+		cards: new Map(),
+		// What a question card waits on, so the answer can be handed back to whoever asked.
+		askers: new Map(),
+		activity: [],
+		clients: new Set(),
+	};
+	const thread: any = { id: "abcdef123456", title: "a thread", status: "idle", turns: [], queued: [], folder: "/tmp/board" };
+	board.threads.set(thread.id, thread);
+	const dialog = (frame: any) => handleChildLine(board, thread, JSON.stringify(frame));
+	const settle = () => new Promise((done) => setTimeout(done, 0));
+
+	dialog({ type: "extension_ui_request", id: "ui-1", method: "select", title: "dump_codebase .", options: ["Dump 3 files", "Cancel"] });
+	const asked = [...board.cards.values()].find((one: any) => one.type === "question") as any;
+	assert.ok(asked, "the select dialog was not put on the board as a question");
+	assert.deepEqual(asked.options, ["Dump 3 files", "Cancel"]);
+	assert.equal(asked.status, "open");
+	// Nothing goes back to the child until the human answers: that wait is what a dialog is.
+	assert.deepEqual(frames, []);
+	settleQuestion(board, asked, "answered", "Dump 3 files");
+	await settle();
+	assert.deepEqual(frames, [{ type: "extension_ui_response", id: "ui-1", value: "Dump 3 files" }]);
+
+	// A confirmation comes back as the yes or no pi asked for, not as the words of the button.
+	dialog({ type: "extension_ui_request", id: "ui-2", method: "confirm", title: "clear the session?", message: "all messages will be lost" });
+	const again = [...board.cards.values()].find((one: any) => one.type === "question" && one.status === "open") as any;
+	settleQuestion(board, again, "answered", "No");
+	await settle();
+	assert.deepEqual(frames[1], { type: "extension_ui_response", id: "ui-2", confirmed: false });
+
+	// A notification expects no answer and is a line on the rail; a dialog the board cannot draw is
+	// cancelled, so the extension gets its `undefined` instead of a child waiting for ever.
+	dialog({ type: "extension_ui_request", id: "ui-3", method: "notify", message: "dumped 3 files" });
+	const said = board.activity.find((one: any) => one.kind === "reply");
+	assert.equal(said.text, "dumped 3 files");
+	dialog({ type: "extension_ui_request", id: "ui-4", method: "editor", title: "edit the text" });
+	assert.deepEqual(frames[2], { type: "extension_ui_response", id: "ui-4", cancelled: true });
+	assert.equal(thread.status, "idle", "a dialog ended the thread");
+	clearTimeout(board.saveTimer);
+	board.saveTimer = null;
 });
