@@ -204,7 +204,7 @@ export async function onMessage(req, res, board) {
 		// The pictures wait with the words: a run that has not read them yet is not told about them twice.
 		thread.queued.push({ message, text: said, preamble, skills: chipped.sections, target, ...(images.length ? { images } : {}) });
 	} else {
-		prompt(board, thread, message, target, images);
+		prompt(board, thread, message, target, images, said);
 	}
 	answer(res, 200, { id: thread.id, turn: index });
 }

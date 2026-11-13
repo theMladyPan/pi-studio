@@ -141,18 +141,25 @@ export function wireText(thread, text) {
 
 
 
-/** One prompt, either a new question or what was waiting behind the run in flight. */
-export function prompt(board, thread, text, target = null, images = []) {
+/**
+ * One prompt, either a new question or what was waiting behind the run in flight.
+ *
+ * `said` is what the human wrote, when the caller has it apart from what the child is sent: a message is
+ * composed for the child — the card index, the chips' files, a labelled line above `[user message]` — and a
+ * name taken from that composition is the label rather than the request. It defaults to `text`, because every
+ * other caller sends words that are the request itself.
+ */
+export function prompt(board, thread, text, target = null, images = [], said = text) {
 	// The tree is made here, before anything is spawned: this is the first moment the thread is going
 	// to do something, and the child's working folder is decided by it.
 	ensureWorktree(board, thread);
 	// A thread with no name takes one from its first request: the request's own words at once, and a
 	// better name from a fast model afterwards if it offers one.
 	if (!thread.title) {
-		thread.title = titleFromRequest(text) || shortId(thread);
+		thread.title = titleFromRequest(said) || shortId(thread);
 		thread.namedBy = "request";
 		update(board, thread);
-		if (NAME_MODEL) void nameThread(board, thread, text);
+		if (NAME_MODEL) void nameThread(board, thread, said);
 	}
 	const message = wireText(thread, text);
 	beginRun(board, thread, target);
