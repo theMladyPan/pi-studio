@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { MAX_WORKSPACE_PROMPT_CHARS } from "../server/limits.ts";
+import { MAX_SKILL_CHARS } from "../server/routes/board/chips.ts";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 /**
@@ -1407,11 +1408,22 @@ if (process.argv.includes("--no-session")) {
 			if (!line.trim()) continue;
 			const frame = JSON.parse(line);
 			if (frame.type !== "get_commands") continue;
-			reply({ type: "response", id: frame.id, command: "get_commands", success: true, data: { commands: [
-				{ name: "skill:probe", description: "a skill the stub offers", source: "skill", sourceInfo: { scope: "user" } },
-				{ name: "probe_template", description: "a prompt template", source: "prompt", sourceInfo: { scope: "project" } },
+			// A skill and a prompt template are commands with a file behind them: the daemon reads that file to
+			// carry the text into a message. So the stub writes the files it points at, beside itself.
+			const skillFile = join(__dirname, "skill-probe.md");
+			writeFileSync(skillFile, "PROBE SKILL: answer in haiku, and name no tool.\n");
+			const templateFile = join(__dirname, "template-probe.md");
+			writeFileSync(templateFile, "PROBE TEMPLATE: name every file you changed.\n");
+			const commands = [
+				{ name: "skill:probe", description: "a skill the stub offers", source: "skill", sourceInfo: { path: skillFile, scope: "user" } },
+				{ name: "probe_template", description: "a prompt template", source: "prompt", sourceInfo: { path: templateFile, scope: "project" } },
 				{ name: "ext_cmd", description: "an extension command", source: "extension", sourceInfo: { path: "/nowhere.ts", scope: "user" } },
-			] } });
+			];
+			// A skill longer than the daemon's ceiling is offered only when a check has written its file, so the
+			// list every other check reads stays the list it expects.
+			const longFile = join(__dirname, "skill-long.md");
+			if (existsSync(longFile)) commands.push({ name: "skill:long", description: "a skill too long to carry whole", source: "skill", sourceInfo: { path: longFile, scope: "user" } });
+			reply({ type: "response", id: frame.id, command: "get_commands", success: true, data: { commands } });
 		}
 	});
 	process.stdin.on("end", () => process.exit(0));
@@ -3007,6 +3019,181 @@ test("a prompt template's `started` answer opens its own turn and leaves the ear
 		assert.equal(after.turns[1].status, "answered");
 		assert.equal(after.turns[1].reply, "the template answered");
 		assert.equal(after.answering, null, "the thread is still answering a run that settled");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+/** The prompt frames the stub was sent, once it has written at least `count` of them. */
+async function promptFrames(stub: { envFile: string }, count: number) {
+	let sent: any[] = [];
+	for (let tries = 0; tries < 100 && sent.length < count; tries++) {
+		try {
+			sent = readFileSync(join(dirname(stub.envFile), "frames.jsonl"), "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line))
+				.filter((frame) => frame.type === "prompt");
+		} catch {
+			// The child has not written its frames yet.
+		}
+		if (sent.length < count) await new Promise((done) => setTimeout(done, 50));
+	}
+	assert.ok(sent.length >= count, `only ${sent.length} of ${count} prompt frames reached the stub`);
+	return sent;
+}
+
+/**
+ * A command picked as a chip is not a turn of its own. A skill is a file of text, so its text is read and
+ * placed above the human's words in the one message that follows; an extension command does something, so
+ * it runs before that message goes out. One turn, one answer, whichever kind each chip is.
+ */
+test("the chips on a message ride one turn: a skill's text above the words, an extension run first", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-chips-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-chips-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-chips-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "a thread" })).body).threadId;
+		const sent = await postTo(daemon, board.id, "/message", {
+			cardId: threadId,
+			text: "which one first?",
+			commands: ["skill:probe", "ext_cmd"],
+		});
+		assert.equal(sent.status, 200, sent.body);
+		// Two frames and no more: the extension command first, then the one message that carries the skill.
+		const written = await promptFrames(stub, 2);
+		assert.equal(written[0].message, "/ext_cmd", "the extension command did not run first, raw");
+		assert.ok(String(written[0].id).startsWith("cmd:"), `a handled command without the prefix is fatal: ${written[0].id}`);
+		const message = String(written[1].message);
+		// The skill's own file text is in the turn, under a label that says which skill it is, that a human picked
+		// it, and that it is that command's instructions rather than words the human wrote.
+		assert.match(message, /PROBE SKILL: answer in haiku/, `the skill's text never reached the turn: ${message}`);
+		const label = message.split("\n")[0];
+		assert.match(label, /^\[skill · probe · .*not as words the human wrote · .*skill-probe\.md\]$/);
+		assert.ok(message.indexOf("PROBE SKILL") < message.indexOf("[user message]"), "the skill sits below the human's words");
+		assert.ok(message.endsWith("[user message]\nwhich one first?"), `the human's words moved: ${message}`);
+		// One answer, on one turn: the skill's text and the words were the same request.
+		const settled = await settledThread(daemon, board.id, threadId, 1);
+		assert.equal(settled.turns.length, 1, `the chips made turns of their own: ${JSON.stringify(settled.turns)}`);
+		assert.equal(settled.turns[0].text, "which one first?");
+		assert.equal(settled.turns[0].reply, "the stub answered");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+/**
+ * Chips are a message too, so a message of chips and no words is still a turn — and the card shows what was
+ * sent rather than an empty bubble. A chip pi never offered is refused with the sentence `/command` gives,
+ * before anything runs, and a list longer than the composer draws is refused whole rather than trimmed.
+ */
+test("a message of chips and no words is still a turn, and a chip no menu offered is refused", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-chips-only-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-chips-only-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-chips-only-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "a thread" })).body).threadId;
+		const bare = await postTo(daemon, board.id, "/message", { cardId: threadId, commands: ["skill:probe"] });
+		assert.equal(bare.status, 200, bare.body);
+		const written = await promptFrames(stub, 1);
+		// The agent is told in words that there was nothing else, because a bare `/name` in the human's section
+		// reads as a command to run a second time.
+		assert.ok(
+			String(written[0].message).endsWith("[user message]\n(the human sent no words; the commands above are the request)"),
+			`the human's section of a chip-only message: ${String(written[0].message).slice(-120)}`,
+		);
+		const settled = await settledThread(daemon, board.id, threadId, 1);
+		assert.equal(settled.turns.length, 1);
+		assert.equal(settled.turns[0].text, "/skill:probe", "the card drew nothing of what the human picked");
+		assert.equal(settled.turns[0].reply, "the stub answered");
+
+		// A name one letter off is refused the way `/command` refuses it, and nothing is sent for it.
+		const typo = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "x", commands: ["probe_templat"] });
+		assert.equal(typo.status, 409, typo.body);
+		assert.equal(typo.body, "did you mean /probe_template? no command named /probe_templat");
+		const far = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "x", commands: ["no_such_command"] });
+		assert.equal(far.status, 409, far.body);
+		assert.equal(far.body, "no command named /no_such_command");
+		assert.equal((await promptFrames(stub, 1)).length, 1, "a refused message reached the child anyway");
+		assert.equal((await threadState(daemon, board.id, threadId)).turns.length, 1);
+		// Six chips are more than the composer draws, so the request is refused rather than cut down to five.
+		const many = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "x", commands: Array(6).fill("skill:probe") });
+		assert.equal(many.status, 400, many.body);
+		assert.equal(many.body, "a message carries at most 5 commands");
+		// The same chip twice is one command: the text read twice would say nothing the first copy did not.
+		const twice = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "again", commands: ["skill:probe", "skill:probe"] });
+		assert.equal(twice.status, 200, twice.body);
+		const repeated = String((await promptFrames(stub, 2))[1].message);
+		assert.equal(repeated.split("[skill · probe ·").length - 1, 1, `the same skill was carried twice: ${repeated}`);
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+/**
+ * A card's header names what the human asked. A message carrying chips is composed for the child — the skill's
+ * file text and the line that says who picked it sit above `[user message]` — and a new thread took its title
+ * from that whole composition, so its header read `[skill · probe · picked by the human beside…` instead of the
+ * request. The title is the human's words, and the picked names when the chips were all the message said.
+ */
+test("a thread named by a message with chips is named by the human's words, not by the label above them", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-chips-title-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-chips-title-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-chips-title-")));
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		// A card the human made with no name of its own: the first request is what names it.
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		const asked = "which two skills rode this message?";
+		const sent = await postTo(daemon, board.id, "/message", { cardId: threadId, text: asked, commands: ["skill:probe"] });
+		assert.equal(sent.status, 200, sent.body);
+		const named = await settledThread(daemon, board.id, threadId, 1);
+		assert.equal(named.title, asked, `the title read the composed turn: ${JSON.stringify(named.title)}`);
+		// The first request names the card and no later one renames it.
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "and now the plainer one" })).status, 200);
+		assert.equal((await settledThread(daemon, board.id, threadId, 2)).title, asked, "a second message renamed the card");
+
+		// Chips alone are still something to say, and the name says what the human picked rather than the label.
+		const bareId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+		assert.equal((await postTo(daemon, board.id, "/message", { cardId: bareId, commands: ["skill:probe"] })).status, 200);
+		assert.equal((await settledThread(daemon, board.id, bareId, 1)).title, "/skill:probe", "a message of chips alone was named by the label");
+	} finally {
+		daemon.child.kill();
+		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+	}
+});
+
+/**
+ * A skill is written for an agent, not for a menu, so a file longer than one turn takes is cut — and the cut
+ * is said in the turn, because an agent that quietly read half a skill would follow half of it.
+ */
+test("a skill longer than a turn takes is cut, and the turn says where", async () => {
+	const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-long-skill-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-long-skill-work-"));
+	const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-long-skill-")));
+	// The stub offers this skill only once its file is written, so the file is here before the daemon probes.
+	writeFileSync(join(dirname(stub.envFile), "skill-long.md"), `${"L".repeat(3000)}\n${"M".repeat(6000)}\n`);
+	const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+	try {
+		const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+		const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "a thread" })).body).threadId;
+		const sent = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "use it", commands: ["skill:long"] });
+		assert.equal(sent.status, 200, sent.body);
+		const message = String((await promptFrames(stub, 1))[0].message);
+		assert.ok(message.includes("L".repeat(3000)), "the skill's text was cut before its ceiling");
+		assert.ok(!message.includes("M".repeat(6000)), "the skill's text was carried whole past the ceiling");
+		assert.ok(
+			message.includes(`[this text was cut at ${MAX_SKILL_CHARS} of its 9001 characters]`),
+			`the cut was not said in the turn: ${message.slice(-200)}`,
+		);
 	} finally {
 		daemon.child.kill();
 		for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });

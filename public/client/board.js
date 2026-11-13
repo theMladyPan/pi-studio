@@ -6109,6 +6109,11 @@ function makeComposer(entry) {
     cmdMute: false,
     /** The cards this message names beside the one it is written in. */
     named: [],
+    /**
+     * The commands this message carries, in the order their chips sit: the names `GET /commands` gave,
+     * because the daemon resolves each one itself when the message goes.
+     */
+    commands: [],
     /** Images pasted or dropped into this field, and paths picked for it: both travel with the message. */
     images: [],
     /**
@@ -6613,12 +6618,12 @@ function addReference(inst, entry) {
   return true;
 }
 
-/** One chip per card the message names, each droppable on its own. */
+/** One chip per card the message names and one per command it carries, each droppable on its own. */
 function paintRefs(inst) {
   // A card that left the board is not a reference any more, so the row drops it rather than naming
   // something a click would miss.
   inst.named = inst.named.filter((id) => byId.has(id));
-  inst.refRow.hidden = inst.named.length === 0;
+  inst.refRow.hidden = inst.named.length === 0 && inst.commands.length === 0;
   inst.refRow.replaceChildren(
     ...inst.named.map((id) => {
       const entry = byId.get(id);
@@ -6639,6 +6644,9 @@ function paintRefs(inst) {
       chip.append(name, drop);
       return chip;
     }),
+    // A command the message carries takes a chip in the same row, so three skills and a sentence cost
+    // one line of chips above the words.
+    ...inst.commands.map((name) => cmdChip(inst, name)),
   );
   paintFork(inst);
   paintHint(inst);
@@ -9712,8 +9720,9 @@ window.addEventListener("resize", () => {
 
 // ---------- the `/` menu in a field ------------------------------------------
 // A `/` at the front of a draft asks pi what it can run in this thread. The list is grouped by where
-// each command comes from, narrowed by name and by what each one does, and a row only writes the
-// command into the field: the arguments are the human's to type, and nothing is sent by picking.
+// each command comes from, narrowed by name and by what each one does, and a row only puts the command
+// on the message as a chip: nothing is sent by picking, the field is left for the words, and several
+// commands ride one turn because each one is a name the daemon resolves as it runs them.
 const cmdPick = document.getElementById("cmdPick");
 const cmdSearch = document.getElementById("cmdSearch");
 const cmdList = document.getElementById("cmdList");
@@ -9721,6 +9730,11 @@ const cmdList = document.getElementById("cmdList");
 let cmdInst = null;
 /** Every listing bumps this, so a slow reply cannot land on top of a newer one. */
 let cmdSeq = 0;
+/**
+ * How many commands one message carries. Every command is an instruction of its own, so a turn stacked
+ * with them is a turn the agent reads less of; five is where the list stops and the hint says why.
+ */
+const CMD_CHIP_LIMIT = 5;
 /** One heading per source, in the order the list reads: what the board's extensions add first. */
 const CMD_GROUPS = [
   ["extension", "commands from extensions"],
@@ -9739,8 +9753,8 @@ function cmdQuery(inst) {
 }
 
 /**
- * The command name a row shows and the field writes. A skill is named `skill:name` on the way to the
- * daemon and shown as `name`, because the heading above it already says it comes from a skill.
+ * The command name a row shows and a chip carries. A skill is named `skill:name` on the way to the daemon
+ * and shown as `name`, because the heading above it already says it comes from a skill.
  */
 function shownCommand(name) {
   return String(name ?? "").replace(/^skill:/, "");
@@ -9903,17 +9917,60 @@ function openCmdPick(inst, fromChip) {
   void loadCmds(inst, false);
 }
 
-/** Write the picked command into the field and leave the caret after its space, where arguments go. */
+/**
+ * Take a picked row: it becomes a chip above the field rather than words in it, so the composer stays the
+ * human's to write in and one message can carry several commands.
+ */
 function takeCmdRow(one) {
   const inst = cmdInst;
   if (!inst) return;
-  inst.msg.value = `/${shownCommand(one.name)} `;
+  // A draft that is nothing but the command being named is the menu's own filter, and the pick has spent
+  // it: left in the field, a send would run that `/name` by itself and the chips would go with nothing.
+  if (cmdQuery(inst) !== null) {
+    inst.msg.value = "";
+    growComposer(inst);
+  }
   // The draft that muted the menu is spent, so the next slash opens it again.
   inst.cmdMute = false;
+  addCmdChip(inst, one.name);
   closeCmdPick();
   inst.msg.focus();
-  inst.msg.setSelectionRange(inst.msg.value.length, inst.msg.value.length);
-  growComposer(inst);
+}
+
+/**
+ * One command on the message, drawn the way a card reference is: the row's own chip, with the `/` that says
+ * what it is and the short name the menu shows, since a skill is `skill:name` only on the way to the daemon.
+ */
+function cmdChip(inst, name) {
+  const chip = el("div", "ref");
+  chip.title = `this message runs ${name}`;
+  const said = el("span");
+  said.textContent = `/${shownCommand(name)}`;
+  const drop = el("button");
+  drop.type = "button";
+  drop.textContent = "×";
+  drop.title = "drop this command";
+  drop.addEventListener("click", () => {
+    inst.commands = inst.commands.filter((one) => one !== name);
+    paintRefs(inst);
+    inst.msg.focus();
+  });
+  chip.append(said, drop);
+  return chip;
+}
+
+/**
+ * Put one command on the message being written. A command already there is there once, and the sixth one
+ * is refused out loud rather than swallowed, because a pick that does nothing reads as a broken row.
+ */
+function addCmdChip(inst, name) {
+  if (inst.commands.includes(name)) return;
+  if (inst.commands.length >= CMD_CHIP_LIMIT) {
+    hintLine(`only ${CMD_CHIP_LIMIT} commands ride one message`, true, inst);
+    return;
+  }
+  inst.commands.push(name);
+  paintRefs(inst);
 }
 
 /**
@@ -10033,7 +10090,7 @@ async function sendMessage(inst = activeComposer) {
     if (inst.pending.length) await Promise.allSettled([...inst.pending]);
     const draft = inst.msg.value;
     const typed = draft.trim();
-    if (!typed && inst.images.length === 0 && inst.picked.size === 0) return;
+    if (!typed && inst.images.length === 0 && inst.picked.size === 0 && inst.commands.length === 0) return;
     // A `!` at the very front of a one-line draft is the shell, the way it is in a console pi. A draft with a
     // newline in it is prose that happens to start with `!` — nobody types a two-line command — and stays a
     // message, and a space before the `!` is a message too, so "!important" in a sentence is never run.
@@ -10047,6 +10104,8 @@ async function sendMessage(inst = activeComposer) {
     const sentPaths = [...inst.picked.keys()];
     const sentImages = [...inst.images];
     const sentNamed = [...inst.named];
+    // The commands the chips name, in the order they sit, so the daemon runs them as this one turn.
+    const sentCmds = [...inst.commands];
     // A picture on its own is a message. A message is read as words, so an empty draft with images on it
     // goes as the one line that names them, and the agent finds the picture beside it.
     const words = text || (sentImages.length ? IMAGE_ONLY_TEXT : "");
@@ -10065,6 +10124,9 @@ async function sendMessage(inst = activeComposer) {
         cardId: sentFork ? sentFork.id : card?.id,
         // The cards the message names travel beside the one it answers, so the agent is told about each.
         refs: sentFork ? sentNamed.filter((id) => id !== sentFork.id) : sentNamed,
+        // The commands the message carries, as the names `GET /commands` gave. Nothing typed by hand
+        // reaches this: a `/name args` draft is a command the daemon runs by itself, arguments and all.
+        commands: sentCmds.length ? sentCmds : undefined,
         fork: Boolean(sentFork) || undefined,
         text: words,
         mode: inst.sendMode,
@@ -10107,6 +10169,8 @@ async function sendMessage(inst = activeComposer) {
     drawChips(inst);
     // The cards the message named were for that message, and the thread now holds what they said.
     inst.named = inst.named.filter((id) => !sentNamed.includes(id));
+    // The commands it carried went with it, and one picked while it travelled stays.
+    inst.commands = inst.commands.filter((name) => !sentCmds.includes(name));
     paintRefs(inst);
     paintReferenceRings();
     closePicker();
