@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pi-studio — a local daemon for pi agents</title>
+<meta name="description" content="A local daemon that owns pi agents and gives them a board. Type into a card and watch it work." />
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+<style>
+  :root {
+    --bg: #0d1117; --card: #161b22; --card-head: #1c2128;
+    --border: #30363d; --border-bright: #3d444d;
+    --text: #e6edf3; --muted: #8b949e;
+    --accent: #58a6ff; --accent-dim: #1f6feb;
+    --green: #3fb950; --amber: #d29922; --pink: #db61a2; --red: #f85149;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background-color: var(--bg);
+    background-image: radial-gradient(circle at 1px 1px, #21262d 1px, transparent 0);
+    background-size: 24px 24px;
+    color: var(--text); font: 15px/1.6 system-ui, -apple-system, sans-serif;
+  }
+  a { color: var(--accent); }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .skip {
+    position: absolute; left: 12px; top: -48px; z-index: 100;
+    background: var(--card); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 14px; font: 13px var(--mono); text-decoration: none;
+  }
+  .skip:focus { top: 12px; }
+  .container { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+
+  header.site {
+    position: static;
+    background: var(--bg); border-bottom: 1px solid var(--border);
+  }
+  .header-in { display: flex; align-items: center; gap: 24px; height: 56px; }
+  .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text); }
+  .brand img { width: 26px; height: 26px; border-radius: 6px; }
+  .brand-name { font: 600 15px var(--mono); letter-spacing: .2px; }
+  nav.main { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
+  nav.main a {
+    color: var(--muted); text-decoration: none; font: 13px var(--mono);
+    padding: 6px 10px; border-radius: 6px;
+  }
+  nav.main a:hover { color: var(--text); background: var(--card); }
+
+  .hero { padding: 56px 0 48px; }
+  .hero-grid { display: grid; grid-template-columns: 1fr 1.15fr; gap: 40px; align-items: start; }
+  .kicker {
+    font: 12px var(--mono); text-transform: uppercase; letter-spacing: 1.2px;
+    color: var(--accent); margin: 0 0 16px;
+  }
+  h1 { font-size: 46px; line-height: 1.1; letter-spacing: -0.5px; margin: 0 0 18px; font-weight: 700; }
+  .pitch { font-size: 17px; color: var(--text); margin: 0 0 24px; max-width: 34em; }
+  .chips { list-style: none; margin: 0 0 24px; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+  .chips li {
+    font: 12px var(--mono); color: var(--accent);
+    background: rgba(88,166,255,.08); border: 1px solid rgba(88,166,255,.25);
+    border-radius: 999px; padding: 3px 12px;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(1,4,9,.5); overflow: hidden;
+  }
+  .card-head {
+    display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+    background: var(--card-head); border-bottom: 1px solid var(--border);
+    font: 12px var(--mono); color: var(--muted);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+  .card-body { padding: 16px; }
+  .quickstart pre {
+    margin: 0 0 12px; font: 13px/1.7 var(--mono); white-space: pre; overflow-x: auto; word-break: normal;
+  }
+  .quickstart .note { margin: 0; font-size: 13.5px; color: var(--muted); }
+  .quickstart .note code, code {
+    font: 12.5px var(--mono); background: var(--card-head);
+    border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px;
+  }
+  .copy-btn {
+    margin-left: auto; font: 12px var(--mono); color: var(--accent);
+    background: rgba(88,166,255,.08); border: 1px solid rgba(88,166,255,.25);
+    border-radius: 6px; padding: 3px 10px; cursor: pointer;
+  }
+  .copy-btn:hover { background: rgba(88,166,255,.16); }
+  .copy-status { font: 12px var(--mono); color: var(--green); min-height: 1.2em; margin-top: 10px; }
+  figure.shot { margin: 0; }
+  figure.shot img { display: block; width: 100%; height: auto; }
+  figure.shot figcaption {
+    padding: 10px 14px; font-size: 13.5px; color: var(--muted);
+    border-top: 1px solid var(--border); background: var(--card);
+  }
+
+  section { padding: 48px 0; border-top: 1px solid var(--border); }
+  section h2 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.3px; }
+  .lede { color: var(--muted); margin: 0 0 28px; max-width: 42em; }
+
+  [role="tablist"] {
+    display: flex; gap: 4px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border); margin-bottom: 28px;
+  }
+  [role="tab"] {
+    font: 13px var(--mono); color: var(--muted); background: transparent;
+    border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0;
+    padding: 10px 16px; cursor: pointer;
+  }
+  [role="tab"]:hover { color: var(--text); background: var(--card); }
+  [role="tab"][aria-selected="true"] {
+    color: var(--text); background: var(--card);
+    border-color: var(--border);
+  }
+  [role="tabpanel"] { max-width: 72em; }
+  [role="tabpanel"] p, [role="tabpanel"] li { font-size: 15px; }
+  [role="tabpanel"] h3 { font-size: 19px; margin: 0 0 12px; }
+  .cols2 { display: grid; grid-template-columns: 1.2fr 1fr; gap: 36px; align-items: start; }
+  ul.tight { margin: 0 0 16px; padding-left: 20px; }
+  ul.tight li { margin-bottom: 8px; }
+
+  .mini { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card); }
+  .mini-head {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+    background: var(--card-head); border-bottom: 1px solid var(--border);
+    font: 12px var(--mono); color: var(--muted);
+  }
+  .mini-body { padding: 14px; display: grid; gap: 10px; }
+  .mini-card {
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    font-size: 13px; background: var(--bg);
+  }
+  .mini-card .chip-label {
+    display: inline-block; font: 10px var(--mono); letter-spacing: .04em;
+    border-radius: 999px; padding: 1px 8px; margin-bottom: 6px;
+    border: 1px solid var(--border); color: var(--muted);
+  }
+  .mini-card.thread { border-color: var(--accent-dim); }
+  .mini-card.thread .chip-label { color: var(--accent); border-color: rgba(88,166,255,.3); }
+  .mini-card.question .chip-label { color: var(--pink); border-color: rgba(219,97,162,.35); }
+  .mini-card.source .chip-label { color: var(--amber); border-color: rgba(210,153,34,.35); }
+  .arrow-note { font: 11px var(--mono); color: var(--muted); text-align: center; margin: 0; }
+
+  .lanes { display: grid; gap: 10px; }
+  .lane {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    background: var(--bg); font: 12px var(--mono);
+  }
+  .lane .branch { color: var(--accent); }
+  .lane .pill {
+    border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; color: var(--muted);
+  }
+  .lane .pill.head { color: var(--green); border-color: rgba(63,185,80,.4); }
+  .lane-note { font-size: 13px; color: var(--muted); margin: 12px 0 0; }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  caption { text-align: left; font-weight: 600; padding: 0 0 10px; }
+  th, td { text-align: left; padding: 10px 12px; border: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--card-head); font: 12px var(--mono); color: var(--muted); }
+  td:first-child { font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+
+  .keys-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr; gap: 8px; max-width: 46em; }
+  .keys-list li {
+    display: flex; gap: 16px; align-items: baseline;
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; background: var(--card);
+  }
+  kbd {
+    font: 12px var(--mono); color: var(--accent); flex: none; min-width: 52px;
+    border: 1px solid rgba(88,166,255,.3); border-radius: 4px; padding: 0 6px; text-align: center;
+    background: rgba(88,166,255,.07);
+  }
+  .keys-note { color: var(--muted); font-size: 13.5px; margin-top: 16px; }
+  @media (min-width: 640px) {
+    .keys-list { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: none; }
+  }
+
+  footer { border-top: 1px solid var(--border); padding: 32px 0 48px; }
+  .footer-links { list-style: none; display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0 0 12px; padding: 0; }
+  .footer-links a { font: 13px var(--mono); text-decoration: none; }
+  .footer-links a:hover { text-decoration: underline; }
+  .closing { color: var(--muted); font-size: 13.5px; margin: 0; }
+
+  @media (max-width: 900px) {
+    .hero-grid, .cols2 { grid-template-columns: 1fr; gap: 28px; }
+    h1 { font-size: 34px; }
+    .hero { padding: 36px 0 32px; }
+  }
+  @media (max-width: 640px) {
+    .header-in { height: auto; padding: 10px 0; flex-wrap: wrap; gap: 8px; }
+    nav.main { margin-left: 0; }
+    table, tbody, tr, th, td { display: block; }
+    thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    td { border: 0; border-top: 1px solid var(--border); padding: 6px 12px; }
+    td:first-child { border-top: 0; white-space: normal; padding-top: 12px; }
+    td::before { content: attr(data-label) ": "; font: 12px var(--mono); color: var(--muted); }
+    td.no-label::before { content: none; }
+    .keys-list li { flex-direction: column; gap: 4px; }
+    kbd { text-align: left; }
+  }
+  @media print {
+    [hidden]{display:block!important}
+    header.site nav.main { display: none; }
+    body { background-image: none; }
+  }
+</style>
+<noscript><style>[role="tablist"]{display:none} .copy-btn{display:none}</style></noscript>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+  <div class="container header-in">
+    <a class="brand" href="#top" aria-label="pi-studio home">
+      <img src="assets/favicon.svg" width="26" height="26" alt="" />
+      <span class="brand-name">pi-studio</span>
+    </a>
+    <nav class="main" aria-label="Site">
+      <a href="#tour">tour</a>
+      <a href="#requirements">requirements</a>
+      <a href="#shortcuts">shortcuts</a>
+      <a href="https://github.com/theMladyPan/pi-studio">github</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <div class="hero container" id="top">
+    <div class="hero-grid">
+      <div>
+        <p class="kicker">Local daemon for pi agents</p>
+        <h1>Type into a card. Watch it work.</h1>
+        <p class="pitch">A workspace is a folder. A thread on its board is one agent; you steer it in flight, queue follow-ups, and review its work on an isolated git worktree.</p>
+        <ul class="chips" aria-label="Facts">
+          <li>node &gt;= 22.18</li>
+          <li>zero runtime deps</li>
+          <li>loopback + token</li>
+          <li>no build step</li>
+        </ul>
+        <div class="card quickstart">
+          <div class="card-head">
+            <span class="dot" aria-hidden="true"></span>
+            <span>quickstart</span>
+            <button class="copy-btn" type="button" aria-label="Copy quickstart command" id="copy-btn">copy</button>
+          </div>
+          <div class="card-body">
+            <pre id="quickstart-cmds">git clone https://github.com/theMladyPan/pi-studio.git
+cd pi-studio
+node server.ts</pre>
+            <p class="note">Add <code>--no-open</code> for a service, or run <code>pi-studio</code> from <code>bin/pi-studio</code> once the repo's <code>bin/</code> directory is on your <code>PATH</code>, or <code>./bin/pi-studio</code>.</p>
+            <p class="copy-status" role="status" aria-live="polite" id="copy-status"></p>
+          </div>
+        </div>
+      </div>
+      <figure class="card shot">
+        <div class="card-head">
+          <span class="dot" aria-hidden="true"></span>
+          <span>board</span>
+        </div>
+        <img src="assets/board.png" width="1920" height="1290" alt="A pi-studio board: thirteen cards of a document audit — two thread cards, and eleven note cards with tables and charts that the threads posted beside themselves — with the activity rail on the left and the branch strip on the right." />
+        <figcaption>Two threads and the eleven cards they posted beside themselves while auditing a repo, with the git strip open on the right.</figcaption>
+      </figure>
+    </div>
+  </div>
+
+  <section id="tour" class="container">
+    <h2>Three primitives</h2>
+    <p class="lede">One daemon, three ideas: threads you steer, branches you can read, and a boss that hands work to children.</p>
+
+    <div role="tablist" aria-label="Tour">
+      <button role="tab" id="tab-board" aria-selected="true" aria-controls="panel-board">board &amp; threads</button>
+      <button role="tab" id="tab-git" aria-selected="false" aria-controls="panel-git" tabindex="-1">git worktrees</button>
+      <button role="tab" id="tab-boss" aria-selected="false" aria-controls="panel-boss" tabindex="-1">boss &amp; subagents</button>
+    </div>
+
+    <div role="tabpanel" id="panel-board" tabindex="0" aria-labelledby="tab-board">
+      <div class="cols2">
+        <div>
+          <h3>One card per agent</h3>
+          <p>Every thread card runs its own <code>pi --mode rpc</code> child. Threads run in parallel, each in its own workspace or worktree, and the rail on the left lists every command, edit, and thought as it happens.</p>
+          <ul class="tight">
+            <li><strong>Steer</strong> redirects a run still in flight; <strong>queue</strong> waits behind it. No killing the run to fix it.</li>
+            <li>Cards beside a thread are structured: <strong>notes</strong> with tables and charts, <strong>source</strong> views at the line that matters, and <strong>questions</strong> with buttons to answer.</li>
+            <li>Sessions persist under <code>~/.pi/agent/state/pi-studio/</code>, so a board is resumed after a restart, not restarted.</li>
+          </ul>
+        </div>
+        <div class="mini" aria-label="Diagram: a thread card with a note, a question, and a source card beside it">
+          <div class="mini-head"><span class="dot" aria-hidden="true"></span><span>thread</span></div>
+          <div class="mini-body">
+            <div class="mini-card thread"><span class="chip-label">thread</span><br />Refactor the store</div>
+            <p class="arrow-note">posts beside itself</p>
+            <div class="mini-card"><span class="chip-label">note</span><br />Audit table and chart</div>
+            <div class="mini-card question"><span class="chip-label">question</span><br />Keep the old layout?</div>
+            <div class="mini-card source"><span class="chip-label">source</span><br />store.ts, at the line that matters</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div role="tabpanel" id="panel-git" tabindex="0" aria-labelledby="tab-git">
+      <div class="cols2">
+        <div>
+          <h3>A detached worktree per thread</h3>
+          <p>In a git repo, every thread starts in its own detached worktree under <code>.agents/&lt;id&gt;</code>. Before its first edit, a thread that edits cuts a named branch <code>&lt;type&gt;/&lt;slug&gt;-&lt;id&gt;</code>; a read-only or question thread stays detached and writes no branch. Threads stay out of each other&rsquo;s way by construction.</p>
+          <ul class="tight">
+            <li>The strip on the right draws branch lanes and commit pills, so you can read what each thread changed.</li>
+            <li>A folder that is not a repo runs in place, like scratch: no worktree or branch to cut, and nothing merges or pushes behind your back; you review, you merge.</li>
+          </ul>
+        </div>
+        <div class="mini" aria-label="Schematic: two branch lanes with commit pills">
+          <div class="mini-head"><span class="dot" aria-hidden="true"></span><span>git strip</span></div>
+          <div class="mini-body">
+            <div class="lanes">
+              <div class="lane"><span class="branch">main</span><span class="pill head">head</span><span class="pill">a1b2c3d</span></div>
+              <div class="lane"><span class="branch">.agents/7f3a detached</span><span class="pill">read-only</span><span class="pill head">head</span></div>
+              <div class="lane"><span class="branch">.agents/9c1e &#8594; feat/board-map-9c1e</span><span class="pill">2b3c4d5</span><span class="pill">6e7f8a9</span><span class="pill head">head</span></div>
+            </div>
+            <p class="lane-note">Worktrees start detached; named branches appear on first edit, and read-only threads stay detached. Lane names are examples; the strip is drawn from the repo.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div role="tabpanel" id="panel-boss" tabindex="0" aria-labelledby="tab-boss">
+      <h3>A boss that hands work out</h3>
+      <p>Human threads get a mode: <code>agent</code> is the baseline, <code>plan</code> writes a plan and throwaway scripts, and <code>boss</code> spawns children and reports what came back. A boss runs no work itself; it fans out child threads &mdash; <code>scout</code>, <code>implement</code>, <code>review</code>, <code>chore</code>, <code>architect</code> &mdash; in parallel or in sequence, then integrates their committed branches back into its own, using the board's chosen strategy (merge by default, rebase optional) before reporting.</p>
+      <p>Every flow gets one bounded repair pass: a red check goes back once, and if it is still red the boss stops and tells you why, instead of looping on its own findings.</p>
+      <div class="table-wrap">
+        <table>
+          <caption>The three flows</caption>
+          <thead>
+            <tr><th scope="col">flow</th><th scope="col">when</th><th scope="col">shape</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td data-label="flow">simple</td>
+              <td data-label="when">One file, one known behaviour, a test beside the change.</td>
+              <td data-label="shape">scout, implement, then the smallest check that catches a regression; red goes back once.</td>
+            </tr>
+            <tr>
+              <td data-label="flow">advanced</td>
+              <td data-label="when">Files are known, the edges between them are not.</td>
+              <td data-label="shape">scout and a throwaway script in parallel, the plan waits for both, then implement, isolated and full tests, and a review of plan plus diff; one repair round.</td>
+            </tr>
+            <tr>
+              <td data-label="flow">complex</td>
+              <td data-label="when">Too big for one plan, or too risky for one reviewer.</td>
+              <td data-label="shape">Two scouts in parallel, a plan the human approves, implement in slices, checks from narrow to end-to-end, review and static checks in parallel, one targeted repair, then a re-review of the assembled branch carrying the repair.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="requirements" class="container">
+    <h2>Requirements and honest caveats</h2>
+    <p class="lede">One machine, one developer. Everything below is true of the daemon today, including the parts that bite.</p>
+    <div class="table-wrap">
+      <table>
+        <caption>What pi-studio needs</caption>
+        <thead>
+          <tr><th scope="col">needs</th><th scope="col">detail</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td data-label="needs">Node.js</td>
+            <td data-label="detail">&gt;= 22.18 from nodejs.org, or a version-manager build with TypeScript stripping enabled. A distribution package often compiles TypeScript support out: Ubuntu 26.04 ships 22.22, which passes the version check and then fails with <code>ERR_UNKNOWN_FILE_EXTENSION</code>. If pi brought its own Node, put <code>$HOME/.local/share/pi-node/current/bin</code> ahead on <code>PATH</code>.</td>
+          </tr>
+          <tr>
+            <td data-label="needs">pi CLI</td>
+            <td data-label="detail">Installed locally and on <code>PATH</code> on the same machine. The daemon spawns it; there is no cloud agent behind it.</td>
+          </tr>
+          <tr>
+            <td data-label="needs">Dependencies</td>
+            <td data-label="detail">Zero runtime npm dependencies: <code>node server.ts</code> runs the TypeScript directly, with no build step. <code>npm install</code> is only needed for <code>npm run check</code>, which uses the TypeScript dev dependency.</td>
+          </tr>
+          <tr>
+            <td data-label="needs">Network &amp; security</td>
+            <td data-label="detail">Loopback-only (<code>127.0.0.1</code>) by default, gated by a persistent daemon token saved on disk (browser sessions last 30 days; restarting the daemon does not revoke a leaked link). <code>--host 0.0.0.0</code> exposes plain HTTP to anyone holding the printed link, who can then ask agents to run commands on that machine: use only on a trusted network, or put a tunnel in front of it.</td>
+          </tr>
+          <tr>
+            <td data-label="needs">Scope</td>
+            <td data-label="detail">Built for a single developer on their own machine. No hosted cloud mode, no accounts.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="shortcuts" class="container">
+    <h2>Keyboard shortcuts</h2>
+    <p class="lede">The board is driven from the keyboard. Six worth knowing:</p>
+    <ul class="keys-list">
+      <li><kbd>t</kbd><span>start a new thread, on a board of threads with no card selected</span></li>
+      <li><kbd>f</kbd><span>fit every card on the screen</span></li>
+      <li><kbd>n</kbd><span>jump to the next new card or waiting question</span></li>
+      <li><kbd>m</kbd><span>hide or show the small overview map</span></li>
+      <li><kbd>Enter</kbd><span>send the message</span></li>
+      <li><kbd>Esc</kbd><span>hand the keyboard back to the board and keep the text</span></li>
+    </ul>
+    <p class="keys-note">The full list lives behind the <code>keys</code> button in the app, drawn from the same <code>SHORTCUTS</code> table in <code>public/client/board.js</code>.</p>
+  </section>
+</main>
+
+<footer>
+  <div class="container">
+    <ul class="footer-links">
+      <li><a href="https://github.com/theMladyPan/pi-studio">github</a></li>
+      <li><a href="https://github.com/theMladyPan/pi-studio/blob/main/README.md">README.md</a></li>
+      <li><a href="https://github.com/theMladyPan/pi-studio/blob/main/docs/boss-and-subagents.md">docs/boss-and-subagents.md</a></li>
+    </ul>
+    <p class="closing">Local only, by design.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  // Tabs: roving tabindex, manual activation. Panels ship visible; JS hides the unselected ones.
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+  var panels = tabs.map(function (t) { return document.getElementById(t.getAttribute('aria-controls')); });
+  function activate(i) {
+    tabs.forEach(function (t, j) {
+      t.setAttribute('aria-selected', j === i ? 'true' : 'false');
+      t.tabIndex = j === i ? 0 : -1;
+      if (panels[j]) panels[j].hidden = j !== i;
+    });
+  }
+  function focusTab(i) {
+    tabs.forEach(function (t, j) { t.tabIndex = j === i ? 0 : -1; });
+    tabs[i].focus();
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener('click', function () { activate(i); });
+    t.addEventListener('keydown', function (e) {
+      var n = null;
+      if (e.key === 'ArrowRight') n = (i + 1) % tabs.length;
+      else if (e.key === 'ArrowLeft') n = (i - 1 + tabs.length) % tabs.length;
+      else if (e.key === 'Home') n = 0;
+      else if (e.key === 'End') n = tabs.length - 1;
+      else if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') { activate(i); e.preventDefault(); return; }
+      if (n !== null) { focusTab(n); e.preventDefault(); }
+    });
+  });
+  activate(0);
+
+  // Copy quickstart command with visible feedback.
+  var btn = document.getElementById('copy-btn');
+  var status = document.getElementById('copy-status');
+  var cmds = document.getElementById('quickstart-cmds');
+  var timer = null;
+  function copied(on) {
+    btn.textContent = on ? 'copied' : 'copy';
+    if (timer) clearTimeout(timer);
+    if (on) { timer = setTimeout(function () { btn.textContent = 'copy'; }, 2000); }
+  }
+  function failed() {
+    btn.textContent = 'copy failed';
+    if (status) status.textContent = 'copy failed';
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(function () { btn.textContent = 'copy'; if (status) status.textContent = ''; }, 2000);
+  }
+  btn.addEventListener('click', function () {
+    var text = cmds.textContent;
+    function done() { copied(true); if (status) status.textContent = 'copied'; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallback(); });
+    } else { fallback(); }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { if (document.execCommand('copy')) { done(); } else { failed(); } } catch (e) { failed(); }
+      document.body.removeChild(ta);
+      btn.focus({ preventScroll: true });
+    }
+  });
+})();
+</script>
+</body>
+</html>
