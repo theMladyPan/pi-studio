@@ -346,7 +346,7 @@ node server.ts</pre>
             <tr>
               <td data-label="flow">complex</td>
               <td data-label="when">Too big for one plan, or too risky for one reviewer.</td>
-              <td data-label="shape">Two scouts in parallel, a plan the human approves, implement in slices, checks from narrow to end-to-end, review and static checks in parallel, one targeted repair, then a re-review of the repair alone.</td>
+              <td data-label="shape">Two scouts in parallel, a plan the human approves, implement in slices, checks from narrow to end-to-end, review and static checks in parallel, one targeted repair, then a re-review of the assembled branch carrying the repair.</td>
             </tr>
           </tbody>
         </table>
@@ -473,6 +473,7 @@ node server.ts</pre>
       document.body.appendChild(ta); ta.select();
       try { if (document.execCommand('copy')) { done(); } else { failed(); } } catch (e) { failed(); }
       document.body.removeChild(ta);
+      btn.focus({ preventScroll: true });
     }
   });
 })();
