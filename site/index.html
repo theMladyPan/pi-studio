@@ -16,7 +16,6 @@
     --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
   body {
     margin: 0; background-color: var(--bg);
     background-image: radial-gradient(circle at 1px 1px, #21262d 1px, transparent 0);
@@ -35,7 +34,7 @@
   .container { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
 
   header.site {
-    position: sticky; top: 0; z-index: 50;
+    position: static;
     background: var(--bg); border-bottom: 1px solid var(--border);
   }
   .header-in { display: flex; align-items: center; gap: 24px; height: 56px; }
@@ -75,7 +74,7 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
   .card-body { padding: 16px; }
   .quickstart pre {
-    margin: 0 0 12px; font: 13px/1.7 var(--mono); white-space: pre-wrap; word-break: break-all;
+    margin: 0 0 12px; font: 13px/1.7 var(--mono); white-space: pre; overflow-x: auto; word-break: normal;
   }
   .quickstart .note { margin: 0; font-size: 13.5px; color: var(--muted); }
   .quickstart .note code, code {
@@ -163,7 +162,7 @@
   th { background: var(--card-head); font: 12px var(--mono); color: var(--muted); }
   td:first-child { font-family: var(--mono); font-size: 13px; white-space: nowrap; }
 
-  .keys-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-width: 46em; }
+  .keys-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr; gap: 8px; max-width: 46em; }
   .keys-list li {
     display: flex; gap: 16px; align-items: baseline;
     border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; background: var(--card);
@@ -174,6 +173,9 @@
     background: rgba(88,166,255,.07);
   }
   .keys-note { color: var(--muted); font-size: 13.5px; margin-top: 16px; }
+  @media (min-width: 640px) {
+    .keys-list { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: none; }
+  }
 
   footer { border-top: 1px solid var(--border); padding: 32px 0 48px; }
   .footer-links { list-style: none; display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0 0 12px; padding: 0; }
@@ -204,7 +206,7 @@
     body { background-image: none; }
   }
 </style>
-<noscript><style>[role="tablist"]{display:none}</style></noscript>
+<noscript><style>[role="tablist"]{display:none} .copy-btn{display:none}</style></noscript>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -229,7 +231,7 @@
       <div>
         <p class="kicker">Local daemon for pi agents</p>
         <h1>Type into a card. Watch it work.</h1>
-        <p class="pitch">A workspace is a folder. A thread on its board is one agent; you steer it in flight, queue follow-ups, and review its work on an isolated git branch.</p>
+        <p class="pitch">A workspace is a folder. A thread on its board is one agent; you steer it in flight, queue follow-ups, and review its work on an isolated git worktree.</p>
         <ul class="chips" aria-label="Facts">
           <li>node &gt;= 22.18</li>
           <li>zero runtime deps</li>
@@ -243,9 +245,10 @@
             <button class="copy-btn" type="button" aria-label="Copy quickstart command" id="copy-btn">copy</button>
           </div>
           <div class="card-body">
-            <pre id="quickstart-cmds">git clone https://github.com/theMladyPan/pi-studio.git &amp;&amp; cd pi-studio
+            <pre id="quickstart-cmds">git clone https://github.com/theMladyPan/pi-studio.git
+cd pi-studio
 node server.ts</pre>
-            <p class="note">Add <code>--no-open</code> for a service, or run <code>pi-studio</code> from <code>bin/pi-studio</code> once the repo is on your path.</p>
+            <p class="note">Add <code>--no-open</code> for a service, or run <code>pi-studio</code> from <code>bin/pi-studio</code> once the repo's <code>bin/</code> directory is on your <code>PATH</code>, or <code>./bin/pi-studio</code>.</p>
             <p class="copy-status" role="status" aria-live="polite" id="copy-status"></p>
           </div>
         </div>
@@ -271,7 +274,7 @@ node server.ts</pre>
       <button role="tab" id="tab-boss" aria-selected="false" aria-controls="panel-boss" tabindex="-1">boss &amp; subagents</button>
     </div>
 
-    <div role="tabpanel" id="panel-board" aria-labelledby="tab-board">
+    <div role="tabpanel" id="panel-board" tabindex="0" aria-labelledby="tab-board">
       <div class="cols2">
         <div>
           <h3>One card per agent</h3>
@@ -295,14 +298,14 @@ node server.ts</pre>
       </div>
     </div>
 
-    <div role="tabpanel" id="panel-git" aria-labelledby="tab-git">
+    <div role="tabpanel" id="panel-git" tabindex="0" aria-labelledby="tab-git">
       <div class="cols2">
         <div>
-          <h3>A branch per thread</h3>
-          <p>In a git repo, a thread works in its own worktree under <code>.agents/&lt;id&gt;</code>, cut on its first message, on a branch named <code>&lt;type&gt;/&lt;slug&gt;-&lt;id&gt;</code>. Threads stay out of each other&rsquo;s way by construction.</p>
+          <h3>A detached worktree per thread</h3>
+          <p>In a git repo, every thread starts in its own detached worktree under <code>.agents/&lt;id&gt;</code>. Before its first edit, a thread that edits cuts a named branch <code>&lt;type&gt;/&lt;slug&gt;-&lt;id&gt;</code>; a read-only or question thread stays detached and writes no branch. Threads stay out of each other&rsquo;s way by construction.</p>
           <ul class="tight">
             <li>The strip on the right draws branch lanes and commit pills, so you can read what each thread changed.</li>
-            <li>A folder that is not a repo runs in place, like scratch: no branch to cut, and nothing merges or pushes behind your back; you review, you merge.</li>
+            <li>A folder that is not a repo runs in place, like scratch: no worktree or branch to cut, and nothing merges or pushes behind your back; you review, you merge.</li>
           </ul>
         </div>
         <div class="mini" aria-label="Schematic: two branch lanes with commit pills">
@@ -310,18 +313,18 @@ node server.ts</pre>
           <div class="mini-body">
             <div class="lanes">
               <div class="lane"><span class="branch">main</span><span class="pill head">head</span><span class="pill">a1b2c3d</span></div>
-              <div class="lane"><span class="branch">fix/retry-loop-7f3a</span><span class="pill">e4f5a6b</span><span class="pill head">head</span></div>
-              <div class="lane"><span class="branch">feat/board-map-9c1e</span><span class="pill">2b3c4d5</span><span class="pill">6e7f8a9</span><span class="pill head">head</span></div>
+              <div class="lane"><span class="branch">.agents/7f3a detached</span><span class="pill">read-only</span><span class="pill head">head</span></div>
+              <div class="lane"><span class="branch">.agents/9c1e &#8594; feat/board-map-9c1e</span><span class="pill">2b3c4d5</span><span class="pill">6e7f8a9</span><span class="pill head">head</span></div>
             </div>
-            <p class="lane-note">Lane names are examples; the strip is drawn from the repo.</p>
+            <p class="lane-note">Worktrees start detached; named branches appear on first edit, and read-only threads stay detached. Lane names are examples; the strip is drawn from the repo.</p>
           </div>
         </div>
       </div>
     </div>
 
-    <div role="tabpanel" id="panel-boss" aria-labelledby="tab-boss">
+    <div role="tabpanel" id="panel-boss" tabindex="0" aria-labelledby="tab-boss">
       <h3>A boss that hands work out</h3>
-      <p>Human threads get a mode: <code>agent</code> is the baseline, <code>plan</code> writes a plan and throwaway scripts, and <code>boss</code> spawns children and reports what came back. A boss runs no work itself; it fans out child threads &mdash; <code>scout</code>, <code>implement</code>, <code>review</code>, <code>chore</code>, <code>architect</code> &mdash; in parallel or in sequence, then rebases their branches back into its own before reporting.</p>
+      <p>Human threads get a mode: <code>agent</code> is the baseline, <code>plan</code> writes a plan and throwaway scripts, and <code>boss</code> spawns children and reports what came back. A boss runs no work itself; it fans out child threads &mdash; <code>scout</code>, <code>implement</code>, <code>review</code>, <code>chore</code>, <code>architect</code> &mdash; in parallel or in sequence, then integrates their committed branches back into its own, using the board's chosen strategy (merge by default, rebase optional) before reporting.</p>
       <p>Every flow gets one bounded repair pass: a red check goes back once, and if it is still red the boss stops and tells you why, instead of looping on its own findings.</p>
       <div class="table-wrap">
         <table>
@@ -375,7 +378,7 @@ node server.ts</pre>
           </tr>
           <tr>
             <td data-label="needs">Network &amp; security</td>
-            <td data-label="detail">Loopback-only (<code>127.0.0.1</code>) by default, gated by a per-start token. <code>--host 0.0.0.0</code> exposes plain HTTP to anyone holding the printed link, who can then ask agents to run commands on that machine: use only on a trusted network, or put a tunnel in front of it.</td>
+            <td data-label="detail">Loopback-only (<code>127.0.0.1</code>) by default, gated by a persistent daemon token saved on disk (browser sessions last 30 days; restarting the daemon does not revoke a leaked link). <code>--host 0.0.0.0</code> exposes plain HTTP to anyone holding the printed link, who can then ask agents to run commands on that machine: use only on a trusted network, or put a tunnel in front of it.</td>
           </tr>
           <tr>
             <td data-label="needs">Scope</td>
@@ -452,6 +455,12 @@ node server.ts</pre>
     if (timer) clearTimeout(timer);
     if (on) { timer = setTimeout(function () { btn.textContent = 'copy'; }, 2000); }
   }
+  function failed() {
+    btn.textContent = 'copy failed';
+    if (status) status.textContent = 'copy failed';
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(function () { btn.textContent = 'copy'; if (status) status.textContent = ''; }, 2000);
+  }
   btn.addEventListener('click', function () {
     var text = cmds.textContent;
     function done() { copied(true); if (status) status.textContent = 'copied'; }
@@ -462,7 +471,7 @@ node server.ts</pre>
       var ta = document.createElement('textarea');
       ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
       document.body.appendChild(ta); ta.select();
-      try { document.execCommand('copy'); done(); } catch (e) { /* leave label as-is */ }
+      try { if (document.execCommand('copy')) { done(); } else { failed(); } } catch (e) { failed(); }
       document.body.removeChild(ta);
     }
   });
