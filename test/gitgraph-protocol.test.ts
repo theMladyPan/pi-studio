@@ -136,7 +136,7 @@ test("the words git and the page are held to are the ones they use", () => {
 /** One request the page really sends, and the command it should be read as. */
 const validRequests: Array<Record<string, unknown> & { command: string }> = [
 	{ command: "addRemote", repo: "/repo", name: "origin", url: "https://example.invalid/a/b.git", pushUrl: null, fetch: true },
-	{ command: "addTag", repo: "/repo", tagName: "v2.0.0", commitHash: "abc1234", type: 0, message: "release", pushToRemote: false, force: false },
+	{ command: "addTag", repo: "/repo", tagName: "v2.0.0", commitHash: "abc1234", type: 0, message: "release", pushToRemote: "origin", force: false },
 	{ command: "applyStash", repo: "/repo", selector: "stash@{0}", reinstateIndex: false },
 	{ command: "branchFromStash", repo: "/repo", selector: "stash@{1}", branchName: "feat/from-stash" },
 	{ command: "checkoutBranch", repo: "/repo", branchName: "feat/x", remoteBranch: null, pullAfterwards: null },
@@ -383,6 +383,8 @@ const bundleRequests: Array<Record<string, unknown> & { command: string }> = [
 	},
 	// One checkbox: whether `git clean` descends into untracked directories.
 	{ command: "cleanUntrackedFiles", repo: "/repo", directories: true },
+	// `addTag`'s "Push to remote" field is the remote the dialog picked, or null for none of them.
+	{ command: "addTag", repo: "/repo", tagName: "v1.2.3", commitHash: "abc1234", type: 0, message: "a tag", pushToRemote: "origin", force: true },
 	{ command: "merge", repo: "/repo", obj: "remotes/origin/feat", actionOn: "Remote-tracking Branch", createNewCommit: true, squash: false, noCommit: false },
 	{ command: "rebase", repo: "/repo", obj: "remotes/origin/feat", actionOn: "Remote-tracking Branch", ignoreDate: false, interactive: false },
 ];

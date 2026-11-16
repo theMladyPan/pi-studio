@@ -19,7 +19,8 @@ import type { ReadResult } from "./read.ts";
 import { openFile, viewDiff, viewDiffWithWorkingFile, viewFileAtRevision } from "./view.ts";
 import type { ViewAnswer } from "./view.ts";
 import { reposFor } from "./repos.ts";
-import type { RepoBoardLike } from "./repos.ts";
+import type { RepoBoardLike, RepoEntry } from "./repos.ts";
+import { runAction } from "./actions.ts";
 
 // ---------- what a board is, to this module ----------
 
@@ -38,56 +39,36 @@ type Reply = Record<string, unknown> & { command: string };
 const NOT_YET = "This tab cannot do that yet.";
 
 /**
- * The commands that need an editor, a terminal, a remote or a write, and are answered without a single
- * git call. This table is the seam the next stage replaces: implementing one command means deleting its
- * name from here and adding its branch to `answer`, and nothing else in this file changes.
+ * The commands that still need an editor, a terminal or a remote this tab does not have, and are
+ * answered without a single git call. The local writes left this table when `actions.ts` gained their
+ * handlers; what remains is refused by name, one sentence each, so a human who reaches one — a stale
+ * page, a menu this tab has yet to earn — is told the same thing every other refused command says.
  */
-const WRITING_OR_EDITOR_COMMANDS = [
+const UNAVAILABLE_COMMANDS = [
 	"addRemote",
-	"addTag",
-	"applyStash",
-	"branchFromStash",
-	"checkoutBranch",
-	"checkoutCommit",
-	"cherrypickCommit",
-	"cleanUntrackedFiles",
 	"createArchive",
-	"createBranch",
 	"createPullRequest",
-	"deleteBranch",
 	"deleteRemote",
 	"deleteRemoteBranch",
-	"deleteTag",
 	"deleteUserDetails",
-	"dropCommit",
-	"dropStash",
 	"editRemote",
 	"editUserDetails",
 	"exportRepoConfig",
-	"fetch",
+	"fetchAvatar",
 	"fetchIntoLocalBranch",
-	"merge",
-	"popStash",
-	"pruneRemote",
+	"openExternalDirDiff",
+	"openExtensionSettings",
+	"openTerminal",
 	"pullBranch",
 	"pushBranch",
-	"pushStash",
 	"pushTag",
-	"rebase",
-	"renameBranch",
-	"resetToCommit",
-	"revertCommit",
-	"openTerminal",
-	"openExtensionSettings",
-	"openExternalDirDiff",
-	"viewScm",
-	"fetchAvatar",
 	"rescanForRepos",
 	"showErrorMessage",
+	"viewScm",
 ] as const;
 
 /** The sentence each of those answers, by command, so a later stage can word one of them differently. */
-export const UNAVAILABLE: Record<string, string> = Object.fromEntries(WRITING_OR_EDITOR_COMMANDS.map((command) => [command, NOT_YET]));
+export const UNAVAILABLE: Record<string, string> = Object.fromEntries(UNAVAILABLE_COMMANDS.map((command) => [command, NOT_YET]));
 
 // ---------- small readers ----------
 
@@ -99,6 +80,17 @@ function reviewFor(board: DispatchBoard, repo: string, id: string): GitCodeRevie
 /** A view's answer, which the page draws when it carries text and shows the reason for when it does not. */
 function viewed(command: string, answer: ViewAnswer): Reply {
 	return "view" in answer ? { command, error: null, view: answer.view } : { command, error: answer.error };
+}
+
+/**
+ * The action's run, for the page's commands that show one failure: the first sentence git gave.
+ *
+ * A command that runs twice — a branch deleted on its remote too, a tag made and then pushed — still
+ * answers a single `error` on this half of the page's commands, and a second sentence would be the same
+ * cause said twice.
+ */
+function firstError(errors: (string | null)[]): string | null {
+	return errors.find((error) => error !== null) ?? null;
 }
 
 /** What the page's commit details pane is handed, including the review and the refresh flag it sent. */
@@ -154,7 +146,9 @@ export async function respond(board: DispatchBoard, raw: unknown): Promise<Reply
 		const paths = [...repos.keys()];
 		const named = "repo" in request ? request.repo : null;
 		if (named !== null && !repos.has(named)) return [{ command: request.command, error: "That repository is no longer open in this tab." }];
-		return await answer(board, request, paths);
+		// What the entry knows about the repository's tree decides whether an action may move it: `live` is the
+		// board's own answer to "is a thread working in there right now".
+		return await answer(board, request, paths, named === null ? undefined : repos.get(named));
 	} catch (error) {
 		// A read that escaped its own handling is still a page waiting for a reply, so it is answered
 		// with what went wrong rather than left to the route's catch, which would answer a 500.
@@ -162,8 +156,8 @@ export async function respond(board: DispatchBoard, raw: unknown): Promise<Reply
 	}
 }
 
-/** The command itself, once it is known to name a repository this board still has. */
-async function answer(board: DispatchBoard, request: GitGraphRequest, paths: string[]): Promise<Reply[]> {
+/** The command itself, once it is known to name a repository this board still has, and that entry. */
+async function answer(board: DispatchBoard, request: GitGraphRequest, paths: string[], entry?: RepoEntry): Promise<Reply[]> {
 	const unavailable = UNAVAILABLE[request.command];
 	if (unavailable !== undefined) return [{ command: request.command, error: unavailable }];
 	switch (request.command) {
@@ -288,6 +282,44 @@ async function answer(board: DispatchBoard, request: GitGraphRequest, paths: str
 			// The page does these itself: the clipboard and a new tab belong to the browser that is
 			// already showing the text, and a daemon has no clipboard to put it on.
 			return [{ command: request.command, error: null }];
+		case "addTag":
+		case "cherrypickCommit":
+		case "createBranch":
+			// The page's commands that report every step they ran, because they run more than one.
+			return [{ command: request.command, errors: (await runAction(request.repo, request, entry)).errors }];
+		case "checkoutBranch": {
+			// The page words its own failure report from this field ("… & Pull Changes"), so the pull it asked
+			// for is echoed whether or not the checkout worked.
+			const errors = (await runAction(request.repo, request, entry)).errors;
+			return [{ command: "checkoutBranch", pullAfterwards: request.pullAfterwards, errors }];
+		}
+		case "deleteBranch": {
+			const errors = (await runAction(request.repo, request, entry)).errors;
+			// The bundle asks again with `forceDelete` when it sees git's own "run 'git branch -D'" hint, and
+			// it sends these three fields back with that question, so they are answered exactly as asked.
+			return [{ command: "deleteBranch", repo: request.repo, branchName: request.branchName, deleteOnRemotes: request.deleteOnRemotes ?? [], errors }];
+		}
+		case "merge":
+			return [{ command: "merge", actionOn: request.actionOn, error: firstError((await runAction(request.repo, request, entry)).errors) }];
+		case "rebase":
+			// `interactive` is echoed because the page keeps its "action running" notice up until it reads it.
+			return [{ command: "rebase", actionOn: request.actionOn, interactive: request.interactive, error: firstError((await runAction(request.repo, request, entry)).errors) }];
+		case "applyStash":
+		case "branchFromStash":
+		case "checkoutCommit":
+		case "cleanUntrackedFiles":
+		case "deleteTag":
+		case "dropCommit":
+		case "dropStash":
+		case "fetch":
+		case "popStash":
+		case "pruneRemote":
+		case "pushStash":
+		case "renameBranch":
+		case "resetToCommit":
+		case "revertCommit":
+			// The page's commands that report one failure, in one sentence.
+			return [{ command: request.command, error: firstError((await runAction(request.repo, request, entry)).errors) }];
 		case "setRepoState": {
 			const state = stateFor(board);
 			state.repos[request.repo] = request.state;

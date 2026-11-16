@@ -2,11 +2,11 @@
  * The settings the Git Graph view is opened with, written out here rather than read from a settings
  * file, because this app has one place to look and a human with a broken JSON should still get a view.
  *
- * Two things in here are deliberately unlike the extension this page came from. Every action that
- * writes to a checkout, a remote or a config starts hidden: the page draws its menus from these flags
- * before any command behind them exists, and a menu entry that does nothing is worse than no entry.
- * And `fetchAvatars` is false, because an avatar is a request to GitHub or Gravatar made on behalf of
- * a human who only asked to see their own repository.
+ * Two things in here are deliberately unlike the extension this page came from. An action is offered
+ * only once the daemon has the command behind it: the page draws its menus from these flags, and a menu
+ * entry that answers "cannot do that yet" is worse than no entry at all. And `fetchAvatars` is false,
+ * because an avatar is a request to GitHub or Gravatar made on behalf of a human who only asked to see
+ * their own repository.
  */
 import type { ContextMenuActionsVisibility, DialogDefaultsConfig, GitGraphViewConfig } from "./protocol.ts";
 
@@ -73,17 +73,21 @@ export const BRANCH_COLOURS = [
 // ---------- what a menu may offer ----------
 
 /**
- * The actions the view offers on its first day: everything that reads, copies or opens, and nothing
- * that writes. A false here is a menu entry the page does not draw, so enabling one is the same act as
- * shipping the command behind it.
+ * The actions the view offers, which is the read side and every write that has a handler on the daemon.
+ *
+ * A false here is a menu entry the page does not draw, and a true is one it draws and sends. So this
+ * table and the dispatch's table of refused commands are one decision written twice: a command that
+ * `dispatch.ts` still answers with "This tab cannot do that yet." is false here, and a command that has
+ * a real handler is true. `test/gitgraph-actions.test.ts` walks both and fails when they disagree, which
+ * is what keeps a menu entry from being offered and then refused.
  */
 export const ENABLED_CONTEXT_ACTIONS: ContextMenuActionsVisibility = {
 	branch: {
-		checkout: false,
-		rename: false,
-		delete: false,
-		merge: false,
-		rebase: false,
+		checkout: true,
+		rename: true,
+		delete: true,
+		merge: true,
+		rebase: true,
 		push: false,
 		createPullRequest: false,
 		createArchive: false,
@@ -92,23 +96,25 @@ export const ENABLED_CONTEXT_ACTIONS: ContextMenuActionsVisibility = {
 		copyName: true,
 	},
 	commit: {
-		addTag: false,
-		createBranch: false,
-		checkout: false,
-		cherrypick: false,
-		revert: false,
-		drop: false,
-		merge: false,
-		rebase: false,
-		reset: false,
+		addTag: true,
+		createBranch: true,
+		checkout: true,
+		cherrypick: true,
+		revert: true,
+		drop: true,
+		merge: true,
+		rebase: true,
+		reset: true,
 		copyHash: true,
 		copySubject: true,
 	},
 	remoteBranch: {
-		checkout: false,
+		checkout: true,
+		// Deleting a remote branch, fetching one into a local branch and pulling one are remote writes, and
+		// the commands behind them are still refused; the menu entry would be a click that goes nowhere.
 		delete: false,
 		fetch: false,
-		merge: false,
+		merge: true,
 		pull: false,
 		createPullRequest: false,
 		createArchive: false,
@@ -117,24 +123,25 @@ export const ENABLED_CONTEXT_ACTIONS: ContextMenuActionsVisibility = {
 		copyName: true,
 	},
 	stash: {
-		apply: false,
-		createBranch: false,
-		pop: false,
-		drop: false,
+		apply: true,
+		createBranch: true,
+		pop: true,
+		drop: true,
 		copyName: true,
 		copyHash: true,
 	},
 	tag: {
 		viewDetails: true,
-		delete: false,
+		delete: true,
+		// Pushing a tag on its own is a remote write with no handler yet; adding one may push it already.
 		push: false,
 		createArchive: false,
 		copyName: true,
 	},
 	uncommittedChanges: {
-		stash: false,
-		reset: false,
-		clean: false,
+		stash: true,
+		reset: true,
+		clean: true,
 		openSourceControlView: false,
 	},
 	fileView: {

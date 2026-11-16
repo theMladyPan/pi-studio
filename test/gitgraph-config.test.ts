@@ -2,27 +2,20 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BRANCH_COLOURS, DEFAULT_CONFIG, DEFAULT_READ_FLAGS, ENABLED_CONTEXT_ACTIONS, buildViewConfig } from "../server/git/gitgraph/config.ts";
 
-test("the view opens read-only: nothing that writes to a checkout or a remote is offered", () => {
-	// The page draws its menus from these flags before the commands behind them exist. A true here is a
-	// menu entry that does nothing, so the whole writing half starts off.
-	for (const action of ["checkout", "rename", "delete", "merge", "rebase", "push", "createPullRequest", "createArchive"] as const) {
+test("the menus still hide every action this tab cannot run", () => {
+	// These are the entries whose command `dispatch.ts` still answers with "This tab cannot do that
+	// yet.": a remote write, an archive, or a terminal. `test/gitgraph-actions.test.ts` holds the other
+	// half of this decision, that nothing enabled here is refused there.
+	for (const action of ["push", "createPullRequest", "createArchive"] as const) {
 		assert.equal(ENABLED_CONTEXT_ACTIONS.branch[action], false, `branch.${action}`);
 	}
-	for (const action of ["addTag", "createBranch", "checkout", "cherrypick", "revert", "drop", "merge", "rebase", "reset"] as const) {
-		assert.equal(ENABLED_CONTEXT_ACTIONS.commit[action], false, `commit.${action}`);
-	}
-	for (const action of ["checkout", "delete", "fetch", "merge", "pull", "createPullRequest", "createArchive"] as const) {
+	for (const action of ["delete", "fetch", "pull", "createPullRequest", "createArchive"] as const) {
 		assert.equal(ENABLED_CONTEXT_ACTIONS.remoteBranch[action], false, `remoteBranch.${action}`);
 	}
-	for (const action of ["apply", "createBranch", "pop", "drop"] as const) {
-		assert.equal(ENABLED_CONTEXT_ACTIONS.stash[action], false, `stash.${action}`);
-	}
-	for (const action of ["delete", "push", "createArchive"] as const) {
+	for (const action of ["push", "createArchive"] as const) {
 		assert.equal(ENABLED_CONTEXT_ACTIONS.tag[action], false, `tag.${action}`);
 	}
-	for (const action of ["stash", "reset", "clean", "openSourceControlView"] as const) {
-		assert.equal(ENABLED_CONTEXT_ACTIONS.uncommittedChanges[action], false, `uncommittedChanges.${action}`);
-	}
+	assert.equal(ENABLED_CONTEXT_ACTIONS.uncommittedChanges.openSourceControlView, false);
 	assert.equal(ENABLED_CONTEXT_ACTIONS.fileView.viewIssue, false);
 });
 
@@ -52,9 +45,9 @@ test("twelve branch colours, all of them distinct", () => {
 
 test("a config built for one view does not share its menus with the next", () => {
 	const first = buildViewConfig();
-	first.contextMenuActionsVisibility.branch.delete = true;
-	assert.equal(buildViewConfig().contextMenuActionsVisibility.branch.delete, false);
-	assert.equal(ENABLED_CONTEXT_ACTIONS.branch.delete, false);
+	first.contextMenuActionsVisibility.branch.delete = false;
+	assert.equal(buildViewConfig().contextMenuActionsVisibility.branch.delete, true);
+	assert.equal(ENABLED_CONTEXT_ACTIONS.branch.delete, true);
 	// Everything else is the same view: the copy is of the menus, not of the settings.
 	assert.equal(first.initialLoadCommits, DEFAULT_CONFIG.initialLoadCommits);
 	assert.equal(first.graph, DEFAULT_CONFIG.graph);

@@ -119,20 +119,10 @@ test("loadRepoInfo and loadCommits echo the refreshId the page is waiting for", 
 	assert.equal(rows[1].message, "first");
 });
 
-test("a write or a terminal is answered with one sentence and no git call at all", async () => {
-	const reply = await one({
-		command: "addTag",
-		repo,
-		tagName: "a-tag-this-tab-must-not-make",
-		commitHash: git(repo, "rev-parse", "HEAD"),
-		type: 0,
-		message: "made by a tab that cannot make tags",
-		pushToRemote: false,
-		force: false,
-	});
+test("a command this tab still has no way to run is answered with one sentence and no git call at all", async () => {
+	const reply = await one({ command: "createArchive", repo, ref: "HEAD" });
 	assert.equal(reply.error, "This tab cannot do that yet.");
-	assert.equal(git(repo, "tag"), "", "the tag must not exist: the command is answered, not run");
-	for (const command of ["fetch", "checkoutBranch", "openTerminal", "pushStash", "resetToCommit"]) {
+	for (const command of ["openTerminal", "pushBranch", "pullBranch", "createPullRequest", "exportRepoConfig", "deleteRemoteBranch"]) {
 		assert.equal(dispatch.UNAVAILABLE[command], "This tab cannot do that yet.");
 	}
 });

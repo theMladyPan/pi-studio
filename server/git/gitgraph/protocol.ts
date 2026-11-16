@@ -529,7 +529,7 @@ export type GitGraphResponseMessage =
  */
 export type GitGraphRequest =
 	| { command: "addRemote"; repo: string; name: string; url: string; pushUrl: string | null; fetch: boolean }
-	| { command: "addTag"; repo: string; tagName: string; commitHash: string; type: 0 | 1; message: string; pushToRemote: boolean; force: boolean }
+	| { command: "addTag"; repo: string; tagName: string; commitHash: string; type: 0 | 1; message: string; pushToRemote: string | null; force: boolean }
 	| { command: "applyStash"; repo: string; selector: string; reinstateIndex: boolean }
 	| { command: "branchFromStash"; repo: string; selector: string; branchName: string }
 	| { command: "checkoutBranch"; repo: string; branchName: string; remoteBranch: string | null; pullAfterwards: CheckoutPull | null }
@@ -949,6 +949,10 @@ function readRequest(command: string, raw: Fields): GitGraphRequest | null {
 		case "addTag": {
 			const type = field(raw, "type");
 			if (!isOneOf(TAG_TYPES, type)) throw new RequestError("type must be 0 for an annotated tag or 1 for a lightweight one");
+			// The page's "Push to remote" field is the remote it named, or `null` for none: a repository with
+			// one remote sends that remote's name, and one with several sends the one the human picked.
+			const pushToRemote = optionalText(raw, "pushToRemote", 128);
+			if (pushToRemote !== null && !isRemoteName(pushToRemote)) throw new RequestError("pushToRemote is not a name git accepts as a remote");
 			return {
 				command,
 				repo: repoRoot(raw),
@@ -956,7 +960,7 @@ function readRequest(command: string, raw: Fields): GitGraphRequest | null {
 				commitHash: hash(raw, "commitHash"),
 				type,
 				message: text(raw, "message", 8192),
-				pushToRemote: flag(raw, "pushToRemote"),
+				pushToRemote,
 				force: flag(raw, "force"),
 			};
 		}
