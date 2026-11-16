@@ -237,11 +237,16 @@ function prunedRepos(value: unknown): Record<string, GitRepoState> {
 /** A whole state file, read as the defaults plus whatever the file can still vouch for. */
 function stateFrom(value: unknown): GitGraphViewState {
 	const raw = plain(value);
+	const repos = prunedRepos(raw.repos);
+	const lastActiveRepo = stringOrNull(raw.lastActiveRepo);
 	return {
 		globalViewState: globalViewStateFrom(raw.globalViewState),
 		workspaceViewState: workspaceViewStateFrom(raw.workspaceViewState),
-		repos: prunedRepos(raw.repos),
+		repos,
 		codeReviews: prunedReviews(raw.codeReviews, Date.now()),
+		// A repository the human was last looking at is the one the dropdown opens on, and a folder that
+		// is gone or was never listed can never be opened again, so the answer is then "nothing".
+		lastActiveRepo: lastActiveRepo !== null && lastActiveRepo in repos ? lastActiveRepo : null,
 	};
 }
 

@@ -25,9 +25,15 @@ import {
 	repoPath,
 } from "./validate.ts";
 import { globalViewStateFrom, repoStateFrom, workspaceViewStateFrom } from "./state.ts";
-import type { RepoEntry } from "./repos.ts";
 
 // ---------- one commit and what it carries ----------
+
+/**
+ * The hash the graph draws for the uncommitted changes row. It is not a commit and has no id, so the
+ * page and this daemon spell it the one way git never would: a command that names `*` is a command
+ * about the working tree.
+ */
+export const UNCOMMITTED = "*";
 
 /** A signature git checked, drawn beside the author of a signed commit. */
 export type GitSignature = { key: string; signer: string; status: string };
@@ -408,6 +414,8 @@ export type GitGraphViewState = {
 	workspaceViewState: WorkspaceViewState;
 	repos: Record<string, GitRepoState>;
 	codeReviews: Record<string, Record<string, GitCodeReview>>;
+	/** The repository the human was last looking at, so the dropdown opens where they left it. */
+	lastActiveRepo: string | null;
 };
 
 /** Where the page should go once it has loaded, and the command it should run on arrival. */
@@ -417,14 +425,37 @@ export type GitLoadViewTo = {
 	runCommandOnLoad?: "fetch";
 };
 
-/** What the page is handed before it draws anything, besides the settings above. */
-export type GitGraphInitPayload = {
+/**
+ * What the page is handed once it is allowed to draw, which is everything except the three state
+ * objects it keeps for itself.
+ *
+ * `repos` is keyed by real path and holds a repository's remembered arrangement, because the page
+ * reads the arrangement (which branches it showed, how wide the panes are) before it asks git
+ * anything: a repository it has never seen is listed with the defaults.
+ */
+export type GitGraphInitialState = {
 	config: GitGraphViewConfig;
 	lastActiveRepo: string | null;
 	loadViewTo: GitLoadViewTo | null;
-	repos: Record<string, RepoEntry>;
+	repos: Record<string, GitRepoState>;
 	loadRepoInfoRefreshId: number;
 	loadCommitsRefreshId: number;
+};
+
+/**
+ * The answer to `GET /git/init`: whether this tab can draw a graph at all, and the three globals the
+ * bundled page reads the moment it runs.
+ *
+ * A page that cannot draw says why in `reason` rather than failing the request, because "the extension
+ * is not installed" and "this workspace has no repository" are things the human can act on, and a 500
+ * in a tab is not.
+ */
+export type GitGraphInitPayload = {
+	available: boolean;
+	reason: string | null;
+	initialState: GitGraphInitialState | null;
+	globalState: GlobalViewState | null;
+	workspaceState: WorkspaceViewState | null;
 };
 
 /**
@@ -434,13 +465,13 @@ export type GitGraphInitPayload = {
  * answers the text itself and the view draws it. `binary` says the bytes are not text at all, and
  * `truncated` says the file was longer than the view will read in one go.
  */
-export type GitDiffViewPayload = {
+export type GitTextView = {
 	title: string;
 	kind: "diff" | "file";
 	content: string;
 	filePath: string;
-	truncated?: boolean;
-	binary?: boolean;
+	truncated: boolean;
+	binary: boolean;
 };
 
 // ---------- what the daemon answers ----------

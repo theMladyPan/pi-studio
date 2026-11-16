@@ -34,6 +34,7 @@ import { onSkill } from "./routes/board/skill.ts";
 import { onCardPdf } from "./routes/board/pdf.ts";
 import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onThreadCollect, onUndo } from "./routes/board/lifecycle.ts";
 import { onShell } from "./routes/board/shell.ts";
+import { onGitInit, onGitMsg, onGitPage, onGitVendor } from "./routes/gitgraph.ts";
 import { onCommand } from "./routes/board/command.ts";
 import { commandList, forMenu } from "./commands.ts";
 import { workdirOf } from "./worktrees/make.ts";
@@ -170,9 +171,10 @@ export const server = createServer((req, res) => {
 		// Static assets carry no session data, so the token only guards the data routes.
 		if (req.method === "GET") {
 			// The link pi prints is traded for a cookie and sent back without the token. A wrong token earns
-			// neither, and the page is served as before.
+			// neither, and the page is served as before. A Git Graph page is one of the pages this trades for:
+			// it too is opened from a printed link, and its commands then travel on the cookie that link left.
 			const asked = url.searchParams.get("token");
-			if (asked && (url.pathname === "/" || /^\/w\/[0-9a-f]{6,64}\/?$/.test(url.pathname)) && callerOf(asked)?.human) {
+			if (asked && (url.pathname === "/" || /^\/w\/[0-9a-f]{6,64}\/?$/.test(url.pathname) || /^\/git\/[0-9a-f]{6,64}\/?$/.test(url.pathname)) && callerOf(asked)?.human) {
 				url.searchParams.delete("token");
 				res.writeHead(303, {
 					"Set-Cookie": sessionCookie(createSession(), req.headers["x-forwarded-proto"]),
@@ -204,6 +206,19 @@ export const server = createServer((req, res) => {
 			// A workspace's board is the same page for every folder; the id in the path tells it which.
 			if (/^\/w\/[0-9a-f]{6,64}\/?$/.test(url.pathname)) {
 				serveStatic(res, "index.html", "text/html; charset=utf-8");
+				return;
+			}
+			// The Git Graph page and the bundle it runs are here rather than behind the caller check for one
+			// reason: neither carries data. The page is the same document for every workspace, and the vendor
+			// bytes are the human's own installed extension — what a tab does with them is asked for at
+			// `/git/init` and `/git/msg`, and both of those are behind the token.
+			if (/^\/git\/[0-9a-f]{6,64}\/?$/.test(url.pathname)) {
+				onGitPage(res);
+				return;
+			}
+			const vendor = /^\/gitgraph\/vendor\/(out\.min\.(?:js|css))$/.exec(url.pathname);
+			if (vendor) {
+				onGitVendor(res, vendor[1]);
 				return;
 			}
 		}
@@ -477,6 +492,15 @@ export const server = createServer((req, res) => {
 			});
 			return;
 		}
+		// The three globals the Git Graph page reads before it draws, and whether it may draw at all. It is
+		// behind the caller check and the workspace check like `/state`, because what it hands out is a path
+		// on this machine and the repositories the page is then allowed to read.
+		if (req.method === "GET" && url.pathname === "/git/init") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onGitInit(res, board);
+			return;
+		}
 		// What earlier trash actions left behind: a worktree, a folder or a branch no thread answers for. Read
 		// per call, because it is git's answer and not the board's.
 		if (req.method === "GET" && url.pathname === "/fragments") {
@@ -561,6 +585,9 @@ export const server = createServer((req, res) => {
 				// The two instruction files a workspace keeps beside its code. The human's page writes them,
 				// so neither is in THREAD_ROUTES: a thread reads its instructions, it does not set them.
 				"/workspace-prompt": onWorkspacePromptWrite,
+				// One message from the Git Graph page, answered with the replies it earned. Not in THREAD_ROUTES:
+				// this route runs git in the human's checkouts, and a child reports in its last message instead.
+				"/git/msg": onGitMsg,
 			};
 			const handler = routing[url.pathname];
 			if (handler) {

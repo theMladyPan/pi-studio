@@ -21,8 +21,8 @@ import { fileURLToPath } from "node:url";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const publicDir = join(repo, "public");
-/** The file `index.html` loads. Everything the client needs has to be reachable from it. */
-const clientEntry = join(publicDir, "client", "board.js");
+/** The files a page loads itself. Everything a page needs has to be reachable from one of them. */
+const clientEntries = [join(publicDir, "client", "board.js"), join(publicDir, "client", "gitgraph", "host.js")];
 /** Directories in the order they are walked. A name that does not exist is skipped, not an error. */
 const roots = ["server.mjs", "server.ts", "server", "public", "bin"];
 const skip = new Set([".git", ".agents", ".history", "node_modules"]);
@@ -133,8 +133,12 @@ function main() {
 	const served = serveTable(files);
 	said(served !== null, "the static allowlist was found", served ? relative(repo, served.file) : "no `const statics = {` anywhere");
 
-	const reached = clientGraph(clientEntry);
-	said(reached.size > 0, "the client entry was reached", `${reached.size} modules from ${relative(repo, clientEntry)}`);
+	const reached = new Set(clientEntries.flatMap((entry) => [...clientGraph(entry)]));
+	said(
+		reached.size > 0,
+		"every client entry was reached",
+		`${reached.size} modules from ${clientEntries.map((entry) => relative(repo, entry)).join(", ")}`,
+	);
 
 	// One rule serves every client module: the daemon accepts `/client/**/*.js` and nothing else. The same
 	// shape is asked of each module the page reaches, so a module outside it is a blank board waiting.
