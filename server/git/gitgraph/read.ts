@@ -251,7 +251,11 @@ export type CommitOptions = {
 	branches: readonly string[] | null;
 	remotes: readonly string[];
 	hideRemotes: readonly string[];
-	stashes: boolean;
+	/**
+	 * The stashes the page already holds, so the commits that belong to one are marked with the selector
+	 * it knows, or `null` for a page that knows nothing about them yet: the list is then read here.
+	 */
+	stashes: readonly GitStash[] | null;
 };
 
 /**
@@ -337,7 +341,8 @@ export async function getCommits(repo: string, options: CommitOptions): Promise<
 
 	const signatureFields = DEFAULT_READ_FLAGS.showSignatureStatus ? `${LOG_FIELD}%G?${LOG_FIELD}%GS${LOG_FIELD}%GK` : "";
 	const format = `--format=%H${LOG_FIELD}%P${LOG_FIELD}%an${LOG_FIELD}%ae${LOG_FIELD}%at${LOG_FIELD}%s${signatureFields}${LOG_RECORD}`;
-	const stashes = options.stashes ? await readStashes(repo) : { ok: true as const, value: [] as GitStash[] };
+	const stashes: ReadResult<GitStash[]> =
+		options.stashes !== null ? { ok: true, value: [...options.stashes] } : await readStashes(repo);
 	const stashCommits = stashes.ok ? stashes.value.map((stash) => stash.baseHash) : [];
 	const result = await gitText(repo, [
 		"log",

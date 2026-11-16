@@ -18,7 +18,6 @@ import {
 	isRemoteUrl,
 	isRevision,
 	isStashSelector,
-	repoDirList,
 	repoPath,
 } from "../server/git/gitgraph/validate.ts";
 
@@ -96,12 +95,6 @@ test("a path inside the repository cannot leave it", () => {
 	assert.equal(repoPath("a\u0000b").ok, false);
 	assert.equal(repoPath("").ok, false);
 	assert.equal(repoPath(42).ok, false);
-	assert.deepEqual(repoDirList(["."]), { ok: true, value: ["."] });
-	assert.deepEqual(repoDirList(["src", "docs/old"]), { ok: true, value: ["src", "docs/old"] });
-	assert.equal(repoDirList([]).ok, false);
-	assert.equal(repoDirList([".."]).ok, false);
-	assert.equal(repoDirList(["/etc"]).ok, false);
-	assert.equal(repoDirList("src").ok, false);
 });
 
 test("a path is only inside the repository when the kernel says so, which is what stops a symlink", () => {
@@ -156,7 +149,7 @@ const validRequests: Array<Record<string, unknown> & { command: string }> = [
 	},
 	{ command: "checkoutCommit", repo: "/repo", commitHash: "abc1234" },
 	{ command: "cherrypickCommit", repo: "/repo", commitHash: "abc1234", parentIndex: 0, recordOrigin: false, noCommit: false },
-	{ command: "cleanUntrackedFiles", repo: "/repo", directories: ["src", "docs"] },
+	{ command: "cleanUntrackedFiles", repo: "/repo", directories: true },
 	{ command: "commitDetails", repo: "/repo", commitHash: "abc1234", hasParents: true, stash: null, avatarEmail: null, refresh: false },
 	{
 		command: "commitDetails",
@@ -191,9 +184,6 @@ const validRequests: Array<Record<string, unknown> & { command: string }> = [
 		sourceOwner: "me",
 		sourceRepo: "repo",
 		sourceBranch: "feat/x",
-		destRemote: "upstream",
-		destOwner: "you",
-		destRepo: "repo",
 		push: false,
 	},
 	{ command: "deleteBranch", repo: "/repo", branchName: "feat/x", forceDelete: true, deleteOnRemotes: null },
@@ -201,7 +191,7 @@ const validRequests: Array<Record<string, unknown> & { command: string }> = [
 	{ command: "deleteRemote", repo: "/repo", name: "origin" },
 	{ command: "deleteRemoteBranch", repo: "/repo", branchName: "main", remote: "origin" },
 	{ command: "deleteTag", repo: "/repo", tagName: "v1.0.0", deleteOnRemote: "origin" },
-	{ command: "deleteUserDetails", repo: "/repo", location: "local" },
+	{ command: "deleteUserDetails", repo: "/repo", name: true, email: false, location: "local" },
 	{ command: "dropCommit", repo: "/repo", commitHash: "abc1234" },
 	{ command: "dropStash", repo: "/repo", selector: "stash@{0}" },
 	{ command: "editRemote", repo: "/repo", nameOld: "origin", nameNew: "upstream", urlOld: "https://example.invalid/a.git", urlNew: null, pushUrlOld: null, pushUrlNew: null },
@@ -225,7 +215,7 @@ const validRequests: Array<Record<string, unknown> & { command: string }> = [
 		commitOrdering: "date",
 		remotes: ["origin"],
 		hideRemotes: [],
-		stashes: true,
+		stashes: null,
 	},
 	{
 		command: "loadCommits",
@@ -240,12 +230,17 @@ const validRequests: Array<Record<string, unknown> & { command: string }> = [
 		commitOrdering: "topo",
 		remotes: [],
 		hideRemotes: ["origin"],
-		stashes: false,
+		stashes: [
+			{ selector: "stash@{0}", baseHash: "abc1234", untrackedFilesHash: null },
+			{ selector: "stash@{1}", baseHash: "def5678", untrackedFilesHash: "9876fedc" },
+		],
 	},
 	{ command: "loadConfig", repo: "/repo", remotes: ["origin"] },
 	{ command: "loadRepoInfo", repo: "/repo", refreshId: 1, showRemoteBranches: true, showStashes: true, hideRemotes: [] },
 	{ command: "loadRepos", check: true },
 	{ command: "merge", repo: "/repo", obj: "abc1234", actionOn: "Commit", createNewCommit: true, squash: false, noCommit: false },
+	// The page's remote-tracking branch menu merges a `remotes/origin/x` ref and says so in one word.
+	{ command: "merge", repo: "/repo", obj: "remotes/origin/x", actionOn: "Remote-tracking Branch", createNewCommit: false, squash: true, noCommit: true },
 	{ command: "openExtensionSettings" },
 	{ command: "openExternalDirDiff", repo: "/repo", fromHash: "abc1234", toHash: "def5678", isGui: true },
 	{ command: "openExternalUrl", url: "https://example.invalid/issue/1" },
@@ -266,6 +261,7 @@ const validRequests: Array<Record<string, unknown> & { command: string }> = [
 	{ command: "pushStash", repo: "/repo", message: "wip", includeUntracked: true },
 	{ command: "pushTag", repo: "/repo", tagName: "v1.0.0", remotes: ["origin"] },
 	{ command: "rebase", repo: "/repo", obj: "feat/x", actionOn: "Branch", ignoreDate: true, interactive: false },
+	{ command: "rebase", repo: "/repo", obj: "remotes/origin/x", actionOn: "Remote-tracking Branch", ignoreDate: false, interactive: true },
 	{ command: "renameBranch", repo: "/repo", oldName: "feat/x", newName: "feat/y" },
 	{ command: "resetToCommit", repo: "/repo", commit: "abc1234", resetMode: "hard" },
 	{ command: "revertCommit", repo: "/repo", commitHash: "abc1234", parentIndex: 0 },
@@ -295,6 +291,163 @@ test("every command the page can send is covered by a request that parses", () =
 	// command the view draws a menu entry for and cannot run.
 	const covered = new Set(validRequests.map((request) => request.command));
 	assert.equal(covered.size, 60);
+});
+
+// ---------- the messages the bundled page really sends ----------
+
+/**
+ * `loadCommits` as `out.min.js` builds it, field for field, with the values a page in that state holds.
+ * Copied from the bundle rather than from the union, because a literal written out of the union proves
+ * only that the union agrees with itself — which is exactly how `stashes: true` survived a sweep.
+ */
+const bundleLoadCommits = {
+	command: "loadCommits",
+	repo: "/repo",
+	refreshId: 3,
+	branches: null,
+	maxCommits: 300,
+	showTags: true,
+	showRemoteBranches: true,
+	includeCommitsMentionedByReflogs: false,
+	onlyFollowFirstParent: false,
+	commitOrdering: "author-date",
+	remotes: ["origin"],
+	hideRemotes: [],
+	stashes: [{ selector: "stash@{0}", baseHash: "abc1234", untrackedFilesHash: null }],
+};
+
+/**
+ * The messages the page builds for the commands this daemon answers, each one copied from the bundle's
+ * own call site: `requestLoadCommits`, `requestLoadRepoInfo`, `requestCommitDetails`,
+ * `requestCommitComparison`, `requestLoadConfig`, `getTagContextMenuActions`, `saveRepoState`,
+ * `deleteUserDetails`, the two `createPullRequest` sites, `cleanUntrackedFiles`, `mergeAction` and
+ * `rebaseAction`. They are the evidence the union is measured against, so they are literals.
+ */
+const bundleRequests: Array<Record<string, unknown> & { command: string }> = [
+	bundleLoadCommits,
+	{ command: "loadRepoInfo", repo: "/repo", refreshId: 2, showRemoteBranches: true, showStashes: true, hideRemotes: [] },
+	// A stash row's details carry the stash itself; every other row sends `null`.
+	{ command: "commitDetails", repo: "/repo", commitHash: "abc1234", hasParents: true, stash: null, avatarEmail: null, refresh: false },
+	{ command: "commitDetails", repo: "/repo", commitHash: "def5678", hasParents: false, stash: { selector: "stash@{0}", baseHash: "def5678", untrackedFilesHash: null }, avatarEmail: null, refresh: true },
+	{ command: "compareCommits", repo: "/repo", commitHash: "abc1234", compareWithHash: "def5678", fromHash: "def5678", toHash: "abc1234", refresh: false },
+	{ command: "loadConfig", repo: "/repo", remotes: ["origin"] },
+	{ command: "tagDetails", repo: "/repo", tagName: "v1", commitHash: "abc1234" },
+	{
+		command: "setRepoState",
+		repo: "/repo",
+		state: {
+			cdvDivider: 0.5,
+			cdvHeight: 250,
+			columnWidths: [300, 0, 200, 100],
+			commitOrdering: "default",
+			fileViewType: 0,
+			hideRemotes: [],
+			includeCommitsMentionedByReflogs: 0,
+			issueLinkingConfig: null,
+			lastImportAt: 0,
+			name: null,
+			onlyFollowFirstParent: 0,
+			onRepoLoadShowCheckedOutBranch: 0,
+			onRepoLoadShowSpecificBranches: null,
+			pullRequestConfig: null,
+			showRemoteBranches: true,
+			showRemoteBranchesV2: 0,
+			showStashes: 0,
+			showTags: 0,
+			workspaceFolderIndex: null,
+		},
+	},
+	// The page says which of the two user details it is removing, and to which scope.
+	{ command: "deleteUserDetails", repo: "/repo", name: true, email: false, location: "global" },
+	// The destination is not beside the source: it is inside the settings object the page sends whole.
+	{
+		command: "createPullRequest",
+		repo: "/repo",
+		config: {
+			provider: 2,
+			custom: null,
+			hostRootUrl: "https://github.com",
+			sourceOwner: "me",
+			sourceRepo: "repo",
+			sourceRemote: "origin",
+			destOwner: "you",
+			destRepo: "repo",
+			destRemote: "upstream",
+			destBranch: "main",
+		},
+		sourceRemote: "origin",
+		sourceOwner: "me",
+		sourceRepo: "repo",
+		sourceBranch: "feat/x",
+		push: false,
+	},
+	// One checkbox: whether `git clean` descends into untracked directories.
+	{ command: "cleanUntrackedFiles", repo: "/repo", directories: true },
+	{ command: "merge", repo: "/repo", obj: "remotes/origin/feat", actionOn: "Remote-tracking Branch", createNewCommit: true, squash: false, noCommit: false },
+	{ command: "rebase", repo: "/repo", obj: "remotes/origin/feat", actionOn: "Remote-tracking Branch", ignoreDate: false, interactive: false },
+];
+
+test("the messages the bundled page really sends are the shapes this module reads", () => {
+	for (const request of bundleRequests) {
+		const parsed = parseRequest(request);
+		assert.equal(parsed.ok, true, `${request.command}: ${parsed.ok ? "" : parsed.error}`);
+	}
+});
+
+test("the stashes a page already holds are read as stashes, and nothing else is", () => {
+	const read = parseRequest(bundleLoadCommits);
+	assert.equal(read.ok, true, read.ok ? "" : read.error);
+	if (read.ok && read.request.command === "loadCommits") {
+		assert.deepEqual(read.request.stashes, [{ selector: "stash@{0}", baseHash: "abc1234", untrackedFilesHash: null }]);
+	}
+	// `null` is a page that knows of none, which is a different thing from a list of none.
+	const none = parseRequest({ ...bundleLoadCommits, stashes: null });
+	assert.equal(none.ok, true, none.ok ? "" : none.error);
+	if (none.ok && none.request.command === "loadCommits") assert.equal(none.request.stashes, null);
+
+	const flag = parseRequest({ ...bundleLoadCommits, stashes: true });
+	assert.equal(flag.ok, false);
+	assert.equal(flag.ok ? "" : flag.error, "stashes must be a list of stashes or null");
+	const spelled = parseRequest({ ...bundleLoadCommits, stashes: [{ selector: "main", baseHash: "abc1234", untrackedFilesHash: null }] });
+	assert.equal(spelled.ok ? "" : spelled.error, "stashes.selector must be a stash selector such as stash@{0}");
+	const bare = parseRequest({ ...bundleLoadCommits, stashes: ["stash@{0}"] });
+	assert.equal(bare.ok ? "" : bare.error, "stashes must be a stash");
+	const missing = parseRequest({ ...bundleLoadCommits, stashes: undefined });
+	assert.equal(missing.ok, true, "a page that omits the field knows nothing about it");
+});
+
+test("a request that leaves out a field the page always sends is refused by name", () => {
+	const unflagged = parseRequest({ command: "cleanUntrackedFiles", repo: "/repo", directories: ["src"] });
+	assert.equal(unflagged.ok ? "" : unflagged.error, "directories must be true or false");
+	const named = parseRequest({ command: "deleteUserDetails", repo: "/repo", location: "local" });
+	assert.equal(named.ok ? "" : named.error, "name is missing");
+	const settings = parseRequest({ command: "createPullRequest", repo: "/repo", sourceRemote: "origin", sourceOwner: "me", sourceRepo: "repo", sourceBranch: "feat/x", push: false });
+	assert.equal(settings.ok ? "" : settings.error, "config is missing");
+	const target = parseRequest({ command: "merge", repo: "/repo", obj: "feat/x", actionOn: "Remote-tracking", createNewCommit: false, squash: false, noCommit: false });
+	assert.equal(target.ok ? "" : target.error, "actionOn must be Branch, Remote-tracking Branch or Commit");
+});
+
+// ---------- what this daemon hands out is what comes back ----------
+
+test("a stash's untracked files are asked for at the revision this daemon listed them under", () => {
+	// `loadRepoInfo` names a stash's untracked files as `<stash hash>^3`, and the page sends that same
+	// string back when a human opens one of them: it is a revision, so it is not a hash, and refusing it
+	// would break the one file a stash row's untracked list is for.
+	const stashHash = "abc1234abc1234abc1234abc1234abc1234abc1234";
+	const untracked = `${stashHash}^3`;
+	const listed = parseRequest({ ...bundleLoadCommits, stashes: [{ selector: "stash@{0}", baseHash: stashHash, untrackedFilesHash: untracked }] });
+	assert.equal(listed.ok, true, listed.ok ? "" : listed.error);
+	for (const [command, request] of [
+		["viewDiff", { command: "viewDiff", repo: "/repo", fromHash: untracked, toHash: untracked, oldFilePath: "a.txt", newFilePath: "a.txt", type: "U" }],
+		["viewFileAtRevision", { command: "viewFileAtRevision", repo: "/repo", hash: untracked, filePath: "a.txt" }],
+		["viewDiffWithWorkingFile", { command: "viewDiffWithWorkingFile", repo: "/repo", hash: untracked, filePath: "a.txt" }],
+		["openFile", { command: "openFile", repo: "/repo", hash: untracked, filePath: "a.txt" }],
+	] as Array<[string, Record<string, unknown>]>) {
+		assert.equal(parseRequest(request).ok, true, `${command} should read the revision a stash row listed`);
+	}
+	// A revision that is neither a commit id nor a stash's third parent is still refused.
+	const invented = parseRequest({ command: "viewFileAtRevision", repo: "/repo", hash: `${stashHash}^2`, filePath: "a.txt" });
+	assert.equal(invented.ok ? "" : invented.error, "hash is not a commit id");
 });
 
 test("a command that writes to a checkout refuses an option dressed as a value", () => {
@@ -333,8 +486,6 @@ test("a file command cannot name a file outside the repository", () => {
 	}
 	const diff = parseRequest({ command: "viewDiff", repo: "/repo", fromHash: "abc1234", toHash: "def5678", oldFilePath: "/etc/passwd", newFilePath: "a.ts", type: "M" });
 	assert.equal(diff.ok, false);
-	const clean = parseRequest({ command: "cleanUntrackedFiles", repo: "/repo", directories: [".."] });
-	assert.equal(clean.ok, false);
 	const review = parseRequest({ command: "startCodeReview", repo: "/repo", id: "abc1234", commitHash: "abc1234", compareWithHash: null, files: ["../../etc/passwd"], lastViewedFile: null });
 	assert.equal(review.ok, false);
 });
@@ -343,7 +494,7 @@ test("user details are only ever written to a repository or to the human's own c
 	const edited = parseRequest({ command: "editUserDetails", repo: "/repo", name: "A", email: "a@b.c", location: "system", deleteLocalName: false, deleteLocalEmail: false });
 	assert.equal(edited.ok, false);
 	assert.match(edited.ok ? "" : edited.error, /location/);
-	const deleted = parseRequest({ command: "deleteUserDetails", repo: "/repo", location: "system" });
+	const deleted = parseRequest({ command: "deleteUserDetails", repo: "/repo", name: true, email: true, location: "system" });
 	assert.equal(deleted.ok, false);
 	assert.match(deleted.ok ? "" : deleted.error, /location/);
 });

@@ -155,24 +155,6 @@ export function repoPath(rel: unknown): Checked<string> {
 	return { ok: true, value: segments.join("/") };
 }
 
-/** The directories `cleanUntrackedFiles` may clean, each one inside the repository or `.` for all of it. */
-export function repoDirList(value: unknown): Checked<string[]> {
-	if (!Array.isArray(value)) return { ok: false, error: "directories must be a list" };
-	if (value.length === 0) return { ok: false, error: "directories cannot be an empty list" };
-	if (value.length > 256) return { ok: false, error: "directories cannot hold more than 256 entries" };
-	const cleaned: string[] = [];
-	for (const entry of value) {
-		if (entry === ".") {
-			cleaned.push(".");
-			continue;
-		}
-		const checked = repoPath(entry);
-		if (!checked.ok) return checked;
-		cleaned.push(checked.value);
-	}
-	return { ok: true, value: cleaned };
-}
-
 /**
  * The real file a relative path names, and the proof that it is inside the repository.
  *

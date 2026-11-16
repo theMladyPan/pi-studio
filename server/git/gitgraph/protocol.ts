@@ -21,7 +21,6 @@ import {
 	isRepoRoot,
 	isRevision,
 	isStashSelector,
-	repoDirList,
 	repoPath,
 } from "./validate.ts";
 import { globalViewStateFrom, repoStateFrom, workspaceViewStateFrom } from "./state.ts";
@@ -536,7 +535,7 @@ export type GitGraphRequest =
 	| { command: "checkoutBranch"; repo: string; branchName: string; remoteBranch: string | null; pullAfterwards: CheckoutPull | null }
 	| { command: "checkoutCommit"; repo: string; commitHash: string }
 	| { command: "cherrypickCommit"; repo: string; commitHash: string; parentIndex: number; recordOrigin: boolean; noCommit: boolean }
-	| { command: "cleanUntrackedFiles"; repo: string; directories: string[] }
+	| { command: "cleanUntrackedFiles"; repo: string; directories: boolean }
 	| { command: "commitDetails"; repo: string; commitHash: string; hasParents: boolean; stash: GitStash | null; avatarEmail: string | null; refresh: boolean }
 	| { command: "compareCommits"; repo: string; commitHash: string; compareWithHash: string; fromHash: string; toHash: string; refresh: boolean }
 	| { command: "copyFilePath"; repo: string; filePath: string; absolute: boolean }
@@ -546,21 +545,19 @@ export type GitGraphRequest =
 	| {
 			command: "createPullRequest";
 			repo: string;
+			/** The saved settings the dialog opened with, which is where the destination is written down. */
 			config: PullRequestConfig;
 			sourceRemote: string;
 			sourceOwner: string;
 			sourceRepo: string;
 			sourceBranch: string;
-			destRemote: string | null;
-			destOwner: string;
-			destRepo: string;
 			push: boolean;
 	  }
 	| { command: "deleteBranch"; repo: string; branchName: string; forceDelete: boolean; deleteOnRemotes: string[] | null }
 	| { command: "deleteRemote"; repo: string; name: string }
 	| { command: "deleteRemoteBranch"; repo: string; branchName: string; remote: string }
 	| { command: "deleteTag"; repo: string; tagName: string; deleteOnRemote: string | null }
-	| { command: "deleteUserDetails"; repo: string; location: (typeof CONFIG_LOCATIONS)[number] }
+	| { command: "deleteUserDetails"; repo: string; name: boolean; email: boolean; location: (typeof CONFIG_LOCATIONS)[number] }
 	| { command: "dropCommit"; repo: string; commitHash: string }
 	| { command: "dropStash"; repo: string; selector: string }
 	| { command: "editRemote"; repo: string; nameOld: string; nameNew: string; urlOld: string | null; urlNew: string | null; pushUrlOld: string | null; pushUrlNew: string | null }
@@ -583,12 +580,13 @@ export type GitGraphRequest =
 			commitOrdering: (typeof COMMIT_ORDERS)[number];
 			remotes: string[];
 			hideRemotes: string[];
-			stashes: boolean;
+			/** The stashes the page already holds, so the commits that belong to one can be marked, or `null`. */
+			stashes: GitStash[] | null;
 	  }
 	| { command: "loadConfig"; repo: string; remotes: string[] }
 	| { command: "loadRepoInfo"; repo: string; refreshId: number; showRemoteBranches: boolean; showStashes: boolean; hideRemotes: string[] }
 	| { command: "loadRepos"; check: boolean }
-	| { command: "merge"; repo: string; obj: string; actionOn: "Branch" | "Commit"; createNewCommit: boolean; squash: boolean; noCommit: boolean }
+	| { command: "merge"; repo: string; obj: string; actionOn: MergeTarget; createNewCommit: boolean; squash: boolean; noCommit: boolean }
 	| { command: "openExtensionSettings" }
 	| { command: "openExternalDirDiff"; repo: string; fromHash: string; toHash: string; isGui: boolean }
 	| { command: "openExternalUrl"; url: string }
@@ -608,7 +606,7 @@ export type GitGraphRequest =
 	  }
 	| { command: "pushStash"; repo: string; message: string; includeUntracked: boolean }
 	| { command: "pushTag"; repo: string; tagName: string; remotes: string[] }
-	| { command: "rebase"; repo: string; obj: string; actionOn: "Branch" | "Commit"; ignoreDate: boolean; interactive: boolean }
+	| { command: "rebase"; repo: string; obj: string; actionOn: MergeTarget; ignoreDate: boolean; interactive: boolean }
 	| { command: "renameBranch"; repo: string; oldName: string; newName: string }
 	| { command: "resetToCommit"; repo: string; commit: string; resetMode: (typeof RESET_MODES)[number] }
 	| { command: "revertCommit"; repo: string; commitHash: string; parentIndex: number }
@@ -626,6 +624,12 @@ export type GitGraphRequest =
 
 /** What `checkoutBranch` also does when the human asked for the pull in the same dialog. */
 export type CheckoutPull = { branchName: string; remote: string; createNewCommit: boolean; squash: boolean };
+
+/**
+ * The thing a merge or a rebase acts on, in the three words the page's menus pass along: the words are
+ * the page's own, and it builds its progress sentence out of them.
+ */
+export type MergeTarget = "Branch" | "Remote-tracking Branch" | "Commit";
 
 /** Whether a request was read, or the command it named and why it was not. */
 export type ParsedRequest = { ok: true; request: GitGraphRequest } | { ok: false; command: string; error: string };
@@ -687,6 +691,24 @@ function hash(raw: Fields, key: string, allowUncommitted = false): string {
 	const value = field(raw, key);
 	if (!isHash(value, allowUncommitted)) throw new RequestError(`${key} is not a commit id`);
 	return value;
+}
+
+/**
+ * The third parent a stash keeps its untracked files in, spelled the way this daemon hands it out: the
+ * selector's commit and `^3`. It is a revision rather than a hash, so `isHash` is right to refuse it.
+ */
+function isStashParentRevision(value: unknown): value is string {
+	return typeof value === "string" && value.endsWith("^3") && isHash(value.slice(0, -2));
+}
+
+/**
+ * A commit id the page may have been handed by a stash row, where the file a human opened is the one the
+ * stash kept untracked and its revision is `<stash hash>^3`. Anything else is refused as a commit id.
+ */
+function stashHash(raw: Fields, key: string): string {
+	const value = field(raw, key);
+	if (isHash(value, true) || isStashParentRevision(value)) return value;
+	throw new RequestError(`${key} is not a commit id`);
 }
 
 /** A revision: a commit, a stash, `HEAD`, or a branch or tag name. */
@@ -806,9 +828,11 @@ function pushMode(raw: Fields, key: string): (typeof PUSH_MODES)[number] {
 }
 
 /** What an action acts on, which is what its error message says. */
-function actionOn(raw: Fields, key: string): "Branch" | "Commit" {
+function actionOn(raw: Fields, key: string): MergeTarget {
 	const value = field(raw, key);
-	if (value !== "Branch" && value !== "Commit") throw new RequestError(`${key} must be Branch or Commit`);
+	if (value !== "Branch" && value !== "Remote-tracking Branch" && value !== "Commit") {
+		throw new RequestError(`${key} must be Branch, Remote-tracking Branch or Commit`);
+	}
 	return value;
 }
 
@@ -854,16 +878,40 @@ function ownerName(raw: Fields, key: string): string {
 	return value;
 }
 
+/**
+ * One stash as the page spells it: the selector it is dropped by, the commit it sits on, and the commit
+ * holding the files it kept untracked. `where` is the field it arrived in, so the reason names it.
+ */
+function stashEntry(value: unknown, where: string): GitStash {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new RequestError(`${where} must be a stash`);
+	const stash = value as Fields;
+	if (!isStashSelector(stash.selector)) throw new RequestError(`${where}.selector must be a stash selector such as stash@{0}`);
+	if (!isHash(stash.baseHash)) throw new RequestError(`${where}.baseHash is not a commit id`);
+	// `untrackedFilesHash` is the one this daemon hands out as `<stash hash>^3`, so it is read back as that.
+	if (!isHash(stash.untrackedFilesHash) && !isStashParentRevision(stash.untrackedFilesHash) && stash.untrackedFilesHash !== null) {
+		throw new RequestError(`${where}.untrackedFilesHash is not a commit id`);
+	}
+	return { selector: stash.selector, baseHash: stash.baseHash, untrackedFilesHash: stash.untrackedFilesHash };
+}
+
 /** The stash a commit row is, when the page asks about one: `null` for an ordinary commit. */
 function stashOf(raw: Fields): GitStash | null {
 	const value = raw.stash;
 	if (value === undefined || value === null) return null;
 	if (typeof value !== "object" || Array.isArray(value)) throw new RequestError("stash must be a stash or null");
-	const stash = value as Fields;
-	if (!isStashSelector(stash.selector)) throw new RequestError("stash.selector must be a stash selector such as stash@{0}");
-	if (!isHash(stash.baseHash)) throw new RequestError("stash.baseHash is not a commit id");
-	if (!isHash(stash.untrackedFilesHash) && stash.untrackedFilesHash !== null) throw new RequestError("stash.untrackedFilesHash is not a commit id");
-	return { selector: stash.selector, baseHash: stash.baseHash, untrackedFilesHash: stash.untrackedFilesHash };
+	return stashEntry(value, "stash");
+}
+
+/**
+ * The stashes the page already holds, which it sends with `loadCommits` so the commits that belong to one
+ * are marked with the selector it knows. `null` is not an empty list: it is a page that knows nothing
+ * about this repository's stashes yet, and the reader then asks git itself rather than seeing none.
+ */
+function stashList(raw: Fields, key: string): GitStash[] | null {
+	const value = raw[key];
+	if (value === undefined || value === null) return null;
+	if (!Array.isArray(value)) throw new RequestError(`${key} must be a list of stashes or null`);
+	return value.map((entry) => stashEntry(entry, key));
 }
 
 /** The pull the checkout branch dialog may ask for in the same breath. */
@@ -932,11 +980,9 @@ function readRequest(command: string, raw: Fields): GitGraphRequest | null {
 				recordOrigin: flag(raw, "recordOrigin"),
 				noCommit: flag(raw, "noCommit"),
 			};
-		case "cleanUntrackedFiles": {
-			const directories = repoDirList(field(raw, "directories"));
-			if (!directories.ok) throw new RequestError(`directories ${directories.error}`);
-			return { command, repo: repoRoot(raw), directories: directories.value };
-		}
+		case "cleanUntrackedFiles":
+			// The page's one checkbox: whether the clean descends into untracked directories.
+			return { command, repo: repoRoot(raw), directories: flag(raw, "directories") };
 		case "commitDetails":
 			return {
 				command,
@@ -972,9 +1018,9 @@ function readRequest(command: string, raw: Fields): GitGraphRequest | null {
 				checkout: flag(raw, "checkout"),
 				force: flag(raw, "force"),
 			};
-		case "createPullRequest": {
-			const destRemote = optionalText(raw, "destRemote");
-			if (destRemote !== null && !isRemoteName(destRemote)) throw new RequestError("destRemote is not a name git accepts as a remote");
+		case "createPullRequest":
+			// The destination is not sent beside the source: the page sends the saved settings whole, and
+			// `config.destOwner`, `config.destRepo` and `config.destRemote` are where it is written down.
 			return {
 				command,
 				repo: repoRoot(raw),
@@ -983,12 +1029,8 @@ function readRequest(command: string, raw: Fields): GitGraphRequest | null {
 				sourceOwner: ownerName(raw, "sourceOwner"),
 				sourceRepo: ownerName(raw, "sourceRepo"),
 				sourceBranch: refName(raw, "sourceBranch"),
-				destRemote,
-				destOwner: ownerName(raw, "destOwner"),
-				destRepo: ownerName(raw, "destRepo"),
 				push: flag(raw, "push"),
 			};
-		}
 		case "deleteBranch": {
 			const deleteOnRemotes = raw.deleteOnRemotes === undefined || raw.deleteOnRemotes === null ? null : remoteNames(raw, "deleteOnRemotes");
 			return {
@@ -1009,7 +1051,13 @@ function readRequest(command: string, raw: Fields): GitGraphRequest | null {
 			return { command, repo: repoRoot(raw), tagName: refName(raw, "tagName"), deleteOnRemote };
 		}
 		case "deleteUserDetails":
-			return { command, repo: repoRoot(raw), location: configLocation(raw, "location") };
+			return {
+				command,
+				repo: repoRoot(raw),
+				name: flag(raw, "name"),
+				email: flag(raw, "email"),
+				location: configLocation(raw, "location"),
+			};
 		case "dropCommit":
 			return { command, repo: repoRoot(raw), commitHash: hash(raw, "commitHash") };
 		case "dropStash":
@@ -1081,7 +1129,7 @@ function readRequest(command: string, raw: Fields): GitGraphRequest | null {
 				commitOrdering: commitOrder(raw, "commitOrdering"),
 				remotes: remoteNames(raw, "remotes"),
 				hideRemotes: remoteNames(raw, "hideRemotes"),
-				stashes: flag(raw, "stashes"),
+				stashes: stashList(raw, "stashes"),
 			};
 		}
 		case "loadConfig":
@@ -1120,7 +1168,7 @@ function readRequest(command: string, raw: Fields): GitGraphRequest | null {
 		case "openExternalUrl":
 			return { command, url: externalUrl(raw, "url") };
 		case "openFile":
-			return { command, repo: repoRoot(raw), hash: hash(raw, "hash", true), filePath: insideRepo(raw, "filePath") };
+			return { command, repo: repoRoot(raw), hash: stashHash(raw, "hash"), filePath: insideRepo(raw, "filePath") };
 		case "openTerminal":
 			return { command, repo: repoRoot(raw), name: text(raw, "name", 255) };
 		case "popStash":
@@ -1205,17 +1253,17 @@ function readRequest(command: string, raw: Fields): GitGraphRequest | null {
 			return {
 				command,
 				repo: repoRoot(raw),
-				fromHash: hash(raw, "fromHash", true),
-				toHash: hash(raw, "toHash", true),
+				fromHash: stashHash(raw, "fromHash"),
+				toHash: stashHash(raw, "toHash"),
 				oldFilePath: insideRepo(raw, "oldFilePath"),
 				newFilePath: insideRepo(raw, "newFilePath"),
 				type,
 			};
 		}
 		case "viewDiffWithWorkingFile":
-			return { command, repo: repoRoot(raw), hash: hash(raw, "hash", true), filePath: insideRepo(raw, "filePath") };
+			return { command, repo: repoRoot(raw), hash: stashHash(raw, "hash"), filePath: insideRepo(raw, "filePath") };
 		case "viewFileAtRevision":
-			return { command, repo: repoRoot(raw), hash: hash(raw, "hash", true), filePath: insideRepo(raw, "filePath") };
+			return { command, repo: repoRoot(raw), hash: stashHash(raw, "hash"), filePath: insideRepo(raw, "filePath") };
 		case "viewScm":
 			return { command };
 		default:

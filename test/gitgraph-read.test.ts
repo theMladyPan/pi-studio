@@ -100,7 +100,8 @@ const graphOptions = {
 	branches: null,
 	remotes: ["origin"],
 	hideRemotes: [],
-	stashes: true,
+	// A page that has not read this repository's stashes yet sends `null` and the graph reads them here.
+	stashes: null,
 };
 
 test(
@@ -139,10 +140,31 @@ test(
 	"a repository with the stash row switched on and no stash still draws its commits",
 	withHistory(async (repo) => {
 		git(repo, "stash", "clear");
-		const log = await getCommits(repo, { ...graphOptions, stashes: true });
+		const log = await getCommits(repo, { ...graphOptions, stashes: null });
 		assert.ok(log.ok, log.ok ? "" : log.error);
 		assert.deepEqual(
 			log.value.commits.map((commit) => commit.message),
+			["Uncommitted Changes", "rename", "second", "first"],
+		);
+	}),
+);
+
+test(
+	"the stashes the page already holds mark the commit that is one, and a list of none walks none",
+	withHistory(async (repo) => {
+		const info = await getRepoInfo(repo, { showRemoteBranches: true, showStashes: true, hideRemotes: [] });
+		const log = await getCommits(repo, { ...graphOptions, stashes: info.stashes });
+		assert.ok(log.ok, log.ok ? "" : log.error);
+		const marked = log.value.commits.find((commit) => commit.stash !== null);
+		assert.equal(marked?.hash, info.stashes[0].baseHash);
+		assert.deepEqual(marked?.stash, info.stashes[0]);
+
+		// The page's list is also what the walk starts from, so a page that holds no stash walks no stash
+		// commit: the rows are the branch's three and the uncommitted one, exactly as the extension drew them.
+		const none = await getCommits(repo, { ...graphOptions, stashes: [] });
+		assert.ok(none.ok, none.ok ? "" : none.error);
+		assert.deepEqual(
+			none.value.commits.map((commit) => commit.message),
 			["Uncommitted Changes", "rename", "second", "first"],
 		);
 	}),

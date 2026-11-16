@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -35,6 +35,54 @@ test("a request that is not a request is answered with the reason, not thrown", 
 	assert.match(String(unknown.error), /Unsupported command: frobnicate/);
 });
 
+test("the loadCommits message the bundle sends is answered, and a stashed commit comes back marked", async () => {
+	/**
+	 * A repository of its own, because the graph of the one above is asserted without a stash in it. The
+	 * request below is the page's message field for field: `this.gitStashes` is the list `loadRepoInfo`
+	 * handed the page, and asking for the graph with it is what the page does on every refresh.
+	 */
+	const stashed = realpathSync(scratchRepo());
+	try {
+		writeFileSync(join(stashed, "wip.txt"), "not committed\n");
+		writeFileSync(join(stashed, "kept-untracked.txt"), "neither\n");
+		git(stashed, "add", "wip.txt");
+		// Untracked files beside the change, so the stash's list entry carries the `^3` revision this
+		// daemon hands out and the page hands straight back.
+		git(stashed, "stash", "push", "-u", "-m", "wip");
+		const graphs = { id: "w-stashed", folder: stashed, trees: [], threads: new Map(), children: new Map() };
+		const info = await dispatch.respond(graphs, { command: "loadRepoInfo", repo: stashed, refreshId: 1, showRemoteBranches: false, showStashes: true, hideRemotes: [] });
+		const stashes = info[0].stashes as Array<{ selector: string; baseHash: string; untrackedFilesHash: string | null }>;
+		assert.equal(stashes.length, 1, "the page can only send what the repository info listed");
+		assert.match(stashes[0].untrackedFilesHash ?? "", /^[0-9a-f]{40}\^3$/);
+
+		const replies = await dispatch.respond(graphs, {
+			command: "loadCommits",
+			repo: stashed,
+			refreshId: 2,
+			branches: null,
+			maxCommits: 300,
+			showTags: true,
+			showRemoteBranches: false,
+			includeCommitsMentionedByReflogs: false,
+			onlyFollowFirstParent: false,
+			commitOrdering: "date",
+			remotes: [],
+			hideRemotes: [],
+			stashes,
+		});
+		assert.equal(replies.length, 1);
+		const reply = replies[0];
+		assert.equal(reply.error, null);
+		assert.equal(reply.refreshId, 2);
+		const rows = reply.commits as Array<{ hash: string; stash: { selector: string; baseHash: string } | null }>;
+		const marked = rows.find((row) => row.stash !== null);
+		assert.equal(marked?.hash, stashes[0].baseHash);
+		assert.equal(marked?.stash?.selector, "stash@{0}");
+	} finally {
+		rmSync(stashed, { recursive: true, force: true });
+	}
+});
+
 test("a repository this tab no longer has is refused in one sentence", async () => {
 	const reply = await one({ command: "loadRepoInfo", repo: elsewhere, refreshId: 1, showRemoteBranches: true, showStashes: false, hideRemotes: [] });
 	assert.equal(reply.error, "That repository is no longer open in this tab.");
@@ -61,7 +109,7 @@ test("loadRepoInfo and loadCommits echo the refreshId the page is waiting for", 
 		commitOrdering: "date",
 		remotes: [],
 		hideRemotes: [],
-		stashes: false,
+		stashes: [],
 	});
 	assert.equal(commits.refreshId, 42);
 	assert.equal(commits.error, null);
