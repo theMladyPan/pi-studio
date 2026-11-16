@@ -71,20 +71,23 @@ not equivalent: a plain hover on the strip (`pointer-events: auto`) swallows dra
 test keeps the board usable and costs a short delay. Hover is also not a modality everyone has, so the
 accessible read (the strip's own summary label, or a strip that can take focus) has to be kept.
 
-**The Git Graph drawer cannot write to a repository.** Every command that would change one is answered
-with `This tab cannot do that yet.`: checkout, merge, rebase (including the interactive one),
-cherry-pick, revert, reset, tags, pull, push, fetch, stash and its apply, pop and branch, remotes,
-create, delete and rename a branch, clean untracked files, the archive download, the configuration
-export, and the commands an editor or a third party would have served. Reading is complete — the graph, the trees a board made, one
-commit, a diff, a stash, a comparison, a tag and the configuration all answer — so the work is one
-table: every name in `WRITING_OR_EDITOR_COMMANDS` loses its entry, gets a branch in `answer` and a git
-run behind it, and `UNAVAILABLE` shrinks by one with each commit. Touches that table in
-`server/git/gitgraph/dispatch.ts`, a writer beside `server/git/gitgraph/read.ts`, the page's own error
-surface in `public/gitgraph.html`, and the repository state the page saves. Files are named rather than
-numbered here because these are all new, and `dev` has no line number for them yet. To settle: which of
-those actions a board's own worktrees may be given at all, because a thread may be working in one while
-a human checks out, merges or resets it, and what the board says to a thread whose checkout moved
-under it.
+**The Git Graph drawer still cannot reach a remote, and there are a few commands with no home here.**
+The local writes all answer now — branches, tags, checkout, merge, rebase, cherry-pick, revert, reset,
+dropping a commit, stash and clean — and so do the reads. What answers `This tab cannot do that yet.` is
+still one table: adding, editing and deleting a remote, deleting a remote branch, fetching a remote
+branch into a local one, pulling a branch, pushing a branch, pushing a tag on its own, the archive
+download, the configuration export, and the commands an editor or a third party would have served. Two
+local commands are refused by name for a reason of their own rather than by that table: an interactive
+rebase, which needs a terminal for the commit list, and dropping a merge commit, which git cannot rebase
+out of a history that joins two. The work is one table: every name in `UNAVAILABLE_COMMANDS` loses its
+entry in `server/git/gitgraph/dispatch.ts`, gets a branch in `answer` and a run in
+`server/git/gitgraph/actions.ts` behind it, and `UNAVAILABLE` shrinks by one with each commit; the
+archive download is a route of its own rather than a git run, because it writes a file a human then
+saves. Files are named rather than numbered here because these are all new, and `dev` has no line number
+for them yet. To settle: what the board says to a thread whose checkout moved under it while the thread
+was idle, because the live guard only knows a child that is running now, so a human merging or resetting
+an idle thread's tree moves it in silence. And whether a remote write reaches this daemon at all, which
+is the same question as whether "nothing to install" survives a push that needs a token.
 
 **Voice, on a card.** The `voice` extension drove the console by speech, and it was retired from the
 extensions repository rather than ported, because every one of its hooks checked `ctx.mode === "tui"`

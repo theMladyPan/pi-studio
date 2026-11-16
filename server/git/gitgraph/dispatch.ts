@@ -114,11 +114,20 @@ function detailsReply(
 	};
 }
 
-/** The repository states the repository dropdown is drawn from, filled out for one it has never seen. */
-function repoStates(board: DispatchBoard, paths: Iterable<string>): Record<string, GitRepoState> {
+/**
+ * The repository states the repository dropdown is drawn from, filled out for one it has never seen.
+ *
+ * The name falls back to the entry's label exactly as `/git/init` does it, and the two must agree: the
+ * page draws the dropdown from the init answer, then re-reads this same list through `loadRepos`, so a
+ * name the init route filled and this one left `null` would be wiped back to the last path component.
+ */
+function repoStates(board: DispatchBoard, entries: Map<string, RepoEntry>): Record<string, GitRepoState> {
 	const state = stateFor(board);
 	const states: Record<string, GitRepoState> = {};
-	for (const path of paths) states[path] = state.repos[path] ?? { ...DEFAULT_REPO_STATE };
+	for (const [path, entry] of entries) {
+		const held = state.repos[path];
+		states[path] = held ? { ...held, name: held.name ?? entry.label } : { ...DEFAULT_REPO_STATE, name: entry.label };
+	}
 	return states;
 }
 
@@ -148,7 +157,7 @@ export async function respond(board: DispatchBoard, raw: unknown): Promise<Reply
 		if (named !== null && !repos.has(named)) return [{ command: request.command, error: "That repository is no longer open in this tab." }];
 		// What the entry knows about the repository's tree decides whether an action may move it: `live` is the
 		// board's own answer to "is a thread working in there right now".
-		return await answer(board, request, paths, named === null ? undefined : repos.get(named));
+		return await answer(board, request, paths, repos, named === null ? undefined : repos.get(named));
 	} catch (error) {
 		// A read that escaped its own handling is still a page waiting for a reply, so it is answered
 		// with what went wrong rather than left to the route's catch, which would answer a 500.
@@ -157,7 +166,7 @@ export async function respond(board: DispatchBoard, raw: unknown): Promise<Reply
 }
 
 /** The command itself, once it is known to name a repository this board still has, and that entry. */
-async function answer(board: DispatchBoard, request: GitGraphRequest, paths: string[], entry?: RepoEntry): Promise<Reply[]> {
+async function answer(board: DispatchBoard, request: GitGraphRequest, paths: string[], repos: Map<string, RepoEntry>, entry?: RepoEntry): Promise<Reply[]> {
 	const unavailable = UNAVAILABLE[request.command];
 	if (unavailable !== undefined) return [{ command: request.command, error: unavailable }];
 	switch (request.command) {
@@ -165,7 +174,7 @@ async function answer(board: DispatchBoard, request: GitGraphRequest, paths: str
 			return [
 				{
 					command: "loadRepos",
-					repos: repoStates(board, paths),
+					repos: repoStates(board, repos),
 					lastActiveRepo: lastActiveRepo(board, paths),
 					loadViewTo: null,
 				},

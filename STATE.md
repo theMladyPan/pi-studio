@@ -575,12 +575,26 @@ commit's own account rather than on a check run now, the section below says so.
   threads work in, each checked to be a top level of the same repository before the page may name it, so
   a branch a thread made is read on the commit that thread wrote. The commit details pane reads one
   commit with its files and its stats, and the viewer shows a file at a revision, a working file, a
-  comparison or a stash, capped at 2 MB and called binary when it holds a NUL. Every writing action
-  answers one sentence, `This tab cannot do that yet.`, from one table in
-  `server/git/gitgraph/dispatch.ts`: checkout, merge, rebase and its interactive one, cherry-pick,
-  revert, reset, tags, branches, pull, push, fetch, stash, remotes, the archive download, and the ones
-  an editor or a third party would have served, `fetchAvatar` among them, because the daemon makes no
-  request to a third party on a human's behalf. Checked by `node --check`,
+  comparison or a stash, capped at 2 MB and called binary when it holds a NUL. The graph writes as well as
+  reads. A branch is created, renamed and deleted, a tag added and deleted, a branch or a commit checked
+  out, a merge run with its squash and no-commit forms, a rebase run, a commit cherry-picked, reverted,
+  dropped or reset in its three modes, the stash pushed, applied, popped, dropped or turned into a branch,
+  and the untracked files cleaned, one git command per step, each step's own stderr handed back to the
+  page as the sentence the human reads. A fetch and a remote prune run too, because they move no ref a
+  human works on, and the remote half a dialog asked for runs as that dialog's second step: the push of
+  the tag just made, the delete of a branch on the remote it named, the pull after a checkout. What still
+  answers `This tab cannot do that yet.` is one table in `server/git/gitgraph/dispatch.ts`: adding,
+  editing and deleting a remote, deleting a remote branch, fetching a remote branch into a local one,
+  pulling a branch, pushing a branch, pushing a tag on its own, the archive download, the configuration
+  export, and the ones an editor or a third party would have served, `fetchAvatar` among them, because
+  the daemon makes no request to a third party on a human's behalf. An interactive rebase is refused by
+  name, because git opens a text editor on the commit list and this tab has no terminal to give it, and
+  so is dropping a merge commit, which git cannot rebase out of a history that joins two. Two guards
+  stand in front of every write: one git action at a time per repository, so a second click is a second
+  answer rather than a run racing the first for the index, and anything that would move a tree a thread
+  is working in, refused with the sentence naming the thread the dropdown shows. The context menu only
+  offers what works, because `config.ts`'s visible entries and `dispatch.ts`'s refused commands are
+  checked against each other by a test. Checked by `node --check`,
   `bin/check-imports.mjs`, the route tests and `bin/smoke.mjs` against its own daemons: the page's HTTP
   chain and every static fact the bundle needs. The page itself has not been run in a browser, so what
   it draws is read from the code.

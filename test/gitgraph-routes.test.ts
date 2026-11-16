@@ -314,6 +314,16 @@ test("a board with a worktree offers the dropdown two repositories, and the tree
 		assert.equal(repos[paths[0]].name, folder.split("/").pop(), "the folder is labelled by its own name");
 		assert.equal(repos[paths[1]].name, "feat/drawer · the drawer's tree", "the tree carries its branch and the thread's title");
 		assert.equal(payload.initialState.lastActiveRepo, paths[0], "the dropdown opens on the folder");
+		// The page refreshes itself by re-reading this same list through the message route, and the answer to
+		// that is the one the dropdown is drawn from: a name the init route filled and this one left `null`
+		// would be wiped back to the tree's own folder id, which is what a human would then read instead.
+		const listed = await post(daemon, `/git/msg?workspace=${board}`, { command: "loadRepos", check: false });
+		assert.equal(listed.status, 200);
+		const replies = JSON.parse(listed.body) as Array<{ command: string; repos: Record<string, { name: string | null }> }>;
+		assert.equal(replies.length, 1);
+		assert.equal(replies[0].command, "loadRepos");
+		assert.equal(replies[0].repos[paths[1]].name, "feat/drawer · the drawer's tree", "the message route labels the tree exactly as the init route did");
+		assert.equal(replies[0].repos[paths[0]].name, folder.split("/").pop(), "and the folder by its own name, so the two routes agree on every entry");
 		// This is what makes the dropdown exist at all, and it is the bundle's decision rather than this
 		// daemon's: `loadRepos` in the installed `media/out.min.js` sets the `singleRepo` class on
 		// `#controls` from `Object.keys(repos).length === 1`, and `media/out.min.css` carries
