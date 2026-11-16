@@ -10,3 +10,6 @@ export type DaemonRecord = {
 	port: number;
 	at: string;
 };
+
+/** What the Git Graph page is handed before it draws anything, beside the settings it draws itself from. */
+export type { GitGraphInitPayload } from "./git/gitgraph/protocol.ts";
