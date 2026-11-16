@@ -6,7 +6,9 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { BRANCH_COLOURS } from "../server/git/gitgraph/config.ts";
-import { scratchRepo } from "../test-support/git.ts";
+import { STATE_VERSION, workspaceId } from "../server/paths.ts";
+import { ensureWorktree } from "../server/worktrees/make.ts";
+import { git, scratchRepo } from "../test-support/git.ts";
 
 /**
  * The four routes, reached the way a browser reaches them: a real daemon, a real token and a real
@@ -29,8 +31,7 @@ function fakeExtension() {
 type Daemon = { child: { kill: () => void }; base: string; token: string };
 
 /** One daemon against a scratch state folder, with whatever environment a test needs. */
-async function boot(env: Record<string, string> = {}): Promise<Daemon> {
-	const state = mkdtempSync(join(tmpdir(), "pi-studio-gitgraph-routes-"));
+async function boot(env: Record<string, string> = {}, state = mkdtempSync(join(tmpdir(), "pi-studio-gitgraph-routes-"))): Promise<Daemon> {
 	const child = spawn(process.execPath, [join(repo, "server.ts"), "--no-open"], {
 		cwd: repo,
 		env: { ...process.env, PI_STUDIO_STATE: state, PI_STUDIO_PORT: "", ...env },
@@ -264,6 +265,65 @@ test("one message is answered with its replies, and refused without the token", 
 		rmSync(folder, { recursive: true, force: true });
 	} finally {
 		daemon.child.kill();
+		rmSync(extension, { recursive: true, force: true });
+	}
+});
+
+test("a board with a worktree offers the dropdown two repositories, and the tree is labelled by its branch and its thread", async () => {
+	const extension = fakeExtension();
+	const state = mkdtempSync(join(tmpdir(), "pi-studio-gitgraph-two-"));
+	const folder = scratchRepo();
+	// The tree a thread works in, made the way the daemon makes one: `ensureWorktree` on a plain board,
+	// because the daemon only ever makes one for a child that is spawning, and no child runs in a test.
+	const plain = { folder, trees: [] as Array<{ path: string; branch?: string }>, threads: new Map(), children: new Map() };
+	const thread = { id: "thread-gitgraph-1", title: "the drawer's tree", folder };
+	plain.threads.set(thread.id, thread);
+	const tree = ensureWorktree(plain, thread);
+	assert.ok(tree.path, `no worktree made: ${JSON.stringify(tree)}`);
+	git(tree.path, "checkout", "-b", "feat/drawer");
+	writeFileSync(join(tree.path, "tree.txt"), "tree\n");
+	git(tree.path, "add", ".");
+	git(tree.path, "commit", "-m", "tree work");
+	tree.branch = "feat/drawer";
+	const boardId = workspaceId(folder);
+	// A daemon reads a board out of its own state folder, so the record is written before it boots. The
+	// path is `paths.ts`'s `boardFile`, which a test process cannot call: its `STATE_DIR` is not this one.
+	mkdirSync(join(state, "boards"), { recursive: true });
+	writeFileSync(
+		join(state, "boards", `${boardId}.json`),
+		JSON.stringify({
+			version: STATE_VERSION,
+			workspace: { id: boardId, folder, name: "pi-studio" },
+			trees: [tree],
+			threads: [{ id: thread.id, title: thread.title, at: Date.now(), turns: [] }],
+		}),
+	);
+	const daemon = await boot({ PI_STUDIO_GITGRAPH_DIR: extension }, state);
+	try {
+		const board = await openWorkspace(daemon, folder);
+		assert.equal(board, boardId, "a folder keeps its identity, which is how the board file was found");
+		const init = await get(daemon, `/git/init?token=${daemon.token}&workspace=${board}`);
+		assert.equal(init.status, 200);
+		const payload = JSON.parse(init.body);
+		assert.equal(payload.available, true, payload.reason);
+		const repos = payload.initialState.repos as Record<string, { name: string | null }>;
+		const paths = Object.keys(repos);
+		assert.equal(paths.length, 2, `expected the folder and its tree, got ${paths.join(", ")}`);
+		assert.equal(paths[0], realpathSync(folder), "the folder the workspace opened comes first");
+		assert.equal(paths[1], realpathSync(tree.path), "the tree is keyed by its own path");
+		assert.equal(repos[paths[0]].name, folder.split("/").pop(), "the folder is labelled by its own name");
+		assert.equal(repos[paths[1]].name, "feat/drawer · the drawer's tree", "the tree carries its branch and the thread's title");
+		assert.equal(payload.initialState.lastActiveRepo, paths[0], "the dropdown opens on the folder");
+		// This is what makes the dropdown exist at all, and it is the bundle's decision rather than this
+		// daemon's: `loadRepos` in the installed `media/out.min.js` sets the `singleRepo` class on
+		// `#controls` from `Object.keys(repos).length === 1`, and `media/out.min.css` carries
+		// `.singleRepo #repoControl{display:none;}`. With two keys the class is not set and `#repoControl`
+		// is drawn. Unverified in a browser from here: that is the bundle's code, and this daemon only
+		// answers the two keys.
+	} finally {
+		daemon.child.kill();
+		rmSync(folder, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
 		rmSync(extension, { recursive: true, force: true });
 	}
 });

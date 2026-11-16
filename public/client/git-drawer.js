@@ -28,7 +28,17 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
   const tabBtn = document.getElementById("gdTab");
   const closeBtn = document.getElementById("gdClose");
   const btn = document.getElementById("gitBtn");
-  document.getElementById("gdWorkspace").textContent = workspace;
+  const workspaceLabel = document.getElementById("gdWorkspace");
+
+  /**
+   * The bar names the board the way a human knows it. A workspace id is a folder's identity in the
+   * state folder, not something anyone reads, so it is what the bar falls back to before the board has
+   * heard the name.
+   */
+  function setName(name) {
+    workspaceLabel.textContent = `· ${name || workspace}`;
+  }
+  setName("");
 
   /** Is the drawer down. Named apart from the `open` verb below, which is what rolls it down. */
   let shown = false;
@@ -186,5 +196,5 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
     }, wait);
   }
 
-  return { isOpen: () => shown, toggle: () => (shown ? close() : open()), open, close, notifyChanged };
+  return { isOpen: () => shown, toggle: () => (shown ? close() : open()), open, close, notifyChanged, setName };
 }

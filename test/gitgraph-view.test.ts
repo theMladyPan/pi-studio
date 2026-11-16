@@ -190,3 +190,62 @@ test(
 		assert.equal(bad.ok, false);
 	}),
 );
+
+/** The seven characters a bar shows for a hash, so a title is asserted as the human reads it. */
+const abbrev = (hash: string) => hash.slice(0, 7);
+
+test(
+	"the bar of a commit's own diff names its parent on the left and the caret that says so",
+	withRepo(async (repo) => {
+		const head = git(repo, "rev-parse", "HEAD");
+		const view = await viewDiff(repo, head, head, "readme.md", "readme.md", "M");
+		assert.ok("view" in view);
+		assert.equal(view.view.title, `readme.md (${abbrev(head)}^ ↔ ${abbrev(head)})`);
+	}),
+);
+
+test(
+	"the bar of a diff against the working file names the working tree, not a second hash",
+	withRepo(async (repo) => {
+		writeFileSync(join(repo, "readme.md"), "hello\nrewritten\n");
+		const head = git(repo, "rev-parse", "HEAD");
+		const view = await viewDiffWithWorkingFile(repo, head, "readme.md");
+		assert.ok("view" in view);
+		assert.equal(view.view.title, `readme.md (${abbrev(head)} ↔ Working Tree)`);
+	}),
+);
+
+test(
+	"the bar of a diff between two revisions names both of them, and says which one brought an added or deleted file",
+	withRepo(async (repo) => {
+		const first = git(repo, "rev-list", "--max-parents=0", "HEAD");
+		const head = git(repo, "rev-parse", "HEAD");
+		const between = await viewDiff(repo, first, head, "readme.md", "readme.md", "M");
+		assert.ok("view" in between);
+		assert.equal(between.view.title, `readme.md (${abbrev(first)} ↔ ${abbrev(head)})`);
+		const added = await viewDiff(repo, head, head, "", "readme.md", "A");
+		assert.ok("view" in added);
+		assert.equal(added.view.title, `readme.md (Added in ${abbrev(head)})`);
+		const deleted = await viewDiff(repo, first, head, "readme.md", "", "D");
+		assert.ok("view" in deleted);
+		assert.equal(deleted.view.title, `readme.md (Deleted between ${abbrev(first)} & ${abbrev(head)})`);
+	}),
+);
+
+test(
+	"the bar of the uncommitted row against nothing says uncommitted rather than naming a hash",
+	withRepo(async (repo) => {
+		const view = await viewDiff(repo, UNCOMMITTED, UNCOMMITTED, "readme.md", "readme.md", "M");
+		assert.ok("view" in view);
+		assert.equal(view.view.title, "readme.md (Uncommitted)");
+	}),
+);
+
+test(
+	"the bar of an untracked file says uncommitted too, and names the file by its own name",
+	withRepo(async (repo) => {
+		const view = await viewDiff(repo, UNCOMMITTED, UNCOMMITTED, "never-added.txt", "never-added.txt", "U");
+		assert.ok("view" in view);
+		assert.equal(view.view.title, "never-added.txt (Uncommitted)");
+	}),
+);

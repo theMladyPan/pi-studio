@@ -10681,6 +10681,8 @@ function applyMeta(meta) {
   // The label names the workspace this tab belongs to; clicking it goes back to the crossroads,
   // where another one can be opened in a tab of its own.
   const folder = meta.workspace?.name || meta.folder || "session";
+  // The drawer's bar names the same workspace, and only falls back to its id while no name is known.
+  gitDrawer.setName(meta.workspace?.name);
   const sess = document.getElementById("sess");
   sess.innerHTML = "";
   sess.append("board of ");

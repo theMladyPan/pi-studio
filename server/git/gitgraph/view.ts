@@ -79,6 +79,9 @@ function workingFileText(repo: string, filePath: string): Bounded {
 	}
 }
 
+/** The right side of a diff against the working tree, which is a place and not a revision. */
+const WORKING_TREE = "Working Tree";
+
 /** A hash as the bar says it: seven characters, which is what a human recognises. */
 function short(hash: string): string {
 	if (hash === UNCOMMITTED) return "uncommitted changes";
@@ -134,12 +137,34 @@ export async function untrackedDiff(repo: string, filePath: string): Promise<Bou
 
 // ---------- the four things the page may ask to see ----------
 
-/** The view a diff is drawn in, with the title the bar shows. */
-function diffView(from: string, to: string, filePath: string, text: Bounded): ViewAnswer {
+/**
+ * What the two sides of a diff are, in the words the extension's own title uses.
+ *
+ * One revision against itself is the change that commit brought, so its left side is its parent and is
+ * written with the caret that names one: `<hash>^ ↔ <hash>`. The working tree is the right side of a
+ * diff against it, and is named as a place rather than as a revision. An added or deleted file says
+ * which revision brought it, because a side it never had is not worth naming.
+ */
+function sides(from: string, to: string, type: string): string {
+	const left = from === UNCOMMITTED ? WORKING_TREE : short(from);
+	const right = to === UNCOMMITTED ? WORKING_TREE : short(to);
+	if (from === to) {
+		if (from === UNCOMMITTED) return "Uncommitted";
+		if (type === "A") return `Added in ${right}`;
+		if (type === "D") return `Deleted in ${right}`;
+		return `${left}^ ↔ ${right}`;
+	}
+	if (type === "A") return `Added between ${left} & ${right}`;
+	if (type === "D") return `Deleted between ${left} & ${right}`;
+	return `${left} ↔ ${right}`;
+}
+
+/** The view a diff is drawn in, with the title the bar shows: the file's own name, then both sides. */
+function diffView(from: string, to: string, filePath: string, type: string, text: Bounded): ViewAnswer {
 	if (!text.ok) return { error: text.error };
 	return {
 		view: {
-			title: `Diff ${short(from)} → ${short(to)} · ${filePath}`,
+			title: `${filePath.split("/").pop() ?? filePath} (${sides(from, to, type)})`,
 			kind: "diff",
 			content: text.binary ? "" : text.text,
 			filePath,
@@ -183,16 +208,18 @@ export async function viewDiff(
 	type: string,
 ): Promise<ViewAnswer> {
 	const filePath = newFilePath || oldFilePath;
-	if (type === "U") return diffView(UNCOMMITTED, UNCOMMITTED, filePath, await untrackedDiff(repo, filePath));
+	if (type === "U") return diffView(UNCOMMITTED, UNCOMMITTED, filePath, type, await untrackedDiff(repo, filePath));
 	const paths = type === "A" ? [newFilePath] : type === "D" ? [oldFilePath] : oldFilePath === newFilePath ? [newFilePath] : [oldFilePath, newFilePath];
 	const text = await diffText(repo, fromHash, toHash, paths);
-	return diffView(fromHash, toHash, filePath, text);
+	return diffView(fromHash, toHash, filePath, type, text);
 }
 
 /** The diff between one revision and the working file, which is how a human checks what they changed. */
 export async function viewDiffWithWorkingFile(repo: string, hash: string, filePath: string): Promise<ViewAnswer> {
 	const text = await diffText(repo, hash, UNCOMMITTED, [filePath]);
-	return diffView(hash, UNCOMMITTED, filePath, text);
+	// The working file of a tracked change: a modification, which is the one letter the title does not
+	// have to mention.
+	return diffView(hash, UNCOMMITTED, filePath, "M", text);
 }
 
 /**
