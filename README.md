@@ -145,6 +145,12 @@ waiting behind it.
 worktree on a branch of its own, and the strip in the corner of the board draws the branches and the
 commits on them.
 
+**The whole graph is a drawer away.** In a repository, `g` on the board rolls that repository down over
+it as the full graph: every branch, every commit, the commit details pane and the diff, where the corner
+strip summarises. What draws it is `mhutchie/vscode-git-graph` 1.30.x, the extension's own webview,
+loaded from the copy already installed in your VS Code, because its licence allows using it and forbids
+shipping it or a derivative. `PI_STUDIO_GITGRAPH_DIR` points the daemon at a copy somewhere else.
+
 **A boss thread** spawns children instead of working. It decides what the work needs — on `auto` the
 steps are its own, and a flow a human pinned is a recipe it follows — and gives each child one role;
 [docs/boss-and-subagents.md](docs/boss-and-subagents.md) draws the three flows and says what each role
@@ -172,11 +178,14 @@ server/           the daemon, one module per subject
   cards.ts        the wire shape of a card; bus.ts the fan-out to every open tab
   child/          the `pi` child: its argv, its prompts, its output, its turns
   git/            the repository, the strip's picture, the polling that refreshes it
+    gitgraph/     the answers the Git Graph page asks for: its dispatch, its reads, its bundle
   worktrees/      making a thread's worktree, naming its branch, retiring it
   paths.ts        every path and the JSON io; types.ts the shapes that cross a boundary
 public/           the board client: index.html with its styles, welcome.html for the crossroads
   client/         board.js, and beside it mermaid 11.17.2 and Chart.js 4.6.1, MIT, fetched the
                   first time a card carries a fence they draw
+  gitgraph.html   the graph page a tab or the drawer loads, its host script and viewer under
+                  client/gitgraph/, and the drawer the board rolls down (client/git-drawer.js)
 bridge/           the extension a child loads so a thread can draw on its board
 bin/pi-studio     the wrapper: one word to start it
 bin/smoke.mjs     two daemons against scratch folders, and the routes a change can break

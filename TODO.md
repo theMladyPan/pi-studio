@@ -4,7 +4,7 @@ The one list of what is open. `STATE.md` says what works; this says what does no
 says what it is, what it would touch, and what has to be settled before it can start. Line numbers are
 `dev` at `c723fc3`.
 
-Fourteen entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
+Fifteen entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
 something the board cannot do yet, **chore** is work on the code itself.
 
 Four decisions have to be answered by you before some of these can start, and each is named in the
@@ -70,6 +70,21 @@ not equivalent: a plain hover on the strip (`pointer-events: auto`) swallows dra
 208px of board, which the stylesheet states it must not (`public/index.html:99`); a pointer position
 test keeps the board usable and costs a short delay. Hover is also not a modality everyone has, so the
 accessible read (the strip's own summary label, or a strip that can take focus) has to be kept.
+
+**The Git Graph drawer cannot write to a repository.** Every command that would change one is answered
+with `This tab cannot do that yet.`: checkout, merge, rebase (including the interactive one),
+cherry-pick, revert, reset, tags, pull, push, fetch, stash and its apply, pop and branch, remotes,
+create, delete and rename a branch, clean untracked files, the archive download, the configuration
+export, and the commands an editor or a third party would have served. Reading is complete — the graph, the trees a board made, one
+commit, a diff, a stash, a comparison, a tag and the configuration all answer — so the work is one
+table: every name in `WRITING_OR_EDITOR_COMMANDS` loses its entry, gets a branch in `answer` and a git
+run behind it, and `UNAVAILABLE` shrinks by one with each commit. Touches that table in
+`server/git/gitgraph/dispatch.ts`, a writer beside `server/git/gitgraph/read.ts`, the page's own error
+surface in `public/gitgraph.html`, and the repository state the page saves. Files are named rather than
+numbered here because these are all new, and `dev` has no line number for them yet. To settle: which of
+those actions a board's own worktrees may be given at all, because a thread may be working in one while
+a human checks out, merges or resets it, and what the board says to a thread whose checkout moved
+under it.
 
 **Voice, on a card.** The `voice` extension drove the console by speech, and it was retired from the
 extensions repository rather than ported, because every one of its hooks checked `ctx.mode === "tui"`
