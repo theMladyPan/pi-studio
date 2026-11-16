@@ -11,5 +11,38 @@ export type DaemonRecord = {
 	at: string;
 };
 
+/**
+ * A thread as the browser draws it. A thread's card is built from what the thread has, so most fields are
+ * there only when the thread carries one: a card that says `modeAtRun` is a card whose run in flight follows
+ * a mode other than the one chosen on it, which is how the head says a choice is waiting.
+ */
+export type ThreadCard = {
+	id: string;
+	type: string;
+	title: string;
+	at: number;
+	/** Empty on purpose: a thread's words live in its turns, so the card invents no message. */
+	text: string;
+	status: string;
+	mode: string;
+	/** The mode the run in flight follows, set only when it differs from the mode the card shows. */
+	modeAtRun?: string;
+	turns: unknown[];
+	rect?: { x: number; y: number; w: number; h: number };
+	mini?: boolean;
+	threadRoot?: string;
+	after?: string[];
+	parentThread?: string;
+	parentTitle?: string;
+	role?: string;
+	path?: string;
+	pathChosenBy?: string;
+	provider?: string;
+	model?: string;
+	thinking?: string;
+	stats?: Record<string, unknown>;
+	worktree?: { base?: string; path: string; repo?: string };
+};
+
 /** What the Git Graph page is handed before it draws anything, beside the settings it draws itself from. */
 export type { GitGraphInitPayload } from "./git/gitgraph/protocol.ts";
