@@ -367,6 +367,13 @@ commit's own account rather than on a check run now, the section below says so.
   and a plain card only while one of its own turns is streaming — the card a hidden child answers for.
   `answersWith.running` names the thread's whole run and is true for every card that thread ever made,
   so reading it as "this card is live" put a `waiting` row on a note and on the thread card at once.
+- **The strip never shrinks, and the bottom pin survives a zoom.** `.card-live` is `flex: 0 0 auto`,
+  so on a long thread whose card reaches its maximum height the conversation column above gives up
+  the room instead of the strip being crushed to a sliver with its row unreadable below the fold.
+  The pin that holds a conversation at its newest message now remembers the scroll top it left and
+  only lets go when that top actually moves: a zoom re-lays the text taller, which used to fire a
+  scroll event hundreds of pixels from the bottom and release the pin, leaving the last message out
+  of view until the reader scrolled back down by hand.
 - **A running row is a fixed slot.** One head line and `--act-detail` lines under it — three by default
   — and the same height from the first delta to the last, because a row that grows while it streams
   walks the rows around it about. The head says the tool in one word (`bash`, `edit`, `read`) and the
