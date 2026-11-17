@@ -10874,6 +10874,15 @@ function connect() {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const source = new WebSocket(`${protocol}//${location.host}/events?${auth}`);
   let opened = false;
+  const connectByEventSource = () => {
+    const fallback = new EventSource(`/events?${auth}`);
+    fallback.onopen = () => setLive(true);
+    fallback.onerror = () => {
+      if (fallback.readyState === EventSource.CLOSED) setLive(false, "session expired or token refused — reopen the link pi printed");
+      else setLive(false, "pi not reachable — retrying");
+    };
+    fallback.onmessage = source.onmessage;
+  };
   source.onopen = () => {
     opened = true;
     linkDelay = 500;
@@ -10905,6 +10914,10 @@ function connect() {
       }
       if (!signedIn) {
         setLive(false, "session expired or token refused — reopen the link pi printed");
+        return;
+      }
+      if (!opened) {
+        connectByEventSource();
         return;
       }
       setLive(false, "pi not reachable — retrying");

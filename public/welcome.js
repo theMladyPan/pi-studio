@@ -1358,6 +1358,10 @@
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const link = new WebSocket(`${protocol}//${location.host}/events?scope=welcome`);
     let opened = false;
+    const connectByEventSource = () => {
+      const fallback = new EventSource("/events?scope=welcome");
+      fallback.onmessage = link.onmessage;
+    };
     link.onopen = () => {
       opened = true;
       linkDelay = 500;
@@ -1381,6 +1385,10 @@
           clearTimeout(probeTimer);
         }
         if (!signedIn) return;
+        if (!opened) {
+          connectByEventSource();
+          return;
+        }
         if (!linkTimer) {
           linkTimer = setTimeout(() => {
             linkTimer = null;

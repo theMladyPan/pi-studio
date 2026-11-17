@@ -359,7 +359,7 @@ test("a message on a thread whose mode changed tells the board the choice has la
 			cards: new Map(),
 			activity: [],
 			// A tab that writes every frame down: what this test reads is what the browser would draw.
-			clients: new Set([{ writableEnded: false, destroyed: false, write: (frame: string) => frames.push(JSON.parse(frame)) }]),
+			clients: new Set([{ webSocket: true, writableEnded: false, destroyed: false, write: (frame: string) => frames.push(JSON.parse(frame)) }]),
 		};
 		// A process already running under the old mode is the state a change made mid-run leaves, and what
 		// the choice has to be pending against.
