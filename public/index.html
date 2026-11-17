@@ -218,8 +218,11 @@
   .thread[hidden] { display: none; }
   /* What the thread is doing right now, in the same rows the log keeps: the live step is read where
      its answer will appear, and it leaves for the log the moment it settles. It sits below the
-     answer, pinned, so a long note cannot hide it; the column above keeps its scroll and its place. */
-  .card-live { flex: 0 1 auto; min-height: 0; max-height: 50%; overflow-y: auto;
+     answer, pinned, so a long note cannot hide it; the column above keeps its scroll and its place.
+     It never shrinks: a shrinkable strip is the thing a tall card crushes to a sliver once the
+     conversation above it reaches the card's maximum height, leaving the row inside it unreadable.
+     The column above gives up the room instead. */
+  .card-live { flex: 0 0 auto; max-height: 50%; overflow-y: auto;
     border-top: 1px solid var(--border); background: #0b1017;
     padding: 6px 12px 8px; display: flex; flex-direction: column; gap: 4px; }
   .card-live:empty { display: none; }

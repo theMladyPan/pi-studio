@@ -2550,6 +2550,10 @@ function putColumnAtBottom(entry) {
   cancelAnimationFrame(entry.scrollFrame);
   entry.scrollFrame = requestAnimationFrame(() => {
     entry.scroll.scrollTop = entry.scroll.scrollHeight;
+    // The place the pin put the column: a later scroll event that finds the top still here is the
+    // layout moving under a still reader (a zoom re-lays the text, the content grows), never a
+    // scroll of the reader's own, whatever the distance to the bottom now reads.
+    entry.pinTop = entry.scroll.scrollTop;
   });
 }
 
@@ -2579,14 +2583,24 @@ function pinToBottom(entry) {
   // drawings and the pictures land, so one observer over the three catches every late shift.
   const watch = new ResizeObserver(settle);
   entry.pinWatch = watch;
-  // The whole state is this one measure: the pin follows while the column is within reach of its
-  // bottom and lets go once it is not. A clamp always leaves the column at its bottom, so the pin's own
-  // move never reads as the human's, and nothing is compared against a stale place; a reader who walks
-  // up in small steps is away from the bottom the moment they pass it, whatever the steps were; and an
-  // event that still reads the bottom arms the pin again, which is how a late picture is followed. The
-  // 24px is the same tolerance an answer growing under a reader is given.
+  // The whole state is this one measure, with one guard: the pin follows while the column is within
+  // reach of its bottom and lets go once the reader's own top leaves it. A reader who walks up in
+  // small steps is away from the bottom the moment they pass it, whatever the steps were; and an
+  // event that still reads the bottom arms the pin again, which is how a late picture is followed.
+  // A scroll event whose top never moved is layout, not the reader, and leaves the pin alone: the
+  // observer above is what answers layout, by re-pinning once the new geometry settles. The 24px is
+  // the same tolerance an answer growing under a reader is given.
   const onScroll = () => {
+    // A zoom, a fit or a growth re-lays the column: its height changes, the top does not, and the
+    // distance to the bottom jumps by the whole change. Reading that distance as the reader walking
+    // up released the pin on every zoom, and the newest message stayed below the fold until the
+    // reader scrolled back down by hand. Only a top that moved is the reader's own scroll; a top
+    // still where the pin left it keeps the pin, and the observer above re-pins once layout settles.
+    if (entry.pinTop !== undefined && Math.abs(entry.scroll.scrollTop - entry.pinTop) <= 4) return;
     entry.pinnedBottom = entry.scroll.scrollHeight - entry.scroll.scrollTop - entry.scroll.clientHeight < 24;
+    // A reader who reached the bottom by hand arms the pin here, so the place it is held at is
+    // theirs and not a stale one from an earlier follow: a zoom after it must read as layout again.
+    if (entry.pinnedBottom) entry.pinTop = entry.scroll.scrollTop;
     // A released reader has no automatic scroll left in flight.
     if (!entry.pinnedBottom) cancelAnimationFrame(entry.scrollFrame);
   };
