@@ -3,7 +3,7 @@
  * The workspaces on disk: the list the crossroads shows, the defaults a new board starts with, and the
  * one line of facts each one is described by.
  */
-import { SCRATCH_DIR, STATE_VERSION, WORKSPACES_FILE, boardFile, readJsonFile, workspaceId, writeJsonFile } from "./paths.ts";
+import { SCRATCH_DIR, STATE_VERSION, WORKSPACES_FILE, boardFile, legacyBoardFile, projectStateDir, readJsonFile, workspaceId, writeJsonFile } from "./paths.ts";
 import { boards } from "./store.ts";
 import { sessionFacts } from "./session.ts";
 import { basename, join } from "node:path";
@@ -402,13 +402,30 @@ export function gitFacts(folder) {
 
 
 
+/**
+ * The saved board a description reads: the project-local file once it exists, and the legacy global file
+ * until the first open imports it, so the crossroads keeps showing a recent's threads and last activity
+ * instead of reporting every project as empty. A linked project home is never read through, and nothing
+ * here creates state in a scratch or missing folder.
+ */
+function savedBoardFor(workspace) {
+	const file = boardFile(workspace);
+	if (!workspace.folder) return readJsonFile(file, null);
+	try {
+		if (lstatSync(projectStateDir(workspace.folder)).isSymbolicLink()) return readJsonFile(legacyBoardFile(workspace), null);
+	} catch {
+		// No project home yet: the legacy file below is the one a recent that was never reopened holds.
+	}
+	return existsSync(file) ? readJsonFile(file, null) : readJsonFile(legacyBoardFile(workspace), null);
+}
+
 /** The one workspace that matters to a tab: what is on it, and the last thing that happened. */
 export function describeWorkspace(workspace) {
 	const board = boards.get(workspace.id);
 	// A thread that serves a card is not a thread anyone can open: counting it would report more
 	// threads than the board has cards.
 	const threads = [...(board?.threads.values() ?? [])].filter((thread) => !thread.hidden);
-	const rows = board?.activity ?? readJsonFile(boardFile(workspace), null)?.activity ?? [];
+	const rows = board?.activity ?? savedBoardFor(workspace)?.activity ?? [];
 	const last = [...rows].reverse().find((row) => row?.startedAt || row?.at);
 	const facts = folderFacts(workspace.folder);
 	return {
@@ -439,7 +456,7 @@ export function describeWorkspace(workspace) {
 
 
 export function countSavedThreads(workspace) {
-	const saved = readJsonFile(boardFile(workspace), null);
+	const saved = savedBoardFor(workspace);
 	return saved && Array.isArray(saved.threads) ? saved.threads.length : 0;
 }
 

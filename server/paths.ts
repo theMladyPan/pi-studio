@@ -108,6 +108,25 @@ export function gitgraphStateFile(workspace: { id: string; folder?: string }) {
 }
 
 /**
+ * The legacy global home for this instance: the old `~/.pi` location for the default instance, or the
+ * explicit root itself for a `--state` instance, so an import never reaches the real user's data. Read-only
+ * fallback for the crossroads until a folder is first opened and its state is imported.
+ */
+export function legacyStateRoot() {
+	return HAS_EXPLICIT_STATE ? STATE_DIR : LEGACY_STATE_DIR;
+}
+
+/** The board file in the legacy global layout, read until the first open imports it. */
+export function legacyBoardFile(workspace: { id: string }) {
+	return join(legacyStateRoot(), "boards", `${workspace.id}.json`);
+}
+
+/** The sessions folder in the legacy global layout, read until the first open imports it. */
+export function legacySessionDir(workspace: { id: string }) {
+	return join(legacyStateRoot(), "sessions", workspace.id);
+}
+
+/**
  * Where one opened folder's own state lives: `<folder>/.pi-studio`, directly holding `board.json`,
  * `gitgraph.json` and `sessions/`. State is per opened folder, while worktrees keep the existing
  * repo-root `.agents` behaviour. No automatic remapping is done for renamed or cloned repositories:

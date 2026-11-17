@@ -204,7 +204,14 @@ function startLiveStream(req, socket, head) {
 			rejectUpgrade(socket, 409, "no such workspace");
 			return;
 		}
-		board = boardFor(workspace);
+		try {
+			board = boardFor(workspace);
+		} catch (error) {
+			// An unsafe or unwritable project home (a linked `.pi-studio`, a read-only folder) is a
+			// clear refusal here, never a thrown upgrade that takes the daemon down with it.
+			rejectUpgrade(socket, 503, `project state could not be opened: ${error.message}`);
+			return;
+		}
 	}
 	const client = upgradeWebSocket(req, socket, head);
 	if (!client || client.writableEnded || client.destroyed) return;
@@ -476,7 +483,7 @@ export const server = createServer((req, res) => {
 			if (!board) return;
 			const thread = board.threads.get(decodeURIComponent(pictureAt[1]));
 			if (!thread) return void fail(res, 404, "no such thread");
-			const file = thread.sessionId ? sessionFile({ id: board.id }, thread.sessionId) : "";
+			const file = thread.sessionId ? sessionFile({ id: board.id, folder: board.folder }, thread.sessionId) : "";
 			const picture = file ? sessionImage(file, Number(pictureAt[2])) : null;
 			if (!picture) return void fail(res, 404, "no picture there");
 			const bytes = Buffer.from(picture.data, "base64");
@@ -493,7 +500,7 @@ export const server = createServer((req, res) => {
 			const id = decodeURIComponent(url.pathname.slice("/transcript/".length));
 			const thread = board.threads.get(id);
 			if (!thread) return void fail(res, 404, "no such thread");
-			const file = thread.sessionId ? sessionFile({ id: board.id }, thread.sessionId) : "";
+			const file = thread.sessionId ? sessionFile({ id: board.id, folder: board.folder }, thread.sessionId) : "";
 			const entries = file ? transcriptOf(file) : null;
 			if (!entries) return void fail(res, 404, "this thread has no session file yet");
 			answer(res, 200, {

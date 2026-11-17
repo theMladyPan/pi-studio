@@ -293,7 +293,7 @@ async function main() {
 	// Written down, not only answered: a board file that forgot the mode would come back as an agent that
 	// does the work itself, and the tool rules would follow it.
 	await new Promise((resolve) => setTimeout(resolve, 1200));
-	const savedBoard = JSON.parse(readFileSync(join(first, "boards", `${opened.board.id}.json`), "utf8"));
+	const savedBoard = JSON.parse(readFileSync(join(first, ".pi-studio", "board.json"), "utf8"));
 	const savedBoss = (savedBoard.threads || []).find((thread) => thread.id === boss.threadId);
 	said(
 		savedBoss?.mode === "boss" && savedBoss?.path === "complex",
@@ -327,17 +327,19 @@ async function main() {
 	said(!alone.card?.after?.length, "and a thread the human made follows from nothing", `after ${JSON.stringify(alone.card?.after ?? [])}`);
 
 	// The point of the whole exercise: a second daemon answering at the same time, told where to put
-	// its state by the flag, on the same workspace folder.
+	// its state by the flag, on a distinct project folder. One opened folder holds one `.pi-studio`
+	// state, so two daemons never write the same project at once.
 	const two = await boot(second, "flag");
 	said(Boolean(two.token) && two.base !== one.base, "a second daemon boots beside the first", two.base);
 	said(two.token !== one.token, "each instance has its own token");
 	said(daemonFile(second).port !== saved.daemon.port, "and its own port", `${saved.daemon.port} and ${daemonFile(second).port}`);
 
-	const alsoOpened = await openWorkspace(two, first);
+	const otherProject = scratchFolder();
+	const alsoOpened = await openWorkspace(two, otherProject);
 	const theirs = JSON.parse((await get(two, `/state?token=${two.token}&workspace=${alsoOpened.board.id}`)).body || "{}");
 	said(
-		alsoOpened.status === 200 && alsoOpened.board.id === opened.board.id && Array.isArray(theirs.threads) && theirs.threads.length === 0,
-		"the same folder is two boards, one per instance",
+		alsoOpened.status === 200 && alsoOpened.board.id !== opened.board.id && Array.isArray(theirs.threads) && theirs.threads.length === 0,
+		"a distinct project folder is its own board on the second instance",
 		`board ${String(alsoOpened.board?.id ?? "").slice(0, 8)}, ${theirs.threads?.length} threads on the second`,
 	);
 	said(theirs.meta?.instance !== state.meta?.instance, "and each board says which instance it is", `${state.meta?.instance} | ${theirs.meta?.instance}`);
@@ -366,7 +368,21 @@ async function main() {
 		"emptying one instance's scratch row leaves the other's alone",
 		`${mineRow?.folder} | ${theirRow?.folder}`,
 	);
-	for (const daemon of [one, two]) {
+	// Persistence is sequential, never concurrent: stop the first daemon, boot it again against the
+	// same global folder, and reopen the same project. The board it reads back is the one written
+	// under the project's own `.pi-studio`.
+	await new Promise((resolve) => setTimeout(resolve, 1200));
+	one.child.kill();
+	await new Promise((resolve) => one.child.once("exit", resolve));
+	const againDaemon = await boot(first, "env");
+	const reopened = await openWorkspace(againDaemon, first);
+	const reopenedState = JSON.parse((await get(againDaemon, `/state?token=${againDaemon.token}&workspace=${reopened.board.id}`)).body || "{}");
+	said(
+		reopened.status === 200 && reopened.board.id === opened.board.id && reopenedState.threads?.some((thread) => thread.id === boss.threadId),
+		"a sequential reopen reads the same project board back",
+		`board ${String(reopened.board?.id ?? "").slice(0, 8)}, ${reopenedState.threads?.length} threads`,
+	);
+	for (const daemon of [one, two, againDaemon]) {
 		if (daemon.noise.length) console.log(`     stderr: ${daemon.noise.join("").trim().split("\n").slice(-1)[0]}`);
 	}
 }

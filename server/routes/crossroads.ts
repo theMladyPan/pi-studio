@@ -6,7 +6,7 @@
 import { answer, fail, readJson } from "../http.ts";
 import { CONTROL_CHARS, MAX_EDITOR_CHARS, SCRATCH_SETTLE_MS } from "../limits.ts";
 import { join, resolve } from "node:path";
-import { SCRATCH_DIR } from "../paths.ts";
+import { isScratchFolder } from "../paths.ts";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
 import { activeHomeDefaults, describeWorkspace, emptyScratchFolder, ensureScratch, homeDefaults, rememberWorkspace, setHomeDefaults } from "../workspaces.ts";
@@ -34,8 +34,9 @@ export async function onOpenWorkspace(req, res) {
 	if (!folder) return void fail(res, 400, "a folder is required");
 	const absolute = resolve(folder);
 	// The one folder the app promises to have: a path typed into the box may be the scratch root, which the
-	// daemon makes on demand, and refusing it as missing would break that promise.
-	if (absolute === resolve(SCRATCH_DIR)) ensureScratch();
+	// daemon makes on demand, and refusing it as missing would break that promise. Compared by real path,
+	// so a link spelling of the scratch folder is the scratch row too.
+	if (isScratchFolder(absolute)) ensureScratch();
 	if (!existsSync(absolute) || !statSync(absolute).isDirectory()) {
 		// A typo fails here rather than creating a tree somewhere the human did not look.
 		return void fail(res, 404, `no such folder: ${absolute}`);
@@ -45,7 +46,7 @@ export async function onOpenWorkspace(req, res) {
 		// The scratch row keeps its temporary global state; every other folder gets a checked
 		// project home and, in a repository, the local excludes, before it is remembered. An
 		// unwritable or unsafe home is a clear refusal here, never an unsaved board.
-		if (absolute !== resolve(SCRATCH_DIR)) {
+		if (!isScratchFolder(absolute)) {
 			ensureProjectStateDir(absolute);
 			ensureStateExcludes(absolute);
 		}

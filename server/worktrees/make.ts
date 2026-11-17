@@ -6,7 +6,7 @@
 import { baseRef, gitIn, repoOf } from "../git/repo.ts";
 import { isScratchFolder } from "../paths.ts";
 import { join, resolve } from "node:path";
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 
 
 
@@ -50,7 +50,11 @@ export function ensureStateExcludes(folder: string): boolean {
 	if (!missing.length) return true;
 	const next = current + (current && !current.endsWith("\n") ? "\n" : "") + missing.join("\n") + "\n";
 	try {
-		writeFileSync(exclude, next, { mode: 0o600 });
+		// Written whole beside the file and renamed over it, so a crash cannot leave a half-written
+		// exclude behind; the content already there is carried over untouched.
+		const temp = `${exclude}.${process.pid}.tmp`;
+		writeFileSync(temp, next, { mode: 0o600 });
+		renameSync(temp, exclude);
 	} catch (error) {
 		throw new Error(`git exclude file could not be written: ${exclude}: ${(error as Error).message}`);
 	}

@@ -1473,6 +1473,60 @@ describe("routes", { concurrency: 8 }, () => {
 		}
 	});
 
+	test("transcript and image read the project-local session file, not the global decoy", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-transcript-project-"));
+		const folder = join(state, "proj");
+		const id = "aaaaaaaabbbbcccc";
+		const threadId = "t-project";
+		const sessionId = "sess-project";
+		const name = `2026-01-01_${sessionId}.jsonl`;
+		const session = (text: string, data: string) =>
+			`${JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text }] } })}\n` +
+			`${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "image", mimeType: "image/png", data }] } })}\n`;
+		mkdirSync(join(folder, ".pi-studio", "sessions"), { recursive: true });
+		writeFileSync(join(folder, ".pi-studio", "sessions", name), session("project words", "aGVsbG8="));
+		writeFileSync(
+			join(folder, ".pi-studio", "board.json"),
+			JSON.stringify({ version: 1, workspace: { id, folder: realpathSync(folder), name: "proj" }, savedAt: 1, threads: [{ id: threadId, title: "a thread", sessionId, at: 1, turns: [] }], cards: [] }),
+		);
+		mkdirSync(join(state, "sessions", id), { recursive: true });
+		writeFileSync(join(state, "sessions", id, name), session("decoy words", "ZGVjb3k="));
+		writeFileSync(join(state, "workspaces.json"), JSON.stringify({ version: 1, workspaces: [{ id, folder: realpathSync(folder), name: "proj", openedAt: 1 }] }));
+		const daemon = await boot(state);
+		try {
+			const transcript = await get(daemon, `/transcript/${threadId}?token=${daemon.token}&workspace=${id}`);
+			assert.equal(transcript.status, 200, transcript.body);
+			assert.ok(transcript.body.includes("project words"), transcript.body);
+			assert.ok(!transcript.body.includes("decoy words"), transcript.body);
+			const image = await get(daemon, `/transcript/${threadId}/image/0?token=${daemon.token}&workspace=${id}`);
+			assert.equal(image.status, 200, image.body);
+			assert.equal(image.body, "hello", "the picture came from the global decoy");
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	test("an unsafe project state refuses a live reconnect instead of taking the daemon down", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-events-unsafe-"));
+		const elsewhere = mkdtempSync(join(tmpdir(), "pi-studio-events-unsafe-target-"));
+		const folder = join(state, "proj");
+		const id = "bbbbbbbbccccdddd";
+		mkdirSync(folder);
+		symlinkSync(elsewhere, join(folder, ".pi-studio"));
+		writeFileSync(join(state, "workspaces.json"), JSON.stringify({ version: 1, workspaces: [{ id, folder: realpathSync(folder), name: "proj", openedAt: 1 }] }));
+		const daemon = await boot(state);
+		try {
+			assert.equal(await rawUpgrade(daemon, `/events?token=${daemon.token}&workspace=${id}`), 503);
+			const listed = await get(daemon, `/workspaces?token=${daemon.token}`);
+			assert.equal(listed.status, 200, listed.body);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+			rmSync(elsewhere, { recursive: true, force: true });
+		}
+	});
+
 	test("a close frame with invalid UTF-8 reason text is refused", async () => {
 		const folder = mkdtempSync(join(tmpdir(), "pi-studio-events-"));
 		const daemon = await boot(folder);

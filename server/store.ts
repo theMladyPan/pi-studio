@@ -15,6 +15,7 @@ import { MODE_NAMES, PATH_NAMES } from "./child/modes.ts";
 import { sweepTrees, thumbImages } from "./cards.ts";
 import { MAX_PUT_AWAY_CHILDREN } from "./limits.ts";
 import { ensureProjectStateDir, importLegacyProjectState } from "./state-storage.ts";
+import { ensureStateExcludes } from "./worktrees/make.ts";
 import { existsSync, statSync } from "node:fs";
 
 
@@ -380,6 +381,9 @@ export function boardFor(workspace) {
 	// stale by the crossroads (`describeWorkspace`) rather than created as a side effect here.
 	if (workspace.folder && !isScratchFolder(workspace.folder) && existsSync(workspace.folder) && statSync(workspace.folder).isDirectory()) {
 		ensureProjectStateDir(workspace.folder);
+		// A restored board reaches here without the explicit open route, so the local excludes are
+		// ensured on this path too: both `.agents/` and `.pi-studio/` stay out of git status.
+		ensureStateExcludes(workspace.folder);
 		importLegacyProjectState(workspace);
 	}
 	const saved = readJsonFile(boardFile(workspace), null);

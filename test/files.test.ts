@@ -177,10 +177,11 @@ describe("listing a workspace", () => {
 			assert.equal(names.includes(".git"), false, ".git is git's own folder");
 			assert.equal(names.some((one: string) => one.startsWith("bad")), false, "a control name is skipped");
 			assert.equal(names.includes("ünï cödé.txt"), true);
-			// Dirs first, then names: the first four of this folder are the four folders.
-			const firstFour = page.body.entries.slice(0, 4).map((one: any) => one.name);
-			assert.deepEqual(new Set(firstFour), new Set([".agents", "docs", "docs-link", "escape"]));
-			assert.equal(page.body.entries.slice(4).every((one: any) => one.dir === false), true);
+			// Dirs first, then names: the first five of this folder are the five folders, the project's
+			// own `.pi-studio` state folder visible among them.
+			const firstFive = page.body.entries.slice(0, 5).map((one: any) => one.name);
+			assert.deepEqual(new Set(firstFive), new Set([".agents", ".pi-studio", "docs", "docs-link", "escape"]));
+			assert.equal(page.body.entries.slice(5).every((one: any) => one.dir === false), true);
 			for (const one of page.body.entries) {
 				assert.equal(typeof one.size, "number");
 				assert.equal(typeof one.mtime, "number");
@@ -315,7 +316,7 @@ describe("listing a workspace", () => {
 			assert.equal(page.status, 200, JSON.stringify(page.body));
 			assert.equal(page.body.root, real);
 			const names = page.body.entries.map((one: any) => one.name);
-			assert.deepEqual(names, ["here.txt"]);
+			assert.deepEqual(names, [".pi-studio", "here.txt"]);
 		} finally {
 			daemon.child.kill();
 			rmSync(state, { recursive: true, force: true });
@@ -779,8 +780,8 @@ describe("what a workspace asks its explorer to show", () => {
 			const board = await openWorkspace(daemon, folder);
 			const page = await listed(daemon, board);
 			assert.equal(page.status, 200, JSON.stringify(page.body));
-			assert.deepEqual(page.body.entries.map((one: { name: string }) => one.name), [".agents", "node_modules", "keep.txt"]);
-			assert.equal(page.body.total, 3);
+			assert.deepEqual(page.body.entries.map((one: { name: string }) => one.name), [".agents", ".pi-studio", "node_modules", "keep.txt"]);
+			assert.equal(page.body.total, 4);
 			assert.deepEqual(page.body.settings.exclude, {
 				"**/.git": true,
 				"**/.svn": true,
@@ -858,8 +859,8 @@ describe("what a workspace asks its explorer to show", () => {
 			const board = await openWorkspace(daemon, folder);
 			const page = await listed(daemon, board);
 			assert.equal(page.status, 200, JSON.stringify(page.body));
-			assert.deepEqual(page.body.entries.map((one: { name: string }) => one.name).sort(), [".DS_Store", ".agents", ".vscode", "keep.txt", "lonely.tmp", "notes.keep", "user-only"]);
-			assert.equal(page.body.total, 7);
+			assert.deepEqual(page.body.entries.map((one: { name: string }) => one.name).sort(), [".DS_Store", ".agents", ".pi-studio", ".vscode", "keep.txt", "lonely.tmp", "notes.keep", "user-only"]);
+			assert.equal(page.body.total, 8);
 			const exclude = page.body.settings.exclude;
 			assert.equal(exclude["**/.git"], true, "the standard entries are still hidden");
 			assert.equal(exclude["**/*.log"], true, "the machine's own rule is kept");
@@ -891,7 +892,7 @@ describe("what a workspace asks its explorer to show", () => {
 			const board = await openWorkspace(daemon, folder);
 			const page = await listed(daemon, board);
 			assert.equal(page.status, 200, JSON.stringify(page.body));
-			assert.deepEqual(page.body.entries.map((one: { name: string }) => one.name), [".vscode", "keep.txt"]);
+			assert.deepEqual(page.body.entries.map((one: { name: string }) => one.name), [".pi-studio", ".vscode", "keep.txt"]);
 			assert.equal(page.body.settings.exclude["**/*.txt"], undefined, "nothing was taken from a file that could not be read");
 			assert.equal(page.body.settings.exclude["**/.DS_Store"], true);
 			assert.equal(page.body.settings.compactFolders, true);
@@ -915,14 +916,14 @@ describe("what a workspace asks its explorer to show", () => {
 			const board = await openWorkspace(daemon, folder);
 			const first = await listed(daemon, board);
 			assert.equal(first.status, 200, JSON.stringify(first.body));
-			assert.equal(first.body.total, 261, "the total is the entries an explorer shows");
+			assert.equal(first.body.total, 262, "the total is the entries an explorer shows");
 			assert.equal(first.body.entries.length, 200);
 			assert.equal(first.body.truncated, true);
 			assert.equal(first.body.next, first.body.entries[first.body.entries.length - 1].name);
 			assert.match(first.body.next, /^f\d{3}\.txt$/);
 			assert.ok(first.body.entries.every((one: { name: string }) => !one.name.endsWith(".skip")));
 			const second = await listed(daemon, board, `&after=${first.body.next}`);
-			assert.equal(second.body.entries.length, 61);
+			assert.equal(second.body.entries.length, 62);
 			assert.equal(second.body.truncated, false);
 			assert.equal(second.body.next, null);
 			assert.ok(second.body.entries.every((one: { name: string }) => !one.name.endsWith(".skip")));
@@ -950,13 +951,15 @@ describe("what a workspace asks its explorer to show", () => {
 			const board = await openWorkspace(daemon, folder);
 			const off = await listed(daemon, board);
 			assert.equal(off.status, 200, JSON.stringify(off.body));
-			assert.deepEqual(off.body.entries.map((one: { name: string }) => one.name), [".vscode", "build", ".gitignore", "app.log", "keep.txt"]);
+			assert.deepEqual(off.body.entries.map((one: { name: string }) => one.name), [".pi-studio", ".vscode", "build", ".gitignore", "app.log", "keep.txt"]);
 			assert.equal(off.body.settings.excludeGitIgnore, false);
 
 			const asked = JSON.stringify({ "explorer.excludeGitIgnore": true });
 			writeFileSync(join(folder, ".vscode", "settings.json"), asked);
 			const on = await listed(daemon, board);
 			assert.equal(on.status, 200, JSON.stringify(on.body));
+			// With gitignore on, `.pi-studio` is hidden by the repository's local exclude,
+			// the same rule that keeps it out of git status.
 			assert.deepEqual(on.body.entries.map((one: { name: string }) => one.name), [".vscode", ".gitignore", "keep.txt"]);
 			assert.equal(on.body.total, 3);
 			assert.equal(on.body.settings.excludeGitIgnore, true);
@@ -966,7 +969,7 @@ describe("what a workspace asks its explorer to show", () => {
 			const plainBoard = await openWorkspace(daemon, plain);
 			const warned = await listed(daemon, plainBoard);
 			assert.equal(warned.status, 200, JSON.stringify(warned.body));
-			assert.deepEqual(warned.body.entries.map((one: { name: string }) => one.name), [".vscode", "keep.txt"]);
+			assert.deepEqual(warned.body.entries.map((one: { name: string }) => one.name), [".pi-studio", ".vscode", "keep.txt"]);
 			assert.match(warned.body.settingsWarnings[0], /not a git checkout/);
 		} finally {
 			daemon.child.kill();

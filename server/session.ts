@@ -4,8 +4,8 @@
  * can be read back from.
  */
 import { join } from "node:path";
-import { STATE_DIR, projectRootFor } from "./paths.ts";
-import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
+import { STATE_DIR, legacySessionDir, projectRootFor } from "./paths.ts";
+import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 
 
 
@@ -18,9 +18,27 @@ export function sessionDir(workspace) {
 
 
 
+/**
+ * The sessions folder the crossroads counts: the project-local one once a project board exists, and the
+ * legacy global one until the first open imports it, so a recent folder that was never reopened under the
+ * new layout does not report every project as empty. A linked project home is never read through.
+ */
+function sessionFactsDir(workspace) {
+	const root = projectRootFor(workspace);
+	if (!root) return sessionDir(workspace);
+	try {
+		if (lstatSync(root).isSymbolicLink()) return legacySessionDir(workspace);
+	} catch {
+		// No project home yet, which is the ordinary case for a recent that was never reopened.
+	}
+	if (existsSync(join(root, "board.json"))) return join(root, "sessions");
+	const legacy = legacySessionDir(workspace);
+	return existsSync(legacy) ? legacy : join(root, "sessions");
+}
+
 /** How much of the app's own state a workspace holds: its sessions on disk. */
 export function sessionFacts(workspace) {
-	const dir = sessionDir(workspace);
+	const dir = sessionFactsDir(workspace);
 	let count = 0;
 	let bytes = 0;
 	try {

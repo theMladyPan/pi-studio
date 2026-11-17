@@ -9,7 +9,7 @@
  */
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { HAS_EXPLICIT_STATE, LEGACY_STATE_DIR, STATE_DIR, isScratchFolder, projectStateDir } from "./paths.ts";
+import { HAS_EXPLICIT_STATE, LEGACY_STATE_DIR, STATE_DIR, isScratchFolder, legacyStateRoot, projectStateDir } from "./paths.ts";
 
 const importedFor = new Set<string>();
 
@@ -82,12 +82,11 @@ export function importLegacyProjectState(workspace: { id: string; folder?: strin
 	const folder = workspace.folder ? resolve(workspace.folder) : "";
 	if (!folder || !workspace.id || importedFor.has(workspace.id)) return;
 	if (isScratchFolder(folder) || !existsSync(folder)) return;
-	importedFor.add(workspace.id);
 	const root = ensureProjectStateDir(folder);
 	// For the default instance the legacy home is the old ~/.pi location. For an explicit root the
 	// legacy home is that root itself: importing it never reaches the real user's data, because the
 	// source stays inside the root the human (or test) named.
-	const legacy = HAS_EXPLICIT_STATE ? STATE_DIR : LEGACY_STATE_DIR;
+	const legacy = legacyStateRoot();
 	if (!existsSync(legacy)) return;
 	copyNoOverwrite(join(legacy, "boards", `${workspace.id}.json`), join(root, "board.json"));
 	copyNoOverwrite(join(legacy, "gitgraph", `${workspace.id}.json`), join(root, "gitgraph.json"));
@@ -100,6 +99,9 @@ export function importLegacyProjectState(workspace: { id: string; folder?: strin
 	} catch {
 		// No legacy sessions for this workspace is the ordinary case.
 	}
+	// Only a successful pass is remembered: marking before the copy would make a refused path
+	// (an unsafe link, a read-only folder) unretryable after the human fixes it.
+	importedFor.add(workspace.id);
 }
 
 /**
