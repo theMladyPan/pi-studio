@@ -62,6 +62,7 @@ type ExDraft = { dir: string; asDir: boolean; name?: string };
 type ExPorts = { writeText?: (text: string) => unknown; selectCopy?: (text: string) => unknown };
 type ExIcon = { glyph: string; color: string };
 type ExSortable = { path: string; name: string; dir?: boolean };
+type ExSavedDoc = { path: string; text: string; mtime: number; size: number; editable: boolean };
 type ExDeleteResult = {
 	deleted: string[];
 	trashed: boolean;
@@ -83,6 +84,13 @@ type ExCore = {
 	selectRange(sel: ExSelection, order: string[], path: string): ExSelection;
 	selectAll(sel: ExSelection, order: string[]): ExSelection;
 	pressOpens(entry: { dir?: boolean } | null, event: { target?: { classList?: { contains(name: string): boolean } }; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean } | null): boolean;
+	pressAction(
+		entry: { dir?: boolean } | null,
+		press: { repeated: boolean } | null,
+		event: { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean } | null,
+		renaming?: boolean,
+	): string;
+	editTarget(entry: { dir?: boolean; link?: boolean } | null | undefined): string;
 	pressAgain(held: { path: string; at: number }, path: string, now: number): { repeated: boolean; next: { path: string; at: number } };
 	selectKeep(sel: ExSelection, known: Set<string>): string[];
 	rebasePath(path: string, from: string, to: string): string;
@@ -132,6 +140,8 @@ type ExCore = {
 	icon(theme: unknown, entry: { name: string; dir?: boolean }): ExIcon | null;
 	gitKind(git: string): string;
 	gitBadge(git: string): string;
+	saveDoc(doc: ExSavedDoc, content: string, answer: { mtime?: number; size?: number } | null): ExSavedDoc;
+	saveStatus(dirty: boolean): { text: string; tone: string };
 	PATH_MIME: string;
 };
 
@@ -221,6 +231,9 @@ test("Escape works down one order: a name or a menu, a sheet, the git graph, the
 	// The question about a permanent delete is the last word on a destructive press, so it goes first.
 	assert.equal(core.escapeTarget({ confirm: true, menu: true, rename: true, drawer: true }), "confirm");
 	assert.equal(core.escapeTarget({ confirm: false, drawer: true }), "drawer", "a hidden question holds nothing");
+	// The editor a file opened in stands over all of it, because the text in it is the human's.
+	assert.equal(core.escapeTarget({ editor: true, confirm: true, drawer: true }), "editor");
+	assert.equal(core.escapeTarget({ editor: false, drawer: true }), "drawer", "a closed editor holds nothing");
 });
 
 // ---------------------------------------------------------------- the tree
@@ -410,6 +423,41 @@ test("a second press on the same row inside a moment is the same intent, not ano
 	assert.equal(core.pressAgain({ path: "src", at: 1_000 }, "src", 2_000).repeated, false);
 	assert.equal(core.pressAgain({ path: "src", at: 1_000 }, "docs", 1_100).repeated, false);
 	assert.equal(core.pressAgain({ path: "", at: 0 }, "", 1_000).repeated, false);
+});
+
+test("a file pressed twice inside a moment asks to open, and a slow pair only selects", () => {
+	const file = entry("src/main.ts");
+	const first = core.pressAgain({ path: "", at: 0 }, file.path, 1_000);
+	assert.deepEqual([first.repeated, core.pressAction(file, first, {})], [false, "select"]);
+	const quick = core.pressAgain(first.next, file.path, 1_180);
+	assert.deepEqual([quick.repeated, core.pressAction(file, quick, {})], [true, "open"]);
+	// Half a second later the browser still calls it a double press, and nothing is opened for it.
+	const slow = core.pressAgain(first.next, file.path, 1_600);
+	assert.deepEqual([slow.repeated, core.pressAction(file, slow, {})], [false, "select"]);
+});
+
+test("a pair of presses that builds a selection never opens a file", () => {
+	const file = entry("src/main.ts");
+	const first = core.pressAgain({ path: "", at: 0 }, file.path, 1_000);
+	const quick = core.pressAgain(first.next, file.path, 1_180);
+	assert.equal(quick.repeated, true, "the pair is still a pair");
+	assert.equal(core.pressAction(file, quick, { shiftKey: true }), "select");
+	assert.equal(core.pressAction(file, quick, { ctrlKey: true }), "select");
+	assert.equal(core.pressAction(file, quick, { metaKey: true }), "select");
+	// A row whose name is being typed asks for nothing, however its presses land.
+	assert.equal(core.pressAction(file, quick, {}, true), "");
+	assert.equal(core.pressAction(file, first, {}, true), "");
+});
+
+test("a folder pair opens once, and its second press asks for nothing more", () => {
+	const folder = entry("src", true);
+	const first = core.pressAgain({ path: "", at: 0 }, folder.path, 1_000);
+	assert.equal(core.pressAction(folder, first, {}), "toggle");
+	const quick = core.pressAgain(first.next, folder.path, 1_180);
+	assert.deepEqual([quick.repeated, core.pressAction(folder, quick, {})], [true, ""]);
+	// A folder is never opened as a file, however its presses land.
+	assert.notEqual(core.pressAction(folder, first, {}), "open");
+	assert.notEqual(core.pressAction(folder, quick, {}), "open");
 });
 
 // ---------------------------------------------------------------- paths and drags
@@ -629,11 +677,57 @@ test("Git's two letters become the one colour and the one badge a row shows", ()
 	assert.equal(core.gitBadge(""), "");
 });
 
+// ---------------------------------------------------------------- the editor gate
+
+test("a second press on a row asks for an edit, a read, or nothing", () => {
+	assert.equal(core.editTarget(entry("a.py")), "edit");
+	assert.equal(core.editTarget(entry("src/main.ts")), "edit");
+	// A folder has nothing to open this way: a press already opens it.
+	assert.equal(core.editTarget(entry("src", true)), "");
+	// A link is read, because the daemon will not promise to write through one.
+	assert.equal(core.editTarget({ ...entry("link.py"), link: true }), "read");
+	assert.equal(core.editTarget(null), "");
+	assert.equal(core.editTarget(undefined), "");
+});
+
+// ---------------------------------------------------------------- what a save leaves behind
+
+test("a save keeps a size of zero, because zero is the size the next save is checked against", () => {
+	const doc: ExSavedDoc = { path: "notes.txt", text: "one\n", mtime: 5, size: 4, editable: true };
+	// An emptied file is 4 bytes smaller than nothing: its size is 0, and 0 is a real number here.
+	const emptied = core.saveDoc(doc, "", { mtime: 9, size: 0 });
+	assert.equal(emptied.size, 0, "a size of zero is the file's size, not a missing number");
+	assert.equal(emptied.mtime, 9);
+	assert.equal(emptied.text, "", "the text that was written is the text the editor now holds");
+	assert.equal(emptied.editable, true, "a save leaves the rest of the file as it was");
+	// The next save carries that zero, which is what the daemon compares the file on disk against.
+	assert.equal(core.saveDoc(emptied, "", { mtime: 11, size: 3 }).size, 3);
+	// An answer with no numbers is the old stamp, and the document it came from is not changed in place.
+	const kept = core.saveDoc(doc, "two\n", null);
+	assert.deepEqual([kept.mtime, kept.size], [5, 4]);
+	assert.deepEqual([doc.text, doc.mtime, doc.size], ["one\n", 5, 4], "the document handed in is untouched");
+	assert.equal(kept.text, "two\n");
+	// The route answers with numbers; a number that arrived as a string is still one.
+	assert.equal(core.saveDoc(doc, "three\n", { mtime: "21" as unknown as number, size: "0" as unknown as number }).size, 0);
+});
+
+test("a landed save is read from the text as it stands, not from the text that was sent", () => {
+	assert.deepEqual(core.saveStatus(false), { text: "saved", tone: "" });
+	// Text typed while the write was out leaves the editor dirty, and that is what it has to say.
+	assert.deepEqual(core.saveStatus(true), { text: "unsaved changes", tone: "dirty" });
+});
+
 // ---------------------------------------------------------------- the page
 
 test("the three drawers and the tree exist in the page, and the old picker is gone", () => {
 	const html = readFileSync(HTML, "utf8");
 	for (const id of ["drawerFiles", "drawerActivity", "drawerCards", "exTree", "exFilter", "exMenu", "exConfirm", "pickCount"]) {
+		assert.ok(html.includes(`id="${id}"`), `#${id} is in the page`);
+	}
+	// The editor a file opens in: its frame, the path it names, the surface it draws into, its status
+	// line and the two buttons that are its whole keyboard-free interface.
+	assert.ok(html.includes('id="exEditor" hidden role="dialog" aria-modal="true"'), "#exEditor is a modal dialog");
+	for (const id of ["exEditorTitle", "exEditorBody", "exEditorStatus", "exEditorSave", "exEditorClose"]) {
 		assert.ok(html.includes(`id="${id}"`), `#${id} is in the page`);
 	}
 	for (const gone of ['id="picker"', 'id="pickList"', 'id="pickFilter"', 'id="pickHidden"', 'id="railOpen"']) {

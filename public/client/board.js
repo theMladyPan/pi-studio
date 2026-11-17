@@ -3,6 +3,9 @@
 // with this one are a single subject, and this file is long enough already. The daemon serves every
 // `/client/*.js` by one rule, so a new module beside this one loads without a table to edit.
 import { createGitDrawer } from "./git-drawer.js";
+// The tokenizer and the text surface are shared with the git graph's reader, so both pages colour a
+// file the same way: one implementation, imported by each.
+import { createTextPreview, escapeHtml, highlight } from "./text-preview.js";
 const world = document.getElementById("world");
 const viewport = document.getElementById("viewport");
 // `overflow: clip` keeps the viewport out of the scroll containers, but an engine that ignores
@@ -216,8 +219,6 @@ const viewportCenter = () => ({
 });
 
 // ---------- helpers ------------------------------------------------------
-const escapeHtml = (s) =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const el = (tag, cls) => {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
@@ -419,6 +420,16 @@ function exPressAgain(held, path, now) {
 }
 
 /**
+ * What a second press on a row asks for: a file opens in the editor, and a folder asks for nothing this
+ * way because a press already opens it. A symbolic link is read rather than edited, because the daemon
+ * will not promise to write through a link to a file this workspace does not own.
+ */
+function exEditTarget(entry) {
+  if (!entry || entry.dir) return "";
+  return entry.link ? "read" : "edit";
+}
+
+/**
  * Whether a press on this row opens or closes it. A folder is a switch, and the whole row is its handle:
  * the arrow toggles, and so does the name, because that is how the explorer this one copies behaves. A
  * press carrying shift, ctrl or command is picking several rows instead, so it only picks.
@@ -427,6 +438,22 @@ function exPressOpens(entry, event) {
   if (!entry?.dir) return false;
   if (event?.target?.classList?.contains("ex-twist")) return true;
   return !event?.shiftKey && !event?.ctrlKey && !event?.metaKey;
+}
+
+/**
+ * What one press on a row asks the drawer to do, once the press before it is known. A press that is picking
+ * several rows only picks; a folder is a switch whose second half is swallowed; a file's second press is
+ * the edit its row exists for, while a slow second press is a new choice and only selects. A row being
+ * renamed asks for nothing, because the field over it is what the presses land on.
+ */
+function exPressAction(entry, press, event, renaming = false) {
+  if (renaming) return "";
+  if (!entry?.dir) {
+    if (event?.shiftKey || event?.ctrlKey || event?.metaKey) return "select";
+    return press?.repeated ? "open" : "select";
+  }
+  if (!exPressOpens(entry, event)) return "select";
+  return press?.repeated ? "" : "toggle";
 }
 
 // ---------- a path that moved, and everything that named it -----------------
@@ -710,11 +737,11 @@ function exDrawerToggle(state, name) {
 // ---------- which key belongs where ---------------------------------------
 /**
  * A plain letter reaches the board only while nothing is being typed and no surface of the drawer is
- * reading the keyboard. The order Escape works through is the same order as this list: a name being
- * edited or a menu standing open goes before the drawer, and the drawer goes before the card the board
- * is reading.
+ * reading the keyboard. The order Escape works through is the same order as this list: the editor a file
+ * opens in stands over everything, a name being edited or a menu standing open goes before the drawer,
+ * and the drawer goes before the card the board is reading.
  */
-const EX_ESCAPE_ORDER = ["confirm", "menu", "rename", "create", "sheet", "git", "drawer", "card"];
+const EX_ESCAPE_ORDER = ["editor", "confirm", "menu", "rename", "create", "sheet", "git", "drawer", "card"];
 
 function exEscapeTarget(open) {
   for (const one of EX_ESCAPE_ORDER) if (open?.[one]) return one;
@@ -792,6 +819,33 @@ function exGitBadge(git) {
   return letters[0];
 }
 
+// ---------- what the editor's save leaves behind ---------------------------
+/**
+ * The file the editor holds once the daemon has taken the write. The two stamps are the ones the answer
+ * named, and they are kept when they are numbers of their own: an emptied file's size is `0`, and that
+ * zero is what the next save is checked against, so it may not be folded away like a missing number.
+ */
+function exSavedDoc(doc, content, answer) {
+  const stamp = (value, fallback) => {
+    const number = typeof value === "string" && value.trim() ? Number(value) : value;
+    return typeof number === "number" && Number.isFinite(number) ? number : fallback;
+  };
+  return {
+    ...doc,
+    text: String(content ?? ""),
+    mtime: stamp(answer?.mtime, doc.mtime),
+    size: stamp(answer?.size, doc.size),
+  };
+}
+
+/**
+ * What the status line says when a save lands. Text typed while the write was out is still unsaved, so
+ * the answer is read against what the surface holds now rather than against the text that was sent.
+ */
+function exSaveStatus(dirty) {
+  return dirty ? { text: "unsaved changes", tone: "dirty" } : { text: "saved", tone: "" };
+}
+
 const explorerCore = {
   join: exJoin,
   parentOf: exParentOf,
@@ -810,6 +864,8 @@ const explorerCore = {
   selectAll: exSelectAll,
   pressOpens: exPressOpens,
   pressAgain: exPressAgain,
+  pressAction: exPressAction,
+  editTarget: exEditTarget,
   selectKeep: exSelectKeep,
   rebasePath: exRebasePath,
   rebaseListing: exRebaseListing,
@@ -841,6 +897,8 @@ const explorerCore = {
   icon: exIcon,
   gitKind: exGitKind,
   gitBadge: exGitBadge,
+  saveDoc: exSavedDoc,
+  saveStatus: exSaveStatus,
   PATH_MIME: EXPLORER_PATH_MIME,
 };
 
@@ -1006,26 +1064,6 @@ const applyView = () => {
     });
   }
   addEventListener("resize", scheduleArrows);
-
-  // ---------- syntax highlighting -----------------------------------------
-
-// ---------- syntax highlighting -----------------------------------------
-const TOKENS =
-  /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:[^`\\]|\\.)*`)|(#.*$|\/\/.*$)|(\b\d+(?:\.\d+)?\b)|(\b[A-Za-z_]\w*(?=\())|(\b(?:def|class|return|if|elif|else|for|while|import|from|as|try|except|finally|with|lambda|yield|await|async|const|let|var|function|export|default|new|throw|catch|switch|case|break|continue|type|interface|struct|fn|pub|use|mod|match|impl|self|this|True|False|None|null|true|false|nil|end|do|then)\b)/g;
-
-function highlight(raw) {
-  let out = "";
-  let last = 0;
-  for (const match of raw.matchAll(TOKENS)) {
-    const [text] = match;
-    out += escapeHtml(raw.slice(last, match.index));
-    const cls = match[1] ? "s" : match[2] ? "c" : match[3] ? "n2" : match[4] ? "f" : "k";
-    out += `<span class="${cls}">${escapeHtml(text)}</span>`;
-    last = match.index + text.length;
-  }
-  out += escapeHtml(raw.slice(last));
-  return out || "&nbsp;";
-}
 
 // ---------- markdown -----------------------------------------------------
 /**
@@ -6762,7 +6800,6 @@ function makeComposer(entry) {
     thinkBtn: root.querySelector(".think-pick"),
     ctxBtn: root.querySelector(".ctx-btn"),
     ctxLabel: root.querySelector(".ctx-label"),
-    filesBtn: root.querySelector(".files"),
     cmdBtn: root.querySelector(".cmd-pick"),
     // Steering cuts a run short, so it is a choice about this message rather than about the board.
     sendMode: "queue",
@@ -6977,13 +7014,6 @@ function wireComposer(inst) {
     // chip makes its own field current: a hint that lands while the list is up then lands here.
     activeComposer = inst;
     openCmdPick(inst, true);
-  });
-  inst.filesBtn.addEventListener("click", () => {
-    // A path is attached in the workspace's tree, and that tree belongs to this message while the field
-    // is the one in hand: the drawer's own footer names it, and its name is what the chips land on.
-    activeComposer = inst;
-    exPaintTarget();
-    showDrawer("files");
   });
 }
 
@@ -8388,9 +8418,11 @@ const SHORTCUTS = [
       { keys: "F2", does: "rename the row you are on, and enter keeps the name" },
       { keys: "delete", does: "delete the selected paths, through the trash bin first" },
       { keys: "ctrl+x / ctrl+c / ctrl+v", does: "cut, copy and paste paths inside the tree" },
+      { keys: "enter / double-click a file", does: "open it in the editor" },
+      { keys: "ctrl+s", does: "in the editor, write the file back and keep it open" },
       { keys: "drag a row", does: "move it into a folder, and onto a thread card to reference it there" },
       { keys: "right-click a row", does: "cut, copy, paste, rename, delete, copy a path, or reference it in a thread" },
-      { keys: "esc", does: "close the menu or the name being typed first, then the drawer" },
+      { keys: "esc", does: "close the editor when it has no unsaved changes, then the menu or the name being typed, then the drawer" },
     ],
   },
   {
@@ -9705,7 +9737,7 @@ function takePicture(inst, file) {
 /**
  * What one dropped file becomes. A picture is a picture, and anything else is a file the browser cannot
  * name by path: the daemon keeps a copy of it and the message carries where that copy is, exactly as the
- * files button attaches a path. The transfer is read before anything is awaited, because the browser
+ * files drawer references one. The transfer is read before anything is awaited, because the browser
  * empties it once the event that carried it is over.
  */
 function takeDropped(inst, transfer) {
@@ -9716,7 +9748,7 @@ function takeDropped(inst, transfer) {
       .map((entry) => entry.name),
   );
   // A folder cannot be read by a browser, so it is named rather than sent as an empty file.
-  if (folders.size) hintLine("a folder cannot be dropped — use files to attach one", true, inst);
+  if (folders.size) hintLine("a folder cannot be dropped — reference it from the files drawer (f)", true, inst);
   for (const file of [...(transfer?.files ?? [])]) {
     if (folders.has(file.name)) continue;
     if (isPicture(file)) takePicture(inst, file);
@@ -9786,6 +9818,12 @@ const exConfirmTitle = document.getElementById("exConfirmTitle");
 const exConfirmBody = document.getElementById("exConfirmBody");
 const exConfirmYes = document.getElementById("exConfirmYes");
 const exConfirmNo = document.getElementById("exConfirmNo");
+const exEditorEl = document.getElementById("exEditor");
+const exEditorTitle = document.getElementById("exEditorTitle");
+const exEditorBody = document.getElementById("exEditorBody");
+const exEditorStatus = document.getElementById("exEditorStatus");
+const exEditorSaveBtn = document.getElementById("exEditorSave");
+const exEditorCloseBtn = document.getElementById("exEditorClose");
 const pickCount = document.getElementById("pickCount");
 
 /**
@@ -10021,11 +10059,15 @@ function exRowEl(entry, level) {
     else explorerCore.select(exState.sel, entry.path);
     exTreeEl.focus();
     // A double press is one intent, so the second land on the same row does not shut what the first
-    // opened before it could be seen.
+    // opened before it could be seen, and a file's second press is the edit the row asks for.
     const press = explorerCore.pressAgain(exPress, entry.path, Date.now());
     exPress = press.next;
-    if (!explorerCore.pressOpens(entry, event) || press.repeated) return void exPaintSelection();
-    void exToggleFolder(entry);
+    const action = explorerCore.pressAction(entry, press, event, exState.renaming === entry.path);
+    if (action === "open") {
+      const target = explorerCore.editTarget(entry);
+      if (target) void exEditOpen(entry.path, target);
+    } else if (action === "toggle") void exToggleFolder(entry);
+    else exPaintSelection();
   });
   row.addEventListener("contextmenu", (event) => {
     event.preventDefault();
@@ -10562,6 +10604,173 @@ function exAskPermanent(paths) {
   });
 }
 
+// ---------- the text editor ----------------------------------------------
+/**
+ * The file the editor holds: the path the daemon knows it by, the stamp it was read with — `mtime` and
+ * `size`, which is what the writer checks before it writes — the text exactly as it was read, and
+ * whether the daemon will take a write at all. The surface is made once for the life of the page, so
+ * opening a second file reuses the same textarea rather than growing a new one; a save replaces this
+ * record whole, which is why it is bound with `let`.
+ */
+let exEditorDoc = { path: "", text: "", mtime: 0, size: 0, editable: false };
+/** What had the focus before the editor opened, handed back when it closes. */
+let exEditorPrior = null;
+const exEditorPreview = createTextPreview(exEditorBody, {
+  onInput: () => exEditorSay(exEditorDirty() ? "unsaved changes" : "saved", exEditorDirty() ? "dirty" : ""),
+});
+
+/** Whether what stands in the editor is still the text that was read from disk. */
+function exEditorDirty() {
+  return exEditorPreview.getText() !== exEditorDoc.text;
+}
+
+/** The editor's one line: last thing that happened, in grey, amber for unsaved text and red for a refusal. */
+function exEditorSay(text, tone = "") {
+  exEditorStatus.textContent = text;
+  exEditorStatus.classList.toggle("bad", tone === "bad");
+  exEditorStatus.classList.toggle("dirty", tone === "dirty");
+  exEditorSaveBtn.disabled = !exEditorDoc.editable;
+}
+
+/** A refusal from the daemon in words that name its cause, because `415` alone tells a reader nothing. */
+function exEditorTrouble(status, text) {
+  if (status === 404) return "that path is not a file any more";
+  if (status === 415) return "this file is not text, so there is nothing to show";
+  if (status === 413) return "this file is larger than 512 KiB, which this editor does not take";
+  if (status === 409) return "the file changed on disk since it was opened";
+  return String(text || "").slice(0, 140) || `the daemon answered ${status}`;
+}
+
+/** One GET, read either way: the status is what the editor speaks from, so a failure is an answer too. */
+async function exGet(path) {
+  const response = await fetch(path, { credentials: "same-origin" });
+  const text = (await response.text()).trim();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {}
+  return { status: response.status, ok: response.ok, data, text };
+}
+
+/**
+ * Open one file. The gate has already said whether a second press on the row asks for an edit or a read;
+ * the daemon has the last word, because it is the one that knows whether it can write this path at all.
+ * A read that fails leaves the modal standing with the reason in its status line, so the drawer's
+ * selection and the tree under it are exactly as they were.
+ */
+async function exEditOpen(path, target = "edit") {
+  if (exEditorEl.hidden) exEditorPrior = document.activeElement;
+  exEditorEl.hidden = false;
+  exEditorTitle.textContent = path;
+  exEditorDoc.path = path;
+  exEditorDoc.text = "";
+  exEditorDoc.editable = false;
+  exEditorPreview.setDocument({ path, content: "" });
+  // Nothing is typed into a file until the daemon has said the file may be written: the surface refuses
+  // the caret while the read is in the air, not only after it has answered.
+  exEditorPreview.setReadOnly(true);
+  exEditorSay("reading\u2026");
+  exEditorPreview.focus();
+  let answer;
+  try {
+    answer = await exGet(`/files/read?${auth}&path=${encodeURIComponent(path)}`);
+  } catch {
+    if (!exEditorEl.hidden && exEditorDoc.path === path) {
+      exEditorSay("could not reach the daemon \u2014 nothing was read", "bad");
+      exEditorCloseBtn.focus();
+    }
+    return;
+  }
+  // The editor may have been shut while the read was in the air, or another file may have taken it.
+  if (exEditorEl.hidden || exEditorDoc.path !== path) return;
+  if (!answer.ok) {
+    exEditorSay(exEditorTrouble(answer.status, answer.text), "bad");
+    exEditorCloseBtn.focus();
+    return;
+  }
+  const data = answer.data ?? {};
+  exEditorDoc.text = String(data.content ?? "");
+  exEditorDoc.mtime = Number(data.mtime) || 0;
+  exEditorDoc.size = Number(data.size) || 0;
+  exEditorDoc.editable = data.editable !== false && target !== "read";
+  exEditorPreview.setDocument({ path, content: exEditorDoc.text });
+  exEditorPreview.setReadOnly(!exEditorDoc.editable);
+  exEditorSay(
+    exEditorDoc.editable ? `read ${exEditorDoc.size} bytes` : "read only \u2014 this path is a link, or the workspace has no root",
+  );
+  if (exEditorDoc.editable) exEditorPreview.focus();
+  else exEditorCloseBtn.focus();
+}
+
+/**
+ * Write the text back. A save that succeeds leaves the modal standing, because a human who saved is
+ * often not done reading; the status line is what says it landed. A refusal says why and keeps the text.
+ */
+async function exEditSave() {
+  const path = exEditorDoc.path;
+  if (exEditorEl.hidden || !path) return;
+  if (!exEditorDoc.editable) return exEditorSay("read only \u2014 there is nothing here to save", "bad");
+  const content = exEditorPreview.getText();
+  exEditorSay("saving\u2026");
+  let answer;
+  try {
+    answer = await exPost("/files/write", { path, content, mtime: exEditorDoc.mtime, size: exEditorDoc.size });
+  } catch {
+    // A daemon that went away is not an answer, and the text stays where it is rather than saying saved.
+    if (!exEditorEl.hidden && exEditorDoc.path === path) {
+      exEditorSay("could not reach the daemon \u2014 the text is not saved", "bad");
+    }
+    return;
+  }
+  if (exEditorEl.hidden || exEditorDoc.path !== path) return;
+  if (!answer.ok || !answer.data) return exEditorSay(exEditorTrouble(answer.status, answer.text), "bad");
+  exEditorDoc = explorerCore.saveDoc(exEditorDoc, content, answer.data);
+  // A human who kept typing while the write was out is not looking at a saved file, and the size of an
+  // emptied file is the zero the daemon has just answered with.
+  const said = explorerCore.saveStatus(exEditorDirty());
+  exEditorSay(said.text, said.tone);
+}
+
+/** Shut the editor and hand the keyboard back: the tree the file came from, when that is still there. */
+function exEditClose() {
+  if (exEditorEl.hidden) return;
+  exEditorEl.hidden = true;
+  exEditorDoc.path = "";
+  const prior = exEditorPrior;
+  exEditorPrior = null;
+  if (prior instanceof HTMLElement && document.contains(prior)) prior.focus();
+  else exTreeEl.focus();
+}
+
+/**
+ * Escape gives up a clean editor and refuses a dirty one: text that was typed is not something a
+ * single press may throw away. The status line is where the refusal is said.
+ */
+function exEditEscape() {
+  if (exEditorDirty()) return exEditorSay("unsaved changes \u2014 save, or close and lose them", "bad");
+  exEditClose();
+}
+
+// One listener for the modal's own keys: Tab stays inside it, and ctrl or command with s writes it back.
+exEditorEl.addEventListener("keydown", (event) => {
+  if (event.key === "Tab") {
+    const stops = [...exEditorEl.querySelectorAll("textarea, button:not([disabled])")];
+    if (!stops.length) return;
+    event.preventDefault();
+    const at = stops.indexOf(document.activeElement);
+    const step = event.shiftKey ? -1 : 1;
+    stops[(at + step + stops.length) % stops.length].focus();
+    return;
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+    event.preventDefault();
+    event.stopPropagation();
+    void exEditSave();
+  }
+});
+exEditorSaveBtn.addEventListener("click", () => void exEditSave());
+exEditorCloseBtn.addEventListener("click", () => exEditClose());
+
 /** A path onto the clipboard; the relative one is what a message wants to carry. */
 async function exCopyPath(paths, absolute) {
   const lines = paths.map((path) => (absolute ? explorerCore.absolute(exState.root, path) : path));
@@ -10696,7 +10905,8 @@ exTreeEl.addEventListener("keydown", (event) => {
   if (key === "Enter") {
     event.preventDefault();
     if (held?.dir) return void exToggleFolder(held);
-    if (held) footNote("opening a file in an editor is not built yet");
+    const target = explorerCore.editTarget(held);
+    if (target) void exEditOpen(held.path, target);
     return;
   }
   if (meta && key.toLowerCase() === "a") {
@@ -11923,12 +12133,17 @@ const openSheet = () => document.querySelector(".sheet:not([hidden])");
  * open. A menu and a name being typed are.
  */
 const drawerSurface = () =>
-  !exConfirmEl.hidden || Boolean(exState.menu) || Boolean(exState.renaming) || Boolean(exState.draft);
+  !exEditorEl.hidden ||
+  !exConfirmEl.hidden ||
+  Boolean(exState.menu) ||
+  Boolean(exState.renaming) ||
+  Boolean(exState.draft);
 
 /** Every surface that stands over the board right now, named the way the drawer's escape order names them. */
 function exOpenSurfaces() {
   const sheet = openSheet();
   return {
+    editor: !exEditorEl.hidden,
     confirm: !exConfirmEl.hidden,
     menu: Boolean(exState.menu),
     rename: Boolean(exState.renaming),
@@ -11942,8 +12157,9 @@ function exOpenSurfaces() {
 
 // The selection is a reading position, so Escape gives it up: the board stops dimming and the wheel
 // goes back to moving the board. Everything that stands over the board takes Escape first and stops it
-// there, and the order it is read in is the drawer's own list — the permanent-delete question, a name or
-// a menu of the files drawer, a sheet, the git graph, the drawer, and only then the card being read.
+// there, and the order it is read in is the drawer's own list — the editor a file opened in, the
+// permanent-delete question, a name or a menu of the files drawer, a sheet, the git graph, the drawer,
+// and only then the card being read.
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   // The `@` list is its own surface and takes Escape first, so shutting it does not also drop
@@ -11954,6 +12170,7 @@ document.addEventListener("keydown", (event) => {
   // One press is spent here, once: nothing behind this surface hears it as well.
   event.preventDefault();
   event.stopPropagation();
+  if (target === "editor") return exEditEscape();
   if (target === "confirm") return exConfirmNo.click();
   // A menu or a name in the drawer, when the focus has already left the drawer's own handler.
   if (target === "menu") return exCloseMenu();

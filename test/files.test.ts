@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, describe, test } from "node:test";
@@ -71,6 +71,20 @@ const listed = async (daemon: Daemon, board: string, query = "") => {
 };
 const json = (res: { status: number; body: string }) => ({ status: res.status, body: JSON.parse(res.body) });
 
+/** The editor's read and its save, on the human's token unless a test names another one. */
+const readRoute = (daemon: Daemon, board: string, path: string, token = daemon.token) =>
+	get(daemon, `/files/read?token=${token}&workspace=${board}&path=${encodeURIComponent(path)}`);
+const readFile = async (daemon: Daemon, board: string, path: string) => {
+	const res = await readRoute(daemon, board, path);
+	return { status: res.status, body: res.body ? JSON.parse(res.body) : null };
+};
+const saveFile = (daemon: Daemon, board: string, body: unknown, token = daemon.token) =>
+	fetch(`${daemon.base}/files/write?token=${token}&workspace=${board}`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body),
+	}).then(async (res) => ({ status: res.status, body: await res.text() }));
+
 /** A workspace opened on a temporary folder, the way a board is opened from the crossroads. */
 async function openWorkspace(daemon: Daemon, folder: string): Promise<string> {
 	const opened = await fetch(`${daemon.base}/workspace?token=${daemon.token}`, {
@@ -112,14 +126,17 @@ describe("the explorer's routes belong to the human", () => {
 	const child = { human: false, board: { id: "board-a" }, thread: { id: "t1" } };
 
 	test("none of them is a route a thread may reach, and the human is refused nothing", () => {
-		const routes = ["/files", "/files/new", "/files/rename", "/files/move", "/files/copy", "/files/delete"];
+		const reads = ["/files", "/files/read"];
+		const changes = ["/files/new", "/files/rename", "/files/move", "/files/copy", "/files/delete", "/files/write"];
+		const routes = [...reads, ...changes];
 		for (const path of routes) assert.equal(THREAD_ROUTES.has(path), false, `${path} is in THREAD_ROUTES`);
 		// The list is compared whole too: a route added to THREAD_ROUTES widens what a child may reach.
 		assert.equal(THREAD_ROUTES.size, 7);
-		for (const path of routes.slice(1)) assert.equal(threadRefusal(child, "POST", path, "board-a"), "a thread may not use that", path);
-		assert.equal(threadRefusal(child, "GET", "/files", "board-a"), "a thread may not use that");
+		for (const path of changes) assert.equal(threadRefusal(child, "POST", path, "board-a"), "a thread may not use that", path);
+		for (const path of reads) assert.equal(threadRefusal(child, "GET", path, "board-a"), "a thread may not use that", path);
 		assert.equal(threadRefusal({ human: true }, "GET", "/files", ""), null);
-		for (const path of routes.slice(1)) assert.equal(threadRefusal({ human: true }, "POST", path, "board-a"), null, path);
+		for (const path of reads) assert.equal(threadRefusal({ human: true }, "GET", path, ""), null, path);
+		for (const path of changes) assert.equal(threadRefusal({ human: true }, "POST", path, "board-a"), null, path);
 	});
 });
 
@@ -951,6 +968,211 @@ describe("what a workspace asks its explorer to show", () => {
 			assert.equal(warned.status, 200, JSON.stringify(warned.body));
 			assert.deepEqual(warned.body.entries.map((one: { name: string }) => one.name), [".vscode", "keep.txt"]);
 			assert.match(warned.body.settingsWarnings[0], /not a git checkout/);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("reading one file", () => {
+	test("the text comes back folded, with the endings and the mark it carries", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-read-"));
+		const folder = join(state, "proj");
+		const outside = join(state, "outside");
+		mkdirSync(join(folder, "sub"), { recursive: true });
+		mkdirSync(outside);
+		writeFileSync(join(folder, "lf.txt"), "one\ntwo\n");
+		writeFileSync(join(folder, "crlf.txt"), "one\r\ntwo\r\n");
+		writeFileSync(join(folder, "bom.txt"), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("one\ntwo\n")]));
+		writeFileSync(join(folder, "bom-crlf.txt"), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("one\r\ntwo\r\n")]));
+		// A PNG header: a NUL in the opening bytes, which no text carries.
+		writeFileSync(join(folder, "picture.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]));
+		// Not UTF-8 and no NUL at all: the decoder, not the probe, has to say so.
+		writeFileSync(join(folder, "wrong.bin"), Buffer.from([0x61, 0xc3, 0x28, 0x62]));
+		writeFileSync(join(folder, "edge.txt"), "x".repeat(512 * 1024));
+		writeFileSync(join(folder, "over.txt"), "x".repeat(512 * 1024 + 1));
+		writeFileSync(join(folder, "sub", "linked.txt"), "through\n");
+		writeFileSync(join(outside, "secret.txt"), "secret\n");
+		symlinkSync("sub/linked.txt", join(folder, "link.txt"));
+		symlinkSync(join(outside, "secret.txt"), join(folder, "escape.txt"));
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+
+			const lf = await readFile(daemon, board, "lf.txt");
+			assert.equal(lf.status, 200, JSON.stringify(lf.body));
+			assert.deepEqual(Object.keys(lf.body).sort(), ["bom", "content", "editable", "eol", "mtime", "path", "size"]);
+			assert.equal(lf.body.path, "lf.txt");
+			assert.equal(lf.body.content, "one\ntwo\n");
+			assert.equal(lf.body.eol, "lf");
+			assert.equal(lf.body.bom, false);
+			assert.equal(lf.body.editable, true);
+			assert.equal(lf.body.size, 8);
+			assert.equal(lf.body.mtime, Math.floor(statSync(join(folder, "lf.txt")).mtimeMs));
+
+			const crlf = await readFile(daemon, board, "crlf.txt");
+			assert.equal(crlf.status, 200, JSON.stringify(crlf.body));
+			assert.equal(crlf.body.content, "one\ntwo\n", "the text is folded for the editor");
+			assert.equal(crlf.body.eol, "crlf");
+			assert.equal(crlf.body.size, 10, "the size is the file on disk, not the folded text");
+
+			const bom = await readFile(daemon, board, "bom.txt");
+			assert.equal(bom.status, 200, JSON.stringify(bom.body));
+			assert.equal(bom.body.content, "one\ntwo\n", "the mark is not part of the text");
+			assert.equal(bom.body.bom, true);
+			assert.equal(bom.body.size, 11);
+
+			const both = await readFile(daemon, board, "bom-crlf.txt");
+			assert.equal(both.body.bom, true);
+			assert.equal(both.body.eol, "crlf");
+			assert.equal(both.body.content, "one\ntwo\n");
+
+			const picture = await readRoute(daemon, board, "picture.png");
+			assert.equal(picture.status, 415, picture.body);
+			const wrong = await readRoute(daemon, board, "wrong.bin");
+			assert.equal(wrong.status, 415, wrong.body, "invalid UTF-8 is binary even with no NUL");
+
+			const edge = await readFile(daemon, board, "edge.txt");
+			assert.equal(edge.status, 200, "exactly 512 KiB is a file the editor opens");
+			assert.equal(edge.body.size, 512 * 1024);
+			const over = await readRoute(daemon, board, "over.txt");
+			assert.equal(over.status, 413, over.body);
+
+			// A link that stays in the workspace is read through its target and is not the human's to save.
+			const link = await readFile(daemon, board, "link.txt");
+			assert.equal(link.status, 200, JSON.stringify(link.body));
+			assert.equal(link.body.content, "through\n");
+			assert.equal(link.body.editable, false);
+			assert.equal(link.body.path, "link.txt", "the path is the one that was asked for");
+
+			const missing = await readRoute(daemon, board, "nope.txt");
+			assert.equal(missing.status, 404, missing.body);
+			const dir = await readRoute(daemon, board, "sub");
+			assert.equal(dir.status, 404, "a folder is not a file");
+			const escape = await readRoute(daemon, board, "escape.txt");
+			assert.equal(escape.status, 409, escape.body);
+			assert.match(escape.body, /outside the workspace/);
+			for (const path of ["..", "../outside/secret.txt", ".git/HEAD", "a\u0000b"]) {
+				const refused = await readRoute(daemon, board, path);
+				assert.equal(refused.status, 400, `${path} answered ${refused.status}: ${refused.body}`);
+			}
+			const noBoard = await get(daemon, `/files/read?token=${daemon.token}&workspace=nope&path=lf.txt`);
+			assert.equal(noBoard.status, 409);
+			assert.match(noBoard.body, /no such workspace/);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("saving one file", () => {
+	test("a save puts the file's own endings and mark back, keeps its mode, and refuses what it did not read", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-write-"));
+		const folder = join(state, "proj");
+		mkdirSync(folder);
+		const crlfPath = join(folder, "crlf.txt");
+		const bomPath = join(folder, "bom.txt");
+		const plainPath = join(folder, "plain.txt");
+		const stalePath = join(folder, "stale.txt");
+		writeFileSync(crlfPath, "one\r\ntwo\r\n");
+		writeFileSync(bomPath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("one\ntwo\n")]));
+		writeFileSync(plainPath, "one\ntwo\n");
+		chmodSync(crlfPath, 0o640);
+		chmodSync(plainPath, 0o600);
+		writeFileSync(stalePath, "a\n");
+		symlinkSync("sub/beyond.txt", join(folder, "link.txt"));
+		mkdirSync(join(folder, "sub"));
+		writeFileSync(join(folder, "sub", "beyond.txt"), "beyond\n");
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+
+			// Folded text into a CRLF file comes back as the file's own endings, at the file's own mode.
+			const crlf = await readFile(daemon, board, "crlf.txt");
+			assert.equal(crlf.body.eol, "crlf");
+			const saved = await saveFile(daemon, board, { path: "crlf.txt", content: "one\ntwo\nthree\n", mtime: crlf.body.mtime, size: crlf.body.size });
+			assert.equal(saved.status, 200, saved.body);
+			const crlfAnswer = JSON.parse(saved.body);
+			assert.deepEqual(Object.keys(crlfAnswer).sort(), ["mtime", "path", "size"]);
+			assert.equal(crlfAnswer.path, "crlf.txt");
+			assert.equal(readFileSync(crlfPath, "utf8"), "one\r\ntwo\r\nthree\r\n");
+			assert.equal(crlfAnswer.size, statSync(crlfPath).size);
+			assert.equal(crlfAnswer.mtime, Math.floor(statSync(crlfPath).mtimeMs));
+			assert.equal(statSync(crlfPath).mode & 0o7777, 0o640, "the mode is the file's own");
+			assert.equal(readdirSync(folder).some((name) => name.endsWith(".tmp")), false, "the temp file is gone");
+
+			// A mark and its endings both come back, and the read agrees with the disk afterwards.
+			const bom = await readFile(daemon, board, "bom.txt");
+			const bomSaved = await saveFile(daemon, board, { path: "bom.txt", content: "one\ntwo\n", mtime: bom.body.mtime, size: bom.body.size });
+			assert.equal(bomSaved.status, 200, bomSaved.body);
+			assert.deepEqual([...readFileSync(bomPath).subarray(0, 3)], [0xef, 0xbb, 0xbf], "the mark is the file's own");
+			assert.equal(readFileSync(bomPath).subarray(3).toString("utf8"), "one\ntwo\n");
+			const again = await readFile(daemon, board, "bom.txt");
+			assert.equal(again.body.bom, true);
+			assert.equal(again.body.eol, "lf");
+			assert.equal(again.body.content, "one\ntwo\n");
+
+			// The file the client read is not the file on disk any more.
+			const stale = await readFile(daemon, board, "stale.txt");
+			writeFileSync(stalePath, "someone else wrote this\n");
+			const refused = await saveFile(daemon, board, { path: "stale.txt", content: "mine\n", mtime: stale.body.mtime, size: stale.body.size });
+			assert.equal(refused.status, 409, refused.body);
+			assert.equal(refused.body, "the file changed on disk since it was opened");
+			assert.equal(readFileSync(stalePath, "utf8"), "someone else wrote this\n", "a refused save writes nothing");
+
+			// A save never makes a file.
+			const missing = await saveFile(daemon, board, { path: "made.txt", content: "x\n", mtime: 1, size: 0 });
+			assert.equal(missing.status, 404, missing.body);
+			assert.equal(existsSync(join(folder, "made.txt")), false);
+
+			// A link is not what the human opened, so a save through it is refused and its target is kept.
+			const throughLink = await saveFile(daemon, board, { path: "link.txt", content: "over\n", mtime: 1, size: 0 });
+			assert.equal(throughLink.status, 409, throughLink.body);
+			assert.equal(readFileSync(join(folder, "sub", "beyond.txt"), "utf8"), "beyond\n");
+
+			const big = await saveFile(daemon, board, { path: "plain.txt", content: "x".repeat(512 * 1024 + 1), mtime: 1, size: 1 });
+			assert.equal(big.status, 413, big.body);
+			const malformed = await saveFile(daemon, board, { path: "plain.txt" });
+			assert.equal(malformed.status, 400, malformed.body);
+			const notText = await saveFile(daemon, board, { path: "plain.txt", content: "a\u0000b", mtime: 1, size: 1 });
+			assert.equal(notText.status, 415, notText.body);
+			const badPath = await saveFile(daemon, board, { path: "../outside.txt", content: "x", mtime: 1, size: 1 });
+			assert.equal(badPath.status, 400, badPath.body);
+
+			// The last writer of an LF file writes LF, and the text is the text.
+			const plain = await readFile(daemon, board, "plain.txt");
+			const lfSaved = await saveFile(daemon, board, { path: "plain.txt", content: "no newline at all", mtime: plain.body.mtime, size: plain.body.size });
+			assert.equal(lfSaved.status, 200, lfSaved.body);
+			assert.equal(readFileSync(plainPath, "utf8"), "no newline at all");
+			assert.equal(statSync(plainPath).mode & 0o7777, 0o600);
+
+			// A name at the edge of the filesystem's 255 bytes is still a file the editor saves. The temp file
+			// it is written through is a name of its own, so the save does not have to repeat this one.
+			const longName = `${"n".repeat(220)}.txt`;
+			assert.equal(Buffer.byteLength(longName), 224);
+			writeFileSync(join(folder, longName), "short\n");
+			const longRead = await readFile(daemon, board, longName);
+			assert.equal(longRead.status, 200, JSON.stringify(longRead.body));
+			const longSaved = await saveFile(daemon, board, {
+				path: longName,
+				content: "a longer body\n",
+				mtime: longRead.body.mtime,
+				size: longRead.body.size,
+			});
+			assert.equal(longSaved.status, 200, longSaved.body);
+			assert.equal(readFileSync(join(folder, longName), "utf8"), "a longer body\n");
+			assert.deepEqual(
+				readdirSync(folder).filter((name) => name.endsWith(".tmp")),
+				[],
+				"the temp file a save writes through is gone",
+			);
+
+			// A token that is not the human's is not a request this route answers.
+			const foreign = await saveFile(daemon, board, { path: "plain.txt", content: "x", mtime: 1, size: 1 }, "thread-secret-token");
+			assert.equal(foreign.status, 403, foreign.body);
+			assert.match(foreign.body, /forbidden/);
 		} finally {
 			daemon.child.kill();
 			rmSync(state, { recursive: true, force: true });
