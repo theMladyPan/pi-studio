@@ -6762,7 +6762,6 @@ function makeComposer(entry) {
     thinkBtn: root.querySelector(".think-pick"),
     ctxBtn: root.querySelector(".ctx-btn"),
     ctxLabel: root.querySelector(".ctx-label"),
-    filesBtn: root.querySelector(".files"),
     cmdBtn: root.querySelector(".cmd-pick"),
     // Steering cuts a run short, so it is a choice about this message rather than about the board.
     sendMode: "queue",
@@ -6977,13 +6976,6 @@ function wireComposer(inst) {
     // chip makes its own field current: a hint that lands while the list is up then lands here.
     activeComposer = inst;
     openCmdPick(inst, true);
-  });
-  inst.filesBtn.addEventListener("click", () => {
-    // A path is attached in the workspace's tree, and that tree belongs to this message while the field
-    // is the one in hand: the drawer's own footer names it, and its name is what the chips land on.
-    activeComposer = inst;
-    exPaintTarget();
-    showDrawer("files");
   });
 }
 
@@ -9705,7 +9697,7 @@ function takePicture(inst, file) {
 /**
  * What one dropped file becomes. A picture is a picture, and anything else is a file the browser cannot
  * name by path: the daemon keeps a copy of it and the message carries where that copy is, exactly as the
- * files button attaches a path. The transfer is read before anything is awaited, because the browser
+ * files drawer references one. The transfer is read before anything is awaited, because the browser
  * empties it once the event that carried it is over.
  */
 function takeDropped(inst, transfer) {
@@ -9716,7 +9708,7 @@ function takeDropped(inst, transfer) {
       .map((entry) => entry.name),
   );
   // A folder cannot be read by a browser, so it is named rather than sent as an empty file.
-  if (folders.size) hintLine("a folder cannot be dropped — use files to attach one", true, inst);
+  if (folders.size) hintLine("a folder cannot be dropped — reference it from the files drawer (f)", true, inst);
   for (const file of [...(transfer?.files ?? [])]) {
     if (folders.has(file.name)) continue;
     if (isPicture(file)) takePicture(inst, file);
