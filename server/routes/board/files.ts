@@ -20,6 +20,15 @@
  * and the check is not a lock, so an outside writer can still win that window. The code says that in one
  * place rather than pretending a guarantee it does not have.
  *
+ * Those changes run one at a time per workspace, and a folder copy yields between entries, so a bulk copy
+ * does not hold the daemon's event loop while another board waits. What that cannot fix is said in
+ * `moveNoClobber`: a folder is still checked and renamed, and an outside writer can win that window.
+ *
+ * What the listing shows is the workspace's own decision. The standard VS Code exclusions, this machine's
+ * user settings and the board's own `.vscode/settings.json` are merged, and what they hide is gone before
+ * a page is cut, so `total` and `next` count only what a human can see. Only the settings this surface
+ * acts on are read, and one that cannot be parsed leaves the layers below it standing with a warning.
+ *
  * Deleting goes through the system's Trash with `gio`, one spawn per path, no shell. A path that cannot
  * be trashed is reported back for the human to confirm, and confirmation is a second request that names
  * `permanent: true`; a failed trash never turns into a permanent delete behind their back. A `gio` that
@@ -31,23 +40,19 @@ import type { ChildProcess } from "node:child_process";
 import {
 	closeSync,
 	constants as fsConstants,
-	copyFileSync,
 	lstatSync,
 	mkdirSync,
 	openSync,
+	readSync,
 	readdirSync,
-	readlinkSync,
 	realpathSync,
-	renameSync,
-	rmSync,
 	statSync,
-	symlinkSync,
-	unlinkSync,
-	linkSync,
 } from "node:fs";
+import { copyFile, link, lstat, mkdir, readdir, readlink, rename, rm, symlink, unlink } from "node:fs/promises";
 import type { Dirent, Stats } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { join, relative, sep } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join, matchesGlob, relative, sep } from "node:path";
 import { runGit } from "../../git/exec.ts";
 import { answer, fail, readJson } from "../../http.ts";
 import { CONTROL_CHARS } from "../../limits.ts";
@@ -240,6 +245,301 @@ function pageLimit(raw: string | null): number {
 	return Math.min(wanted, MAX_PAGE);
 }
 
+// ---------- what an explorer shows ----------
+
+/** One `files.exclude` key's value: hidden, shown, or hidden while a sibling matches `when`. */
+type ExcludeRule = boolean | { when: string };
+
+/** The settings an explorer acts on, every one of them defaulted so a client never has to guess. */
+type ExplorerSettings = {
+	compactFolders: boolean;
+	nesting: { enabled: boolean; expand: boolean; patterns: Record<string, string> };
+	exclude: Record<string, ExcludeRule>;
+	excludeGitIgnore: boolean;
+};
+
+/** One settings file's contribution: only the keys this surface acts on, and only the ones it named. */
+type SettingsLayer = {
+	exclude?: Record<string, ExcludeRule>;
+	compactFolders?: boolean;
+	excludeGitIgnore?: boolean;
+	nesting?: { enabled?: boolean; expand?: boolean; patterns?: Record<string, string> };
+};
+
+/**
+ * The exclusions VS Code ships with. `node_modules` and `.agents` are deliberately absent: they are a
+ * workspace's own to hide, and a listing that hid the folder a workspace keeps its agents' notes in would
+ * be lying about the folder a human opened.
+ */
+const DEFAULT_EXCLUDE: Record<string, ExcludeRule> = {
+	"**/.git": true,
+	"**/.svn": true,
+	"**/.hg": true,
+	"**/CVS": true,
+	"**/.DS_Store": true,
+	"**/Thumbs.db": true,
+};
+
+/**
+ * The file nesting VS Code's explorer ships with, in VS Code's own `${capture}` spelling. This is the
+ * common half of its table: that list grows with each release, and a workspace that wants more sets its
+ * own keys on top of these.
+ */
+const DEFAULT_NESTING_PATTERNS: Record<string, string> = {
+	"*.ts": "${capture}.js, ${capture}.js.map, ${capture}.ts.map, ${capture}.d.ts",
+	"*.js": "${capture}.js.map, ${capture}.min.js, ${capture}.min.js.map",
+	"*.jsx": "${capture}.js",
+	"*.tsx": "${capture}.js",
+	"package.json": ".nvmrc, .node-version, .npmrc, package-lock.json, yarn.lock, pnpm-lock.yaml, bun.lockb",
+	"tsconfig.json": "tsconfig.*.json",
+};
+
+/** One settings file is read up to this much: a config that outgrew it is a mistyped path, not a config. */
+const SETTINGS_MAX_BYTES = 256 * 1024;
+
+/** One string literal, as it stands, from its opening quote to its closing one. Comments are not in it. */
+function quoted(text: string, at: number): { text: string; next: number } {
+	let out = text[at];
+	let index = at + 1;
+	while (index < text.length) {
+		const char = text[index];
+		out += char;
+		index++;
+		if (char === "\\") {
+			if (index < text.length) out += text[index++];
+			continue;
+		}
+		if (char === '"') break;
+	}
+	return { text: out, next: index };
+}
+
+/**
+ * A VS Code settings file is JSONC: it may carry line and block comments and a trailing comma. Both are
+ * taken out by a scan that knows what a string is, because a pattern holding `//` is a value and not a
+ * comment, and a regular expression that forgot this would corrupt it.
+ */
+function stripJsonc(source: string): string {
+	let withoutComments = "";
+	let at = 0;
+	while (at < source.length) {
+		const char = source[at];
+		if (char === '"') {
+			const one = quoted(source, at);
+			withoutComments += one.text;
+			at = one.next;
+			continue;
+		}
+		if (char === "/" && source[at + 1] === "/") {
+			while (at < source.length && source[at] !== "\n") at++;
+			continue;
+		}
+		if (char === "/" && source[at + 1] === "*") {
+			at += 2;
+			while (at < source.length && !(source[at] === "*" && source[at + 1] === "/")) at++;
+			at = Math.min(at + 2, source.length);
+			continue;
+		}
+		withoutComments += char;
+		at++;
+	}
+	let tidy = "";
+	at = 0;
+	while (at < withoutComments.length) {
+		const char = withoutComments[at];
+		if (char === '"') {
+			const one = quoted(withoutComments, at);
+			tidy += one.text;
+			at = one.next;
+			continue;
+		}
+		if (char === ",") {
+			let ahead = at + 1;
+			while (ahead < withoutComments.length && /\s/.test(withoutComments[ahead])) ahead++;
+			if (withoutComments[ahead] === "}" || withoutComments[ahead] === "]") {
+				at++;
+				continue;
+			}
+		}
+		tidy += char;
+		at++;
+	}
+	return tidy;
+}
+
+/** A parsed settings file, or the sentence saying why it could not be one. */
+type SettingsFileAnswer = { parsed: Record<string, unknown> | null; warning: string | null };
+
+/** Parsed settings by mtime and size, so a listing stats two files and re-reads one only when it changed. */
+const settingsCache = new Map<string, { mtimeMs: number; size: number; answer: SettingsFileAnswer }>();
+
+/** One settings file up to the ceiling, without its comments. A file that is not there is `null`, not a warning. */
+function readSettingsFile(file: string): SettingsFileAnswer | null {
+	let stat: Stats;
+	try {
+		stat = statSync(file);
+	} catch {
+		return null;
+	}
+	if (!stat.isFile()) return null;
+	const cached = settingsCache.get(file);
+	if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.answer;
+	const answer = parseSettingsFile(file, stat);
+	settingsCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, answer });
+	return answer;
+}
+
+function parseSettingsFile(file: string, stat: Stats): SettingsFileAnswer {
+	const size = Math.min(stat.size, SETTINGS_MAX_BYTES);
+	const buffer = Buffer.alloc(size);
+	let read = 0;
+	try {
+		const handle = openSync(file, "r");
+		try {
+			read = readSync(handle, buffer, 0, size, 0);
+		} finally {
+			closeSync(handle);
+		}
+	} catch (error) {
+		return { parsed: null, warning: `${file} could not be read: ${say(error)}` };
+	}
+	let warning: string | null = stat.size > SETTINGS_MAX_BYTES ? `${file} is longer than ${SETTINGS_MAX_BYTES} bytes, so only its beginning was read` : null;
+	let parsed: Record<string, unknown> | null = null;
+	try {
+		const value: unknown = JSON.parse(stripJsonc(buffer.subarray(0, read).toString("utf8")).replace(/^\uFEFF/, ""));
+		if (value && typeof value === "object" && !Array.isArray(value)) parsed = value as Record<string, unknown>;
+		else warning ??= `${file} is not a settings object`;
+	} catch (error) {
+		warning ??= `${file} is not readable JSON: ${say(error)}`;
+	}
+	return { parsed, warning };
+}
+
+/** The settings this surface acts on. Everything else in a settings file is somebody else's. */
+function relevantSettings(parsed: Record<string, unknown>): SettingsLayer {
+	const kept: SettingsLayer = {};
+	const exclude = parsed["files.exclude"];
+	if (exclude && typeof exclude === "object" && !Array.isArray(exclude)) {
+		const rules: Record<string, ExcludeRule> = {};
+		for (const [pattern, value] of Object.entries(exclude as Record<string, unknown>)) {
+			if (typeof value === "boolean") rules[pattern] = value;
+			else if (value && typeof value === "object" && typeof (value as { when?: unknown }).when === "string") {
+				rules[pattern] = { when: (value as { when: string }).when };
+			}
+		}
+		kept.exclude = rules;
+	}
+	if (typeof parsed["explorer.compactFolders"] === "boolean") kept.compactFolders = parsed["explorer.compactFolders"] as boolean;
+	if (typeof parsed["explorer.excludeGitIgnore"] === "boolean") kept.excludeGitIgnore = parsed["explorer.excludeGitIgnore"] as boolean;
+	const nesting: { enabled?: boolean; expand?: boolean; patterns?: Record<string, string> } = {};
+	if (typeof parsed["explorer.fileNesting.enabled"] === "boolean") nesting.enabled = parsed["explorer.fileNesting.enabled"] as boolean;
+	if (typeof parsed["explorer.fileNesting.expand"] === "boolean") nesting.expand = parsed["explorer.fileNesting.expand"] as boolean;
+	const patterns = parsed["explorer.fileNesting.patterns"];
+	if (patterns && typeof patterns === "object" && !Array.isArray(patterns)) {
+		const table: Record<string, string> = {};
+		for (const [glob, value] of Object.entries(patterns as Record<string, unknown>)) if (typeof value === "string") table[glob] = value;
+		nesting.patterns = table;
+	}
+	if (Object.keys(nesting).length) kept.nesting = nesting;
+	return kept;
+}
+
+/** VS Code's user settings on Linux: `$XDG_CONFIG_HOME/Code/User/settings.json`, else under the home folder. */
+function userSettingsFile(): string {
+	const configured = process.env.XDG_CONFIG_HOME;
+	const base = configured && isAbsolute(configured) ? configured : join(homedir(), ".config");
+	return join(base, "Code", "User", "settings.json");
+}
+
+/**
+ * The board's own `.vscode/settings.json`, resolved so a link out of the workspace is not read. A folder
+ * with no settings file is `null`; one that is a link outside is a sentence the client can show.
+ */
+function workspaceSettingsFile(root: string): { file: string } | { warning: string } | null {
+	const wanted = join(root, ".vscode", "settings.json");
+	try {
+		const real = realpathSync(wanted);
+		if (!inside(root, real)) return { warning: `${relativeRel(root, wanted)} leads out of the workspace, so its settings were not read` };
+		return { file: real };
+	} catch (error) {
+		// A workspace with no settings file is the ordinary case; another failure is reported by the reader.
+		return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : { file: wanted };
+	}
+}
+
+/**
+ * The settings this workspace's explorer runs with: VS Code's defaults, then this machine's user settings,
+ * then the board's own `.vscode/settings.json`, the later layer winning key by key. Two files are stat'ed
+ * per listing and read only when they changed; one that cannot be parsed leaves the layers below it
+ * standing and adds a sentence to `settingsWarnings`.
+ */
+function explorerSettings(root: string): { settings: ExplorerSettings; warnings: string[] } {
+	const warnings: string[] = [];
+	const layers: SettingsLayer[] = [];
+	const user = readSettingsFile(userSettingsFile());
+	if (user?.warning) warnings.push(user.warning);
+	if (user?.parsed) layers.push(relevantSettings(user.parsed));
+	const workspace = workspaceSettingsFile(root);
+	if (workspace && "warning" in workspace) warnings.push(workspace.warning);
+	const own = workspace && "file" in workspace ? readSettingsFile(workspace.file) : null;
+	if (own?.warning) warnings.push(own.warning);
+	if (own?.parsed) layers.push(relevantSettings(own.parsed));
+	const exclude: Record<string, ExcludeRule> = { ...DEFAULT_EXCLUDE };
+	const patterns: Record<string, string> = { ...DEFAULT_NESTING_PATTERNS };
+	let compactFolders = true;
+	let excludeGitIgnore = false;
+	let enabled = false;
+	let expand = true;
+	for (const layer of layers) {
+		if (layer.exclude) Object.assign(exclude, layer.exclude);
+		if (layer.compactFolders !== undefined) compactFolders = layer.compactFolders;
+		if (layer.excludeGitIgnore !== undefined) excludeGitIgnore = layer.excludeGitIgnore;
+		if (layer.nesting?.enabled !== undefined) enabled = layer.nesting.enabled;
+		if (layer.nesting?.expand !== undefined) expand = layer.nesting.expand;
+		if (layer.nesting?.patterns) Object.assign(patterns, layer.nesting.patterns);
+	}
+	return { settings: { compactFolders, nesting: { enabled, expand, patterns }, exclude, excludeGitIgnore }, warnings };
+}
+
+/** A `files.exclude` key, matched against the entry's path and, for a bare `*.ts`, against its name too. */
+function patternMatches(pattern: string, rel: string, name: string): boolean {
+	try {
+		return matchesGlob(rel, pattern) || (!pattern.includes("/") && matchesGlob(name, pattern));
+	} catch {
+		// An unusable pattern hides nothing rather than emptying the listing.
+		return false;
+	}
+}
+
+/**
+ * A key that carries `when: "$(basename).ts"` reads "hide this file while a `.ts` of the same name stands
+ * beside it", and `$(basename)` is the entry's name without its extension. The siblings are the names the
+ * folder already answered with, so a listing reads each folder once.
+ */
+function siblingPresent(name: string, siblings: string[], when: string): boolean {
+	const dot = name.lastIndexOf(".");
+	const base = dot > 0 ? name.slice(0, dot) : name;
+	const wanted = when.split("$(basename)").join(base);
+	try {
+		return siblings.some((one) => one !== name && matchesGlob(one, wanted));
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Whether `files.exclude` hides one entry. The merged table is read in its own order and the last key that
+ * matches decides, which is how a `false` in a workspace brings back a file the user's own file hid.
+ */
+function excluded(rel: string, name: string, siblings: string[], rules: Record<string, ExcludeRule>): boolean {
+	let hidden = false;
+	for (const [pattern, rule] of Object.entries(rules)) {
+		if (!patternMatches(pattern, rel, name)) continue;
+		hidden = typeof rule === "boolean" ? rule : siblingPresent(name, siblings, rule.when);
+	}
+	return hidden;
+}
+
 // ---------- git ----------
 
 /** The top of the repository the folder belongs to, as the disk spells it, or "" when it is not one. */
@@ -304,83 +604,147 @@ function dirtyFolders(statuses: Map<string, string>): { folders: string[]; trunc
 	return { folders: sorted.slice(0, MAX_DIRTY), truncated: sorted.length > MAX_DIRTY };
 }
 
+/** How many names one listing hands `git check-ignore` before it stops asking and says so. */
+const MAX_IGNORE_PATHS = 5000;
+
+/** One `check-ignore` call carries this many paths, so a folder of long names stays inside an argument list. */
+const IGNORE_CHUNK = 200;
+
+/**
+ * Which of these workspace-relative paths git ignores, asked in chunks for the whole folder rather than
+ * once per entry. `explorer.excludeGitIgnore` is off by default; a folder that is not a checkout, or one
+ * too large to ask about, is answered with a sentence rather than with an empty set, because the two are
+ * different things.
+ */
+async function gitIgnored(root: string, toplevel: string, rels: string[]): Promise<{ ignored: Set<string>; warning: string | null }> {
+	const ignored = new Set<string>();
+	if (!rels.length) return { ignored, warning: null };
+	if (rels.length > MAX_IGNORE_PATHS) return { ignored, warning: `more than ${MAX_IGNORE_PATHS} entries here: git's ignore rules were not applied` };
+	const prefix = toplevel === root ? "" : `${relativeRel(toplevel, root)}/`;
+	if (prefix.startsWith("../")) return { ignored, warning: `${root} is outside ${toplevel}` };
+	for (let at = 0; at < rels.length; at += IGNORE_CHUNK) {
+		const chunk = rels.slice(at, at + IGNORE_CHUNK).map((rel) => `${prefix}${rel}`);
+		// One path per line and no `-z`: `-z` is only accepted with `--stdin`, and a name holding a newline
+		// never reaches here because the listing drops control characters first.
+		const result = await runGit(toplevel, ["check-ignore", "--", ...chunk], { kind: "read", timeoutMs: 5000, maxBytes: 4 * 1024 * 1024 });
+		// `check-ignore` exits 1 when nothing matched and 128 when it could not run; the first is no news.
+		if (result.code !== 0 && result.code !== 1) {
+			return { ignored, warning: `git could not say what it ignores: ${result.stderr || "no reply"}` };
+		}
+		for (const one of result.stdout.toString("utf8").split("\n")) {
+			if (!one) continue;
+			ignored.add(prefix && one.startsWith(prefix) ? one.slice(prefix.length) : one);
+		}
+	}
+	return { ignored, warning: null };
+}
+
 // ---------- copying and moving ----------
+
+/**
+ * One workspace's changes run one at a time. A folder copy yields between entries, so without this a
+ * second press could read a half-copied tree as a finished one; the queue is per workspace root, so two
+ * boards wait for nothing of each other's.
+ */
+const queues = new Map<string, Promise<void>>();
+
+function serialised<T>(root: string, work: () => Promise<T>): Promise<T> {
+	const before = queues.get(root) ?? Promise.resolve();
+	const run = before.then(work, work);
+	const tail = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	queues.set(root, tail);
+	void tail.then(() => {
+		if (queues.get(root) === tail) queues.delete(root);
+	});
+	return run;
+}
 
 /**
  * Place one entry at a name that is free, and fail when it is not. Files and links are placed by a call
  * that the kernel makes refuse an existing name, so two requests racing for one name cannot both win.
+ * A folder is walked entry by entry: the copy yields between them, so a bulk copy never holds the event
+ * loop, and a failure removes only the folder this call made rather than a name that was already there.
  */
-function copyNoClobber(src: string, dst: string): void {
-	const stat = lstatSync(src);
+async function copyNoClobber(src: string, dst: string): Promise<void> {
+	const stat = await lstat(src);
 	if (stat.isSymbolicLink()) {
 		// A link is copied as a link: its target is not read and nothing outside the workspace is visited.
-		symlinkSync(readlinkSync(src), dst);
+		await symlink(await readlink(src), dst);
 		return;
 	}
 	if (stat.isDirectory()) {
-		mkdirSync(dst);
+		await mkdir(dst);
 		try {
-			for (const name of readdirSync(src)) copyNoClobber(join(src, name), join(dst, name));
+			for (const name of await readdir(src)) await copyNoClobber(join(src, name), join(dst, name));
 		} catch (error) {
 			// What was made here is this call's own, so it goes rather than leaving half a folder behind.
-			try {
-				rmSync(dst, { recursive: true, force: true });
-			} catch {}
+			await rm(dst, { recursive: true, force: true }).catch(() => {});
 			throw error;
 		}
 		return;
 	}
 	if (!stat.isFile()) throw new Error("only files, folders and links can be copied");
-	copyFileSync(src, dst, fsConstants.COPYFILE_EXCL);
+	await copyFile(src, dst, fsConstants.COPYFILE_EXCL);
 }
 
 /**
  * Move one entry, never over an existing name.
  *
- * A file or a link is placed with an atomic no-clobber call and then removed, which is same-filesystem
- * only and refuses to overwrite. A folder is checked and then renamed: `rename` has no portable
- * no-replace form here, so another program that creates the destination in that window can still be
- * overwritten. That is the one race this file cannot close, and it is stated rather than papered over.
- * An entry on another device is copied no-clobber and its source removed, which is not atomic.
+ * A file is placed with an atomic no-clobber call and then removed, which is same-filesystem only and
+ * refuses to overwrite. A link is made again and the old name removed. A folder is checked and then
+ * renamed: `rename` has no portable no-replace form here, so another program that creates the destination
+ * in that window can still be overwritten. That is the one race this file cannot close, and it is stated
+ * rather than papered over. An entry on another device is copied no-clobber, and its source is removed
+ * only once that copy has finished.
  */
-function moveNoClobber(src: string, dst: string): void {
-	const stat = lstatSync(src);
+async function moveNoClobber(src: string, dst: string): Promise<void> {
+	const stat = await lstat(src);
 	if (stat.isSymbolicLink()) {
-		try {
-			symlinkSync(readlinkSync(src), dst);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "EEXIST") throw error;
-			copyNoClobber(src, dst);
-			unlinkSync(src);
-			return;
-		}
-		unlinkSync(src);
+		// A failure here is reported as it came: a copy of what the link points at is a different entry, so
+		// there is nothing safe to fall back to.
+		await symlink(await readlink(src), dst);
+		await unlink(src);
 		return;
 	}
 	if (stat.isDirectory()) {
 		if (present(dst)) throw Object.assign(new Error(`${dst} already exists`), { code: "EEXIST" });
 		try {
-			renameSync(src, dst);
+			await rename(src, dst);
 			return;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
 		}
-		copyNoClobber(src, dst);
-		rmSync(src, { recursive: true, force: false });
+		await copyNoClobber(src, dst);
+		await removeSource(src, dst);
 		return;
 	}
 	if (!stat.isFile()) throw new Error("only files, folders and links can be moved");
 	try {
-		linkSync(src, dst);
+		await link(src, dst);
 	} catch (error) {
 		const code = (error as NodeJS.ErrnoException).code;
 		if (code === "EEXIST") throw error;
-		// A filesystem with no hard links, or a name already taken by a directory: copy and remove.
-		copyNoClobber(src, dst);
-		unlinkSync(src);
+		// A filesystem with no hard links: copy the file no-clobber first, then take the original.
+		await copyNoClobber(src, dst);
+		await removeSource(src, dst);
 		return;
 	}
-	unlinkSync(src);
+	await unlink(src);
+}
+
+/**
+ * The original of a moved entry goes only once its copy is on disk. A removal that fails says so in those
+ * words, because the copy really is there and "move failed" alone would hide that.
+ */
+async function removeSource(src: string, dst: string): Promise<void> {
+	try {
+		await rm(src, { recursive: true, force: false });
+	} catch (error) {
+		throw new Error(`copied to ${dst}, but its source could not be removed: ${say(error)}`);
+	}
 }
 
 // ---------- the listing ----------
@@ -403,7 +767,8 @@ export async function onFilesList(url: URL, res: ServerResponse, board: BoardFol
 	} catch (error) {
 		return void fail(res, 409, `cannot list ${listed.dir}: ${say(error)}`);
 	}
-	const entries: Entry[] = [];
+	const siblings = dirents.map((dirent) => dirent.name);
+	const found: Entry[] = [];
 	for (const dirent of dirents) {
 		const name = dirent.name;
 		// Dot entries are part of an explorer. The repository's own folder is not: it is git's, and a
@@ -412,14 +777,27 @@ export async function onFilesList(url: URL, res: ServerResponse, board: BoardFol
 		if (CONTROL_CHARS.test(name)) continue;
 		const path = wanted.rel ? `${wanted.rel}/${name}` : name;
 		try {
-			entries.push(entryOf(path, name, join(listed.dir, name)));
+			found.push(entryOf(path, name, join(listed.dir, name)));
 		} catch {
 			// An entry that went between `readdir` and `lstat` is not a listing's business.
 		}
 	}
+	// What the workspace asked an explorer to hide is gone before a page is cut, so `total`, `next` and
+	// `truncated` describe the entries a human can see rather than the ones on the disk.
+	const { settings, warnings } = explorerSettings(root);
+	let entries = found.filter((entry) => !excluded(entry.path, entry.name, siblings, settings.exclude));
 	entries.sort(byName);
 	const gitWanted = url.searchParams.get("git") === "1";
 	const toplevel = await gitToplevel(root);
+	if (settings.excludeGitIgnore) {
+		if (toplevel) {
+			const checks = await gitIgnored(root, toplevel, entries.map((entry) => entry.path));
+			if (checks.warning) warnings.push(checks.warning);
+			entries = entries.filter((entry) => !checks.ignored.has(entry.path));
+		} else {
+			warnings.push("explorer.excludeGitIgnore is on, but this folder is not a git checkout");
+		}
+	}
 	const status = gitWanted && toplevel ? await gitStatus(root, toplevel) : { statuses: new Map<string, string>(), dirty: [], dirtyTruncated: false };
 	if (status.statuses.size) {
 		for (const entry of entries) {
@@ -443,7 +821,9 @@ export async function onFilesList(url: URL, res: ServerResponse, board: BoardFol
 		next: truncated && page.length ? page[page.length - 1].name : null,
 		repo: toplevel !== "",
 		dirty: status.dirty,
+		settings,
 		...(status.dirtyTruncated ? { dirtyTruncated: true } : {}),
+		...(warnings.length ? { settingsWarnings: warnings } : {}),
 	});
 }
 
@@ -454,6 +834,9 @@ export async function onFilesList(url: URL, res: ServerResponse, board: BoardFol
  * `recursive`, so a name that is taken is a refusal from the kernel rather than from a check that a
  * second request can walk past.
  */
+/** One queued change's answer: a body the client parses, or a sentence it shows. */
+type Outcome = { status: number; payload: unknown } | { status: number; error: string };
+
 export async function onFileNew(req: IncomingMessage, res: ServerResponse, board: BoardFolder): Promise<void> {
 	const body = await readJson(req, res);
 	if (!body) return;
@@ -463,21 +846,24 @@ export async function onFileNew(req: IncomingMessage, res: ServerResponse, board
 	if ("error" in parent) return void fail(res, 400, parent.error);
 	const named = normalizeName(body.name);
 	if ("error" in named) return void fail(res, 400, named.error);
-	const folder = physicalDir(root, parent.rel);
-	if ("error" in folder) return void fail(res, 409, folder.error);
 	const dir = body.dir === true;
-	const target = join(folder.dir, named.name);
 	const path = parent.rel ? `${parent.rel}/${named.name}` : named.name;
-	if (present(target)) return void fail(res, 409, `${path} already exists`);
-	try {
-		if (dir) mkdirSync(target);
-		else closeSync(openSync(target, "wx"));
-	} catch (error) {
-		const code = (error as NodeJS.ErrnoException).code;
-		if (code === "EEXIST") return void fail(res, 409, `${path} already exists`);
-		return void fail(res, 409, say(error));
-	}
-	answer(res, 200, { entry: entryOf(path, named.name, target) });
+	const outcome = await serialised(root, async (): Promise<Outcome> => {
+		const folder = physicalDir(root, parent.rel);
+		if ("error" in folder) return { status: 409, error: folder.error };
+		const target = join(folder.dir, named.name);
+		if (present(target)) return { status: 409, error: `${path} already exists` };
+		try {
+			if (dir) mkdirSync(target);
+			else closeSync(openSync(target, "wx"));
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			return { status: 409, error: code === "EEXIST" ? `${path} already exists` : say(error) };
+		}
+		return { status: 200, payload: { entry: entryOf(path, named.name, target) } };
+	});
+	if ("error" in outcome) return void fail(res, outcome.status, outcome.error);
+	answer(res, outcome.status, outcome.payload);
 }
 
 /** One name changed in place. A link is renamed as a link; its target is not touched. */
@@ -491,24 +877,30 @@ export async function onFileRename(req: IncomingMessage, res: ServerResponse, bo
 	if (!source.rel) return void fail(res, 409, "the workspace root cannot be renamed");
 	const named = normalizeName(body.name);
 	if ("error" in named) return void fail(res, 400, named.error);
-	const leaf = leafOf(root, source.rel);
-	if ("error" in leaf) return void fail(res, 409, leaf.error);
-	if (!present(leaf.abs)) return void fail(res, 409, `no such entry: ${source.rel}`);
-	const target = join(leaf.abs.slice(0, leaf.abs.length - leaf.name.length), named.name);
-	const to = relativeRel(root, target);
-	if (target === leaf.abs) {
-		answer(res, 200, { from: source.rel, to: source.rel, entry: entryOf(source.rel, leaf.name, leaf.abs) });
-		return;
-	}
-	if (present(target)) return void fail(res, 409, `${to} already exists`);
-	try {
-		moveNoClobber(leaf.abs, target);
-	} catch (error) {
-		const code = (error as NodeJS.ErrnoException).code;
-		if (code === "EEXIST") return void fail(res, 409, `${to} already exists`);
-		return void fail(res, 409, say(error));
-	}
-	answer(res, 200, { from: source.rel, to, entry: entryOf(to, named.name, target) });
+	const cut = source.rel.lastIndexOf("/");
+	const parentRel = cut === -1 ? "" : source.rel.slice(0, cut);
+	// The answer names the paths the request named: a parent that is a link inside the workspace is still
+	// the folder the client drew, and the disk is resolved separately.
+	const to = parentRel ? `${parentRel}/${named.name}` : named.name;
+	const outcome = await serialised(root, async (): Promise<Outcome> => {
+		const leaf = leafOf(root, source.rel);
+		if ("error" in leaf) return { status: 409, error: leaf.error };
+		if (!present(leaf.abs)) return { status: 409, error: `no such entry: ${source.rel}` };
+		const target = join(leaf.abs.slice(0, leaf.abs.length - leaf.name.length), named.name);
+		if (target === leaf.abs) {
+			return { status: 200, payload: { from: source.rel, to: source.rel, entry: entryOf(source.rel, leaf.name, leaf.abs) } };
+		}
+		if (present(target)) return { status: 409, error: `${to} already exists` };
+		try {
+			await moveNoClobber(leaf.abs, target);
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			return { status: 409, error: code === "EEXIST" ? `${to} already exists` : say(error) };
+		}
+		return { status: 200, payload: { from: source.rel, to, entry: entryOf(to, named.name, target) } };
+	});
+	if ("error" in outcome) return void fail(res, outcome.status, outcome.error);
+	answer(res, outcome.status, outcome.payload);
 }
 
 /**
@@ -563,51 +955,58 @@ async function batchRoute(req: IncomingMessage, res: ServerResponse, board: Boar
 	const word = mode === "move" ? "moved" : "copied";
 	const dest = normalizeRel(body.to);
 	if ("error" in dest) return void fail(res, 400, dest.error);
-	const folder = physicalDir(root, dest.rel);
-	if ("error" in folder) return void fail(res, 409, folder.error);
-	const found = sourcesOf(root, body.paths);
-	if ("failed" in found) return void answer(res, 409, { error: `nothing was ${word}: the batch did not validate`, failed: found.failed });
-	const steps: { source: Source; to: string; toRel: string }[] = [];
-	const failed: Failure[] = [];
-	const taken = new Set<string>();
-	for (const source of found.sources) {
-		const target = join(folder.dir, source.name);
-		const toRel = relativeRel(root, target);
-		if (target === source.abs) {
-			failed.push({ path: source.rel, error: "it is already there" });
-			continue;
+	const outcome = await serialised(root, async (): Promise<Outcome> => {
+		// The destination is resolved here, in the same turn as the writes that follow it, so a link
+		// retargeted by another program cannot turn a checked folder into a different one mid-batch.
+		const folder = physicalDir(root, dest.rel);
+		if ("error" in folder) return { status: 409, error: folder.error };
+		const found = sourcesOf(root, body.paths);
+		if ("failed" in found) return { status: 409, payload: { error: `nothing was ${word}: the batch did not validate`, failed: found.failed } };
+		const steps: { source: Source; to: string; toRel: string }[] = [];
+		const failed: Failure[] = [];
+		const taken = new Set<string>();
+		for (const source of found.sources) {
+			const target = join(folder.dir, source.name);
+			// The answer names the destination the way the request named it; the checks below use the disk.
+			const toRel = dest.rel ? `${dest.rel}/${source.name}` : source.name;
+			if (target === source.abs) {
+				failed.push({ path: source.rel, error: "it is already there" });
+				continue;
+			}
+			// A folder cannot be carried into itself: the copy would descend forever and the move would
+			// unmake the place it is going.
+			if (source.dir && target.startsWith(`${source.abs}${sep}`)) {
+				failed.push({ path: source.rel, error: "a folder cannot be carried into itself" });
+				continue;
+			}
+			if (taken.has(target)) {
+				failed.push({ path: source.rel, error: "another item of this batch lands on the same name" });
+				continue;
+			}
+			if (present(target)) {
+				failed.push({ path: source.rel, error: `${toRel} already exists` });
+				continue;
+			}
+			taken.add(target);
+			steps.push({ source, to: target, toRel });
 		}
-		// A folder cannot be carried into itself: the copy would descend forever and the move would
-		// unmake the place it is going.
-		if (source.dir && target.startsWith(`${source.abs}${sep}`)) {
-			failed.push({ path: source.rel, error: "a folder cannot be carried into itself" });
-			continue;
+		if (failed.length) return { status: 409, payload: { error: `nothing was ${word}: the batch did not validate`, failed } };
+		const done: { from: string; to: string }[] = [];
+		const later: Failure[] = [];
+		for (const step of steps) {
+			try {
+				if (mode === "move") await moveNoClobber(step.source.abs, step.to);
+				else await copyNoClobber(step.source.abs, step.to);
+				done.push({ from: step.source.rel, to: step.toRel });
+			} catch (error) {
+				later.push({ path: step.source.rel, error: say(error) });
+			}
 		}
-		if (taken.has(target)) {
-			failed.push({ path: source.rel, error: "another item of this batch lands on the same name" });
-			continue;
-		}
-		if (present(target)) {
-			failed.push({ path: source.rel, error: `${toRel} already exists` });
-			continue;
-		}
-		taken.add(target);
-		steps.push({ source, to: target, toRel });
-	}
-	if (failed.length) return void answer(res, 409, { error: `nothing was ${word}: the batch did not validate`, failed });
-	const done: { from: string; to: string }[] = [];
-	const later: Failure[] = [];
-	for (const step of steps) {
-		try {
-			if (mode === "move") moveNoClobber(step.source.abs, step.to);
-			else copyNoClobber(step.source.abs, step.to);
-			done.push({ from: step.source.rel, to: step.toRel });
-		} catch (error) {
-			later.push({ path: step.source.rel, error: say(error) });
-		}
-	}
-	// A batch is not a transaction: what was done is reported as done, and nothing is claimed or retried.
-	answer(res, later.length ? 207 : 200, { [word]: done, ...(later.length ? { failed: later } : {}) });
+		// A batch is not a transaction: what was done is reported as done, and nothing is claimed or retried.
+		return { status: later.length ? 207 : 200, payload: { [word]: done, ...(later.length ? { failed: later } : {}) } };
+	});
+	if ("error" in outcome) return void fail(res, outcome.status, outcome.error);
+	answer(res, outcome.status, outcome.payload);
 }
 
 export function onFileMove(req: IncomingMessage, res: ServerResponse, board: BoardFolder): Promise<void> {
@@ -670,40 +1069,43 @@ export async function onFileDelete(req: IncomingMessage, res: ServerResponse, bo
 	if (!body) return;
 	const root = realRoot(board);
 	if (!root) return void fail(res, 409, `no such folder: ${board.folder}`);
-	const found = sourcesOf(root, body.paths);
-	if ("failed" in found) return void answer(res, 409, { error: "nothing was deleted: the batch did not validate", failed: found.failed });
-	const permanent = body.permanent === true;
-	const deleted: string[] = [];
-	const needsPermanent: string[] = [];
-	const failed: Failure[] = [];
-	if (permanent) {
-		for (const source of found.sources) {
-			try {
-				// `rm` removes a link and not what it points at, which is the entry the human selected.
-				rmSync(source.abs, { recursive: true, force: false });
-				deleted.push(source.rel);
-			} catch (error) {
-				failed.push({ path: source.rel, error: say(error) });
+	const outcome = await serialised(root, async (): Promise<Outcome> => {
+		const found = sourcesOf(root, body.paths);
+		if ("failed" in found) return { status: 409, payload: { error: "nothing was deleted: the batch did not validate", failed: found.failed } };
+		const permanent = body.permanent === true;
+		const deleted: string[] = [];
+		const needsPermanent: string[] = [];
+		const failed: Failure[] = [];
+		if (permanent) {
+			for (const source of found.sources) {
+				try {
+					// `rm` removes a link and not what it points at, which is the entry the human selected.
+					await rm(source.abs, { recursive: true, force: false });
+					deleted.push(source.rel);
+				} catch (error) {
+					failed.push({ path: source.rel, error: say(error) });
+				}
 			}
+			// The shape does not change with the outcome: a client reads `deleted`, `needsPermanent` and
+			// `failed` in every answer instead of knowing which keys a particular press happens to bring.
+			return { status: failed.length ? 207 : 200, payload: { deleted, trashed: false, needsPermanent, failed } };
 		}
-		// The shape does not change with the outcome: a client reads `deleted`, `needsPermanent` and
-		// `failed` in every answer instead of knowing which keys a particular press happens to bring.
-		answer(res, failed.length ? 207 : 200, { deleted, trashed: false, needsPermanent, failed });
-		return;
-	}
-	for (const source of found.sources) {
-		const outcome = await gioTrash(source.abs);
-		// The path decides, not the exit code: a Trash that moved the file and then complained still moved it.
-		const gone = !present(source.abs);
-		if (gone) {
-			deleted.push(source.rel);
-			continue;
+		for (const source of found.sources) {
+			const trashed = await gioTrash(source.abs);
+			// The path decides, not the exit code: a Trash that moved the file and then complained still moved it.
+			const gone = !present(source.abs);
+			if (gone) {
+				deleted.push(source.rel);
+				continue;
+			}
+			if (trashed.ok) {
+				failed.push({ path: source.rel, error: "gio reported the entry trashed but it is still in the folder" });
+				continue;
+			}
+			needsPermanent.push(source.rel);
 		}
-		if (outcome.ok) {
-			failed.push({ path: source.rel, error: "gio reported the entry trashed but it is still in the folder" });
-			continue;
-		}
-		needsPermanent.push(source.rel);
-	}
-	answer(res, needsPermanent.length || failed.length ? 207 : 200, { deleted, trashed: true, needsPermanent, failed });
+		return { status: needsPermanent.length || failed.length ? 207 : 200, payload: { deleted, trashed: true, needsPermanent, failed } };
+	});
+	if ("error" in outcome) return void fail(res, outcome.status, outcome.error);
+	answer(res, outcome.status, outcome.payload);
 }

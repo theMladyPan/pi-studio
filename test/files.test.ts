@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, describe, test } from "node:test";
@@ -18,11 +18,19 @@ process.env.PI_STUDIO_STATE = guardState;
 const { THREAD_ROUTES, threadRefusal } = await import("../server/main.ts");
 after(() => rmSync(guardState, { recursive: true, force: true }));
 
-/** One daemon on its own state folder, started the way a human starts it. No child and no model runs. */
+/**
+ * One daemon on its own state folder, started the way a human starts it. No child and no model runs. Its
+ * home and its XDG config are folders of its own too, because the explorer reads VS Code's settings: a
+ * machine with a settings file of its own must not decide what these tests see.
+ */
 async function boot(state: string, env: Record<string, string> = {}) {
+	const home = join(state, "home");
+	const config = join(state, "xdg");
+	mkdirSync(home, { recursive: true });
+	mkdirSync(config, { recursive: true });
 	const child = spawn(process.execPath, [join(repo, "server.ts"), "--no-open"], {
 		cwd: repo,
-		env: { ...process.env, PI_STUDIO_STATE: state, PI_STUDIO_PORT: "", ...env },
+		env: { ...process.env, PI_STUDIO_STATE: state, PI_STUDIO_PORT: "", HOME: home, XDG_CONFIG_HOME: config, USERPROFILE: home, ...env },
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	const noise: string[] = [];
@@ -496,6 +504,132 @@ describe("changing a workspace", () => {
 			rmSync(state, { recursive: true, force: true });
 		}
 	});
+
+	test("a bulk copy leaves the daemon answering while it runs", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-bulk-"));
+		const folder = join(state, "proj");
+		mkdirSync(join(folder, "big"), { recursive: true });
+		// Enough entries that a copy which never yields would hold the loop long enough to be seen holding it.
+		for (let at = 0; at < 12000; at++) writeFileSync(join(folder, "big", `f${at}.txt`), "x".repeat(64));
+		mkdirSync(join(folder, "taken"));
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			let finished = false;
+			const copy = postJson(daemon, board, "/files/copy", { paths: ["big"], to: "taken" }).then((one) => {
+				finished = true;
+				return one;
+			});
+			// The destination folder is made at the start of the walk, so seeing it means the copy is under way.
+			const started = Date.now();
+			while (!existsSync(join(folder, "taken", "big"))) {
+				assert.ok(Date.now() - started < 10_000, "the copy never started");
+				await new Promise((done) => setTimeout(done, 1));
+			}
+			const listing = await listed(daemon, board);
+			assert.equal(listing.status, 200, listing.body);
+			assert.equal(finished, false, "another request was answered only after the copy had run to the end");
+			const copied = json(await copy);
+			assert.equal(copied.status, 200, copied.body);
+			assert.deepEqual(copied.body.copied, [{ from: "big", to: "taken/big" }]);
+			assert.equal(readdirSync(join(folder, "taken", "big")).length, 12000);
+			assert.equal(readdirSync(join(folder, "big")).length, 12000);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	test("a copy that cannot finish leaves nothing it made, and its batch says what it did", async (t) => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-partial-"));
+		const folder = join(state, "proj");
+		mkdirSync(join(folder, "mixed"), { recursive: true });
+		writeFileSync(join(folder, "mixed", "a.txt"), "A");
+		// A pipe is the one entry an explorer cannot copy, which is how a copy fails half way on purpose.
+		try {
+			execFileSync("mkfifo", [join(folder, "mixed", "pipe")]);
+		} catch {
+			return t.skip("mkfifo is not installed here");
+		}
+		writeFileSync(join(folder, "plain.txt"), "P");
+		mkdirSync(join(folder, "dest"));
+		mkdirSync(join(folder, "again"));
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			const failed = json(await postJson(daemon, board, "/files/copy", { paths: ["mixed"], to: "dest" }));
+			assert.equal(failed.status, 207, failed.body);
+			assert.deepEqual(failed.body.copied, []);
+			assert.equal(failed.body.failed.length, 1);
+			assert.match(failed.body.failed[0].error, /only files, folders and links/);
+			assert.equal(existsSync(join(folder, "dest", "mixed")), false, "the half copy is gone");
+			assert.equal(readFileSync(join(folder, "mixed", "a.txt"), "utf8"), "A");
+
+			// One entry that can go and one that cannot: what was done is reported as done.
+			const mixed = json(await postJson(daemon, board, "/files/copy", { paths: ["plain.txt", "mixed"], to: "dest" }));
+			assert.equal(mixed.status, 207, mixed.body);
+			assert.deepEqual(mixed.body.copied, [{ from: "plain.txt", to: "dest/plain.txt" }]);
+			assert.equal(mixed.body.failed.length, 1);
+			assert.equal(mixed.body.failed[0].path, "mixed");
+			assert.equal(existsSync(join(folder, "dest", "mixed")), false);
+			assert.equal(readFileSync(join(folder, "dest", "plain.txt"), "utf8"), "P");
+
+			// A move that fails leaves its source where it was.
+			const moveFailed = json(await postJson(daemon, board, "/files/move", { paths: ["mixed/pipe"], to: "again" }));
+			assert.equal(moveFailed.status, 207, moveFailed.body);
+			assert.deepEqual(moveFailed.body.moved, []);
+			assert.match(moveFailed.body.failed[0].error, /only files, folders and links/);
+			assert.equal(existsSync(join(folder, "mixed", "pipe")), true);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	test("a change named through a link answers the path that was named, and still refuses to leave", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-lexical-"));
+		const folder = join(state, "proj");
+		const outside = join(state, "outside");
+		mkdirSync(join(folder, "docs"), { recursive: true });
+		mkdirSync(outside);
+		writeFileSync(join(folder, "docs", "note.txt"), "N");
+		writeFileSync(join(folder, "docs", "only.txt"), "O");
+		writeFileSync(join(folder, "a.txt"), "A");
+		symlinkSync("docs", join(folder, "docs-link"));
+		// A link that points out of the workspace is not a way to name anything outside it.
+		symlinkSync(outside, join(folder, "hop"));
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			const renamed = json(await postJson(daemon, board, "/files/rename", { path: "docs-link/note.txt", name: "renamed.txt" }));
+			assert.deepEqual([renamed.status, renamed.body.from, renamed.body.to], [200, "docs-link/note.txt", "docs-link/renamed.txt"]);
+			assert.equal(renamed.body.entry.path, "docs-link/renamed.txt");
+			assert.equal(readFileSync(join(folder, "docs", "renamed.txt"), "utf8"), "N");
+
+			const copied = json(await postJson(daemon, board, "/files/copy", { paths: ["a.txt"], to: "docs-link" }));
+			assert.equal(copied.status, 200, copied.body);
+			assert.deepEqual(copied.body.copied, [{ from: "a.txt", to: "docs-link/a.txt" }]);
+			assert.equal(readFileSync(join(folder, "docs", "a.txt"), "utf8"), "A");
+
+			const moved = json(await postJson(daemon, board, "/files/move", { paths: ["docs-link/only.txt"], to: "" }));
+			assert.equal(moved.status, 200, moved.body);
+			assert.deepEqual(moved.body.moved, [{ from: "docs-link/only.txt", to: "only.txt" }]);
+			assert.equal(existsSync(join(folder, "docs", "only.txt")), false);
+			assert.equal(readFileSync(join(folder, "only.txt"), "utf8"), "O");
+
+			const made = json(await postJson(daemon, board, "/files/new", { path: "docs-link", name: "made.txt", dir: false }));
+			assert.equal(made.status, 200, made.body);
+			assert.equal(made.body.entry.path, "docs-link/made.txt");
+			assert.equal(readFileSync(join(folder, "docs", "made.txt"), "utf8"), "");
+
+			const hop = await postJson(daemon, board, "/files/copy", { paths: ["a.txt"], to: "hop" });
+			assert.equal(hop.status, 409, hop.body);
+			assert.equal(existsSync(join(outside, "a.txt")), false);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("deleting", () => {
@@ -597,6 +731,216 @@ describe("deleting", () => {
 			assert.deepEqual(deletedLink.body.deleted, ["link-away"]);
 			assert.equal(existsSync(join(folder, "link-away")), false);
 			assert.equal(readFileSync(join(outside, "secret.txt"), "utf8"), "secret\n");
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("what a workspace asks its explorer to show", () => {
+	test("with no settings anywhere, the standard entries are hidden and .agents and node_modules are not", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-defaults-"));
+		const folder = join(state, "proj");
+		mkdirSync(join(folder, ".agents"), { recursive: true });
+		mkdirSync(join(folder, "node_modules"));
+		writeFileSync(join(folder, ".DS_Store"), "x");
+		writeFileSync(join(folder, "Thumbs.db"), "x");
+		writeFileSync(join(folder, "keep.txt"), "x");
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			const page = await listed(daemon, board);
+			assert.equal(page.status, 200, JSON.stringify(page.body));
+			assert.deepEqual(page.body.entries.map((one: { name: string }) => one.name), [".agents", "node_modules", "keep.txt"]);
+			assert.equal(page.body.total, 3);
+			assert.deepEqual(page.body.settings.exclude, {
+				"**/.git": true,
+				"**/.svn": true,
+				"**/.hg": true,
+				"**/CVS": true,
+				"**/.DS_Store": true,
+				"**/Thumbs.db": true,
+			});
+			assert.equal(page.body.settings.compactFolders, true);
+			assert.equal(page.body.settings.excludeGitIgnore, false);
+			assert.equal(page.body.settings.nesting.enabled, false);
+			assert.equal(page.body.settings.nesting.expand, true);
+			assert.equal(page.body.settings.nesting.patterns["package.json"], ".nvmrc, .node-version, .npmrc, package-lock.json, yarn.lock, pnpm-lock.yaml, bun.lockb");
+			assert.equal(page.body.settingsWarnings, undefined);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	test("the user's file is read as JSONC, the workspace's wins, and a false puts an entry back", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-settings-"));
+		const folder = join(state, "proj");
+		const home = join(state, "home");
+		const config = join(state, "xdg");
+		mkdirSync(join(config, "Code", "User"), { recursive: true });
+		mkdirSync(home, { recursive: true });
+		// Comments, a trailing comma and a URL in a value: the reader must keep the string and drop the rest.
+		writeFileSync(
+			join(config, "Code", "User", "settings.json"),
+			[
+				"// this machine hides logs, and keeps .DS_Store",
+				"{",
+				'  "files.exclude": {',
+				'    "**/*.log": true,',
+				'    "**/.DS_Store": false,',
+				'    "**/user-only": true',
+				"  },",
+				'  "explorer.compactFolders": false,',
+				'  "explorer.fileNesting.patterns": { "*.ts": "${capture}.user.ts" },',
+				'  "http.proxy": "http://127.0.0.1:8080", /* a value, not a comment */',
+				'  "editor.fontSize": 14,',
+				"}",
+				"",
+			].join("\n"),
+		);
+		mkdirSync(join(folder, ".vscode"), { recursive: true });
+		writeFileSync(
+			join(folder, ".vscode", "settings.json"),
+			[
+				"{",
+				"  // the workspace overrides the machine",
+				'  "files.exclude": {',
+				'    "**/user-only": false,',
+				'    "**/*.tmp": { "when": "$(basename).keep" },',
+				'    "*.bak": true',
+				"  },",
+				'  "explorer.compactFolders": true,',
+				'  "explorer.fileNesting.enabled": true,',
+				'  "explorer.fileNesting.patterns": { "*.ts": "${capture}.ws.ts" }',
+				"}",
+			].join("\n"),
+		);
+		mkdirSync(join(folder, ".agents"));
+		writeFileSync(join(folder, "app.log"), "log");
+		writeFileSync(join(folder, ".DS_Store"), "x");
+		writeFileSync(join(folder, "user-only"), "kept by the workspace");
+		writeFileSync(join(folder, "notes.tmp"), "t");
+		writeFileSync(join(folder, "notes.keep"), "k");
+		writeFileSync(join(folder, "lonely.tmp"), "l");
+		writeFileSync(join(folder, "main.bak"), "b");
+		writeFileSync(join(folder, "keep.txt"), "x");
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			const page = await listed(daemon, board);
+			assert.equal(page.status, 200, JSON.stringify(page.body));
+			assert.deepEqual(page.body.entries.map((one: { name: string }) => one.name).sort(), [".DS_Store", ".agents", ".vscode", "keep.txt", "lonely.tmp", "notes.keep", "user-only"]);
+			assert.equal(page.body.total, 7);
+			const exclude = page.body.settings.exclude;
+			assert.equal(exclude["**/.git"], true, "the standard entries are still hidden");
+			assert.equal(exclude["**/*.log"], true, "the machine's own rule is kept");
+			assert.equal(exclude["**/.DS_Store"], false, "a false from the machine puts an entry back");
+			assert.equal(exclude["**/user-only"], false, "the workspace's false wins over the machine's true");
+			assert.deepEqual(exclude["**/*.tmp"], { when: "$(basename).keep" });
+			assert.equal(exclude["*.bak"], true);
+			assert.equal(page.body.settings.compactFolders, true, "the workspace's value wins");
+			assert.equal(page.body.settings.nesting.enabled, true);
+			assert.equal(page.body.settings.nesting.patterns["*.ts"], "${capture}.ws.ts");
+			assert.equal(page.body.settings.excludeGitIgnore, false);
+			assert.equal(page.body.settingsWarnings, undefined);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	test("a settings file that is not JSON leaves the defaults standing and says so", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-badsettings-"));
+		const folder = join(state, "proj");
+		mkdirSync(join(folder, ".vscode"), { recursive: true });
+		writeFileSync(join(folder, ".vscode", "settings.json"), '{ "files.exclude": { "**/*.txt": true ');
+		mkdirSync(join(folder, ".git"));
+		writeFileSync(join(folder, ".DS_Store"), "x");
+		writeFileSync(join(folder, "keep.txt"), "x");
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			const page = await listed(daemon, board);
+			assert.equal(page.status, 200, JSON.stringify(page.body));
+			assert.deepEqual(page.body.entries.map((one: { name: string }) => one.name), [".vscode", "keep.txt"]);
+			assert.equal(page.body.settings.exclude["**/*.txt"], undefined, "nothing was taken from a file that could not be read");
+			assert.equal(page.body.settings.exclude["**/.DS_Store"], true);
+			assert.equal(page.body.settings.compactFolders, true);
+			assert.equal(page.body.settingsWarnings.length, 1);
+			assert.match(page.body.settingsWarnings[0], /not readable JSON/);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	test("an exclusion is applied before the page is cut, so total and next count only what is shown", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-paging-"));
+		const folder = join(state, "proj");
+		mkdirSync(join(folder, ".vscode"), { recursive: true });
+		writeFileSync(join(folder, ".vscode", "settings.json"), JSON.stringify({ "files.exclude": { "**/*.skip": true } }));
+		for (let at = 0; at < 260; at++) writeFileSync(join(folder, `f${String(at).padStart(3, "0")}.txt`), "x");
+		for (let at = 0; at < 200; at++) writeFileSync(join(folder, `h${String(at).padStart(3, "0")}.skip`), "x");
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			const first = await listed(daemon, board);
+			assert.equal(first.status, 200, JSON.stringify(first.body));
+			assert.equal(first.body.total, 261, "the total is the entries an explorer shows");
+			assert.equal(first.body.entries.length, 200);
+			assert.equal(first.body.truncated, true);
+			assert.equal(first.body.next, first.body.entries[first.body.entries.length - 1].name);
+			assert.match(first.body.next, /^f\d{3}\.txt$/);
+			assert.ok(first.body.entries.every((one: { name: string }) => !one.name.endsWith(".skip")));
+			const second = await listed(daemon, board, `&after=${first.body.next}`);
+			assert.equal(second.body.entries.length, 61);
+			assert.equal(second.body.truncated, false);
+			assert.equal(second.body.next, null);
+			assert.ok(second.body.entries.every((one: { name: string }) => !one.name.endsWith(".skip")));
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	test("git's ignore file is used only when the workspace asks, and a folder that is no checkout says so", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-gitignore-"));
+		const folder = join(state, "repo");
+		mkdirSync(join(folder, "build"), { recursive: true });
+		mkdirSync(join(folder, ".vscode"), { recursive: true });
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: folder });
+		writeFileSync(join(folder, ".gitignore"), "*.log\nbuild/\n");
+		writeFileSync(join(folder, "app.log"), "log");
+		writeFileSync(join(folder, "build", "out.txt"), "out");
+		writeFileSync(join(folder, "keep.txt"), "x");
+		const plain = join(state, "plain");
+		mkdirSync(join(plain, ".vscode"), { recursive: true });
+		writeFileSync(join(plain, "keep.txt"), "x");
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			const off = await listed(daemon, board);
+			assert.equal(off.status, 200, JSON.stringify(off.body));
+			assert.deepEqual(off.body.entries.map((one: { name: string }) => one.name), [".vscode", "build", ".gitignore", "app.log", "keep.txt"]);
+			assert.equal(off.body.settings.excludeGitIgnore, false);
+
+			const asked = JSON.stringify({ "explorer.excludeGitIgnore": true });
+			writeFileSync(join(folder, ".vscode", "settings.json"), asked);
+			const on = await listed(daemon, board);
+			assert.equal(on.status, 200, JSON.stringify(on.body));
+			assert.deepEqual(on.body.entries.map((one: { name: string }) => one.name), [".vscode", ".gitignore", "keep.txt"]);
+			assert.equal(on.body.total, 3);
+			assert.equal(on.body.settings.excludeGitIgnore, true);
+			assert.equal(on.body.settingsWarnings, undefined);
+
+			writeFileSync(join(plain, ".vscode", "settings.json"), asked);
+			const plainBoard = await openWorkspace(daemon, plain);
+			const warned = await listed(daemon, plainBoard);
+			assert.equal(warned.status, 200, JSON.stringify(warned.body));
+			assert.deepEqual(warned.body.entries.map((one: { name: string }) => one.name), [".vscode", "keep.txt"]);
+			assert.match(warned.body.settingsWarnings[0], /not a git checkout/);
 		} finally {
 			daemon.child.kill();
 			rmSync(state, { recursive: true, force: true });
