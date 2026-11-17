@@ -3,7 +3,7 @@
  * The workspaces on disk: the list the crossroads shows, the defaults a new board starts with, and the
  * one line of facts each one is described by.
  */
-import { SCRATCH_DIR, STATE_VERSION, WORKSPACES_FILE, boardFile, readJsonFile, registerWorkspaceFolder, workspaceId, writeJsonFile } from "./paths.ts";
+import { SCRATCH_DIR, STATE_VERSION, WORKSPACES_FILE, boardFile, readJsonFile, workspaceId, writeJsonFile } from "./paths.ts";
 import { boards } from "./store.ts";
 import { sessionFacts } from "./session.ts";
 import { basename, join } from "node:path";
@@ -137,7 +137,6 @@ function loadWorkspaces() {
 				openedAt: Number.isFinite(workspace.openedAt) ? workspace.openedAt : 0,
 			}))
 	);
-	for (const workspace of workspaces) registerWorkspaceFolder(workspace.id, workspace.folder);
 }
 
 
@@ -259,7 +258,6 @@ export function rememberWorkspace(folder) {
 		workspaces.sort((a, b) => b.openedAt - a.openedAt);
 	}
 	saveWorkspaces();
-	registerWorkspaceFolder(workspace.id, resolved);
 	return workspace;
 }
 

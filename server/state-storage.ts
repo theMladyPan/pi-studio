@@ -1,11 +1,13 @@
 /**
- * Project-local state preparation, the one-time legacy import, and the state-profile lock.
+ * Project-local state preparation and the one-time legacy imports.
  *
  * Importing this module writes nothing: every function here is called explicitly by the daemon at
  * startup or when a folder is opened, so a test that only imports daemon code touches no real folder.
  * Nothing here deletes a link or follows a planted symlink to write outside the intended state.
+ * Different global roots opening the same folder refer to the same project-local data; concurrent
+ * writers are unsupported.
  */
-import { closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { HAS_EXPLICIT_STATE, LEGACY_STATE_DIR, STATE_DIR, isScratchFolder, projectStateDir } from "./paths.ts";
 
@@ -29,20 +31,18 @@ function safeMkdir(dir: string): void {
 }
 
 /**
- * The `.pi-studio/<namespace>` home of one opened folder, made and checked so nothing planted
+ * The `.pi-studio` home of one opened folder, made and checked so nothing planted
  * there can redirect a write outside it. Throws a clear error when the state is unwritable or
  * unsafe: the caller must refuse to open an unsaved in-memory board rather than carry on.
  */
-export function ensureProjectStateDir(folder: string, workspaceId?: string): string {
+export function ensureProjectStateDir(folder: string): string {
 	const resolved = resolve(folder);
 	if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
 		throw new Error(`workspace folder is missing: ${resolved} (state is per opened folder; a renamed or cloned repository is not remapped)`);
 	}
 	const root = projectStateDir(resolved);
-	safeMkdir(join(resolved, ".pi-studio"));
 	safeMkdir(root);
-	for (const sub of ["boards", "gitgraph", "sessions"]) safeMkdir(join(root, sub));
-	if (workspaceId) safeMkdir(join(root, "sessions", workspaceId));
+	safeMkdir(join(root, "sessions"));
 	return root;
 }
 
@@ -83,19 +83,19 @@ export function importLegacyProjectState(workspace: { id: string; folder?: strin
 	if (!folder || !workspace.id || importedFor.has(workspace.id)) return;
 	if (isScratchFolder(folder) || !existsSync(folder)) return;
 	importedFor.add(workspace.id);
-	const root = ensureProjectStateDir(folder, workspace.id);
+	const root = ensureProjectStateDir(folder);
 	// For the default instance the legacy home is the old ~/.pi location. For an explicit root the
 	// legacy home is that root itself: importing it never reaches the real user's data, because the
 	// source stays inside the root the human (or test) named.
 	const legacy = HAS_EXPLICIT_STATE ? STATE_DIR : LEGACY_STATE_DIR;
 	if (!existsSync(legacy)) return;
-	copyNoOverwrite(join(legacy, "boards", `${workspace.id}.json`), join(root, "boards", `${workspace.id}.json`));
-	copyNoOverwrite(join(legacy, "gitgraph", `${workspace.id}.json`), join(root, "gitgraph", `${workspace.id}.json`));
+	copyNoOverwrite(join(legacy, "boards", `${workspace.id}.json`), join(root, "board.json"));
+	copyNoOverwrite(join(legacy, "gitgraph", `${workspace.id}.json`), join(root, "gitgraph.json"));
 	const legacySessions = join(legacy, "sessions", workspace.id);
 	try {
 		for (const entry of readdirSync(legacySessions, { withFileTypes: true })) {
 			if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".jsonl")) continue;
-			copyNoOverwrite(join(legacySessions, entry.name), join(root, "sessions", workspace.id, entry.name));
+			copyNoOverwrite(join(legacySessions, entry.name), join(root, "sessions", entry.name));
 		}
 	} catch {
 		// No legacy sessions for this workspace is the ordinary case.
@@ -130,64 +130,4 @@ function safeGlobalDir(): void {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 	mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
-}
-
-let lockFd = -1;
-
-/**
- * Hold this state profile so a second daemon writing the same global records is refused with a
- * clear error instead of last-writer-wins. A lock left by a dead process is taken over.
- */
-export function acquireStateProfileLock(): void {
-	safeGlobalDir();
-	const lockFile = join(STATE_DIR, "daemon.lock");
-	for (let attempt = 0; attempt < 2; attempt++) {
-		try {
-			lockFd = openSync(lockFile, "wx", 0o600);
-			writeSync(lockFd, `${process.pid}\n`);
-			return;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-		}
-		let holder = 0;
-		try {
-			holder = Number(readFileSync(lockFile, "utf8").trim());
-		} catch {
-			holder = 0;
-		}
-		if (holder && holder !== process.pid && pidAlive(holder)) {
-			throw new Error(`another pi-studio daemon already writes state profile ${STATE_DIR} (pid ${holder})`);
-		}
-		try {
-			unlinkSync(lockFile);
-		} catch {
-			throw new Error(`could not take over the stale state lock at ${lockFile}`);
-		}
-	}
-	throw new Error(`could not acquire the state profile lock at ${lockFile}`);
-}
-
-function pidAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-/** Release the profile lock held by `acquireStateProfileLock`, if this process holds it. */
-export function releaseStateProfileLock(): void {
-	if (lockFd === -1) return;
-	try {
-		closeSync(lockFd);
-	} catch {
-		// Already closed.
-	}
-	lockFd = -1;
-	try {
-		if (Number(readFileSync(join(STATE_DIR, "daemon.lock"), "utf8").trim()) === process.pid) unlinkSync(join(STATE_DIR, "daemon.lock"));
-	} catch {
-		// Nothing to release.
-	}
 }

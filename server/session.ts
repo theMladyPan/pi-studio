@@ -13,7 +13,7 @@ export function sessionDir(workspace) {
 	// Sessions live beside the board, per opened folder. The header cwd inside each file is untouched
 	// by the move; a child that has moved worktrees already resumes with `--fork` (see childArgv).
 	const root = projectRootFor(workspace);
-	return root ? join(root, "sessions", workspace.id) : join(STATE_DIR, "sessions", workspace.id);
+	return root ? join(root, "sessions") : join(STATE_DIR, "sessions", workspace.id);
 }
 
 

@@ -39,7 +39,7 @@ import { onGitInit, onGitMsg, onGitPage, onGitVendor } from "./routes/gitgraph.t
 import { onCommand } from "./routes/board/command.ts";
 import { commandList, forMenu } from "./commands.ts";
 import { workdirOf } from "./worktrees/make.ts";
-import { acquireStateProfileLock, migrateLegacyGlobalState } from "./state-storage.ts";
+import { migrateLegacyGlobalState } from "./state-storage.ts";
 
 
 /** Opening a browser is what a desktop app does; a service run asks for `--no-open`. */
@@ -832,14 +832,13 @@ export function onListening() {
  * The entry calls this and nothing else, so importing this file never binds a socket.
  */
 export function start() {
-	// The one-time legacy import and the profile lock run here, at startup, rather than at import,
+	// The one-time legacy import runs here, at startup, rather than at import,
 	// so importing daemon code writes nothing. What the import copied is re-read into memory below.
 	try {
 		if (migrateLegacyGlobalState()) {
 			reloadWorkspaces();
 			reloadLoginState();
 		}
-		acquireStateProfileLock();
 	} catch (error) {
 		console.error(`pi-studio: ${error.message}`);
 		process.exit(1);

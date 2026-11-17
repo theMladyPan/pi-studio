@@ -4,7 +4,7 @@
  * across three generations of on-disk shape that must keep loading.
  */
 import { join } from "node:path";
-import { STATE_VERSION, boardFile, isScratchFolder, readJsonFile, registerWorkspaceFolder, writeJsonFile } from "./paths.ts";
+import { STATE_VERSION, boardFile, isScratchFolder, readJsonFile, writeJsonFile } from "./paths.ts";
 import { card, diskRow } from "./bus.ts";
 import { ownedCards } from "./routes/board/message.ts";
 import { activeConfig, homeDefaults, workspaceById } from "./workspaces.ts";
@@ -351,7 +351,6 @@ export function pruneHiddenThreads(board) {
 
 /** Load a workspace's board into memory, or hand back the one already there. */
 export function boardFor(workspace) {
-	registerWorkspaceFolder(workspace.id, workspace.folder);
 	const existing = boards.get(workspace.id);
 	if (existing) {
 		// A workspace that has simply been opened again keeps its place in the recent list.
@@ -380,7 +379,7 @@ export function boardFor(workspace) {
 	// that only looks real until the first save is dropped. A folder that is gone is reported
 	// stale by the crossroads (`describeWorkspace`) rather than created as a side effect here.
 	if (workspace.folder && !isScratchFolder(workspace.folder) && existsSync(workspace.folder) && statSync(workspace.folder).isDirectory()) {
-		ensureProjectStateDir(workspace.folder, workspace.id);
+		ensureProjectStateDir(workspace.folder);
 		importLegacyProjectState(workspace);
 	}
 	const saved = readJsonFile(boardFile(workspace), null);

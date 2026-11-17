@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,18 +19,16 @@ const { ensureStateExcludes } = await import("../server/worktrees/make.ts");
 const { boardFor } = await import("../server/store.ts");
 const { git, scratchRepo } = await import("../test-support/git.ts");
 
-test("an explicit state root namespaces project state by that root, not by a shared name", () => {
-	const expected = createHash("sha256").update(paths.STATE_DIR).digest("hex").slice(0, 12);
+test("one opened folder holds one plain .pi-studio directory, whatever the global root", () => {
 	assert.equal(paths.HAS_EXPLICIT_STATE, true);
-	assert.equal(paths.PROJECT_NAMESPACE, expected);
-	assert.notEqual(paths.PROJECT_NAMESPACE, "default");
-	const folder = mkdtempSync(join(tmpdir(), "pi-studio-namespace-"));
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-single-state-"));
 	try {
-		assert.equal(paths.projectStateDir(folder), join(folder, ".pi-studio", expected));
-		assert.equal(paths.boardFile({ id: "w1", folder }), join(folder, ".pi-studio", expected, "boards", "w1.json"));
-		assert.equal(paths.gitgraphStateFile({ id: "w1", folder }), join(folder, ".pi-studio", expected, "gitgraph", "w1.json"));
-		// A caller that names only an id it never registered keeps the legacy global layout.
+		assert.equal(paths.projectStateDir(folder), join(folder, ".pi-studio"));
+		assert.equal(paths.boardFile({ id: "w1", folder }), join(folder, ".pi-studio", "board.json"));
+		assert.equal(paths.gitgraphStateFile({ id: "w1", folder }), join(folder, ".pi-studio", "gitgraph.json"));
+		// A caller that names only an id keeps the legacy global layout.
 		assert.equal(paths.boardFile({ id: "w-unregistered" }), join(paths.STATE_DIR, "boards", "w-unregistered.json"));
+		assert.equal(paths.gitgraphStateFile({ id: "w-unregistered" }), join(paths.STATE_DIR, "gitgraph", "w-unregistered.json"));
 	} finally {
 		rmSync(folder, { recursive: true, force: true });
 	}
@@ -58,7 +55,7 @@ test("the legacy import copies board, sessions and Git state whole, and never ov
 		storage.importLegacyProjectState(workspace);
 
 		assert.equal(readFileSync(destBoard, "utf8"), "already here", "an existing project file was overwritten");
-		const destSession = join(paths.projectStateDir(folder), "sessions", id, `2026-01-01_${id}.jsonl`);
+		const destSession = join(paths.projectStateDir(folder), "sessions", `2026-01-01_${id}.jsonl`);
 		assert.equal(readFileSync(destSession, "utf8"), sessionJsonl, "the session transcript was not copied whole");
 		assert.equal(readFileSync(paths.gitgraphStateFile(workspace), "utf8"), "{}");
 		// Originals are retained.
@@ -76,7 +73,7 @@ test("a planted symlink at the project state path is refused, and the board does
 		symlinkSync(elsewhere, join(folder, ".pi-studio"));
 		assert.throws(() => storage.ensureProjectStateDir(folder), /symlink/);
 		assert.throws(() => boardFor({ id: paths.workspaceId(folder), folder, name: "unsafe" }), /symlink/);
-		assert.equal(existsSync(join(elsewhere, "default")), false, "nothing was written through the link");
+		assert.equal(existsSync(join(elsewhere, "board.json")), false, "nothing was written through the link");
 	} finally {
 		rmSync(folder, { recursive: true, force: true });
 		rmSync(elsewhere, { recursive: true, force: true });
