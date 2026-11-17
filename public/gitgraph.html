@@ -1,0 +1,215 @@
+<!doctype html>
+<!--
+	A Git Graph page that runs in a browser tab instead of an editor panel.
+
+	Everything inside #view is the contract mhutchie's `out.min.js` expects, and nothing else is: the
+	bundle builds every control it draws, so the ids below are the ones it looks up and the order it
+	looks them up in. The panel that the bundle would ask an editor to open — a diff, a file at a
+	revision — is drawn by this page instead, in #ggViewer.
+
+	The bundle is not served from here. It is the human's own copy of the mhutchie.git-graph extension,
+	read out of their VS Code install by the daemon, because its licence allows using it and forbids
+	shipping it. This page supplies the two things an editor would have supplied: the `--vscode-*`
+	colours, as variables on <html> where the bundle reads them, and `acquireVsCodeApi`, which
+	/client/gitgraph/host.js installs before the bundle is parsed.
+-->
+<html lang="en" style="
+	--vscode-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+	--vscode-editor-font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+	--vscode-editor-background: #0d1117;
+	--vscode-editor-foreground: #c9d1d9;
+	--vscode-editorWidget-background: #161b22;
+	--vscode-editorSuggestWidget-foreground: #c9d1d9;
+	--vscode-editor-findMatchHighlightBackground: #d2992233;
+	--vscode-editor-findMatchHighlightBorder: #1f6feb;
+	--vscode-textLink-foreground: #58a6ff;
+	--vscode-textLink-activeForeground: #79c0ff;
+	--vscode-focusBorder: #1f6feb;
+	--vscode-selection-background: #1f6feb66;
+	--vscode-menu-background: #161b22;
+	--vscode-menu-foreground: #c9d1d9;
+	--vscode-menu-border: #30363d;
+	--vscode-menu-selectionBackground: #1f6feb;
+	--vscode-menu-selectionForeground: #ffffff;
+	--vscode-menu-selectionBorder: #1f6feb;
+	--vscode-menu-separatorBackground: #30363d;
+	--vscode-input-background: #0d1117;
+	--vscode-input-foreground: #c9d1d9;
+	--vscode-input-placeholderForeground: #8b949e;
+	--vscode-inputOption-activeBackground: #1f6feb66;
+	--vscode-inputOption-activeBorder: #1f6feb;
+	--vscode-inputValidation-errorBackground: #4b1113;
+	--vscode-inputValidation-errorBorder: #f85149;
+	--vscode-scrollbar-shadow: rgba(0, 0, 0, 0.4);
+	--vscode-widget-shadow: rgba(0, 0, 0, 0.5);
+	--vscode-gitDecoration-addedResourceForeground: #3fb950;
+	--vscode-gitDecoration-deletedResourceForeground: #f85149;
+	--vscode-gitDecoration-modifiedResourceForeground: #d29922;
+">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Git Graph</title>
+		<link rel="icon" href="/favicon.svg">
+		<link rel="stylesheet" href="/gitgraph/vendor/out.min.css">
+		<style>
+			/*
+				The twelve graph colours, in the order lanes are given them. They are the same dozen
+				server/git/gitgraph/config.ts hands the page, repeated here because the graph paints before
+				any script has run and a lane with no colour is a lane that is not drawn at all.
+			*/
+			body {
+				--git-graph-color0: #58a6ff;
+				--git-graph-color1: #f778ba;
+				--git-graph-color2: #3fb950;
+				--git-graph-color3: #d29922;
+				--git-graph-color4: #bc8cff;
+				--git-graph-color5: #f85149;
+				--git-graph-color6: #39d2c0;
+				--git-graph-color7: #ff9b57;
+				--git-graph-color8: #a5d84e;
+				--git-graph-color9: #e879f9;
+				--git-graph-color10: #79c0ff;
+				--git-graph-color11: #8b6cff;
+			}
+			[data-color="0"] { --git-graph-color: var(--git-graph-color0); }
+			[data-color="1"] { --git-graph-color: var(--git-graph-color1); }
+			[data-color="2"] { --git-graph-color: var(--git-graph-color2); }
+			[data-color="3"] { --git-graph-color: var(--git-graph-color3); }
+			[data-color="4"] { --git-graph-color: var(--git-graph-color4); }
+			[data-color="5"] { --git-graph-color: var(--git-graph-color5); }
+			[data-color="6"] { --git-graph-color: var(--git-graph-color6); }
+			[data-color="7"] { --git-graph-color: var(--git-graph-color7); }
+			[data-color="8"] { --git-graph-color: var(--git-graph-color8); }
+			[data-color="9"] { --git-graph-color: var(--git-graph-color9); }
+			[data-color="10"] { --git-graph-color: var(--git-graph-color10); }
+			[data-color="11"] { --git-graph-color: var(--git-graph-color11); }
+
+			/* The little page chrome this view owns, as opposed to the bundle's own stylesheet. */
+			html, body { height: 100%; margin: 0; }
+			body {
+				background: var(--vscode-editor-background);
+				color: var(--vscode-editor-foreground);
+				font-family: var(--vscode-font-family);
+			}
+			/* There is no terminal behind this page, so the bundle's button for one stays out of the row. */
+			#terminalBtn { display: none; }
+
+			/* What a page with nothing to draw says instead: no bundle, no repository, or no session. */
+			#ggNotice {
+				position: fixed;
+				inset: 0;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: 0.6em;
+				padding: 2em;
+				text-align: center;
+			}
+			#ggNotice[hidden] { display: none; }
+			#ggNoticeTitle { margin: 0; font-size: 1.2em; font-weight: 600; }
+			#ggNoticeDetail { margin: 0; max-width: 46em; color: #8b949e; line-height: 1.5; }
+
+			/* The text viewer, which stands in for the editor panel a diff used to open in. */
+			#ggViewer { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; }
+			#ggViewer[hidden] { display: none; }
+			.ggViewerBackdrop { position: absolute; inset: 0; background: rgba(1, 4, 9, 0.72); }
+			.ggViewerPanel {
+				position: relative;
+				display: flex;
+				flex-direction: column;
+				min-height: 0;
+				margin: 3vh 4vw;
+				flex: 1;
+				border: 1px solid #30363d;
+				border-radius: 6px;
+				background: #0d1117;
+				box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+				overflow: hidden;
+			}
+			.ggViewerBar {
+				display: flex;
+				align-items: center;
+				gap: 0.8em;
+				padding: 0.5em 0.8em;
+				border-bottom: 1px solid #30363d;
+				background: #161b22;
+			}
+			.ggViewerTitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+			.ggViewerFlags { color: #d29922; font-size: 0.9em; }
+			.ggViewerBar button {
+				font: inherit;
+				color: #c9d1d9;
+				background: #21262d;
+				border: 1px solid #30363d;
+				border-radius: 4px;
+				padding: 0.15em 0.7em;
+				cursor: pointer;
+			}
+			.ggViewerBar button:hover { border-color: #1f6feb; }
+			.ggViewerBar button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 1px; }
+			.ggViewerBody { flex: 1; min-height: 0; overflow: auto; }
+			.ggViewerTable {
+				border-collapse: collapse;
+				font-family: var(--vscode-editor-font-family);
+				font-size: 12px;
+				line-height: 1.5;
+				width: 100%;
+			}
+			.ggViewerTable td { padding: 0 0.6em; white-space: pre; vertical-align: top; }
+			.ggViewerNum {
+				width: 1%;
+				color: #484f58;
+				text-align: right;
+				user-select: none;
+				background: #010409;
+			}
+			.ggViewerLine_added { color: #3fb950; background: rgba(63, 185, 80, 0.1); }
+			.ggViewerLine_removed { color: #f85149; background: rgba(248, 81, 73, 0.1); }
+			.ggViewerLine_hunk { color: #79c0ff; }
+			.ggViewerLine_meta { color: #8b949e; }
+			.ggViewerEmpty { padding: 1.2em; color: #8b949e; }
+		</style>
+	</head>
+	<body>
+		<div id="view" tabindex="-1">
+			<div id="controls">
+				<span id="repoControl"><span class="unselectable">Repo: </span><div id="repoDropdown" class="dropdown"></div></span>
+				<span id="branchControl"><span class="unselectable">Branches: </span><div id="branchDropdown" class="dropdown"></div></span>
+				<label id="showRemoteBranchesControl"><input type="checkbox" id="showRemoteBranchesCheckbox" tabindex="-1"><span class="customCheckbox"></span>Show Remote Branches</label>
+				<div id="findBtn" title="Find"></div>
+				<div id="terminalBtn" title="Open a Terminal for this Repository"></div>
+				<div id="settingsBtn" title="Repository Settings"></div>
+				<div id="fetchBtn"></div>
+				<div id="refreshBtn"></div>
+			</div>
+			<div id="content">
+				<div id="commitGraph"></div>
+				<div id="commitTable"></div>
+			</div>
+			<div id="footer"></div>
+		</div>
+		<div id="scrollShadow"></div>
+
+		<div id="ggViewer" hidden>
+			<div class="ggViewerBackdrop"></div>
+			<div class="ggViewerPanel" role="dialog" aria-modal="true" aria-labelledby="ggViewerTitle">
+				<div class="ggViewerBar">
+					<span id="ggViewerTitle" class="ggViewerTitle"></span>
+					<span id="ggViewerFlags" class="ggViewerFlags"></span>
+					<button type="button" id="ggViewerCopy">Copy</button>
+					<button type="button" id="ggViewerClose" aria-label="Close">✕</button>
+				</div>
+				<div class="ggViewerBody" id="ggViewerBody" tabindex="0"></div>
+			</div>
+		</div>
+
+		<div id="ggNotice" hidden>
+			<h2 id="ggNoticeTitle"></h2>
+			<p id="ggNoticeDetail"></p>
+		</div>
+
+		<script type="module" src="/client/gitgraph/host.js"></script>
+	</body>
+</html>

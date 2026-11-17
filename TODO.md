@@ -4,7 +4,7 @@ The one list of what is open. `STATE.md` says what works; this says what does no
 says what it is, what it would touch, and what has to be settled before it can start. Line numbers are
 `dev` at `c723fc3`.
 
-Fourteen entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
+Fifteen entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
 something the board cannot do yet, **chore** is work on the code itself.
 
 Four decisions have to be answered by you before some of these can start, and each is named in the
@@ -70,6 +70,24 @@ not equivalent: a plain hover on the strip (`pointer-events: auto`) swallows dra
 208px of board, which the stylesheet states it must not (`public/index.html:99`); a pointer position
 test keeps the board usable and costs a short delay. Hover is also not a modality everyone has, so the
 accessible read (the strip's own summary label, or a strip that can take focus) has to be kept.
+
+**The Git Graph drawer still cannot reach a remote, and there are a few commands with no home here.**
+The local writes all answer now — branches, tags, checkout, merge, rebase, cherry-pick, revert, reset,
+dropping a commit, stash and clean — and so do the reads. What answers `This tab cannot do that yet.` is
+still one table: adding, editing and deleting a remote, deleting a remote branch, fetching a remote
+branch into a local one, pulling a branch, pushing a branch, pushing a tag on its own, the archive
+download, the configuration export, and the commands an editor or a third party would have served. Two
+local commands are refused by name for a reason of their own rather than by that table: an interactive
+rebase, which needs a terminal for the commit list, and dropping a merge commit, which git cannot rebase
+out of a history that joins two. The work is one table: every name in `UNAVAILABLE_COMMANDS` loses its
+entry in `server/git/gitgraph/dispatch.ts`, gets a branch in `answer` and a run in
+`server/git/gitgraph/actions.ts` behind it, and `UNAVAILABLE` shrinks by one with each commit; the
+archive download is a route of its own rather than a git run, because it writes a file a human then
+saves. Files are named rather than numbered here because these are all new, and `dev` has no line number
+for them yet. To settle: what the board says to a thread whose checkout moved under it while the thread
+was idle, because the live guard only knows a child that is running now, so a human merging or resetting
+an idle thread's tree moves it in silence. And whether a remote write reaches this daemon at all, which
+is the same question as whether "nothing to install" survives a push that needs a token.
 
 **Voice, on a card.** The `voice` extension drove the console by speech, and it was retired from the
 extensions repository rather than ported, because every one of its hooks checked `ctx.mode === "tui"`

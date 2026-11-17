@@ -1209,11 +1209,59 @@
   #promptEditor .pe-foot button:hover { background: #30363d; }
   .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted);
     font-size: 14px; pointer-events: none; text-align: center; padding: 20px; }
+  /* The git drawer: the Git Graph page in a panel that rolls down under the header, from `g` in the
+     header or on the board. It slides by `transform` and not by height because a height animation makes
+     the graph inside redraw its whole SVG on every frame, while a transform costs one composited layer
+     and no layout. Closing hides it with `visibility` rather than `display`, so the page inside keeps
+     its size and its state and loading it again never happens. z-index 1500 sits above the header
+     (10), the rail and the strip (8), the footer (40) and the transcript drawer (60), and below the
+     pickers and header panels (2000), the prompt editor (2100) and the sheets (2200). */
+  #gitDrawer {
+    position: fixed; top: 44px; left: 0; right: 0; height: calc(100vh - 44px); z-index: 1500;
+    display: flex; flex-direction: column; background: var(--bg);
+    border-bottom: 1px solid var(--border-bright); box-shadow: 0 18px 48px rgba(0,0,0,.6);
+    transform: translateY(-100%); visibility: hidden;
+    transition: transform 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms;
+  }
+  body.git-open #gitDrawer { transform: none; visibility: visible;
+    transition: transform 170ms cubic-bezier(.2,.9,.25,1); }
+  /* The bar is the header's row continued: same mono, same buttons, one border under it. */
+  #gitDrawer .gd-bar { display: flex; align-items: center; gap: 8px; padding: 6px 14px;
+    border-bottom: 1px solid var(--border); }
+  #gitDrawer .gd-title { font: 12px var(--mono); color: var(--muted); }
+  #gitDrawer .gd-workspace { font: 11px var(--mono); color: var(--text); min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #gitDrawer .gd-bar .grow { flex: 1; }
+  #gitDrawer button { font: 12px var(--mono); color: var(--muted); background: #161b22;
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+  #gitDrawer button:hover { color: var(--text); border-color: var(--border-bright); }
+  #gitDrawer button:disabled { cursor: default; opacity: .5; }
+  #gitDrawer .gd-body { flex: 1; min-height: 0; }
+  #gdFrame { width: 100%; height: 100%; border: 0; display: block; background: var(--bg); }
+  /* `display` on the id outranks the browser's own `[hidden]` rule, so a board with no folder hides the
+     frame here rather than leaving an empty page over the drawer's notice. */
+  #gdFrame[hidden] { display: none; }
+  /* A board with no folder has no repository to draw, so the drawer says that instead of loading a page
+     that cannot answer. */
+  #gitDrawer .gd-note { margin: 0; padding: 18px; color: var(--muted); font: 12px var(--mono); }
+  /* The scrim dims the board behind the drawer and fades with the same 170ms slide. The drawer covers
+     the whole area it dims, so it is only ever seen through a slide in progress; it stays because the
+     drawer's height is the CSS's to change, and a scrim that is already there needs no new wiring. */
+  #gitScrim { position: fixed; inset: 44px 0 0 0; z-index: 1499; background: rgba(1,4,9,.45);
+    opacity: 0; visibility: hidden;
+    transition: opacity 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms; }
+  body.git-open #gitScrim { opacity: 1; visibility: visible; transition: opacity 170ms cubic-bezier(.2,.9,.25,1); }
+  /* `hidden` is only the state before the drawer was ever rolled down, so a board that never opens one
+     paints no scrim at all. */
+  #gitScrim[hidden] { display: none; }
+
   /* Each of the board's three animations repeats a state the text already spells out, so the board
      loses nothing when the reader asks for less motion. Last, because it kills rules from the card
      states, the header and the rail alike. */
   @media (prefers-reduced-motion: reduce) {
     .card.fresh, .card.flash, header .live.working b, .act.running .dot, .composer .ctx-btn.hot::after { animation: none; }
+    /* A roll down with no motion: the class still decides what is visible, it just arrives at once. */
+    #gitDrawer, #gitScrim { transition: none; }
   }
 </style>
 </head>
@@ -1238,6 +1286,7 @@
   <button id="cleanBtn" title="forget dead threads and their logs">clean</button>
   <button id="leftBtn" title="folders and branches the board left behind, cleared one at a time">leftovers</button>
   <button id="newBtn" title="start over in this workspace: same folder, same settings, empty board">new</button>
+  <button id="gitBtn" type="button" aria-expanded="false" aria-controls="gitDrawer" title="roll the git graph down (g)">git</button>
   <button id="keysBtn" title="every keyboard shortcut" aria-haspopup="dialog" aria-expanded="false">keys</button>
   <button id="configBtn" title="this board's settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
 </header>
@@ -1455,6 +1504,22 @@
     <div id="leftDetailBody" class="sheet-body" tabindex="0"></div>
   </div>
 </div>
+
+<!-- The git drawer: the Git Graph page in a panel that rolls down under the header with `g`. The page
+     inside keeps its own state — the scroll position, the expanded commit, the repository picked —
+     because it is loaded once and never reloaded. Its src comes from the module in
+     /client/git-drawer.js, which also knows whether this board has a folder to draw at all. -->
+<div id="gitScrim" hidden></div>
+<section id="gitDrawer" aria-label="git graph" inert>
+  <div class="gd-bar">
+    <span class="gd-title">git graph</span>
+    <span class="gd-workspace" id="gdWorkspace"></span>
+    <span class="grow"></span>
+    <button id="gdTab" type="button" title="open the git graph in a tab of its own">open in tab &#8599;</button>
+    <button id="gdClose" type="button" title="roll the git graph up (g)">roll up (g)</button>
+  </div>
+  <div class="gd-body"><iframe id="gdFrame" title="git graph"></iframe></div>
+</section>
 
 <script type="module" src="/client/board.js"></script>
 </body>

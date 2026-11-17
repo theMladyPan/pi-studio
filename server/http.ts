@@ -42,10 +42,15 @@ export function answer(res, status, payload) {
 
 
 
-export function serveStatic(res, file, type) {
+/**
+ * A file under `public/`, with any extra headers the caller's surface needs. A page that carries a
+ * Content Security Policy or a framing rule says so here rather than at four call sites that each have
+ * to remember the same four lines.
+ */
+export function serveStatic(res, file, type, headers) {
 	try {
 		const body = readFileSync(join(PUBLIC_DIR, file));
-		res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store" });
+		res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store", ...headers });
 		res.end(body);
 	} catch (error) {
 		console.error(`pi-studio: cannot serve ${file}: ${error.message}`);

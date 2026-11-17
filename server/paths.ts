@@ -91,6 +91,11 @@ export function boardFile(workspace: { id: string }) {
 	return join(STATE_DIR, "boards", `${workspace.id}.json`);
 }
 
+/** Persisted Git Graph view state and code reviews for one workspace. */
+export function gitgraphStateFile(workspace: { id: string }) {
+	return join(STATE_DIR, "gitgraph", `${workspace.id}.json`);
+}
+
 /**
  * Where a file dropped onto a message field waits for the agent to read it.
  *

@@ -183,6 +183,42 @@ async function main() {
 	// only takes /client/[a-z0-9/_-]+\.js, and a 404 here is a card that silently stays empty.
 	const diagram = await get(one, "/client/mermaid-min.js");
 	said(diagram.status === 200 && diagram.type.includes("javascript"), "GET /client/mermaid-min.js serves the diagram renderer", `${diagram.status} ${diagram.type}`);
+	// The Git Graph view: a page, the three globals behind it, the bundle's bytes and the message route.
+	// The page and the bundle are static, so they are reached without the token; the two data routes are
+	// behind it like every other route that reads this machine.
+	const gitGraph = await get(one, `/git/${opened.board.id}`);
+	said(
+		gitGraph.status === 200 && gitGraph.type.includes("text/html") && gitGraph.body.includes('id="view"'),
+		"GET /git/<id> serves the Git Graph page",
+		`${gitGraph.status} ${gitGraph.type}`,
+	);
+	const gitInit = await get(one, `/git/init?token=${one.token}&workspace=${opened.board.id}`);
+	const gitInitBody = JSON.parse(gitInit.body || "{}");
+	said(
+		gitInit.status === 200 && typeof gitInitBody.available === "boolean" && (gitInitBody.available ? gitInitBody.initialState !== null : Boolean(gitInitBody.reason)),
+		"GET /git/init says whether a tab can draw a graph, and why not when it cannot",
+		`${gitInit.status} ${gitInitBody.available ? "available" : String(gitInitBody.reason).slice(0, 70)}`,
+	);
+	// Whatever this machine has installed: a bundle or the sentence that says why there is none. Neither
+	// may be a 500, which is what a route that fails to read the extension folder would answer.
+	const vendor = await get(one, "/gitgraph/vendor/out.min.js");
+	said(vendor.status === 200 || vendor.status === 404, "GET /gitgraph/vendor/out.min.js answers the bundle or says it is missing", `${vendor.status}`);
+	const notABundle = await get(one, `/gitgraph/vendor/not-a-bundle.js?token=${one.token}`);
+	said(notABundle.status === 404, "and a vendor path that is not one of the two files is refused", `${notABundle.status}`);
+	// One message from the page, answered with an array of replies. `loadRepos` needs no repository, so
+	// this passes on a board whose folder is the smoke run's own state folder.
+	const message = await get(one, `/git/msg?token=${one.token}&workspace=${opened.board.id}`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ command: "loadRepos", check: false }),
+	});
+	const replies = JSON.parse(message.body || "[]");
+	said(
+		message.status === 200 && Array.isArray(replies) && replies[0]?.command === "loadRepos",
+		"POST /git/msg answers a message with its replies",
+		`${message.status} ${Array.isArray(replies) ? `${replies.length} reply` : message.body.slice(0, 60)}`,
+	);
+
 	const refused = await get(one, "/state");
 	said(refused.status === 403, "a route without the token is refused", `${refused.status}`);
 	const forged = await get(one, `/state?token=deadbeef&workspace=${opened.board.id}`);

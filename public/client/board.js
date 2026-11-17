@@ -1,4 +1,8 @@
 /* pi board — canvas client. Cards arrive from the daemon over server-sent events. */
+// The git drawer is a module of its own: the panel, its focus and the two messages its page trades
+// with this one are a single subject, and this file is long enough already. The daemon serves every
+// `/client/*.js` by one rule, so a new module beside this one loads without a table to edit.
+import { createGitDrawer } from "./git-drawer.js";
 const world = document.getElementById("world");
 const viewport = document.getElementById("viewport");
 // `overflow: clip` keeps the viewport out of the scroll containers, but an engine that ignores
@@ -17,6 +21,11 @@ const resetBtn = document.getElementById("reset");
 // board route has to carry it.
 const workspace = (location.pathname.match(/^\/w\/([0-9a-f]{6,64})\/?$/) || [])[1] || "";
 const auth = workspace ? `workspace=${encodeURIComponent(workspace)}` : "";
+// One drawer for the life of the page, so the graph inside it keeps the scroll position, the expanded
+// commit and the repository the human left in it between rolls. `typingSomewhere` is passed rather
+// than copied, so the drawer and the board's letters read a field the same way.
+const gitDrawer = createGitDrawer({ workspace, typingSomewhere });
+document.getElementById("gitBtn").addEventListener("click", () => gitDrawer.toggle());
 // The path already says what this page is: `/w/<id>` is a board of threads, whose field lives
 // inside a card. Waiting for a frame from the server to decide that left a board looking like a
 // one-session board whenever the stream was slow, stale or dead.
@@ -4687,6 +4696,9 @@ function applyGit(picture) {
   const stamp = picture ? JSON.stringify({ ...picture, at: 0 }) : "";
   if (stamp === gitStamp) return;
   gitStamp = stamp;
+  // One line, and the one place that knows a repository changed: an open graph is told to reload its
+  // picture in the background, and a shut one is told when it next rolls down.
+  gitDrawer.notifyChanged();
   gitShown = picture && picture.graph?.length ? picture : null;
   gitLayout = gitShown ? layoutGraph(gitShown.graph) : null;
   document.body.classList.toggle("git-on", Boolean(gitShown));
@@ -7644,13 +7656,25 @@ const SHORTCUTS = [
       { keys: "m", does: "hide or show the small overview map" },
       { keys: "n", does: "jump to the next new card or waiting question" },
       { keys: "o", does: "flip the thread order, newest first or oldest first" },
+      { keys: "g", does: "roll the git graph down, and press it again to roll it up" },
       { keys: "t", does: "start a new thread, on a board of threads with no card selected" },
       { keys: "r", does: "reply to the card you are reading" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
       { keys: "q", does: "close the card you are reading" },
-      { keys: "esc", does: "close the open panel, or with no panel open, let go of the selected card" },
+      { keys: "esc", does: "close the open panel or roll the git graph up, or with nothing open, let go of the selected card" },
       { keys: "ctrl+z", does: "undo a close and put the card back" },
       { keys: "ctrl+m", does: "cycle the mode of the card you are reading: agent, plan, boss, discuss, then back on" },
+    ],
+  },
+  {
+    group: "git graph",
+    rows: [
+      { keys: "esc", does: "close a menu, a dialog, a list, the find bar or the commit details first, then roll the graph up" },
+      { keys: "ctrl+f", does: "find a commit, a branch or a message in the graph" },
+      { keys: "ctrl+r", does: "read the repository again" },
+      { keys: "ctrl+h", does: "scroll to HEAD" },
+      { keys: "ctrl+s", does: "scroll to the stashes" },
+      { keys: "↑ ↓", does: "walk the commits while the details of one are open" },
     ],
   },
   {
@@ -7729,9 +7753,10 @@ function shownKeys(on) {
 
 /**
  * Whether a panel of the header is reading the screen. Both of them cover the board, so the letters the
- * map on screen teaches are not the letters a board key may act on behind it.
+ * map on screen teaches are not the letters a board key may act on behind it. The git drawer covers it
+ * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too.
  */
-const panelUp = () => !keysPanel.hidden || !configPanel.hidden;
+const panelUp = () => !keysPanel.hidden || !configPanel.hidden || gitDrawer.isOpen();
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
@@ -10412,6 +10437,13 @@ document.addEventListener("keydown", (event) => {
     else if (sheet === removePanel) closeRemoveSheet();
     return;
   }
+  // The drawer covers the board, so Escape rolls it up before it lets go of the card being read. A press
+  // inside its page never reaches this handler, and comes back as the page's own `close` message.
+  if (gitDrawer.isOpen()) {
+    event.preventDefault();
+    gitDrawer.close();
+    return;
+  }
   // The selection is a reading position and a set of cards to move, so Escape gives up both.
   if (!document.querySelector(".card.active") && !selectedIds.size) return;
   selectCard(null);
@@ -10599,6 +10631,17 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+// `g` rolls the git graph down over the board, and the drawer's own handler rolls it up: this one only
+// opens. It waits for the panels and the pickers the way the letters above do, because a graph over the
+// board would hide what they are showing, and for a field, because `g` is a letter like any other.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "g" || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (typingSomewhere()) return;
+  if (panelUp() || openSheet() || !picker.hidden || !atPick.hidden) return;
+  event.preventDefault();
+  gitDrawer.toggle();
+});
+
 // ---------- transport ----------------------------------------------------
 // ---------- session header -----------------------------------------------
 const shortNum = (value) => {
@@ -10638,6 +10681,8 @@ function applyMeta(meta) {
   // The label names the workspace this tab belongs to; clicking it goes back to the crossroads,
   // where another one can be opened in a tab of its own.
   const folder = meta.workspace?.name || meta.folder || "session";
+  // The drawer's bar names the same workspace, and only falls back to its id while no name is known.
+  gitDrawer.setName(meta.workspace?.name);
   const sess = document.getElementById("sess");
   sess.innerHTML = "";
   sess.append("board of ");

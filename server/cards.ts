@@ -16,6 +16,7 @@ import { activeConfig } from "./workspaces.ts";
 import { scheduleSave } from "./store.ts";
 import { randomUUID } from "node:crypto";
 import { finished } from "./waiters.ts";
+import type { ThreadCard } from "./types.ts";
 
 
 
@@ -77,7 +78,7 @@ export function promptImages(images) {
 // ---------- the board the client draws -------------------------------------
 
 /** A thread as the card the browser draws: a title, and the conversation under it. */
-export function cardFor(thread, board = null) {
+export function cardFor(thread, board = null): ThreadCard {
 	const answered = thread.turns.some((turn) => turn.status === "answered");
 	const status =
 		thread.status === "dead" ? "stopped" : thread.status === "running" ? "sent" : answered ? "answered" : "queued";

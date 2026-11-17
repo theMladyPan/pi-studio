@@ -111,7 +111,8 @@ test("a card opens the file it was read from, whichever tree the key was written
 		assert.equal(card.file, resolve(trees.a, "src/api.ts"), "the card names the file its body came from");
 		// The absolute path stays on the daemon's side of the wire: it is a whitelist that shapes a card.
 		assert.equal(JSON.parse(read.body).card.file, undefined);
-		assert.equal(plainCardFor(card, board).file, undefined);
+		// The field is not on the drawn card at all, so its absence is asked for by name rather than read.
+		assert.equal("file" in plainCardFor(card, board), false);
 
 		const opened = wire({ cardId });
 		await onOpenCard(opened.req, opened.res, board);
