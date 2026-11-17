@@ -153,7 +153,14 @@ let cached: VendorBundle | null = null;
  * daemon restarting.
  */
 export function findBundle(searchRoots?: readonly string[]): VendorBundle {
-	if (!searchRoots && cached) return cached;
+	// A hit remembers two paths, not the files behind them. An editor retires an installed copy while the
+	// daemon runs — VS Code marks the folder obsolete and deletes it on its next restart — and the cached
+	// answer then names a file that is no longer there, which the page sees as a 404 on every reload. A
+	// hit whose files cannot be read is no hit, so the search runs again and finds the copy that is left.
+	if (!searchRoots && cached) {
+		if (cached.ok && readableFile(cached.jsPath) && readableFile(cached.cssPath)) return cached;
+		cached = null;
+	}
 	const configured = (process.env.PI_STUDIO_GITGRAPH_DIR ?? "").trim();
 	if (configured) return configuredBundle(configured);
 	const roots = searchRoots ?? defaultRoots();

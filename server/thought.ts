@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_ROW_CHARS } from "./limits.ts";
 import { scheduleSave } from "./store.ts";
 import { threadError } from "./cards.ts";
-import { STREAM_MS, afterMessage, liveTurn, prompt, stopStream, streamTick, streamTimers } from "./child/run.ts";
+import { STREAM_MS, afterMessage, liveTurn, prompt, retryRun, stopStream, streamTick, streamTimers } from "./child/run.ts";
 import { keptArgs } from "./child/argv.ts";
 import { describeTool, firstLine, headline, rowResult } from "./child/describe.ts";
 import { join } from "node:path";
@@ -540,27 +540,46 @@ export function handleChildLine(board, thread, line) {
 			prompt(board, thread, typeof next === "string" ? next : next.message, target, typeof next === "string" ? [] : next.images);
 			return;
 		}
-		// Nothing else is queued, so the run is over for anyone waiting on it.
-		finished(thread);
-		// The answer is in its reader's hands the moment this run resolves, so a child whose run ended as an
-		// answer is a spent card and the board puts it away a moment later — hidden, never killed, so the
-		// tree it worked in is still there to assemble. A turn that was stopped or failed is not an answer,
-		// however much of it arrived: an abort, a timeout and an error all leave the turn reading `stopped`,
-		// which is the distinction the spawn route drew with `result.status === "done"`. The turn read is the
-		// one captured above, before the answering pointer went: a steer or a message taken back after the
-		// answer is the newest turn, and it is not the turn that ended this run.
-		if (reached?.status === "answered") autoCloseChild(board, thread);
-		// What the run spent is only known to the child, so it is asked before stdin closes. The close
-		// waits for the answer.
-		const child = board.children.get(thread.id);
-		if (child?.stdin?.writable) {
-			thread.pendingClose = true;
-			try {
-				child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "get_session_stats" })}\n`);
-			} catch {
-				thread.pendingClose = false;
-				child.stdin.end();
-			}
+		// A run that died of the provider's own weather is sent again before the card is left reading
+		// stopped, and the same words go out up to three times before the human is told it failed.
+		if (retryRun(board, thread, reached, () => endRun(board, thread, reached))) return;
+		endRun(board, thread, reached);
+	}
+}
+
+
+
+/**
+ * Everything a run leaves behind once nothing more will be sent for it.
+ */
+function endRun(board, thread, reached) {
+	// A retry dropped in its wait leaves the thread reading as running with nothing behind it, and the
+	// stop that dropped it must not reach the next run.
+	if (thread.status === "running" && !thread.answering) {
+		thread.status = "idle";
+		thread.abortWanted = false;
+		update(board, thread);
+	}
+	// The run is over for anyone waiting on it.
+	finished(thread);
+	// The answer is in its reader's hands the moment this run resolves, so a child whose run ended as an
+	// answer is a spent card and the board puts it away a moment later — hidden, never killed, so the
+	// tree it worked in is still there to assemble. A turn that was stopped or failed is not an answer,
+	// however much of it arrived: an abort, a timeout and an error all leave the turn reading `stopped`,
+	// which is the distinction the spawn route drew with `result.status === "done"`. The turn read is the
+	// one captured above, before the answering pointer went: a steer or a message taken back after the
+	// answer is the newest turn, and it is not the turn that ended this run.
+	if (reached?.status === "answered") autoCloseChild(board, thread);
+	// What the run spent is only known to the child, so it is asked before stdin closes. The close
+	// waits for the answer.
+	const child = board.children.get(thread.id);
+	if (child?.stdin?.writable) {
+		thread.pendingClose = true;
+		try {
+			child.stdin.write(`${JSON.stringify({ id: randomUUID(), type: "get_session_stats" })}\n`);
+		} catch {
+			thread.pendingClose = false;
+			child.stdin.end();
 		}
 	}
 }
