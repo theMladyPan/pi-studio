@@ -4,6 +4,7 @@
  * one line of facts each one is described by.
  */
 import { SCRATCH_DIR, STATE_VERSION, WORKSPACES_FILE, boardFile, legacyBoardFile, projectStateDir, readJsonFile, workspaceId, writeJsonFile } from "./paths.ts";
+import { legacyImportComplete } from "./state-storage.ts";
 import { boards } from "./store.ts";
 import { sessionFacts } from "./session.ts";
 import { basename, join } from "node:path";
@@ -405,8 +406,10 @@ export function gitFacts(folder) {
 /**
  * The saved board a description reads: the project-local file once it exists, and the legacy global file
  * until the first open imports it, so the crossroads keeps showing a recent's threads and last activity
- * instead of reporting every project as empty. A linked project home is never read through, and nothing
- * here creates state in a scratch or missing folder.
+ * instead of reporting every project as empty. A recent whose one-time import is recorded as complete is
+ * never answered for by the legacy file again, so a board the human deleted from the new home does not
+ * come back as old history on the list. A linked project home is never read through, and nothing here
+ * creates state in a scratch or missing folder.
  */
 function savedBoardFor(workspace) {
 	const file = boardFile(workspace);
@@ -416,7 +419,8 @@ function savedBoardFor(workspace) {
 	} catch {
 		// No project home yet: the legacy file below is the one a recent that was never reopened holds.
 	}
-	return existsSync(file) ? readJsonFile(file, null) : readJsonFile(legacyBoardFile(workspace), null);
+	if (existsSync(file)) return readJsonFile(file, null);
+	return legacyImportComplete(workspace) ? null : readJsonFile(legacyBoardFile(workspace), null);
 }
 
 /** The one workspace that matters to a tab: what is on it, and the last thing that happened. */

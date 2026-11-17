@@ -9,7 +9,7 @@
  */
 import { existsSync } from "node:fs";
 import { gitgraphStateFile, readJsonFile, writeJsonFile } from "../../paths.ts";
-import { importLegacyProjectState } from "../../state-storage.ts";
+import { importLegacyProjectState, projectFolderGone } from "../../state-storage.ts";
 import type {
 	GitCodeReview,
 	GitGraphViewState,
@@ -273,6 +273,16 @@ export function stateFor(workspace: { id: string; folder?: string }): GitGraphVi
 }
 
 /**
+ * A save is refused, loudly, when the folder it belongs to is gone: the state file lives inside that folder,
+ * so writing it would make the folder again around a file the human deleted the project away from.
+ */
+function refusedBecauseFolderGone(workspace: { id: string; folder?: string }): boolean {
+	if (!projectFolderGone(workspace)) return false;
+	console.error(`pi-studio: not saving the Git view state of ${workspace.folder}: the project folder is gone`);
+	return true;
+}
+
+/**
  * Write this workspace's state soon. A burst of changes — a column drag, then the pane height, then
  * which branches are shown — costs one write, the way a board does.
  */
@@ -281,6 +291,7 @@ export function scheduleStateSave(workspace: { id: string; folder?: string }): v
 	if (!hit || hit.timer) return;
 	hit.timer = setTimeout(() => {
 		hit.timer = null;
+		if (refusedBecauseFolderGone(hit.workspace)) return;
 		writeJsonFile(gitgraphStateFile(hit.workspace), hit.state);
 	}, 500);
 	hit.timer.unref();
@@ -292,6 +303,7 @@ export function flushState(workspaceId: string): void {
 	if (!hit) return;
 	if (hit.timer) clearTimeout(hit.timer);
 	hit.timer = null;
+	if (refusedBecauseFolderGone(hit.workspace)) return;
 	writeJsonFile(gitgraphStateFile(hit.workspace), hit.state);
 }
 

@@ -16,7 +16,7 @@ process.env.PI_STUDIO_STATE = stateHome;
 const paths = await import("../server/paths.ts");
 const storage = await import("../server/state-storage.ts");
 const { ensureStateExcludes } = await import("../server/worktrees/make.ts");
-const { boardFor } = await import("../server/store.ts");
+const { boardFor, flushBoard } = await import("../server/store.ts");
 const { describeWorkspace } = await import("../server/workspaces.ts");
 const { git, scratchRepo } = await import("../test-support/git.ts");
 
@@ -97,6 +97,111 @@ test("a refused import is not remembered, so fixing the path lets it retry", () 
 	} finally {
 		rmSync(folder, { recursive: true, force: true });
 		rmSync(elsewhere, { recursive: true, force: true });
+	}
+});
+
+test("a retired transcript is not copied back from the legacy original on a later start", () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-retired-import-"));
+	try {
+		const id = paths.workspaceId(folder);
+		const workspace = { id, folder, name: "retired" };
+		mkdirSync(join(stateHome, "sessions", id), { recursive: true });
+		const legacySession = join(stateHome, "sessions", id, `2026-01-01_${id}.jsonl`);
+		const transcript = `${JSON.stringify({ type: "session", cwd: folder })}\n${JSON.stringify({ type: "message" })}\n`;
+		writeFileSync(legacySession, transcript);
+
+		storage.importLegacyProjectState(workspace);
+		const copied = join(paths.projectStateDir(folder), "sessions", `2026-01-01_${id}.jsonl`);
+		assert.equal(readFileSync(copied, "utf8"), transcript, "the transcript was not copied whole");
+		assert.equal(lstatSync(paths.legacyImportMarker(workspace)).isFile(), true, "the completed import was not recorded on disk");
+
+		// The human retires the transcript from the new home, which is the only copy they see.
+		unlinkSync(copied);
+		// A daemon started after that has no memory of the earlier pass, and the legacy original is still there.
+		storage.resetImportCacheForTests();
+		storage.importLegacyProjectState(workspace);
+
+		assert.equal(existsSync(copied), false, "the retired transcript was copied back from the legacy original");
+		assert.equal(readFileSync(legacySession, "utf8"), transcript, "the legacy original was not preserved");
+	} finally {
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a marker that cannot be written leaves the import retryable", () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-import-marker-"));
+	try {
+		const id = paths.workspaceId(folder);
+		const workspace = { id, folder, name: "marker" };
+		mkdirSync(join(stateHome, "boards"), { recursive: true });
+		const boardJson = JSON.stringify({ version: 1, threads: [] });
+		writeFileSync(join(stateHome, "boards", `${id}.json`), boardJson);
+		// A directory standing where the marker belongs: the copy lands, the record of it cannot be written.
+		const marker = paths.legacyImportMarker(workspace);
+		mkdirSync(marker, { recursive: true });
+		writeFileSync(join(marker, "keep.txt"), "keep\n");
+
+		storage.resetImportCacheForTests();
+		storage.importLegacyProjectState(workspace);
+		assert.equal(readFileSync(paths.boardFile(workspace), "utf8"), boardJson, "the refused marker also refused the copy");
+
+		// The obstruction is cleared, and the next start completes the pass and records it.
+		rmSync(marker, { recursive: true, force: true });
+		storage.resetImportCacheForTests();
+		storage.importLegacyProjectState(workspace);
+		assert.equal(lstatSync(marker).isFile(), true, "the retry did not write the marker");
+
+		// And a deleted board stays deleted now that the pass is recorded.
+		unlinkSync(paths.boardFile(workspace));
+		storage.resetImportCacheForTests();
+		storage.importLegacyProjectState(workspace);
+		assert.equal(existsSync(paths.boardFile(workspace)), false, "a deleted board was copied back after the marker was written");
+	} finally {
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a recent whose import completed is never answered for by the legacy files again", () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-imported-described-"));
+	try {
+		const id = paths.workspaceId(folder);
+		const workspace = { id, folder, name: "imported", openedAt: 1 };
+		mkdirSync(join(stateHome, "boards"), { recursive: true });
+		mkdirSync(join(stateHome, "sessions", id), { recursive: true });
+		const legacyBoard = join(stateHome, "boards", `${id}.json`);
+		writeFileSync(legacyBoard, JSON.stringify({ version: 1, threads: [{ id: "t1" }, { id: "t2" }], activity: [{ id: "a1", label: "old", at: 1 }] }));
+		writeFileSync(join(stateHome, "sessions", id, `2026-01-01_${id}.jsonl`), `${JSON.stringify({ type: "message" })}\n`);
+		storage.importLegacyProjectState(workspace);
+
+		// The human deletes the imported board and its transcripts, keeping the project folder itself.
+		unlinkSync(paths.boardFile(workspace));
+		rmSync(join(paths.projectStateDir(folder), "sessions"), { recursive: true, force: true });
+		const described = describeWorkspace(workspace);
+
+		assert.equal(described.threadCount, 0, "the deleted board came back as old history");
+		assert.equal(described.lastActivity, null, "the deleted board's last activity came back");
+		assert.equal(described.sessions.count, 0, "the retired transcripts came back as old history");
+		assert.ok(existsSync(legacyBoard), "the legacy original was not preserved");
+	} finally {
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("a save after the project folder is gone does not make the folder again", () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-save-gone-"));
+	try {
+		const id = paths.workspaceId(folder);
+		const board = { id, folder, name: "gone", threads: new Map(), cards: new Map(), activity: [], trees: [] };
+		flushBoard(board);
+		assert.ok(existsSync(paths.boardFile(board)), "the board of a folder that exists was not written");
+
+		// The human deletes the project, and the shutdown flush reaches for its board anyway.
+		rmSync(folder, { recursive: true, force: true });
+		flushBoard(board);
+
+		assert.equal(existsSync(folder), false, "a save made the deleted project folder again");
+	} finally {
+		rmSync(folder, { recursive: true, force: true });
 	}
 });
 

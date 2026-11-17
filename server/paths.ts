@@ -116,6 +116,12 @@ export function legacyStateRoot() {
 	return HAS_EXPLICIT_STATE ? STATE_DIR : LEGACY_STATE_DIR;
 }
 
+/**
+ * The marker that records a completed one-time import of the legacy global records into this state home,
+ * so a later start does not copy a record the human has since deleted back from the old home.
+ */
+export const GLOBAL_IMPORT_MARKER = join(STATE_DIR, "legacy-import.json");
+
 /** The board file in the legacy global layout, read until the first open imports it. */
 export function legacyBoardFile(workspace: { id: string }) {
 	return join(legacyStateRoot(), "boards", `${workspace.id}.json`);
@@ -148,6 +154,16 @@ export function projectRootFor(workspace: { id: string; folder?: string }): stri
 	const folder = workspace.folder ? resolve(workspace.folder) : "";
 	if (!folder || isScratchPath(folder)) return "";
 	return projectStateDir(folder);
+}
+
+/**
+ * The marker that records a completed one-time import for one opened folder, beside its board and its Git
+ * state. Written only after every copy has landed, and read by every later start of the daemon; see
+ * `importLegacyProjectState`.
+ */
+export function legacyImportMarker(workspace: { id: string; folder?: string }): string {
+	const root = projectRootFor(workspace);
+	return root ? join(root, "legacy-import.json") : "";
 }
 
 /** Whether a folder is the scratch folder, by path; the scratch row keeps global, temporary state. */

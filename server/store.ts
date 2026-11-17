@@ -14,7 +14,7 @@ import { ROLE_NAMES } from "./child/roles.ts";
 import { MODE_NAMES, PATH_NAMES } from "./child/modes.ts";
 import { sweepTrees, thumbImages } from "./cards.ts";
 import { MAX_PUT_AWAY_CHILDREN } from "./limits.ts";
-import { ensureProjectStateDir, importLegacyProjectState } from "./state-storage.ts";
+import { ensureProjectStateDir, importLegacyProjectState, projectFolderGone } from "./state-storage.ts";
 import { ensureStateExcludes } from "./worktrees/make.ts";
 import { existsSync, statSync } from "node:fs";
 
@@ -68,6 +68,13 @@ export function cleanRect(rect) {
 
 /** Write one board: its threads, their turns, their layout and their session ids, and its notes. */
 export function saveBoard(board) {
+	// The board file lives inside the project folder, and a debounced write would make that folder again if
+	// the human deleted it: a deleted project comes back holding a board and nothing else. Refused, loudly,
+	// rather than written into a folder nobody asked for.
+	if (projectFolderGone(board)) {
+		console.error(`pi-studio: not saving the board of ${board.folder}: the project folder is gone`);
+		return;
+	}
 	const payload = {
 		version: STATE_VERSION,
 		workspace: { id: board.id, folder: board.folder, name: board.name },
