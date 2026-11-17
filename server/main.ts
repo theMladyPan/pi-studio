@@ -19,6 +19,7 @@ import { gitPicture, refreshGit, unwatchGit, watchGit } from "./git/graph.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
 import { onDefaults, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
+import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRename, onFilesList } from "./routes/board/files.ts";
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
@@ -268,6 +269,11 @@ export const server = createServer((req, res) => {
 				"/welcome.css": ["welcome.css", "text/css; charset=utf-8"],
 				// Both surfaces name this one in their head, so a tab carries the mark before the page paints.
 				"/favicon.svg": ["favicon.svg", "image/svg+xml"],
+				// The Explorer's icon set and font. They are named here one file at a time so that no request can
+				// turn a path into a file this daemon does not mean to serve.
+				"/explorer/seti.woff": ["explorer/seti.woff", "font/woff"],
+				"/explorer/codicon.ttf": ["explorer/codicon.ttf", "font/ttf"],
+				"/explorer/vs-seti-icon-theme.json": ["explorer/vs-seti-icon-theme.json", "application/json"],
 			};
 			const hit = statics[url.pathname];
 			if (hit) {
@@ -421,6 +427,15 @@ export const server = createServer((req, res) => {
 		}
 		if (req.method === "GET" && url.pathname === "/browse") {
 			onBrowse(url, res);
+			return;
+		}
+		// The Explorer's listing: the board's own folder, always, and never the tree a thread works in. It is
+		// a GET like `/browse`, so `threadRefusal` keeps it to the human, and its five changes below are not
+		// in `THREAD_ROUTES` either: a child reports in its last message instead of moving the human's files.
+		if (req.method === "GET" && url.pathname === "/files") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onFilesList(url, res, board);
 			return;
 		}
 		// The programs a `!` command can name. It is a GET like `/browse`, so `threadRefusal` keeps it to
@@ -665,6 +680,13 @@ export const server = createServer((req, res) => {
 				// One message from the Git Graph page, answered with the replies it earned. Not in THREAD_ROUTES:
 				// this route runs git in the human's checkouts, and a child reports in its last message instead.
 				"/git/msg": onGitMsg,
+				// The Explorer's five changes. None is in THREAD_ROUTES: a child may draw a card, and may not
+				// rename or delete the files of the folder a human opened.
+				"/files/new": onFileNew,
+				"/files/rename": onFileRename,
+				"/files/move": onFileMove,
+				"/files/copy": onFileCopy,
+				"/files/delete": onFileDelete,
 			};
 			const handler = routing[url.pathname];
 			if (handler) {
