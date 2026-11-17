@@ -88,9 +88,12 @@ function startThread(board: any, id: string, branch: string) {
 	git(tree.path, "commit", "-m", `${id} work`);
 	tree.branch = branch;
 	board.threads.set(thread.id, thread);
-	const dir = join(process.env.PI_STUDIO_STATE as string, "sessions", board.id);
+	const dir = join(board.folder, ".pi-studio", "sessions");
 	mkdirSync(dir, { recursive: true });
 	writeFileSync(join(dir, `1700000000000_${thread.sessionId}.jsonl`), `${JSON.stringify({ type: "message" })}\n`);
+	const decoyDir = join(process.env.PI_STUDIO_STATE as string, "sessions", board.id);
+	mkdirSync(decoyDir, { recursive: true });
+	writeFileSync(join(decoyDir, `1700000000000_${thread.sessionId}.jsonl`), `${JSON.stringify({ type: "message", decoy: true })}\n`);
 	unschedule(board);
 	return { thread, tree };
 }
@@ -107,7 +110,8 @@ test("a thread goes in one order: the child, the card, the session, the tree, th
 	try {
 		const board = scratchBoard(repo);
 		const { thread, tree } = startThread(board, "aaaa1111", "feat/aaaa-work-aaaa1111");
-		const file = sessionFile({ id: board.id }, thread.sessionId);
+		const file = sessionFile({ id: board.id, folder: board.folder }, thread.sessionId);
+		assert.equal(file, join(board.folder, ".pi-studio", "sessions", `1700000000000_${thread.sessionId}.jsonl`));
 		assert.ok(file && existsSync(file), "the transcript was never written");
 		const res = scratchRes();
 		await onRemove(jsonRequest({ card: thread.id }), res, board);
@@ -127,7 +131,8 @@ test("a thread goes in one order: the child, the card, the session, the tree, th
 		assert.equal(board.trash.length, 0, "the removal is undoable");
 		assert.equal(existsSync(tree.path), false, "the folder is still on disk");
 		assert.equal(existsSync(file), false, "the transcript outlived the thread");
-		assert.equal(sessionFile({ id: board.id }, thread.sessionId), "");
+		assert.equal(sessionFile({ id: board.id, folder: board.folder }, thread.sessionId), "");
+		assert.ok(existsSync(join(process.env.PI_STUDIO_STATE as string, "sessions", board.id, `1700000000000_${thread.sessionId}.jsonl`)), "the removal deleted the global decoy instead of the project transcript");
 		assert.equal(hasBranch(repo, "feat/aaaa-work-aaaa1111"), false, "the branch outlived the folder");
 	} finally {
 		rmSync(repo, { recursive: true, force: true });

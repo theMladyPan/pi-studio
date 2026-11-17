@@ -563,7 +563,7 @@ export function removeThreadWhole(board, thread, mode = "force", options = {}) {
 	for (const row of board.activity) if (row.thread?.id === thread.id) liveThoughts.delete(row.id);
 	board.activity = dropped;
 	steps.push({ what: "card", ok: true, note: owned.length ? `the thread was dropped with ${owned.length} card(s)` : "the thread was dropped" });
-	const file = thread.sessionId ? sessionFile({ id: board.id }, thread.sessionId) : "";
+	const file = thread.sessionId ? sessionFile({ id: board.id, folder: board.folder }, thread.sessionId) : "";
 	steps.push(file ? unlinkStep(file) : { what: "session", ok: true, note: thread.sessionId ? "the transcript was already gone" : "this thread never had a transcript" });
 	let retiredNote = null;
 	if (mode === "retire") {

@@ -4,7 +4,7 @@
  * across three generations of on-disk shape that must keep loading.
  */
 import { join } from "node:path";
-import { STATE_VERSION, boardFile, readJsonFile, writeJsonFile } from "./paths.ts";
+import { STATE_VERSION, boardFile, isScratchFolder, readJsonFile, writeJsonFile } from "./paths.ts";
 import { card, diskRow } from "./bus.ts";
 import { ownedCards } from "./routes/board/message.ts";
 import { activeConfig, homeDefaults, workspaceById } from "./workspaces.ts";
@@ -14,6 +14,9 @@ import { ROLE_NAMES } from "./child/roles.ts";
 import { MODE_NAMES, PATH_NAMES } from "./child/modes.ts";
 import { sweepTrees, thumbImages } from "./cards.ts";
 import { MAX_PUT_AWAY_CHILDREN } from "./limits.ts";
+import { ensureProjectStateDir, importLegacyProjectState, projectFolderGone } from "./state-storage.ts";
+import { ensureStateExcludes } from "./worktrees/make.ts";
+import { existsSync, statSync } from "node:fs";
 
 
 
@@ -65,6 +68,13 @@ export function cleanRect(rect) {
 
 /** Write one board: its threads, their turns, their layout and their session ids, and its notes. */
 export function saveBoard(board) {
+	// The board file lives inside the project folder, and a debounced write would make that folder again if
+	// the human deleted it: a deleted project comes back holding a board and nothing else. Refused, loudly,
+	// rather than written into a folder nobody asked for.
+	if (projectFolderGone(board)) {
+		console.error(`pi-studio: not saving the board of ${board.folder}: the project folder is gone`);
+		return;
+	}
 	const payload = {
 		version: STATE_VERSION,
 		workspace: { id: board.id, folder: board.folder, name: board.name },
@@ -373,6 +383,16 @@ export function boardFor(workspace) {
 		trash: [],
 		saveTimer: null,
 	};
+	// An unwritable or unsafe project home is a clear error here, never an unsaved in-memory board
+	// that only looks real until the first save is dropped. A folder that is gone is reported
+	// stale by the crossroads (`describeWorkspace`) rather than created as a side effect here.
+	if (workspace.folder && !isScratchFolder(workspace.folder) && existsSync(workspace.folder) && statSync(workspace.folder).isDirectory()) {
+		ensureProjectStateDir(workspace.folder);
+		// A restored board reaches here without the explicit open route, so the local excludes are
+		// ensured on this path too: both `.agents/` and `.pi-studio/` stay out of git status.
+		ensureStateExcludes(workspace.folder);
+		importLegacyProjectState(workspace);
+	}
 	const saved = readJsonFile(boardFile(workspace), null);
 	// A board is born with the crossroads' defaults; its own file takes over from there. Boards saved
 	// before this was called `config` kept the same three fields under `defaults`.
@@ -455,7 +475,12 @@ export function boardFrom(url, res) {
 		fail(res, 409, "no such workspace");
 		return null;
 	}
-	return boardFor(workspace);
+	try {
+		return boardFor(workspace);
+	} catch (error) {
+		fail(res, 503, `project state could not be opened: ${error.message}`);
+		return null;
+	}
 }
 
 

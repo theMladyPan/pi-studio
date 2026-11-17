@@ -50,6 +50,10 @@ title in the same client, which names its own key (`"hide the board overview (m)
 - After the release merge, create an annotated `v0.MINOR.PATCH` tag on that `main` merge commit.
   Release artifacts use that same version. Never move a published tag or replace a published version.
   Merge `main` back into `dev` so subsequent work includes the release history.
+- Pushing that annotated tag is what publishes. `.github/workflows/release.yml` checks the tag against
+  `package.json` and the lockfile and that it sits on `main`, runs `npm run check`, builds the three
+  assets with `npm run package`, and puts them in a draft GitHub Release before making it the latest.
+  A run never replaces a published release; repair a bad one with a new version.
 - If a release is missing its version bump, matching lockfile, dated notes or tag, report it and
   offer a correction. Repair an already published release with a new version.
 

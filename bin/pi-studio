@@ -1,9 +1,42 @@
 #!/usr/bin/env node
 // Starts the pi-studio daemon. Its own file so `pi-studio` can sit in PATH without the repository
 // being on it, and so the app is one word to run from any folder.
-import { fileURLToPath } from "node:url";
+//
+// `--version`, `update` and `uninstall` are handled here, before the server is imported, so they
+// work in a source clone and in a staged/installed copy alike. Everything else starts the app.
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { buildIdentity, formatVersion, parseFlags, registerManagedRuntime, selfInstallFlags } from "./runtime.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-process.argv[1] = join(here, "..", "server.ts");
-await import("../server.ts");
+const appRoot = join(here, "..");
+const [command, ...rest] = process.argv.slice(2);
+const { flags } = parseFlags(rest);
+
+if (command === "--version" || command === "-V" || command === "version") {
+	const identity = buildIdentity(appRoot);
+	if (flags.json) {
+		const { engines, ...serialisable } = identity;
+		console.log(JSON.stringify(serialisable, null, 2));
+	} else {
+		console.log(formatVersion(identity));
+	}
+} else if (command === "update" || command === "uninstall") {
+	const { update, uninstall } = await import("./manage.mjs");
+	// An installed copy knows its own install root and bin folder, so a later update or uninstall
+	// need not be handed the flags the install used. Explicit flags still win.
+	const installFlags = { ...selfInstallFlags(appRoot), ...flags };
+	try {
+		if (command === "update") await update(installFlags);
+		else uninstall(installFlags);
+	} catch (error) {
+		console.error(error.message);
+		process.exit(1);
+	}
+} else {
+	// Record this managed copy as running (a no-op for a source clone or a dist tree, which must
+	// never claim or clear an installation's marker), then start.
+	registerManagedRuntime(appRoot);
+	process.argv[1] = join(appRoot, "server.ts");
+	await import("../server.ts");
+}

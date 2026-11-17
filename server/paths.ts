@@ -9,9 +9,9 @@
  * point at real files exist.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** The repository root: this file is one directory inside it. */
@@ -20,9 +20,17 @@ export const PUBLIC_DIR = join(REPO_DIR, "public");
 /** The extension a child loads so a thread can draw on the board it belongs to. */
 export const BRIDGE = join(REPO_DIR, "bridge", "child-bridge.mjs");
 
-/** The folder a normal daemon uses; `INSTANCE` is empty only for this one. */
-function homeStateDir() {
+/** The folder a normal daemon used before global records moved to XDG state. Kept only as a copy-only import source. */
+function legacyStateDir() {
 	return join(homedir(), ".pi", "agent", "state", "pi-studio");
+}
+
+export const LEGACY_STATE_DIR = legacyStateDir();
+
+/** Global records by default live under XDG state, not beside pi's own state. */
+function defaultGlobalStateDir() {
+	const xdg = process.env.XDG_STATE_HOME ?? "";
+	return xdg && isAbsolute(xdg) ? join(xdg, "pi-studio") : join(homedir(), ".local", "state", "pi-studio");
 }
 
 function stateFromArgs() {
@@ -35,23 +43,24 @@ function stateFromArgs() {
 }
 
 /**
- * Everything durable lives beside pi's own state under a folder named after the app: the token, the
- * workspaces the human has opened, one board file per workspace, and the pi sessions behind its
- * threads.
+ * Global records live in `STATE_DIR`: the token, browser sessions, recent folders and defaults.
+ * Per-folder boards, sessions and Git-view state live under each opened folder's own `.pi-studio`
+ * directory instead (see `projectStateDir`).
  *
- * `PI_STUDIO_STATE` or `--state <folder>` moves all of it, so a second daemon can be booted against
- * its own folder while the real one keeps running. Without that, the only way to see a change work
- * was somebody's own board, which is a hope rather than a check.
+ * `PI_STUDIO_STATE` or `--state <folder>` moves the global records only, so a second daemon can be
+ * booted against its own folder while the real one keeps running. Different global roots opening the
+ * same folder deliberately refer to the same project-local data; concurrent writers are unsupported.
  */
 const stateArg = stateFromArgs() || process.env.PI_STUDIO_STATE || "";
+export const HAS_EXPLICIT_STATE = Boolean(stateArg);
 // A `~` reaches node unexpanded when nobody goes through a shell, and `.agents/…` should be relative to
 // the folder the daemon was started in, which is what `resolve` already does.
-export const STATE_DIR = resolve(stateArg.startsWith("~/") ? join(homedir(), stateArg.slice(2)) : stateArg || homeStateDir());
+export const STATE_DIR = resolve(stateArg.startsWith("~/") ? join(homedir(), stateArg.slice(2)) : stateArg || defaultGlobalStateDir());
 /**
  * What this daemon calls itself when its folder is not the usual one. Two instances with the same
  * boards in two tabs are indistinguishable, and the tab title is the only place that can say which.
  */
-export const INSTANCE = STATE_DIR === homeStateDir() ? "" : basename(STATE_DIR);
+export const INSTANCE = HAS_EXPLICIT_STATE ? basename(STATE_DIR) : "";
 export const STATE_FILE = join(STATE_DIR, "daemon.json");
 export const WORKSPACES_FILE = join(STATE_DIR, "workspaces.json");
 
@@ -86,14 +95,86 @@ export function isScratchFolder(folder: string): boolean {
 /** The schema the board and workspace files are written with. */
 export const STATE_VERSION = 1;
 
-/** One board file per workspace, named by the folder's identity rather than by its path. */
-export function boardFile(workspace: { id: string }) {
-	return join(STATE_DIR, "boards", `${workspace.id}.json`);
+/** The board of one opened folder, which owns its `.pi-studio` directory; the legacy global layout is the fallback for the scratch folder and callers that name only an id. */
+export function boardFile(workspace: { id: string; folder?: string }) {
+	const root = projectRootFor(workspace);
+	return root ? join(root, "board.json") : join(STATE_DIR, "boards", `${workspace.id}.json`);
 }
 
-/** Persisted Git Graph view state and code reviews for one workspace. */
-export function gitgraphStateFile(workspace: { id: string }) {
-	return join(STATE_DIR, "gitgraph", `${workspace.id}.json`);
+/** Persisted Git Graph view state and code reviews for one workspace, beside its board. */
+export function gitgraphStateFile(workspace: { id: string; folder?: string }) {
+	const root = projectRootFor(workspace);
+	return root ? join(root, "gitgraph.json") : join(STATE_DIR, "gitgraph", `${workspace.id}.json`);
+}
+
+/**
+ * The legacy global home for this instance: the old `~/.pi` location for the default instance, or the
+ * explicit root itself for a `--state` instance, so an import never reaches the real user's data. Read-only
+ * fallback for the crossroads until a folder is first opened and its state is imported.
+ */
+export function legacyStateRoot() {
+	return HAS_EXPLICIT_STATE ? STATE_DIR : LEGACY_STATE_DIR;
+}
+
+/**
+ * The marker that records a completed one-time import of the legacy global records into this state home,
+ * so a later start does not copy a record the human has since deleted back from the old home.
+ */
+export const GLOBAL_IMPORT_MARKER = join(STATE_DIR, "legacy-import.json");
+
+/** The board file in the legacy global layout, read until the first open imports it. */
+export function legacyBoardFile(workspace: { id: string }) {
+	return join(legacyStateRoot(), "boards", `${workspace.id}.json`);
+}
+
+/** The sessions folder in the legacy global layout, read until the first open imports it. */
+export function legacySessionDir(workspace: { id: string }) {
+	return join(legacyStateRoot(), "sessions", workspace.id);
+}
+
+/**
+ * Where one opened folder's own state lives: `<folder>/.pi-studio`, directly holding `board.json`,
+ * `gitgraph.json` and `sessions/`. State is per opened folder, while worktrees keep the existing
+ * repo-root `.agents` behaviour. No automatic remapping is done for renamed or cloned repositories:
+ * a workspace whose folder no longer exists is reported stale (see `describeWorkspace`), never
+ * silently repointed. Different global roots opening the same folder refer to this same directory;
+ * concurrent writers are unsupported.
+ */
+export function projectStateDir(folder: string) {
+	return join(resolve(folder), ".pi-studio");
+}
+
+/**
+ * The project root for a workspace, or "" when it has no project-local home: the scratch folder
+ * (whose state stays temporary and global) and callers that name only an id. Production callers
+ * pass the workspace or board, which carries its folder; `flushState` reaches the same file
+ * through the workspace it cached on first load.
+ */
+export function projectRootFor(workspace: { id: string; folder?: string }): string {
+	const folder = workspace.folder ? resolve(workspace.folder) : "";
+	if (!folder || isScratchPath(folder)) return "";
+	return projectStateDir(folder);
+}
+
+/**
+ * The marker that records a completed one-time import for one opened folder, beside its board and its Git
+ * state. Written only after every copy has landed, and read by every later start of the daemon; see
+ * `importLegacyProjectState`.
+ */
+export function legacyImportMarker(workspace: { id: string; folder?: string }): string {
+	const root = projectRootFor(workspace);
+	return root ? join(root, "legacy-import.json") : "";
+}
+
+/** Whether a folder is the scratch folder, by path; the scratch row keeps global, temporary state. */
+function isScratchPath(folder: string): boolean {
+	if (!folder) return false;
+	if (resolve(folder) === resolve(SCRATCH_DIR)) return true;
+	try {
+		return realpathSync(folder) === realpathSync(SCRATCH_DIR);
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -119,15 +200,49 @@ export function readJsonFile<T>(file: string, fallback: T): T {
 	}
 }
 
-/** Write a JSON file whole, so a crash mid-write cannot leave half a board behind. */
-export function writeJsonFile(file: string, data: unknown): void {
+/**
+ * Write a file whole through a temporary this call alone owns, so a crash mid-write cannot leave half a
+ * file behind.
+ *
+ * The temporary's name comes from the process id plus a fresh random tail, and it is created exclusively:
+ * anything already sitting at that name — a file, or a symlink someone planted — makes the open fail
+ * instead of being followed or taken over. The rename then carries that temporary over the file in one
+ * move. A failed write cleans up only the temporary this call created, never one it found. This narrows
+ * the window; it does not make two concurrent writers of the same file safe.
+ */
+export function writeFileThroughTemp(file: string, text: string, mode?: number): void {
+	const temporary = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+	let created = false;
+	try {
+		const handle = openSync(temporary, "wx", mode);
+		created = true;
+		try {
+			writeFileSync(handle, text);
+		} finally {
+			closeSync(handle);
+		}
+		renameSync(temporary, file);
+	} catch (error) {
+		if (created) {
+			try {
+				unlinkSync(temporary);
+			} catch {
+				// The temporary is already gone, which is what a failed rename leaves behind.
+			}
+		}
+		throw error;
+	}
+}
+
+/** Write a JSON file whole, so a crash mid-write cannot leave half a board behind. Answers whether it landed. */
+export function writeJsonFile(file: string, data: unknown): boolean {
 	try {
 		mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-		const temp = `${file}.${process.pid}.tmp`;
-		writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-		renameSync(temp, file);
+		writeFileThroughTemp(file, `${JSON.stringify(data, null, 2)}\n`, 0o600);
+		return true;
 	} catch (error) {
 		console.error(`pi-studio: could not write ${file}: ${(error as Error).message}`);
+		return false;
 	}
 }
 

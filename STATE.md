@@ -26,9 +26,29 @@ commit's own account rather than on a check run now, the section below says so.
   `--directory`: it answers `{file}`, or `{cancelled: true}`, and it is where a program's path comes from.
 - **Workspaces**: `GET /workspaces` lists what has been opened with the facts the crossroads shows
   (thread count, running count, last activity, git branch and dirty count, session size, whether the
-  folder still exists); `POST /workspace {folder}` registers and loads one. State lives in
-  `~/.pi/agent/state/pi-studio/`: `daemon.json` (token, port), `workspaces.json` (the list plus the
-  crossroads defaults), `boards/<id>.json`, `sessions/<id>/`.
+  folder still exists); `POST /workspace {folder}` registers and loads one. An opened folder keeps its
+  own state in `<folder>/.pi-studio/`: `board.json`, `sessions/` and `gitgraph.json`. What stays global
+  lives under XDG state, `~/.local/state/pi-studio/`: `daemon.json` (token, port) and `workspaces.json`
+  (the list plus the crossroads defaults). `--state` moves that global root only. The legacy
+  `~/.pi/agent/state/pi-studio/` layout is copied in once per workspace the first time its folder is
+  opened, by copy, and the originals stay where they are. Each copy-once pass records itself on disk:
+  `.pi-studio/legacy-import.json` beside the folder's board, and `legacy-import.json` in the machine's
+  state folder for the global records (token, browser sessions, the folder list). Deleting a folder's
+  `.pi-studio` or one of those markers is the recovery: the next start copies the legacy files again.
+  `.agents/` worktrees are unchanged, and both folders are kept out of `git status` through the
+  repository's local `info/exclude` rather than a tracked `.gitignore`. One opened folder holds one
+  state, so two daemons on the same project are unsupported.
+- **A managed copy comes from a release, never from a checkout.** `bin/manage.mjs` owns
+  `<install root>/versions/<version>` folders, the `current` link and one launcher. The published
+  `install.sh`, `npm run install:local` and `update` all hand a staged tree to the same
+  `installFromDir`, which re-validates it, refuses a tree older than the installed version, and leaves
+  the state folder, the source clone, Node and `pi` alone. The download installer reads no manager code
+  until the archive proves it is the release that installer names: `build.json` and `package.json` both
+  carry that version, the build tag is `v<version>`, and the build reads `official: true` with
+  `custom: false`. A copy built from a checkout reads custom and needs `--replace-custom` before a
+  release replaces it. Missing `git` or `pi` is only a warning and the install goes ahead; a missing or
+  too old Node stops it. The running marker holds a pid, proven live or stale through `/proc` on Linux;
+  elsewhere it cannot be proven stale, so uninstall refuses until the marker is removed.
 - **One row on the crossroads is the throwaway one.** A folder in the machine's temp spot
   (`pi-studio-scratch`), or `scratch/` beside a daemon's own state folder when it has one, which is what
   keeps a development instance and a test from littering the temp area. `workspaceList()` asks
@@ -717,19 +737,20 @@ a second workspace with its own thread and reply at the same time, both restored
 restart, crossroads showing both with their last activity. `POST /pick-folder` is untested because
 running it opens a dialog on the human's screen.
 
-Two instances run side by side: `--state <folder>` (or `PI_STUDIO_STATE`) moves the token, the
-workspaces, the boards and the sessions, and a fresh folder holds no port so the daemon takes a free
-one. A daemon off the usual folder names itself after it in the console line, in `meta.instance` and
-in the tab title, because two boards in two tabs look identical otherwise. The board id follows the
-workspace folder, so the same repository opened in both is the same board id out of two folders, each
-with its own threads. `npm run dev:alt` is the second instance: watch on, its own state, no tab.
+Two instances run side by side: `--state <folder>` (or `PI_STUDIO_STATE`) moves the daemon's global
+records — the token, the port and the workspaces list — and a fresh folder holds no port so the daemon
+takes a free one. A daemon off the usual folder names itself after it in the console line, in
+`meta.instance` and in the tab title, because two boards in two tabs look identical otherwise. Boards
+and sessions are the opened folder's own `.pi-studio`, so the two instances are given different project
+folders: one folder holds one state, and concurrent writers of it are unsupported. `npm run dev:alt` is
+the second instance: watch on, its own global root, no tab.
 
-`npm run smoke` now does that loop against a scratch state folder: `PI_STUDIO_STATE` moves the token,
-the workspaces, the boards and the sessions out of `~/.pi/agent/state/pi-studio`, a fresh folder holds
+`npm run smoke` does that loop against two scratch state folders: `PI_STUDIO_STATE` gives each daemon
+its own token, port and workspaces list, each opens a project folder of its own, a fresh folder holds
 no port so the daemon takes a free one, and the script boots it, hits the crossroads, opens a
 workspace, reads it back through `/workspaces` and `/state`, and checks that a route without the token
-is refused, then boots a second daemon beside the first on the same workspace folder and checks that
-the two keep their own token, port and board. Seventeen checks, about two seconds, and it never touches
+is refused, then boots a second daemon beside the first on its own project folder and checks that the
+two keep their own token, port and board. Seventeen checks, about two seconds, and it never touches
 the human's own daemon or prompts a thread, so no `pi` child starts and no model is called. That is
 what lets a change be checked by something other than somebody's live board.
 
@@ -891,6 +912,15 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
 
 ## Does not work yet
 
+- The full Git Graph is still the editor's extension, not a bundled viewer: `g` loads
+  `mhutchie/vscode-git-graph` 1.30.x from the copy installed in the editor, so a machine without that
+  extension gets the corner strip and no full graph. Its licence allows using it and forbids shipping
+  it or a derivative, so a viewer of our own is needed rather than a copy; the target for that is
+  https://github.com/PlohnenSoftware/git-graph-libre, and no work on it has started.
+- The release pipeline has never run: `.github/workflows/release.yml` exists and its shell steps are
+  syntax-checked, but no version tag has been pushed through it, and no public release has been
+  published or installed from, so the download line in the README is a contract rather than a verified
+  download.
 - Forking a *thread* is not built: `fork` on a thread card does nothing, and the button is hidden
   there, because the fork the client offers answers only for a plain card that already has a thread
   behind it. A real thread fork has to copy the session file and mark the copy `forkedFrom`, and no

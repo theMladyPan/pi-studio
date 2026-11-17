@@ -3,7 +3,8 @@
  * The workspaces on disk: the list the crossroads shows, the defaults a new board starts with, and the
  * one line of facts each one is described by.
  */
-import { SCRATCH_DIR, STATE_VERSION, WORKSPACES_FILE, boardFile, readJsonFile, workspaceId, writeJsonFile } from "./paths.ts";
+import { SCRATCH_DIR, STATE_VERSION, WORKSPACES_FILE, boardFile, legacyBoardFile, projectStateDir, readJsonFile, workspaceId, writeJsonFile } from "./paths.ts";
+import { legacyImportComplete } from "./state-storage.ts";
 import { boards } from "./store.ts";
 import { sessionFacts } from "./session.ts";
 import { basename, join } from "node:path";
@@ -117,27 +118,41 @@ import { spawnSync } from "node:child_process";
  */
 
 /** @type {Workspace[]} newest first, because that is the order the crossroads shows. */
-export const workspaces = (() => {
-	const saved = readJsonFile(WORKSPACES_FILE, null);
-	if (!saved || saved.version !== STATE_VERSION || !Array.isArray(saved.workspaces)) return [];
-	return saved.workspaces
-		.filter((workspace) => typeof workspace?.folder === "string" && workspace.folder)
-		.map((workspace) => ({
-			id: typeof workspace.id === "string" && workspace.id ? workspace.id : workspaceId(workspace.folder),
-			folder: workspace.folder,
-			name: typeof workspace.name === "string" && workspace.name ? workspace.name : basename(workspace.folder),
-			openedAt: Number.isFinite(workspace.openedAt) ? workspace.openedAt : 0,
-		}));
-})();
+export const workspaces = [];
+
+function savedWorkspacesFile() {
+	return readJsonFile(WORKSPACES_FILE, null);
+}
+
+function loadWorkspaces() {
+	const saved = savedWorkspacesFile();
+	workspaces.length = 0;
+	if (!saved || saved.version !== STATE_VERSION || !Array.isArray(saved.workspaces)) return;
+	workspaces.push(
+		...saved.workspaces
+			.filter((workspace) => typeof workspace?.folder === "string" && workspace.folder)
+			.map((workspace) => ({
+				id: typeof workspace.id === "string" && workspace.id ? workspace.id : workspaceId(workspace.folder),
+				folder: workspace.folder,
+				name: typeof workspace.name === "string" && workspace.name ? workspace.name : basename(workspace.folder),
+				openedAt: Number.isFinite(workspace.openedAt) ? workspace.openedAt : 0,
+			}))
+	);
+}
 
 
 
 /** What a new board is born with, set on the crossroads and shared by every workspace opened after it. */
-export let homeDefaults = (() => {
-	const saved = readJsonFile(WORKSPACES_FILE, null);
+export let homeDefaults = {};
+
+function loadHomeDefaults() {
+	const saved = savedWorkspacesFile();
 	const held = saved?.defaults;
-	if (!held || typeof held !== "object") return {};
 	const known = {};
+	if (!held || typeof held !== "object") {
+		homeDefaults = known;
+		return;
+	}
 	if (typeof held.provider === "string" && held.provider) known.provider = held.provider;
 	if (typeof held.model === "string" && held.model) known.model = held.model;
 	if (THINKING_LEVELS.includes(held.thinking)) known.thinking = held.thinking;
@@ -163,8 +178,21 @@ export let homeDefaults = (() => {
 	// The program a code card's file opens in. A name found on PATH, or the path to the binary; empty is
 	// "nobody chose one yet", so an empty string is dropped rather than carried around.
 	if (typeof held.editor === "string" && held.editor) known.editor = held.editor;
-	return known;
-})();
+	homeDefaults = known;
+}
+
+loadWorkspaces();
+loadHomeDefaults();
+
+/**
+ * Re-read the global records from disk. Called after the one-time legacy import copies them into
+ * the XDG home at startup, so in-memory rows and defaults are the imported ones, not the empty
+ * home this module first loaded.
+ */
+export function reloadWorkspaces() {
+	loadWorkspaces();
+	loadHomeDefaults();
+}
 
 
 
@@ -375,13 +403,33 @@ export function gitFacts(folder) {
 
 
 
+/**
+ * The saved board a description reads: the project-local file once it exists, and the legacy global file
+ * until the first open imports it, so the crossroads keeps showing a recent's threads and last activity
+ * instead of reporting every project as empty. A recent whose one-time import is recorded as complete is
+ * never answered for by the legacy file again, so a board the human deleted from the new home does not
+ * come back as old history on the list. A linked project home is never read through, and nothing here
+ * creates state in a scratch or missing folder.
+ */
+function savedBoardFor(workspace) {
+	const file = boardFile(workspace);
+	if (!workspace.folder) return readJsonFile(file, null);
+	try {
+		if (lstatSync(projectStateDir(workspace.folder)).isSymbolicLink()) return readJsonFile(legacyBoardFile(workspace), null);
+	} catch {
+		// No project home yet: the legacy file below is the one a recent that was never reopened holds.
+	}
+	if (existsSync(file)) return readJsonFile(file, null);
+	return legacyImportComplete(workspace) ? null : readJsonFile(legacyBoardFile(workspace), null);
+}
+
 /** The one workspace that matters to a tab: what is on it, and the last thing that happened. */
 export function describeWorkspace(workspace) {
 	const board = boards.get(workspace.id);
 	// A thread that serves a card is not a thread anyone can open: counting it would report more
 	// threads than the board has cards.
 	const threads = [...(board?.threads.values() ?? [])].filter((thread) => !thread.hidden);
-	const rows = board?.activity ?? readJsonFile(boardFile(workspace), null)?.activity ?? [];
+	const rows = board?.activity ?? savedBoardFor(workspace)?.activity ?? [];
 	const last = [...rows].reverse().find((row) => row?.startedAt || row?.at);
 	const facts = folderFacts(workspace.folder);
 	return {
@@ -412,7 +460,7 @@ export function describeWorkspace(workspace) {
 
 
 export function countSavedThreads(workspace) {
-	const saved = readJsonFile(boardFile(workspace), null);
+	const saved = savedBoardFor(workspace);
 	return saved && Array.isArray(saved.threads) ? saved.threads.length : 0;
 }
 

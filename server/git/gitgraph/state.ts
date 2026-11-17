@@ -9,6 +9,7 @@
  */
 import { existsSync } from "node:fs";
 import { gitgraphStateFile, readJsonFile, writeJsonFile } from "../../paths.ts";
+import { importLegacyProjectState, projectFolderGone } from "../../state-storage.ts";
 import type {
 	GitCodeReview,
 	GitGraphViewState,
@@ -253,7 +254,7 @@ function stateFrom(value: unknown): GitGraphViewState {
 // ---------- the cache ----------
 
 /** One workspace's state, and the timer that would write it. */
-type LoadedState = { state: GitGraphViewState; timer: NodeJS.Timeout | null };
+type LoadedState = { state: GitGraphViewState; timer: NodeJS.Timeout | null; workspace: { id: string; folder?: string } };
 
 /**
  * The states this daemon has loaded, by workspace id. Loaded lazily on the first read, so a workspace
@@ -262,24 +263,36 @@ type LoadedState = { state: GitGraphViewState; timer: NodeJS.Timeout | null };
 const loaded = new Map<string, LoadedState>();
 
 /** The state of one workspace, read from disk the first time it is asked for. */
-export function stateFor(workspace: { id: string }): GitGraphViewState {
+export function stateFor(workspace: { id: string; folder?: string }): GitGraphViewState {
 	const hit = loaded.get(workspace.id);
 	if (hit) return hit.state;
+	importLegacyProjectState(workspace);
 	const state = stateFrom(readJsonFile<unknown>(gitgraphStateFile(workspace), null));
-	loaded.set(workspace.id, { state, timer: null });
+	loaded.set(workspace.id, { state, timer: null, workspace });
 	return state;
+}
+
+/**
+ * A save is refused, loudly, when the folder it belongs to is gone: the state file lives inside that folder,
+ * so writing it would make the folder again around a file the human deleted the project away from.
+ */
+function refusedBecauseFolderGone(workspace: { id: string; folder?: string }): boolean {
+	if (!projectFolderGone(workspace)) return false;
+	console.error(`pi-studio: not saving the Git view state of ${workspace.folder}: the project folder is gone`);
+	return true;
 }
 
 /**
  * Write this workspace's state soon. A burst of changes — a column drag, then the pane height, then
  * which branches are shown — costs one write, the way a board does.
  */
-export function scheduleStateSave(workspace: { id: string }): void {
+export function scheduleStateSave(workspace: { id: string; folder?: string }): void {
 	const hit = loaded.get(workspace.id);
 	if (!hit || hit.timer) return;
 	hit.timer = setTimeout(() => {
 		hit.timer = null;
-		writeJsonFile(gitgraphStateFile(workspace), hit.state);
+		if (refusedBecauseFolderGone(hit.workspace)) return;
+		writeJsonFile(gitgraphStateFile(hit.workspace), hit.state);
 	}, 500);
 	hit.timer.unref();
 }
@@ -290,7 +303,8 @@ export function flushState(workspaceId: string): void {
 	if (!hit) return;
 	if (hit.timer) clearTimeout(hit.timer);
 	hit.timer = null;
-	writeJsonFile(gitgraphStateFile({ id: workspaceId }), hit.state);
+	if (refusedBecauseFolderGone(hit.workspace)) return;
+	writeJsonFile(gitgraphStateFile(hit.workspace), hit.state);
 }
 
 /** Forget every loaded state, so a test reads its own file rather than the previous test's. */

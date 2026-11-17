@@ -4,20 +4,46 @@
  * can be read back from.
  */
 import { join } from "node:path";
-import { STATE_DIR } from "./paths.ts";
-import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
+import { STATE_DIR, legacySessionDir, projectRootFor } from "./paths.ts";
+import { legacyImportComplete } from "./state-storage.ts";
+import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 
 
 
 export function sessionDir(workspace) {
-	return join(STATE_DIR, "sessions", workspace.id);
+	// Sessions live beside the board, per opened folder. The header cwd inside each file is untouched
+	// by the move; a child that has moved worktrees already resumes with `--fork` (see childArgv).
+	const root = projectRootFor(workspace);
+	return root ? join(root, "sessions") : join(STATE_DIR, "sessions", workspace.id);
 }
 
 
 
+/**
+ * The sessions folder the crossroads counts: the project-local one once this folder's one-time import is
+ * recorded as complete, and the legacy global one only for a recent that was never imported, so a folder
+ * that was never reopened under the new layout does not report every project as empty. A recent whose
+ * import did complete is never answered for by the legacy folder again: transcripts the human retired from
+ * the new home would otherwise come back as history that no longer exists. A linked project home is never
+ * read through.
+ */
+function sessionFactsDir(workspace) {
+	const root = projectRootFor(workspace);
+	if (!root) return sessionDir(workspace);
+	try {
+		if (lstatSync(root).isSymbolicLink()) return legacySessionDir(workspace);
+	} catch {
+		// No project home yet, which is the ordinary case for a recent that was never reopened.
+	}
+	if (legacyImportComplete(workspace)) return join(root, "sessions");
+	if (existsSync(join(root, "board.json"))) return join(root, "sessions");
+	const legacy = legacySessionDir(workspace);
+	return existsSync(legacy) ? legacy : join(root, "sessions");
+}
+
 /** How much of the app's own state a workspace holds: its sessions on disk. */
 export function sessionFacts(workspace) {
-	const dir = sessionDir(workspace);
+	const dir = sessionFactsDir(workspace);
 	let count = 0;
 	let bytes = 0;
 	try {

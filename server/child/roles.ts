@@ -4,9 +4,8 @@
  * rules, and a thinking level to start from. The files are the part a human edits; the rules are here
  * because they are behaviour rather than advice.
  */
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { promptText } from "./modes.ts";
 
 
 
@@ -28,14 +27,11 @@ export const ROLE_DIR = fileURLToPath(new URL("../../prompts/roles/", import.met
  * What a role may send to a child: nothing when the role is unknown or its file is missing, because a
  * role with no prompt is a thread that does not know what it is for.
  */
-export function roleSystemPrompt(role) {
+export function roleSystemPrompt(role, stateDir?) {
 	if (!ROLE_NAMES.includes(role)) return "";
-	let text = "";
-	try {
-		text = readFileSync(join(ROLE_DIR, `${role}.md`), "utf8").trim();
-	} catch {
-		return "";
-	}
+	// A saved override under the state folder is what the role is told; the shipped file when none.
+	const text = promptText("roles", role, stateDir);
+	if (!text) return "";
 	return [
 		`You are a delegated ${role} agent, spawned by another thread on this board. That thread reads your last message, so it is the whole report.`,
 		text,

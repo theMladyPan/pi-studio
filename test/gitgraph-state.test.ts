@@ -156,6 +156,25 @@ test("two workspaces keep two files", () => {
 	assert.equal(other.workspaceViewState.findOpenCommitDetailsView, false);
 });
 
+test("a Git view save after the project folder is gone does not make the folder again", () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-gitgraph-gone-"));
+	try {
+		const ws = freshWorkspace("w-gone-folder");
+		const workspace = { id: ws.id, folder };
+		state.stateFor(workspace);
+		state.flushState(workspace.id);
+		assert.ok(existsSync(paths.gitgraphStateFile(workspace)), "the state of a folder that exists was not written");
+
+		// The human deletes the project, and the shutdown flush reaches for its view state anyway.
+		rmSync(folder, { recursive: true, force: true });
+		state.flushState(workspace.id);
+
+		assert.equal(existsSync(folder), false, "a flush made the deleted project folder again");
+	} finally {
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
 test("the file lives under the state folder, one per workspace", () => {
 	const ws = { id: "w-path" };
 	assert.equal(paths.gitgraphStateFile(ws), join(paths.STATE_DIR, "gitgraph", "w-path.json"));

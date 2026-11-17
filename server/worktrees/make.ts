@@ -4,9 +4,9 @@
  * it is cut from.
  */
 import { baseRef, gitIn, repoOf } from "../git/repo.ts";
-import { isScratchFolder } from "../paths.ts";
+import { isScratchFolder, writeFileThroughTemp } from "../paths.ts";
 import { join, resolve } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 
 
 
@@ -14,6 +14,50 @@ import { existsSync } from "node:fs";
 
 /** Where a board keeps the trees it makes, inside the repository the workspace is. */
 export const AGENTS_DIR = ".agents";
+
+/**
+ * Exclude the agent worktrees and the project-local state through the repository's local
+ * `info/exclude`, never a tracked `.gitignore`. Answers false for a non-Git folder, which still
+ * works; throws a clear error when the exclude file is unsafe (a symlink could point at a tracked
+ * file) or cannot be written.
+ */
+export function ensureStateExcludes(folder: string): boolean {
+	const repo = repoOf(folder);
+	if (!repo) return false;
+	const common = gitIn(repo, ["rev-parse", "--git-common-dir"]);
+	if (!common.ok || !common.out) throw new Error(`could not read the git directory of ${repo}`);
+	const gitDir = resolve(repo, common.out);
+	const infoDir = join(gitDir, "info");
+	try {
+		const held = lstatSync(infoDir);
+		if (held.isSymbolicLink() || !held.isDirectory()) throw new Error(`git info directory is unsafe: ${infoDir}`);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		mkdirSync(infoDir, { recursive: true, mode: 0o700 });
+	}
+	const exclude = join(infoDir, "exclude");
+	let current = "";
+	try {
+		const held = lstatSync(exclude);
+		if (held.isSymbolicLink() || !held.isFile()) throw new Error(`git exclude file is unsafe: ${exclude}`);
+		current = readFileSync(exclude, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	const wanted = ["/.agents/", "/.pi-studio/", "**/.pi-studio/"];
+	const named = new Set(current.split("\n").map((line) => line.trim()));
+	const missing = wanted.filter((line) => !named.has(line));
+	if (!missing.length) return true;
+	const next = current + (current && !current.endsWith("\n") ? "\n" : "") + missing.join("\n") + "\n";
+	try {
+		// Written whole beside the file and renamed over it, so a crash cannot leave a half-written
+		// exclude behind; the content already there is carried over untouched.
+		writeFileThroughTemp(exclude, next, 0o600);
+	} catch (error) {
+		throw new Error(`git exclude file could not be written: ${exclude}: ${(error as Error).message}`);
+	}
+	return true;
+}
 
 
 
@@ -96,6 +140,12 @@ export function ensureWorktree(board, thread) {
 	const repo = repoOf(thread.folder ?? board.folder);
 	if (!repo) {
 		thread.worktree = { skipped: "this folder is not a git repository" };
+		return thread.worktree;
+	}
+	try {
+		ensureStateExcludes(repo);
+	} catch (error) {
+		thread.worktree = { skipped: error.message };
 		return thread.worktree;
 	}
 	// A spawned thread reads the work of the thread that spawned it, so its tree starts at that
