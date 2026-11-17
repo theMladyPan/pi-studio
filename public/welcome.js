@@ -1352,13 +1352,49 @@
   void load();
 
   // Counts on this page are live: a thread that starts or settles elsewhere shows up here.
-  const stream = new EventSource("/events?scope=welcome");
-  stream.onmessage = (message) => {
-    try {
-      const payload = JSON.parse(message.data);
-      if (payload.type === "workspaces") adopt(payload.workspaces);
-    } catch {
-      // A frame that is not JSON is not worth breaking the page over.
-    }
+  let linkTimer = null;
+  let linkDelay = 500;
+  const connect = () => {
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const link = new WebSocket(`${protocol}//${location.host}/events?scope=welcome`);
+    let opened = false;
+    link.onopen = () => {
+      opened = true;
+      linkDelay = 500;
+    };
+    link.onerror = () => {
+      try {
+        link.close();
+      } catch {}
+    };
+    link.onclose = () => {
+      void (async () => {
+        let signedIn = true;
+        try {
+          const response = await fetch("/workspaces", { cache: "no-store" });
+          signedIn = response.status !== 401 && response.status !== 403;
+        } catch {
+          signedIn = true;
+        }
+        if (!signedIn) return;
+        if (!linkTimer) {
+          linkTimer = setTimeout(() => {
+            linkTimer = null;
+            connect();
+          }, linkDelay);
+          linkDelay = Math.min(linkDelay * 2, 10_000);
+        }
+      })();
+    };
+    link.onmessage = (message) => {
+      try {
+        const payload = JSON.parse(message.data);
+        if (payload.type === "workspaces") adopt(payload.workspaces);
+      } catch {
+        // A frame that is not JSON is not worth breaking the page over.
+      }
+    };
   };
+  connect();
+
 })();

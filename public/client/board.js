@@ -1,4 +1,4 @@
-/* pi board — canvas client. Cards arrive from the daemon over server-sent events. */
+/* pi board — canvas client. Cards arrive from the daemon over a WebSocket. */
 // The git drawer is a module of its own: the panel, its focus and the two messages its page trades
 // with this one are a single subject, and this file is long enough already. The daemon serves every
 // `/client/*.js` by one rule, so a new module beside this one loads without a table to edit.
@@ -10867,17 +10867,55 @@ function setLive(up, note = "") {
   renderLive();
 }
 
+let linkTimer = null;
+let linkDelay = 500;
+
 function connect() {
-  const source = new EventSource(`/events?${auth}`);
-  source.onopen = () => setLive(true);
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  const source = new WebSocket(`${protocol}//${location.host}/events?${auth}`);
+  let opened = false;
+  source.onopen = () => {
+    opened = true;
+    linkDelay = 500;
+    setLive(true);
+  };
   source.onerror = () => {
-    // The browser tells the two failures apart: an HTTP error, such as a session the daemon no
-    // longer knows, closes the stream for good, while a network error leaves it retrying.
-    if (source.readyState === EventSource.CLOSED) {
-      setLive(false, "session expired or token refused — reopen the link pi printed");
-    } else {
+    try {
+      source.close();
+    } catch {}
+  };
+  source.onclose = () => {
+    // A failed handshake does not by itself prove the sign-in is gone: it can be the network or
+    // the daemon not answering yet. Mark the board disconnected at once, ask over HTTP which one
+    // it is; if the session is refused, retrying cannot help, and if the session is fine the next
+    // snapshot rebuilds the board. A proxy that accepts but never answers the probe cannot block
+    // the reconnect, so the probe has a short timeout.
+    setLive(false, "pi not reachable — retrying");
+    void (async () => {
+      let signedIn = true;
+      const probe = new AbortController();
+      const probeTimer = setTimeout(() => probe.abort(), 3_000);
+      try {
+        const response = await fetch(`/state?${auth}`, { cache: "no-store", signal: probe.signal });
+        signedIn = response.status !== 401 && response.status !== 403;
+      } catch {
+        signedIn = true;
+      } finally {
+        clearTimeout(probeTimer);
+      }
+      if (!signedIn) {
+        setLive(false, "session expired or token refused — reopen the link pi printed");
+        return;
+      }
       setLive(false, "pi not reachable — retrying");
-    }
+      if (!linkTimer) {
+        linkTimer = setTimeout(() => {
+          linkTimer = null;
+          connect();
+        }, linkDelay);
+        linkDelay = Math.min(linkDelay * 2, 10_000);
+      }
+    })();
   };
   source.onmessage = (event) => {
     let payload;

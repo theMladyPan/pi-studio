@@ -9,9 +9,9 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { INSTANCE, STATE_DIR, STATE_FILE, buildHash, readJsonFile, writeJsonFile } from "./paths.ts";
 import { createSession, endSession, hasSession, sessionCookie, token } from "./login.ts";
-import { answer, fail, send, serveStatic } from "./http.ts";
-import { activeConfig, activeHomeDefaults, describeWorkspace, ensureScratch, welcomeClients, workspaceList, workspaces } from "./workspaces.ts";
-import { boardFrom, boards, flushBoard } from "./store.ts";
+import { answer, fail, rejectUpgrade, send, serveStatic, upgradeWebSocket } from "./http.ts";
+import { activeConfig, activeHomeDefaults, describeWorkspace, ensureScratch, welcomeClients, workspaceById, workspaceList, workspaces } from "./workspaces.ts";
+import { boardFor, boardFrom, boards, flushBoard } from "./store.ts";
 import { boardSettingsValues, settingsDocument } from "./settings-document.ts";
 import { boardMeta, cardsFor } from "./cards.ts";
 import { closedCards } from "./bus.ts";
@@ -165,6 +165,82 @@ export function sameOriginRequest(headers) {
 
 
 
+
+/** Upgrade one live request to a WebSocket before it can join a board or the welcome stream. */
+function startLiveStream(req, socket, head) {
+	let url;
+	try {
+		url = requestUrl(req.url);
+	} catch {
+		rejectUpgrade(socket, 400, "bad request target");
+		return;
+	}
+	if (req.method !== "GET" || url.pathname !== "/events") {
+		socket.destroy();
+		return;
+	}
+	const caller = callerFor(url.searchParams.get("token"), req.headers.cookie);
+	if (!caller) {
+		rejectUpgrade(socket, 403, "forbidden");
+		return;
+	}
+	const refusal = threadRefusal(caller, "GET", url.pathname, url.searchParams.get("workspace"));
+	if (refusal) {
+		rejectUpgrade(socket, 403, refusal);
+		return;
+	}
+	if (caller.via === "cookie" && !sameOriginRequest(req.headers)) {
+		rejectUpgrade(socket, 403, "cross-site request");
+		return;
+	}
+	const scope = url.searchParams.get("scope");
+	let board = null;
+	if (scope !== "welcome") {
+		const workspace = workspaceById(url.searchParams.get("workspace") ?? "");
+		if (!workspace) {
+			rejectUpgrade(socket, 409, "no such workspace");
+			return;
+		}
+		board = boardFor(workspace);
+	}
+	const client = upgradeWebSocket(req, socket, head);
+	if (!client || client.writableEnded || client.destroyed) return;
+	if (scope === "welcome") {
+		const keepAlive = setInterval(() => client.ping(), 20_000);
+		if (typeof keepAlive.unref === "function") keepAlive.unref();
+		const forget = () => {
+			clearInterval(keepAlive);
+			welcomeClients.delete(client);
+		};
+		client.onClose = forget;
+		send(new Set([client]), { type: "workspaces", workspaces: workspaceList().map(describeWorkspace) });
+		if (!client.writableEnded && !client.destroyed) welcomeClients.add(client);
+		return;
+	}
+	const keepAlive = setInterval(() => client.ping(), 20_000);
+	if (typeof keepAlive.unref === "function") keepAlive.unref();
+	const forget = () => {
+		clearInterval(keepAlive);
+		board.clients.delete(client);
+		unwatchGit(board);
+	};
+	client.onClose = forget;
+	send(new Set([client]), {
+		type: "snapshot",
+		cards: cardsFor(board),
+		closed: closedCards(board),
+		activity: board.activity,
+		meta: boardMeta(board),
+		// Read before the snapshot goes out, so a tab that has just opened draws the strip at once
+		// instead of waiting a tick for its first git event.
+		git: refreshGit(board, true),
+	});
+	if (!client.writableEnded && !client.destroyed) {
+		board.clients.add(client);
+		watchGit(board);
+	}
+}
+
 export const server = createServer((req, res) => {
 	void (async () => {
 		const url = requestUrl(req.url);
@@ -253,46 +329,8 @@ export const server = createServer((req, res) => {
 		}
 
 		// ----- streams -----
-		if (req.method === "GET" && url.pathname === "/events") {
-			res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
-			const scope = url.searchParams.get("scope");
-			if (scope === "welcome") {
-				// The crossroads only needs counts and previews, and it needs them as they change.
-				send(new Set([res]), { type: "workspaces", workspaces: workspaceList().map(describeWorkspace) });
-				welcomeClients.add(res);
-				const keepAlive = setInterval(() => res.write(": ping\n\n"), 20_000);
-				const forget = () => {
-					clearInterval(keepAlive);
-					welcomeClients.delete(res);
-				};
-				req.on("close", forget);
-				res.on("error", forget);
-				return;
-			}
-			const board = boardFrom(url, res);
-			if (!board) return;
-			send(new Set([res]), {
-				type: "snapshot",
-				cards: cardsFor(board),
-				closed: closedCards(board),
-				activity: board.activity,
-				meta: boardMeta(board),
-				// Read before the snapshot goes out, so a tab that has just opened draws the strip at once
-				// instead of waiting a tick for its first git event.
-				git: refreshGit(board, true),
-			});
-			board.clients.add(res);
-			watchGit(board);
-			const keepAlive = setInterval(() => res.write(": ping\n\n"), 20_000);
-			const forget = () => {
-				clearInterval(keepAlive);
-				board.clients.delete(res);
-				unwatchGit(board);
-			};
-			req.on("close", forget);
-			res.on("error", forget);
-			return;
-		}
+		// Live board data is upgraded in startLiveStream. A plain HTTP request to /events is
+		// no longer a stream; it falls through to the ordinary request handling below.
 
 		// ----- crossroads -----
 		if (req.method === "GET" && url.pathname === "/workspaces") {
@@ -622,6 +660,8 @@ export const server = createServer((req, res) => {
 });
 
 
+
+server.on("upgrade", startLiveStream);
 
 export function shutdown() {
 	// What the debounce still holds is the last thing the human did, so it goes to disk first.

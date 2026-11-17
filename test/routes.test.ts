@@ -48,6 +48,73 @@ async function boot(folder: string, env: Record<string, string> = {}) {
 }
 
 type Daemon = { child: { kill: () => void }; noise: string[]; base: string; token: string };
+
+const liveUrl = (daemon: Daemon, path: string) => `${daemon.base.replace(/^http:/, "ws:")}${path}`;
+function openLive(daemon: Daemon, path: string) {
+	const socket = new WebSocket(liveUrl(daemon, path));
+	return new Promise<typeof socket>((resolve, reject) => {
+		socket.addEventListener("open", () => resolve(socket), { once: true });
+		socket.addEventListener("error", () => reject(new Error("the live socket did not open")), { once: true });
+	});
+}
+function openRawUpgrade(daemon: Daemon, path: string) {
+	const target = new URL(daemon.base);
+	return new Promise<any>((resolve, reject) => {
+		const req = request({
+			hostname: target.hostname,
+			port: target.port,
+			path,
+			method: "GET",
+			headers: {
+				Connection: "Upgrade",
+				Upgrade: "websocket",
+				"Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+				"Sec-WebSocket-Version": "13",
+			},
+			agent: false,
+		}, () => reject(new Error("the upgrade did not switch protocols")));
+		req.on("upgrade", (_res, socket) => {
+			socket.resume();
+			resolve(socket);
+		});
+		req.on("error", reject);
+		req.end();
+	});
+}
+function maskedWebSocketFrame(opcode: number, payload: Buffer) {
+	const mask = Buffer.from([1, 2, 3, 4]);
+	const body = Buffer.from(payload);
+	for (let at = 0; at < body.length; at++) body[at] ^= mask[at % 4];
+	return Buffer.concat([Buffer.from([0x80 | opcode, 0x80 | body.length]), mask, body]);
+}
+function rawUpgrade(daemon: Daemon, path: string, headers: Record<string, string> = {}) {
+	const target = new URL(daemon.base);
+	return new Promise<number>((resolve, reject) => {
+		const req = request({
+			hostname: target.hostname,
+			port: target.port,
+			path,
+			method: "GET",
+			headers: {
+				Connection: "Upgrade",
+				Upgrade: "websocket",
+				"Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+				"Sec-WebSocket-Version": "13",
+				...headers,
+			},
+			agent: false,
+		}, (res) => {
+			res.resume();
+			res.on("end", () => resolve(res.statusCode ?? 0));
+		});
+		req.on("upgrade", (res, socket) => {
+			socket.destroy();
+			resolve(res.statusCode ?? 0);
+		});
+		req.on("error", reject);
+		req.end();
+	});
+}
 const get = async (daemon: Daemon, path: string, init?: RequestInit) => {
 	const res = await fetch(daemon.base + path, init);
 	return { status: res.status, type: res.headers.get("content-type") ?? "", body: await res.text() };
@@ -1335,24 +1402,25 @@ describe("routes", { concurrency: 8 }, () => {
 		}
 	});
 
-	test("the event stream opens with a snapshot the client can draw from", async () => {
+	test("the live socket opens with a snapshot the client can draw from", async () => {
 		const folder = mkdtempSync(join(tmpdir(), "pi-studio-events-"));
 		const daemon = await boot(folder);
 		try {
 			const opened = await post(daemon, "/workspace", { folder });
 			const board = JSON.parse(opened.body).board;
-			const controller = new AbortController();
-			const response = await fetch(`${daemon.base}/events?token=${daemon.token}&workspace=${board.id}`, { signal: controller.signal });
-			assert.equal(response.status, 200);
-			assert.match(response.headers.get("content-type") ?? "", /event-stream/);
-			assert.ok(response.body, "no stream body");
-			const reader = response.body.getReader();
-			const { value } = await reader.read();
-			controller.abort();
-			const text = new TextDecoder().decode(value ?? new Uint8Array());
-			const line = text.split("\n").find((each) => each.startsWith("data: "));
-			assert.ok(line, `no data line in the first chunk: ${text.slice(0, 120)}`);
-			const payload = JSON.parse(line.slice("data: ".length));
+			const socket = await openLive(daemon, `/events?token=${daemon.token}&workspace=${board.id}`);
+			const payload = await new Promise<any>((resolve, reject) => {
+				const timer = setTimeout(() => reject(new Error("no snapshot arrived")), 5_000);
+				socket.addEventListener("message", (event) => {
+					try {
+						clearTimeout(timer);
+						resolve(JSON.parse(String(event.data)));
+					} catch (error) {
+						reject(error);
+					}
+				}, { once: true });
+			});
+			socket.close();
 			// The whole client renders from this one message: the cards, what was closed, the rail's rows,
 			// the board's meta and the git strip.
 			assert.equal(payload.type, "snapshot");
@@ -1361,6 +1429,41 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.ok(Array.isArray(payload.activity));
 			assert.ok(payload.meta, "the snapshot carries no meta");
 			assert.ok("git" in payload, "the snapshot carries no git picture");
+		} finally {
+			daemon.child.kill();
+			rmSync(folder, { recursive: true, force: true });
+		}
+	});
+
+	test("a live upgrade is refused before a handshake when the caller is not authenticated", async () => {
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-events-"));
+		const daemon = await boot(folder);
+		try {
+			const opened = await post(daemon, "/workspace", { folder });
+			const board = JSON.parse(opened.body).board;
+			assert.equal(await rawUpgrade(daemon, `/events?workspace=${board.id}`), 403);
+			assert.equal(await rawUpgrade(daemon, `/events?token=${daemon.token}&workspace=no-such-workspace`), 409);
+			assert.equal(await rawUpgrade(daemon, `/events?token=${daemon.token}&workspace=${board.id}`, { "Sec-WebSocket-Key": "not-base64" }), 400);
+		} finally {
+			daemon.child.kill();
+			rmSync(folder, { recursive: true, force: true });
+		}
+	});
+
+	test("a close frame with invalid UTF-8 reason text is refused", async () => {
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-events-"));
+		const daemon = await boot(folder);
+		try {
+			const opened = await post(daemon, "/workspace", { folder });
+			const board = JSON.parse(opened.body).board;
+			const socket = await openRawUpgrade(daemon, `/events?token=${daemon.token}&workspace=${board.id}`);
+			const code = Buffer.alloc(2);
+			code.writeUInt16BE(1000, 0);
+			let sawClose = false;
+			socket.once("close", () => { sawClose = true; });
+			socket.write(maskedWebSocketFrame(8, Buffer.concat([code, Buffer.from([0xff])])));
+			await new Promise((resolve) => setTimeout(resolve, 1_000));
+			assert.ok(sawClose, "the invalid close frame did not drop the socket");
 		} finally {
 			daemon.child.kill();
 			rmSync(folder, { recursive: true, force: true });
@@ -1737,32 +1840,15 @@ describe("routes", { concurrency: 8 }, () => {
 	 * card in a frame, so the tests that ask what a person sees read that rather than the board in memory.
 	 */
 	async function watching(daemon: Daemon, board: string) {
-		const controller = new AbortController();
-		const response = await fetch(`${daemon.base}/events?token=${daemon.token}&workspace=${board}`, { signal: controller.signal });
-		assert.equal(response.status, 200);
-		assert.ok(response.body, "no stream body");
+		const socket = await openLive(daemon, `/events?token=${daemon.token}&workspace=${board}`);
 		const frames: any[] = [];
-		const reader = response.body.getReader();
-		const decoder = new TextDecoder();
-		void (async () => {
-			let buffer = "";
+		socket.addEventListener("message", (event) => {
 			try {
-				for (;;) {
-					const { value, done } = await reader.read();
-					if (done) break;
-					buffer += decoder.decode(value, { stream: true });
-					let cut = buffer.indexOf("\n\n");
-					while (cut >= 0) {
-						const frame = buffer.slice(0, cut);
-						buffer = buffer.slice(cut + 2);
-						for (const line of frame.split("\n")) if (line.startsWith("data: ")) frames.push(JSON.parse(line.slice(6)));
-						cut = buffer.indexOf("\n\n");
-					}
-				}
+				frames.push(JSON.parse(String(event.data)));
 			} catch {
-				// The test closed the stream.
+				// A frame that is not JSON is not worth breaking the test over.
 			}
-		})();
+		});
 		const card = (id: string) => frames.filter((frame) => frame.type === "update" && frame.card?.id === id).at(-1)?.card ?? null;
 		return {
 			/** The card the client last received, or null while it has heard nothing about it. */
@@ -1777,7 +1863,7 @@ describe("routes", { concurrency: 8 }, () => {
 				}
 				throw new Error(`the client never drew the card that way: ${JSON.stringify(shown?.turns ?? shown)}`);
 			},
-			stop: () => controller.abort(),
+			stop: () => socket.close(),
 		};
 	}
 
