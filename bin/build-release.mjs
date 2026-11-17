@@ -10,6 +10,10 @@
  * (so `server/paths.ts`'s REPO_DIR/PUBLIC_DIR/BRIDGE still resolve) and rewrites `.ts`
  * import specifiers to `.js` via TypeScript's `rewriteRelativeImportExtensions`.
  *
+ * The release build keeps the compiler's full check: `--noCheck` saves about 340 ms of a
+ * 1.6 s build, and a release that was never type-checked is not worth that. A second
+ * transpiler or a build cache would be a second way to produce the tree, so neither is used.
+ *
  * Staged layout (the installer/CLI contract; keep this shape when extending):
  *
  *   server.js, server/<dirs>/*.js  compiled app, same relative paths as the sources

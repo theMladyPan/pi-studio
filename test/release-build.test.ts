@@ -10,15 +10,17 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { test } from "node:test";
+import { test, after, before } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const helper = join(root, "bin", "build-release.mjs");
+/** A build or a syntax check that never returns must fail the test, not hang it. */
+const CHILD_TIMEOUT_MS = 120_000;
 
 function buildInto() {
 	const out = mkdtempSync(join(tmpdir(), "pi-studio-build-"));
-	execFileSync(process.execPath, [helper, "--out", out], { cwd: root, stdio: "pipe" });
+	execFileSync(process.execPath, [helper, "--out", out], { cwd: root, stdio: "pipe", timeout: CHILD_TIMEOUT_MS });
 	return out;
 }
 
@@ -38,8 +40,29 @@ function stagedBuild(t: { after: (fn: () => void) => void }) {
 	return out;
 }
 
-test("the staged tree carries the compiled app, runtime assets, and metadata — and nothing else", (t) => {
-	const out = stagedBuild(t);
+/**
+ * One build for the tests that only read the staged tree: they assert nothing about building, so a
+ * second identical build would buy no coverage. The reproducibility test keeps two builds of its own,
+ * because producing the same tree twice is exactly what it checks.
+ */
+let sharedStaged: string | null = null;
+
+before(() => {
+	sharedStaged = buildInto();
+});
+
+after(() => {
+	if (sharedStaged) rmSync(sharedStaged, { recursive: true, force: true });
+	sharedStaged = null;
+});
+
+function sharedBuild(): string {
+	assert.ok(sharedStaged, "the shared staged build exists");
+	return sharedStaged;
+}
+
+test("the staged tree carries the compiled app, runtime assets, and metadata — and nothing else", () => {
+	const out = sharedBuild();
 	const sourcePkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
 	for (const file of [
@@ -83,7 +106,7 @@ test("the staged tree carries the compiled app, runtime assets, and metadata —
 		for (const line of readFileSync(file, "utf8").split("\n")) {
 			assert.ok(!specifier.test(line), `${relative(out, file)} still imports a .ts specifier: ${line.trim()}`);
 		}
-		execFileSync(process.execPath, ["--check", file]);
+		execFileSync(process.execPath, ["--check", file], { timeout: CHILD_TIMEOUT_MS });
 	}
 
 	// The staged launcher points at server.js; the source launcher still points at server.ts.
@@ -118,7 +141,7 @@ test("the staged tree carries the compiled app, runtime assets, and metadata —
 });
 
 test("staged modules resolve the runtime layout from the staged root, with no .git in sight", async (t) => {
-	const out = stagedBuild(t);
+	const out = sharedBuild();
 	const state = mkdtempSync(join(tmpdir(), "pi-studio-build-state-"));
 	t.after(() => rmSync(state, { recursive: true, force: true }));
 	process.env.PI_STUDIO_STATE = state;

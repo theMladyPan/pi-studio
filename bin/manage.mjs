@@ -321,11 +321,17 @@ export function extractTarGz(buffer, destination) {
 
 // ---------- GitHub Releases update ----------
 
+/** No release host may hold the launcher forever: every request is bounded. */
+const FETCH_TIMEOUT_MS = 60_000;
+
 async function fetchChecked(url, { allowHttpLoopback }) {
 	assertSafeUrl(url, { allowHttpLoopback });
 	let response;
 	try {
-		response = await fetch(url, { headers: { accept: "application/vnd.github+json", "user-agent": APP_NAME } });
+		response = await fetch(url, {
+			headers: { accept: "application/vnd.github+json", "user-agent": APP_NAME },
+			signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+		});
 	} catch (error) {
 		fail(`download failed for ${url}: ${error.message}`);
 	}
@@ -342,15 +348,23 @@ function parseChecksum(text, tarballName) {
 	fail(`checksum file does not name ${tarballName}`);
 }
 
-async function createPromptReport(fromRoot, toRoot, stateDir, fromVersion, toVersion) {
+async function createPromptReport(fromApp, toApp, stateDir, fromVersion, toVersion) {
 	// The prompt helper is TypeScript in a source tree and compiled JavaScript in a staged
 	// tree; either copy is imported from the tree being read, never from the app server.
-	const candidates = [join(toRoot, "server", "prompt-overrides.js"), join(toRoot, "server", "prompt-overrides.ts")];
+	const candidates = [join(toApp, "server", "prompt-overrides.js"), join(toApp, "server", "prompt-overrides.ts")];
 	const helper = candidates.find((candidate) => existsSync(candidate));
 	if (!helper) return null;
 	const module = await import(pathToFileURL(helper).href);
 	if (typeof module.createPromptUpdateReport !== "function") return null;
-	return module.createPromptUpdateReport({ fromRoot, toRoot, stateDir, fromVersion, toVersion });
+	// The helper compares shipped prompt roots (the folders holding board/, modes/, …), so it is
+	// handed each app's `prompts/`, never the app root itself.
+	return module.createPromptUpdateReport({
+		fromRoot: join(fromApp, "prompts"),
+		toRoot: join(toApp, "prompts"),
+		stateDir,
+		fromVersion,
+		toVersion,
+	});
 }
 
 export async function update(flags = {}) {
