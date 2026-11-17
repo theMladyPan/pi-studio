@@ -408,6 +408,27 @@ function exSelectAll(sel, order) {
   return sel;
 }
 
+/**
+ * A press that lands on the same row twice inside a moment is one intent, not two: a folder opened by a
+ * double press stays open instead of being shut again by the second half of the same gesture. The clock
+ * is handed in so the answer is a fact about the press, not about when this ran.
+ */
+function exPressAgain(held, path, now) {
+  const repeated = Boolean(path) && held.path === path && now - held.at < 400;
+  return { repeated, next: repeated ? { path: "", at: 0 } : { path, at: now } };
+}
+
+/**
+ * Whether a press on this row opens or closes it. A folder is a switch, and the whole row is its handle:
+ * the arrow toggles, and so does the name, because that is how the explorer this one copies behaves. A
+ * press carrying shift, ctrl or command is picking several rows instead, so it only picks.
+ */
+function exPressOpens(entry, event) {
+  if (!entry?.dir) return false;
+  if (event?.target?.classList?.contains("ex-twist")) return true;
+  return !event?.shiftKey && !event?.ctrlKey && !event?.metaKey;
+}
+
 // ---------- a path that moved, and everything that named it -----------------
 /**
  * Where a path stands after the folder it lived in was renamed or moved: it and every descendant follow
@@ -787,6 +808,8 @@ const explorerCore = {
   selectToggle: exSelectToggle,
   selectRange: exSelectRange,
   selectAll: exSelectAll,
+  pressOpens: exPressOpens,
+  pressAgain: exPressAgain,
   selectKeep: exSelectKeep,
   rebasePath: exRebasePath,
   rebaseListing: exRebaseListing,
@@ -9921,6 +9944,9 @@ function exVisibleRows() {
 }
 
 /** One row: a twist for a folder, its icon, its name, and what Git says about it. */
+/** The last press the tree saw, so a double press on one row is read as one intent. */
+let exPress = { path: "", at: 0 };
+
 function exRowEl(entry, level) {
   const open = entry.dir && exState.expanded.has(entry.path);
   const selected = exState.sel.paths.has(entry.path);
@@ -9990,16 +10016,16 @@ function exRowEl(entry, level) {
   }
 
   row.addEventListener("click", (event) => {
-    if (entry.dir && (event.target.classList.contains("ex-twist") || event.detail === 2)) return void exToggleFolder(entry);
     if (event.shiftKey) explorerCore.selectRange(exState.sel, exOrder(), entry.path);
     else if (event.metaKey || event.ctrlKey) explorerCore.selectToggle(exState.sel, entry.path);
     else explorerCore.select(exState.sel, entry.path);
-    exPaintSelection();
     exTreeEl.focus();
-  });
-  row.addEventListener("dblclick", (event) => {
-    event.preventDefault();
-    if (entry.dir) void exToggleFolder(entry);
+    // A double press is one intent, so the second land on the same row does not shut what the first
+    // opened before it could be seen.
+    const press = explorerCore.pressAgain(exPress, entry.path, Date.now());
+    exPress = press.next;
+    if (!explorerCore.pressOpens(entry, event) || press.repeated) return void exPaintSelection();
+    void exToggleFolder(entry);
   });
   row.addEventListener("contextmenu", (event) => {
     event.preventDefault();
@@ -10419,7 +10445,9 @@ async function exCopyTo(paths, dest) {
     footNote("a folder cannot be copied inside itself", true);
     return { ok: false, arrived: [], dest };
   }
-  const outcome = exBatchOutcome(await exPost("/files/copy", { paths, to: dest }), "copied");
+  // A copy landing on a name that is already there lands beside it as "copy of …" rather than failing:
+  // pasting a file into the folder it already sits in is how a duplicate is made.
+  const outcome = exBatchOutcome(await exPost("/files/copy", { paths, to: dest, onCollision: "copy" }), "copied");
   if (!outcome.ok) {
     footNote(outcome.refused.slice(0, 3).join(" · ") || outcome.text.slice(0, 140) || "the copy failed", true);
     return { ok: false, arrived: [], dest };
