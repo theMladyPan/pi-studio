@@ -1611,6 +1611,21 @@ describe("routes", { concurrency: 8 }, () => {
 					say({ type: "response", id: frame.id, command: "prompt", success: true, data: { disposition: "handled" } });
 					continue;
 				}
+				// A "flaky" file is a provider that refuses one request and answers the next: the run ends on
+				// a 429 that says nothing about the words, and the daemon has to send them again.
+				if (existsSync(flag("flaky"))) {
+					unlinkSync(flag("flaky"));
+					say({ type: "turn_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: '429: {"message":"Provider returned error"}' } });
+					say({ type: "agent_settled" });
+					continue;
+				}
+				// A "refuses" file is the other kind of failure: the request itself is wrong, and the same
+				// words sent again would earn the same answer.
+				if (existsSync(flag("refuses"))) {
+					say({ type: "turn_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "401: invalid api key" } });
+					say({ type: "agent_settled" });
+					continue;
+				}
 				// A "hold" file keeps the run open, which is the state a compaction has to refuse.
 				if (existsSync(flag("hold"))) continue;
 				// A "cut" file is a run the board stopped before it said anything: the empty, aborted answer
@@ -2336,6 +2351,83 @@ describe("routes", { concurrency: 8 }, () => {
 			const settled = await threadState(daemon, board.id, threadId);
 			assert.deepEqual(settled.turns.map((turn: any) => turn.text), ["compare these two"]);
 			assert.deepEqual((await cardState(daemon, board.id, first.cardId))?.turns ?? [], []);
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+		}
+	});
+
+	test("a provider that refuses the first request is sent the same words again", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-retry-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-retry-work-"));
+		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+		// One refusal, then the answer a healthy provider gives: the retry is the second prompt frame.
+		writeFileSync(join(dirname(stub.envFile), "flaky"), "1");
+		const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+		try {
+			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+			const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say it again" })).status, 200);
+
+			const settled = await settledThread(daemon, board.id, threadId, 1);
+			// The words are one turn, not two: a retry is the same message going out again.
+			assert.equal(settled.turns.length, 1, `the retry opened a second turn: ${JSON.stringify(settled.turns)}`);
+			assert.equal(settled.turns[0].status, "answered", `the turn was left reading ${settled.turns[0].status}: ${settled.turns[0].error ?? ""}`);
+			const prompts = framesOf(stub).filter((frame: any) => frame.type === "prompt" && !String(frame.id).startsWith("cmd:"));
+			assert.equal(prompts.length, 2, `the message went out ${prompts.length} time(s)`);
+			assert.equal(prompts[0].message, prompts[1].message, "the words were not repeated word for word");
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+		}
+	});
+
+	test("a request the provider refuses outright is not sent again", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-refused-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-refused-work-"));
+		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+		writeFileSync(join(dirname(stub.envFile), "refuses"), "1");
+		const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+		try {
+			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+			const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "a message a bad key cannot send" })).status, 200);
+
+			const settled = await settledThread(daemon, board.id, threadId, 1);
+			assert.equal(settled.turns[0].status, "stopped", "a failure of the request itself has to reach the human");
+			assert.match(settled.turns[0].error ?? "", /401/, "the reason has to be kept for the human");
+			const prompts = framesOf(stub).filter((frame: any) => frame.type === "prompt" && !String(frame.id).startsWith("cmd:"));
+			assert.equal(prompts.length, 1, "a refused request was sent again");
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+		}
+	});
+
+	test("a stop pressed while a retry waits drops the message instead of sending it", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-retry-stop-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-retry-stop-work-"));
+		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+		writeFileSync(join(dirname(stub.envFile), "flaky"), "1");
+		const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+		try {
+			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+			const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "not this one" })).status, 200);
+			// The failure lands at once and the retry waits two seconds, which is the window a stop is
+			// pressed in. A thread that reads settled here would have nothing to stop.
+			for (let tries = 0; tries < 100; tries++) {
+				const seen = await threadState(daemon, board.id, threadId);
+				if ((seen?.turns ?? []).some((turn: any) => /sending the message again/.test(turn.error ?? ""))) break;
+				await new Promise((done) => setTimeout(done, 20));
+			}
+			const stopped = await postTo(daemon, board.id, "/stop", { cardId: threadId });
+			assert.equal(stopped.status, 200, stopped.body);
+
+			const settled = await settledThread(daemon, board.id, threadId, 1);
+			assert.equal(settled.turns[0].status, "stopped");
+			const prompts = framesOf(stub).filter((frame: any) => frame.type === "prompt" && !String(frame.id).startsWith("cmd:"));
+			assert.equal(prompts.length, 1, "the message was sent again after the human stopped it");
 		} finally {
 			daemon.child.kill();
 			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });

@@ -35,6 +35,25 @@ export function headline(text) {
 
 
 
+/**
+ * Whether a one-line failure reads as the provider's own weather rather than as something this request did:
+ * a rate limit, an overloaded endpoint, a connection that went away, a request that timed out. A refusal of
+ * the request itself — a token that expired, a model this machine does not have — is not on this list,
+ * because the same words sent again earn the same answer and only the human can change that.
+ */
+export function transientFailure(reason) {
+	const line = String(reason ?? "");
+	if (!line) return false;
+	return (
+		/\b(408|429|5\d\d)\b/.test(line) ||
+		/provider|upstream|overload|rate.?limit|too many requests|temporar|unavailable/i.test(line) ||
+		/request timed out|timeout|socket hang ?up|fetch failed|network|connection reset/i.test(line) ||
+		/ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND/.test(line)
+	);
+}
+
+
+
 /** The text a tool result carries, in the order the tool said it. */
 export function resultText(result) {
 	const content = Array.isArray(result?.content) ? result.content : [];

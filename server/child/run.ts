@@ -12,7 +12,7 @@ import { homeCard } from "../routes/board/message.ts";
 import { port } from "../main.ts";
 import { cardFor, plainCardFor, promptImages, threadError } from "../cards.ts";
 import { StringDecoder } from "node:string_decoder";
-import { lastLine } from "./describe.ts";
+import { lastLine, transientFailure } from "./describe.ts";
 import { NAME_MODEL, nameThread, titleFromRequest } from "../worktrees/name.ts";
 import { broadcast, card, update, updateCard } from "../bus.ts";
 import { compacted } from "../waiters.ts";
@@ -162,9 +162,15 @@ export function prompt(board, thread, text, target = null, images = [], said = t
 		if (NAME_MODEL) void nameThread(board, thread, said);
 	}
 	const message = wireText(thread, text);
-	beginRun(board, thread, target);
+	// The turn this run answers, named here and not at the moment it is sent: a steer that joins the run
+	// is the newest turn, and a message sent again after a provider error has to land back on the words
+	// that are being repeated.
+	const answers = target ?? (thread.turns.length ? { turn: thread.turns.length - 1 } : null);
 	// The pictures ride beside the words, as pi's RPC takes them: the base64 and the type it is.
 	const pictures = promptImages(images);
+	// What was sent, so the same words can go out again without being composed a second time.
+	sentPrompts.set(thread.id, { message, images: pictures, target: answers, attempts: 0, timer: null });
+	beginRun(board, thread, answers);
 	try {
 		const child = ensureChild(board, thread);
 		child.stdin.write(
@@ -172,6 +178,80 @@ export function prompt(board, thread, text, target = null, images = [], said = t
 		);
 	} catch (error) {
 		threadError(board, thread, `could not send to the child: ${error.message}`);
+	}
+}
+
+
+
+/**
+ * The message last sent to a thread's child, and how many times it has been sent again since. It is kept
+ * off the thread for two reasons: `/state` serialises whole threads, and the pictures ride with the message.
+ */
+const sentPrompts = new Map();
+
+
+/** How many times one message is sent again after a failure the provider may not repeat. */
+export const RETRY_LIMIT = 3;
+
+
+/** A rate limit passes in seconds and an overloaded endpoint in a minute, so each wait is longer than the last. */
+export const RETRY_DELAY_MS = [2_000, 5_000, 15_000];
+
+
+/**
+ * Send the same message again when the run died of something the provider may not repeat.
+ *
+ * It answers whether a retry was scheduled, and a scheduled retry means the run is not over: the thread keeps
+ * reading as running, and the failed turn goes back to `sent` with the reason kept beside it. `whenSpent` is
+ * called instead of the send when the retry is dropped in its wait — a stop pressed then, a kill, a thread
+ * that moved on — because the caller still owes that run its ending.
+ */
+export function retryRun(board, thread, failed, whenSpent) {
+	const pending = sentPrompts.get(thread.id);
+	if (!pending || pending.timer) return false;
+	// A run the human stopped or one that ran past its own clock is not sent again on its own.
+	if (thread.timedOut) return false;
+	if (!failed || failed.status !== "stopped" || !failed.error) return false;
+	if (!transientFailure(failed.error)) return false;
+	if (pending.attempts >= RETRY_LIMIT) return false;
+	pending.attempts += 1;
+	const wait = RETRY_DELAY_MS[Math.min(pending.attempts, RETRY_DELAY_MS.length) - 1];
+	failed.status = "sent";
+	failed.error = `provider error — sending the message again (${pending.attempts} of ${RETRY_LIMIT})`;
+	thread.status = "running";
+	update(board, thread);
+	pending.timer = setTimeout(() => {
+		pending.timer = null;
+		// A message still wanted is one whose thread is still working and was not told to stop.
+		if (thread.abortWanted || thread.status !== "running") {
+			failed.status = "stopped";
+			failed.streaming = false;
+			failed.error = "stopped before the message could be sent again";
+			update(board, thread);
+			whenSpent();
+			return;
+		}
+		resend(board, thread, pending, failed, whenSpent);
+	}, wait);
+	// A daemon going down with a retry waiting should not be held open by it.
+	pending.timer.unref?.();
+	return true;
+}
+
+
+
+/** The write a retry makes: the same words, on the same turn, through the child the failed run used. */
+function resend(board, thread, pending, failed, whenSpent) {
+	try {
+		const child = ensureChild(board, thread);
+		beginRun(board, thread, pending.target);
+		failed.error = "sent again after a provider error";
+		child.stdin.write(
+			`${JSON.stringify({ id: randomUUID(), type: "prompt", message: pending.message, ...(pending.images.length ? { images: pending.images } : {}) })}\n`,
+		);
+	} catch (error) {
+		threadError(board, thread, `could not send the message again: ${error.message}`);
+		whenSpent();
 	}
 }
 

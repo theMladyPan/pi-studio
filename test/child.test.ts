@@ -10,7 +10,7 @@ import { beginCommand } from "../server/child/command.ts";
 import { handleChildLine } from "../server/thought.ts";
 import { settleQuestion } from "../server/routes/board/answer.ts";
 import { modeChangeNote } from "../server/child/modes.ts";
-import { describeTool, firstLine, headline, resultText } from "../server/child/describe.ts";
+import { describeTool, firstLine, headline, resultText, transientFailure } from "../server/child/describe.ts";
 import { boardPrompt, worktreePrompt } from "../server/child/prompts.ts";
 import { BRIDGE } from "../server/paths.ts";
 
@@ -101,6 +101,21 @@ test("a message on a thread whose mode changed carries the note, and every other
 	assert.equal(wireText({ id: "t3", mode: "agent" }, "hello"), "hello");
 	// A spawned child carries a role instead of a mode, so there is no mode change it could be told about.
 	assert.equal(wireText({ id: "t4", mode: "agent", runMode: "boss", parentThread: "p" }, "hello"), "hello");
+});
+
+test("the provider's bad weather is sent again, and its own bad request is not", () => {
+	// What the human sees when a model call fails is one line, so this is what the decision reads.
+	assert.equal(transientFailure('429: {"message":"Provider returned error","code":429}'), true);
+	assert.equal(transientFailure("meta/muse-ember is temporarily rate-limited upstream"), true);
+	assert.equal(transientFailure("502 Bad Gateway"), true);
+	assert.equal(transientFailure("the request timed out"), true);
+	assert.equal(transientFailure("read ECONNRESET"), true);
+	// A refusal of the request itself earns the same answer whatever is sent again.
+	assert.equal(transientFailure("401: invalid api key"), false);
+	assert.equal(transientFailure("400: unknown model fake/model-1"), false);
+	assert.equal(transientFailure("403: this key is not allowed to use that model"), false);
+	assert.equal(transientFailure(""), false);
+	assert.equal(transientFailure(undefined), false);
 });
 
 test("a tool call is described by its name and its most useful argument", () => {
