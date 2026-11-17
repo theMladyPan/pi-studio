@@ -1,6 +1,6 @@
 /**
- * The Explorer's backend: one listing of the human's own folder, and the five narrow changes an explorer
- * asks of it — a new empty file or folder, a rename, a move, a copy and a delete.
+ * The Explorer's backend: one listing of the human's own folder, and the six narrow changes an explorer
+ * asks of it — a new empty file or folder, a rename, a move, a copy, a delete and a save.
  *
  * It is not `/browse`. That route answers the composer's path pickers, including a thread's own worktree
  * for a `!` line, and it is the completion a command is written from; its answer is a flat list of
@@ -20,6 +20,12 @@
  * and the check is not a lock, so an outside writer can still win that window. The code says that in one
  * place rather than pretending a guarantee it does not have.
  *
+ * The editor is the one pair that writes over an existing name, because that is what a save is. It reads
+ * one file as text and reports the line endings and the byte order mark that file carries, and the save
+ * puts them back through an exclusive sibling temp file renamed over the file, so the name never holds
+ * half a save and the mode is the file's own. A file past 512 KiB is not one an editor opens, and a save
+ * is refused when the file it was read from is no longer the one on disk.
+ *
  * Those changes run one at a time per workspace, and a folder copy yields between entries, so a bulk copy
  * does not hold the daemon's event loop while another board waits. What that cannot fix is said in
  * `moveNoClobber`: a folder is still checked and renamed, and an outside writer can win that window.
@@ -37,16 +43,22 @@
  */
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
 	closeSync,
 	constants as fsConstants,
+	fchmodSync,
+	fsyncSync,
 	lstatSync,
 	mkdirSync,
 	openSync,
 	readSync,
 	readdirSync,
 	realpathSync,
+	renameSync,
 	statSync,
+	unlinkSync,
+	writeSync,
 } from "node:fs";
 import { copyFile, link, lstat, mkdir, readdir, readlink, rename, rm, symlink, unlink } from "node:fs/promises";
 import type { Dirent, Stats } from "node:fs";
@@ -54,7 +66,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { isAbsolute, join, matchesGlob, relative, sep } from "node:path";
 import { runGit } from "../../git/exec.ts";
-import { answer, fail, readJson } from "../../http.ts";
+import { answer, fail, readBytes, readJson } from "../../http.ts";
 import { CONTROL_CHARS } from "../../limits.ts";
 
 /** The board's folder is the whole of this surface's world; nothing else is read from a board. */
@@ -86,6 +98,22 @@ const GIO_TIMEOUT_MS = 10_000;
 
 /** How much porcelain is worth keeping: enough for a real checkout, not for a runaway `status`. */
 const STATUS_BYTES = 8 * 1024 * 1024;
+
+/** The editor holds one file at a time, and a file past this is not one an editor should open. */
+const MAX_FILE_BYTES = 512 * 1024;
+
+/**
+ * A save carries the whole file as a JSON string, so its body is larger than the file: a control character
+ * costs six bytes once escaped. The limit is set above the worst case so a legal file is never refused for
+ * the shape of the envelope, and the global body cap is left where every other route expects it.
+ */
+const MAX_SAVE_BODY = 4 * 1024 * 1024;
+
+/** A NUL in the opening bytes of a file is a binary file: text does not carry one. */
+const BINARY_PROBE_BYTES = 8 * 1024;
+
+/** The bytes a UTF-8 file may start with and still be the same text. */
+const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
 // ---------- words the routes and the listing share ----------
 
@@ -825,6 +853,203 @@ export async function onFilesList(url: URL, res: ServerResponse, board: BoardFol
 		...(status.dirtyTruncated ? { dirtyTruncated: true } : {}),
 		...(warnings.length ? { settingsWarnings: warnings } : {}),
 	});
+}
+
+// ---------- one file, read and written ----------
+
+/**
+ * A file's bytes, at most `limit` of them, or null when it holds more. The read stops at the cap rather
+ * than measuring the file first, so a file that grows while it is read cannot outrun the buffer.
+ */
+function readCapped(abs: string, limit: number): Buffer | null {
+	const fd = openSync(abs, "r");
+	try {
+		const buffer = Buffer.alloc(limit + 1);
+		let held = 0;
+		while (held < buffer.length) {
+			const got = readSync(fd, buffer, held, buffer.length - held, held);
+			if (!got) break;
+			held += got;
+		}
+		return held > limit ? null : buffer.subarray(0, held);
+	} finally {
+		closeSync(fd);
+	}
+}
+
+/** Whether these bytes are text an editor can show: no NUL up front, and valid UTF-8 throughout. */
+function binaryBytes(bytes: Buffer): boolean {
+	if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return true;
+	try {
+		new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+		return false;
+	} catch {
+		return true;
+	}
+}
+
+/**
+ * The line endings and the byte order mark a file already carries, so a save can put them back. The client
+ * sends folded text, and a file that is written back with the endings of another system is a diff nobody
+ * asked for.
+ */
+function shapeOf(bytes: Buffer): { bom: boolean; eol: "lf" | "crlf" } {
+	const bom = bytes.subarray(0, UTF8_BOM.length).equals(UTF8_BOM);
+	const text = (bom ? bytes.subarray(UTF8_BOM.length) : bytes).toString("utf8");
+	return { bom, eol: text.includes("\r\n") ? "crlf" : "lf" };
+}
+
+/**
+ * One file of the workspace, as text an editor can hold. The path is resolved physically, so a link that
+ * leaves the workspace is refused rather than read; a link that stays inside is read through its target and
+ * reported as not editable, because a save would land on a file the human did not open.
+ */
+export async function onFileRead(url: URL, res: ServerResponse, board: BoardFolder): Promise<void> {
+	const root = realRoot(board);
+	if (!root) return void fail(res, 409, `no such folder: ${board.folder}`);
+	const wanted = normalizeRel(url.searchParams.get("path"));
+	if ("error" in wanted) return void fail(res, 400, wanted.error);
+	const leaf = leafOf(root, wanted.rel);
+	if ("error" in leaf) return void fail(res, 409, leaf.error);
+	let link = false;
+	try {
+		link = lstatSync(leaf.abs).isSymbolicLink();
+	} catch {
+		return void fail(res, 404, `no such file: ${wanted.rel}`);
+	}
+	let real: string;
+	try {
+		real = realpathSync(leaf.abs);
+	} catch {
+		return void fail(res, 404, `no such file: ${wanted.rel}`);
+	}
+	if (!inside(root, real)) return void fail(res, 409, `${wanted.rel} is outside the workspace`);
+	let stat: Stats;
+	try {
+		stat = statSync(real);
+	} catch {
+		return void fail(res, 404, `no such file: ${wanted.rel}`);
+	}
+	if (!stat.isFile()) return void fail(res, 404, `${wanted.rel} is not a file`);
+	if (stat.size > MAX_FILE_BYTES) return void fail(res, 413, `${wanted.rel} is larger than ${MAX_FILE_BYTES} bytes`);
+	const bytes = readCapped(real, MAX_FILE_BYTES);
+	if (!bytes) return void fail(res, 413, `${wanted.rel} is larger than ${MAX_FILE_BYTES} bytes`);
+	if (binaryBytes(bytes)) return void fail(res, 415, `${wanted.rel} is not text`);
+	const { bom, eol } = shapeOf(bytes);
+	const text = (bom ? bytes.subarray(UTF8_BOM.length) : bytes).toString("utf8");
+	answer(res, 200, {
+		path: wanted.rel,
+		content: eol === "crlf" ? text.replace(/\r\n/g, "\n") : text,
+		// The size and the mtime are what a save compares against, so they describe the file on disk rather
+		// than the folded text the client is handed.
+		size: bytes.length,
+		mtime: Math.floor(stat.mtimeMs),
+		eol,
+		bom,
+		editable: !link,
+	});
+}
+
+/**
+ * The body of a save, read with its own ceiling. `readJson` caps every body at the daemon's own limit, and
+ * a file at the editor's ceiling can outgrow it once its text is escaped; the shape of the answer is the
+ * one `readJson` gives, so a client reads one kind of refusal.
+ */
+async function readSave(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown> | null> {
+	const bytes = (await readBytes(req, MAX_SAVE_BODY)) as Buffer | undefined;
+	if (bytes === undefined) {
+		fail(res, 413, "body too large");
+		return null;
+	}
+	const text = bytes.toString("utf8");
+	if (!text.trim()) return {};
+	try {
+		return JSON.parse(text);
+	} catch {
+		fail(res, 400, "bad json");
+		return null;
+	}
+}
+
+/**
+ * One file saved over itself. The client sends folded text and the numbers it read the file with; the route
+ * restores the file's own byte order mark and line endings, refuses a file that changed underneath, and
+ * places the new bytes through an exclusive sibling temp file so the name never holds half a file.
+ *
+ * A save never creates: a path with nothing at it is a 404, because an editor that opened a file is saving
+ * a file and not making one.
+ */
+export async function onFileWrite(req: IncomingMessage, res: ServerResponse, board: BoardFolder): Promise<void> {
+	const body = await readSave(req, res);
+	if (!body) return;
+	const root = realRoot(board);
+	if (!root) return void fail(res, 409, `no such folder: ${board.folder}`);
+	const wanted = normalizeRel(body.path);
+	if ("error" in wanted) return void fail(res, 400, wanted.error);
+	if (!wanted.rel) return void fail(res, 404, "the workspace root is not a file");
+	if (typeof body.content !== "string") return void fail(res, 400, "content is a string");
+	if (!Number.isFinite(body.mtime) || !Number.isFinite(body.size)) {
+		return void fail(res, 400, "mtime and size are the numbers the file was read with");
+	}
+	const content = body.content;
+	const encoded = Buffer.from(content, "utf8");
+	if (encoded.length > MAX_FILE_BYTES) return void fail(res, 413, `the text is larger than ${MAX_FILE_BYTES} bytes`);
+	// A lone surrogate encodes as a replacement character, so the round trip says the text is not UTF-8.
+	if (content.includes("\u0000") || encoded.toString("utf8") !== content) return void fail(res, 415, "the text is not UTF-8");
+	const outcome = await serialised(root, async (): Promise<Outcome> => {
+		const leaf = leafOf(root, wanted.rel);
+		if ("error" in leaf) return { status: 409, error: leaf.error };
+		let stat: Stats;
+		try {
+			stat = lstatSync(leaf.abs);
+		} catch {
+			return { status: 404, error: `no such file: ${wanted.rel}` };
+		}
+		// A link is reported as not editable, and a save that lands on its target is a write the human did
+		// not name. The link is refused rather than followed.
+		if (stat.isSymbolicLink()) return { status: 409, error: `${wanted.rel} is a link, and a link is not edited` };
+		if (!stat.isFile()) return { status: 404, error: `${wanted.rel} is not a file` };
+		if (stat.size > MAX_FILE_BYTES) return { status: 413, error: `${wanted.rel} is larger than ${MAX_FILE_BYTES} bytes` };
+		if (stat.size !== body.size || Math.floor(stat.mtimeMs) !== body.mtime) {
+			return { status: 409, error: "the file changed on disk since it was opened" };
+		}
+		const current = readCapped(leaf.abs, MAX_FILE_BYTES);
+		if (!current) return { status: 413, error: `${wanted.rel} is larger than ${MAX_FILE_BYTES} bytes` };
+		const { bom, eol } = shapeOf(current);
+		const folded = content.replace(/\r\n/g, "\n");
+		const bytes = Buffer.concat([
+			bom ? UTF8_BOM : Buffer.alloc(0),
+			Buffer.from(eol === "crlf" ? folded.replace(/\n/g, "\r\n") : folded, "utf8"),
+		]);
+		// The ceiling is on the text, and a file whose own endings double its newlines is still one the
+		// editor has to be able to open again.
+		if (bytes.length > MAX_FILE_BYTES) return { status: 413, error: `${wanted.rel} would be larger than ${MAX_FILE_BYTES} bytes with its own line endings` };
+		const dir = leaf.abs.slice(0, leaf.abs.length - leaf.name.length);
+		const temp = join(dir, `.${leaf.name}.${randomUUID()}.tmp`);
+		const mode = stat.mode & 0o7777;
+		try {
+			const fd = openSync(temp, "wx", mode);
+			try {
+				// The umask has no say in a mode the file already had.
+				fchmodSync(fd, mode);
+				let at = 0;
+				while (at < bytes.length) at += writeSync(fd, bytes, at, bytes.length - at, at);
+				fsyncSync(fd);
+			} finally {
+				closeSync(fd);
+			}
+			renameSync(temp, leaf.abs);
+		} catch (error) {
+			try {
+				unlinkSync(temp);
+			} catch {}
+			return { status: 409, error: say(error) };
+		}
+		const after = statSync(leaf.abs);
+		return { status: 200, payload: { path: wanted.rel, size: after.size, mtime: Math.floor(after.mtimeMs) } };
+	});
+	if ("error" in outcome) return void fail(res, outcome.status, outcome.error);
+	answer(res, outcome.status, outcome.payload);
 }
 
 // ---------- the changes ----------

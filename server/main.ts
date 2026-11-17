@@ -19,7 +19,7 @@ import { gitPicture, refreshGit, unwatchGit, watchGit } from "./git/graph.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
 import { onDefaults, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
-import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRename, onFilesList } from "./routes/board/files.ts";
+import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRead, onFileRename, onFileWrite, onFilesList } from "./routes/board/files.ts";
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
@@ -430,12 +430,20 @@ export const server = createServer((req, res) => {
 			return;
 		}
 		// The Explorer's listing: the board's own folder, always, and never the tree a thread works in. It is
-		// a GET like `/browse`, so `threadRefusal` keeps it to the human, and its five changes below are not
+		// a GET like `/browse`, so `threadRefusal` keeps it to the human, and its six changes below are not
 		// in `THREAD_ROUTES` either: a child reports in its last message instead of moving the human's files.
 		if (req.method === "GET" && url.pathname === "/files") {
 			const board = boardFrom(url, res);
 			if (!board) return;
 			await onFilesList(url, res, board);
+			return;
+		}
+		// The editor's read: one file of that same folder, with the line endings and the byte order mark it
+		// carries, so a save can put them back. A GET like `/files`, so `threadRefusal` keeps it to the human.
+		if (req.method === "GET" && url.pathname === "/files/read") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onFileRead(url, res, board);
 			return;
 		}
 		// The programs a `!` command can name. It is a GET like `/browse`, so `threadRefusal` keeps it to
@@ -680,13 +688,14 @@ export const server = createServer((req, res) => {
 				// One message from the Git Graph page, answered with the replies it earned. Not in THREAD_ROUTES:
 				// this route runs git in the human's checkouts, and a child reports in its last message instead.
 				"/git/msg": onGitMsg,
-				// The Explorer's five changes. None is in THREAD_ROUTES: a child may draw a card, and may not
-				// rename or delete the files of the folder a human opened.
+				// The Explorer's six changes. None is in THREAD_ROUTES: a child may draw a card, and may not
+				// rename, delete or save over the files of the folder a human opened.
 				"/files/new": onFileNew,
 				"/files/rename": onFileRename,
 				"/files/move": onFileMove,
 				"/files/copy": onFileCopy,
 				"/files/delete": onFileDelete,
+				"/files/write": onFileWrite,
 			};
 			const handler = routing[url.pathname];
 			if (handler) {
