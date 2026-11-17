@@ -216,6 +216,72 @@ test("the update report is null when nothing changed, and names the change when 
 	}
 });
 
+test("a pre-planted report symlink is refused and the outside file survives", () => {
+	const dir = stateDir();
+	const from = shippedRoot({ "modes/boss.md": "old boss\n" });
+	const to = shippedRoot({ "modes/boss.md": "new boss\n" });
+	try {
+		const outside = join(dir, "outside.md");
+		writeFileSync(outside, "outside\n");
+		const reportsDir = join(dir, "prompt-update-reports");
+		mkdirSync(reportsDir, { recursive: true });
+		const link = join(reportsDir, "prompt-update-0.1.0-to-0.2.0.md");
+		symlinkSync(outside, link);
+		assert.throws(
+			() => overrides.createPromptUpdateReport({ fromRoot: from, toRoot: to, stateDir: dir, fromVersion: "0.1.0", toVersion: "0.2.0" }),
+			/that is not a plain file/,
+		);
+		assert.equal(readFileSync(outside, "utf8"), "outside\n", "the link target was not written through");
+		assert.equal(lstatSync(link).isSymbolicLink(), true, "the link itself is left in place");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+		rmSync(from, { recursive: true, force: true });
+		rmSync(to, { recursive: true, force: true });
+	}
+});
+
+test("the report file is mode 0600 inside a 0700 directory under the state folder", () => {
+	const dir = stateDir();
+	const from = shippedRoot({ "modes/boss.md": "old boss\n" });
+	const to = shippedRoot({ "modes/boss.md": "new boss\n" });
+	try {
+		const path = overrides.createPromptUpdateReport({ fromRoot: from, toRoot: to, stateDir: dir, fromVersion: "0.1.0", toVersion: "0.2.0" });
+		assert.ok(path);
+		assert.ok(path.startsWith(dir + "/"), `the report stays inside the state folder: ${path}`);
+		assert.equal(lstatSync(path).mode & 0o777, 0o600, "the report file is readable only by its owner");
+		assert.equal(lstatSync(join(dir, "prompt-update-reports")).mode & 0o777, 0o700, "the reports directory is owner-only");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+		rmSync(from, { recursive: true, force: true });
+		rmSync(to, { recursive: true, force: true });
+	}
+});
+
+test("an override that already matches the incoming default reports no differences, not an unavailable diff", () => {
+	const dir = stateDir();
+	const from = shippedRoot({ "modes/boss.md": "old boss\n" });
+	const to = shippedRoot({ "modes/boss.md": "new boss\n" });
+	try {
+		overrides.savePromptOverride("modes/boss.md", "new boss\n", dir, from);
+		const path = overrides.createPromptUpdateReport({ fromRoot: from, toRoot: to, stateDir: dir, fromVersion: "0.1.0", toVersion: "0.2.0" });
+		assert.ok(path);
+		const report = readFileSync(path, "utf8");
+		assert.ok(report.includes("No differences between these copies."), "an identical pair says so");
+		assert.ok(!report.includes("Diff unavailable"), "a produced (empty) diff is not a failure");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+		rmSync(from, { recursive: true, force: true });
+		rmSync(to, { recursive: true, force: true });
+	}
+});
+
+test("modes and the overrides share one prompt folder list and name pattern", () => {
+	assert.deepEqual(modes.PROMPT_FOLDERS, overrides.PROMPT_OVERRIDE_FOLDERS);
+	assert.equal(overrides.isPromptName("modes/boss.md"), true);
+	assert.equal(overrides.isPromptName("nope/boss.md"), false);
+	assert.equal(overrides.isPromptName("modes/../boss.md"), false);
+});
+
 test("prompt text is quoted as data, never as instructions", () => {
 	const dir = stateDir();
 	const from = shippedRoot({ "modes/boss.md": "old boss\n" });

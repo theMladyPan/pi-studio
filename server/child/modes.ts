@@ -7,7 +7,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { effectivePromptText, listPromptOverrides, readPromptOverride } from "../prompt-overrides.ts";
+import { effectivePromptText, listPromptOverrides, PROMPT_FILE_NAME, PROMPT_FILE_STEM, PROMPT_OVERRIDE_FOLDERS, readPromptOverride } from "../prompt-overrides.ts";
 
 /** A human thread picks one of these. A spawned thread carries a role instead, never a mode. */
 export const MODE_NAMES = ["agent", "plan", "boss", "discuss"];
@@ -32,8 +32,9 @@ export const PROMPT_DIR = fileURLToPath(new URL("../../prompts/", import.meta.ur
  *
  * These files are one copy for the whole studio, so they are edited on the crossroads page alone. The two
  * files a single workspace may add are in its own folder and are named in `workspace-prompt.ts`.
+ * The list itself is the one in `prompt-overrides.ts`, shared with the prompt routes.
  */
-export const PROMPT_FOLDERS = ["board", "roles", "modes", "flows", "verbosity", "audiences", "skills"];
+export const PROMPT_FOLDERS = PROMPT_OVERRIDE_FOLDERS;
 
 /** One prompt file on disk: the name a route takes, and the whole text a thread would be given. */
 export type PromptFile = { name: string; folder: string; file: string; text: string; firstLine: string };
@@ -52,7 +53,7 @@ export function promptFiles(stateDir?: string): PromptFile[] {
 		try {
 			files = readdirSync(join(PROMPT_DIR, folder))
 				// The names the write guard takes, so a file the page lists is a file a save accepts.
-				.filter((file) => /^[a-z][a-z-]*\.md$/.test(file))
+				.filter((file) => PROMPT_FILE_NAME.test(file))
 				.sort();
 		} catch {
 			continue;
@@ -84,7 +85,7 @@ export function promptFiles(stateDir?: string): PromptFile[] {
  * cannot step outside the folders a prompt may live in.
  */
 export function promptText(folder: string, name: string, stateDir?: string): string {
-	if (!PROMPT_FOLDERS.includes(folder) || !/^[a-z][a-z-]*$/.test(name)) return "";
+	if (!PROMPT_FOLDERS.includes(folder) || !PROMPT_FILE_STEM.test(name)) return "";
 	let shipped = "";
 	let held = false;
 	try {
@@ -95,7 +96,7 @@ export function promptText(folder: string, name: string, stateDir?: string): str
 	}
 	const override = readPromptOverride(`${folder}/${name}.md`, stateDir);
 	if (!held && override === null) return "";
-	return effectivePromptText(`${folder}/${name}.md`, shipped, stateDir).trim();
+	return (override ?? shipped).trim();
 }
 
 /**

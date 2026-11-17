@@ -9,21 +9,18 @@ import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { answer, fail, readJson } from "../../http.ts";
 import { PROMPT_DIR, promptFiles } from "../../child/modes.ts";
-import { effectivePromptText, readPromptOverride, savePromptOverride } from "../../prompt-overrides.ts";
+import { effectivePromptText, isPromptName, readPromptOverride, savePromptOverride } from "../../prompt-overrides.ts";
 import { AGENTS_FILE, agentsOverride, workspacePromptName, workspacePromptText } from "../../workspace-prompt.ts";
 import { MAX_WORKSPACE_PROMPT_CHARS } from "../../limits.ts";
 
-/** The names a prompt may have: lowercase, one file each, in one of the folders the daemon reads. */
-const NAME = /^(board|roles|modes|flows|verbosity|audiences|skills)\/[a-z][a-z-]*\.md$/;
-
 /**
- * A name that came from a request, on the way to a path. The pattern is the whole guard: it has no
- * `..`, no absolute path and no folder of its own invention, so a write can only land in the folders
- * this page offers.
+ * A name that came from a request, on the way to a path. The shared prompt-name guard is the whole
+ * guard: it has no `..`, no absolute path and no folder of its own invention, so a write can only
+ * land in the folders this page offers.
  */
 function promptName(given: string): string {
 	const name = String(given ?? "").trim();
-	return NAME.test(name) && existsSync(PROMPT_DIR) ? name : "";
+	return isPromptName(name) && existsSync(PROMPT_DIR) ? name : "";
 }
 
 /** The files there are, with the first line of each, which is what tells a human what it is. */

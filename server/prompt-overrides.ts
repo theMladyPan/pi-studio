@@ -20,11 +20,17 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { STATE_DIR } from "./paths.ts";
 
-/** The names a prompt may have: lowercase, one file each, in one of the folders a prompt may live in. */
-export const PROMPT_NAME = /^(board|roles|modes|flows|verbosity|audiences|skills)\/[a-z][a-z-]*\.md$/;
-
-/** The folders a prompt may live in. Kept beside the pattern so this module needs no other. */
+/** The folders a prompt may live in. This is the one list every prompt reader and writer shares. */
 export const PROMPT_OVERRIDE_FOLDERS = ["board", "roles", "modes", "flows", "verbosity", "audiences", "skills"];
+
+/** A prompt file's name without its folder and extension: lowercase, hyphens allowed. */
+export const PROMPT_FILE_STEM = /^[a-z][a-z-]*$/;
+
+/** A prompt file's name with its extension, without its folder. */
+export const PROMPT_FILE_NAME = /^[a-z][a-z-]*\.md$/;
+
+/** The names a prompt may have: lowercase, one file each, in one of the folders a prompt may live in. */
+export const PROMPT_NAME = new RegExp(`^(${PROMPT_OVERRIDE_FOLDERS.join("|")})/[a-z][a-z-]*\\.md$`);
 
 /** The shipped prompts, relative to this file: `server/prompt-overrides.ts` sits one level below the root. */
 export const SHIPPED_PROMPT_ROOT = fileURLToPath(new URL("../prompts/", import.meta.url));
@@ -81,14 +87,14 @@ function readPlainFile(path: string): string | null {
 }
 
 /** Replace a file in one move, from a temporary beside it, refusing a symlink or a non-file target. */
-function writeFileAtomically(path: string, text: string): void {
+function writeFileAtomically(path: string, text: string, mode?: number): void {
 	if (existsSync(path)) {
 		const held = lstatSync(path);
 		if (held.isSymbolicLink() || !held.isFile()) throw new Error("that is not a plain file");
 	}
 	const temporary = `${path}.tmp-${process.pid}`;
 	try {
-		writeFileSync(temporary, text);
+		writeFileSync(temporary, text, mode === undefined ? undefined : { mode });
 		renameSync(temporary, path);
 	} catch (error) {
 		try {
@@ -108,7 +114,7 @@ export function listPromptOverrides(stateDir: string = STATE_DIR): string[] {
 		let files: string[] = [];
 		try {
 			files = readdirSync(join(root, folder))
-				.filter((file) => /^[a-z][a-z-]*\.md$/.test(file))
+				.filter((file) => PROMPT_FILE_NAME.test(file))
 				.sort();
 		} catch {
 			continue;
@@ -178,7 +184,7 @@ function shippedNames(root: string): string[] {
 		let files: string[] = [];
 		try {
 			files = readdirSync(join(root, folder))
-				.filter((file) => /^[a-z][a-z-]*\.md$/.test(file))
+				.filter((file) => PROMPT_FILE_NAME.test(file))
 				.sort();
 		} catch {
 			continue;
@@ -204,10 +210,11 @@ function quoted(text: string): string {
 
 /**
  * A real unified diff between two texts, from the git executable with an argument list and no
- * shell. Exit 1 means differences, which is the ordinary answer; any other failure, including git
- * missing, answers "" so the report can say the diff is unavailable.
+ * shell. Exit 1 means differences, which is the ordinary answer. Exit 0 answers "" (the two
+ * copies agree); any other failure, including git missing, answers null so the report can tell
+ * "nothing differs" apart from "no diff could be produced".
  */
-function gitDiff(before: string | null, after: string | null, name: string): string {
+function gitDiff(before: string | null, after: string | null, name: string): string | null {
 	const dir = mkdtempSync(join(tmpdir(), "pi-studio-prompt-diff-"));
 	try {
 		const beforeFile = join(dir, "before.md");
@@ -220,7 +227,7 @@ function gitDiff(before: string | null, after: string | null, name: string): str
 			{ encoding: "utf8", env: { ...process.env, GIT_PAGER: "cat", PAGER: "cat" }, timeout: 30_000 },
 		);
 		if (result.status === 0) return "";
-		if (result.status !== 1) return "";
+		if (result.status !== 1) return null;
 		const lines = String(result.stdout).split("\n");
 		for (let index = 0; index < lines.length; index++) {
 			if (lines[index].startsWith("diff --git ")) lines[index] = `diff --git a/${name} b/${name}`;
@@ -229,7 +236,7 @@ function gitDiff(before: string | null, after: string | null, name: string): str
 		}
 		return lines.join("\n").trimEnd();
 	} catch {
-		return "";
+		return null;
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -237,7 +244,8 @@ function gitDiff(before: string | null, after: string | null, name: string): str
 
 function diffBlock(before: string | null, after: string | null, name: string): string {
 	const diff = gitDiff(before, after, name);
-	return diff ? `\`\`\`diff\n${diff}\n\`\`\`` : "Diff unavailable: git could not produce one for this change.";
+	if (diff === null) return "Diff unavailable: git could not produce one for this change.";
+	return diff ? `\`\`\`diff\n${diff}\n\`\`\`` : "No differences between these copies.";
 }
 
 export type PromptUpdateReportOptions = {
@@ -319,6 +327,8 @@ export function createPromptUpdateReport(options: PromptUpdateReportOptions): st
 	const reportsDir = join(stateDir, PROMPT_REPORTS_DIR);
 	ensureSafeDir(reportsDir);
 	const path = join(reportsDir, fileName);
-	writeFileSync(path, report, { mode: 0o600 });
+	// The atomic writer refuses a symlink standing at the report path rather than following it,
+	// so a pre-planted link cannot turn this report into a write on a file outside the state folder.
+	writeFileAtomically(path, report, 0o600);
 	return path;
 }
