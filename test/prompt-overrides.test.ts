@@ -3,7 +3,7 @@
  * report shows what a shipped change means for them without touching either copy.
  */
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -172,6 +172,32 @@ test("writing through the prompt route saves an override, not the shipped file",
 	} finally {
 		rmSync(overrides.promptOverridePath("modes/boss.md", dir), { force: true });
 		rmSync(overrides.promptBaselinePath("modes/boss.md", dir), { force: true });
+	}
+});
+
+test("saving a workspace instruction file never writes through a planted temporary link", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-workspace-prompt-temp-"));
+	try {
+		const path = join(folder, "AGENTS.md");
+		const outside = join(folder, "outside.md");
+		writeFileSync(outside, "outside\n");
+		// The predictable temporary the route used to write through, planted beside the file beforehand.
+		const planted = `${path}.tmp-${process.pid}`;
+		symlinkSync(outside, planted);
+		const said = "# Project\n\nrun the tests with npm test\n";
+		const { req, res } = request({ name: "AGENTS.md", text: said });
+		await routes.onWorkspacePromptWrite(req, res, { folder });
+		assert.equal(res.status, 200, res.body);
+		assert.equal(readFileSync(outside, "utf8"), "outside\n", "a planted link's target was written through");
+		assert.equal(readFileSync(path, "utf8"), said, "the project file did not keep the save");
+		assert.equal(lstatSync(path).isSymbolicLink(), false, "the project file is a plain file of its own");
+		assert.equal(lstatSync(planted).isSymbolicLink(), true, "a link this call did not create is left alone");
+		// The save keeps the mode a plain write gives a project file, which is what the route wrote before.
+		const probe = join(folder, "probe.md");
+		writeFileSync(probe, "probe\n");
+		assert.equal(statSync(path).mode & 0o777, statSync(probe).mode & 0o777, "the save changed the file's mode");
+	} finally {
+		rmSync(folder, { recursive: true, force: true });
 	}
 });
 

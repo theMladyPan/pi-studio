@@ -4,10 +4,11 @@
  * files are plain markdown in `prompts/`, read by the daemon when a thread starts, so an edit here takes
  * effect on the next run and never rewrites one already going.
  */
-import { existsSync, lstatSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { answer, fail, readJson } from "../../http.ts";
+import { writeFileThroughTemp } from "../../paths.ts";
 import { PROMPT_DIR, promptFiles } from "../../child/modes.ts";
 import { effectivePromptText, isPromptName, readPromptOverride, savePromptOverride } from "../../prompt-overrides.ts";
 import { AGENTS_FILE, agentsOverride, workspacePromptName, workspacePromptText } from "../../workspace-prompt.ts";
@@ -54,23 +55,17 @@ export function onPrompt(url: URL, res: ServerResponse) {
 /**
  * A file a thread reads while it starts is replaced in one move, so no run ever reads half of one. A
  * symlink is refused rather than followed: the name is what guards where a write lands, and a link would
- * step outside it.
+ * step outside it. The temporary is the shared writer's own, so a name someone planted beforehand is
+ * never written through.
  */
 function replaceFile(path: string, text: string): { ok: true } | { ok: false; status: number; reason: string } {
 	if (existsSync(path) && !lstatSync(path).isFile()) {
 		return { ok: false, status: 409, reason: "that is not a plain file" };
 	}
-	const temporary = `${path}.tmp-${process.pid}`;
 	try {
-		writeFileSync(temporary, text);
-		renameSync(temporary, path);
+		writeFileThroughTemp(path, text);
 		return { ok: true };
 	} catch (error) {
-		try {
-			unlinkSync(temporary);
-		} catch {
-			// Nothing was left behind, which is the usual case for a failed write.
-		}
 		return { ok: false, status: 500, reason: (error as Error).message };
 	}
 }
