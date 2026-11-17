@@ -31,10 +31,24 @@ commit's own account rather than on a check run now, the section below says so.
   lives under XDG state, `~/.local/state/pi-studio/`: `daemon.json` (token, port) and `workspaces.json`
   (the list plus the crossroads defaults). `--state` moves that global root only. The legacy
   `~/.pi/agent/state/pi-studio/` layout is copied in once per workspace the first time its folder is
-  opened, by copy, and the originals stay where they are. `.agents/` worktrees are unchanged, and both
-  folders are kept out of `git status` through the repository's local `info/exclude` rather than a
-  tracked `.gitignore`. One opened folder holds one state, so two daemons on the same project are
-  unsupported.
+  opened, by copy, and the originals stay where they are. Each copy-once pass records itself on disk:
+  `.pi-studio/legacy-import.json` beside the folder's board, and `legacy-import.json` in the machine's
+  state folder for the global records (token, browser sessions, the folder list). Deleting a folder's
+  `.pi-studio` or one of those markers is the recovery: the next start copies the legacy files again.
+  `.agents/` worktrees are unchanged, and both folders are kept out of `git status` through the
+  repository's local `info/exclude` rather than a tracked `.gitignore`. One opened folder holds one
+  state, so two daemons on the same project are unsupported.
+- **A managed copy comes from a release, never from a checkout.** `bin/manage.mjs` owns
+  `<install root>/versions/<version>` folders, the `current` link and one launcher. The published
+  `install.sh`, `npm run install:local` and `update` all hand a staged tree to the same
+  `installFromDir`, which re-validates it, refuses a tree older than the installed version, and leaves
+  the state folder, the source clone, Node and `pi` alone. The download installer reads no manager code
+  until the archive proves it is the release that installer names: `build.json` and `package.json` both
+  carry that version, the build tag is `v<version>`, and the build reads `official: true` with
+  `custom: false`. A copy built from a checkout reads custom and needs `--replace-custom` before a
+  release replaces it. Missing `git` or `pi` is only a warning and the install goes ahead; a missing or
+  too old Node stops it. The running marker holds a pid, proven live or stale through `/proc` on Linux;
+  elsewhere it cannot be proven stale, so uninstall refuses until the marker is removed.
 - **One row on the crossroads is the throwaway one.** A folder in the machine's temp spot
   (`pi-studio-scratch`), or `scratch/` beside a daemon's own state folder when it has one, which is what
   keeps a development instance and a test from littering the temp area. `workspaceList()` asks

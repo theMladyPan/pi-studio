@@ -38,10 +38,13 @@ The script installs the latest release for the current user and nothing else: th
 needs no `sudo`, writes nothing outside your home folder and edits no shell startup file, so
 `~/.local/bin` has to be on your `PATH` already for the command to answer. It checks the release's
 published sha256 before it installs anything, and a failed check leaves the copy you already had alone.
+It installs only the release it names: the archive has to be the official build of that exact version
+and tag, and an older release never replaces a newer installed copy.
 
-Node 22.18 or newer, `git` and the `pi` CLI have to be on that machine already; the installer ships
-none of them and installs no npm packages. A release is compiled JavaScript, so the Node you have does
-not have to read TypeScript.
+Node 22.18 or newer has to be on that machine already, and the installer stops without it. `git` and
+the `pi` CLI are what threads need: the installer warns when either is missing and installs anyway, so
+add them before you use the board. It ships none of them and installs no npm packages. A release is
+compiled JavaScript, so the Node you have does not have to read TypeScript.
 
 ### From a checkout
 
@@ -53,8 +56,9 @@ node server.ts --no-open  # for a service, or when you open it yourself
 
 With the repository in `PATH`, `./bin/pi-studio` is the same start in one word.
 `npm run install:local` builds the release tree from your own source and installs it the way the
-download does. Running the `.ts` sources is the development path and is the stricter case: that one
-needs a Node whose build reads TypeScript.
+download does. What it installs reads custom, so `pi-studio update` refuses to replace it with a
+release until you pass `--replace-custom`. Running the `.ts` sources is the development path and is
+the stricter case: that one needs a Node whose build reads TypeScript.
 
 ### Where Node comes from
 
@@ -112,7 +116,10 @@ refuses to open and says why, rather than accepting work it could not save.
 
 Boards and sessions an older pi-studio kept under `~/.pi/agent/state/pi-studio` are imported once, by
 copy, the next time their folder is opened: the board, the whole session files and the Git view state,
-with ids and history intact. The old files stay where they are.
+with ids and history intact. The old files stay where they are. The import is recorded in
+`.pi-studio/legacy-import.json` inside the folder and in `legacy-import.json` under the machine's state,
+so it happens once; delete that folder's `.pi-studio`, or just those markers, and the next open copies
+the old files again.
 
 ### A second instance
 
@@ -234,8 +241,10 @@ Work lands on `dev`; merging `dev` into `main` and tagging that merge with an an
 `v0.MINOR.PATCH` is what publishes. The tag starts `.github/workflows/release.yml`, which proves the
 tag, `package.json` and `package-lock.json` name one version, runs the full check gate, builds
 `pi-studio-<version>.tar.gz` with its `.sha256` and `install.sh`, and uploads those three to a draft
-release before publishing it as the latest. A published version is never replaced: a broken release is
-repaired with a new version.
+release before publishing it as the latest. The notes it publishes are the dated `CHANGELOG.md` section
+for that version: a version without one, or whose notes still carry a thread marker such as
+`[t-c70e4c65]`, is refused rather than published with a placeholder. A published version is never
+replaced: a broken release is repaired with a new version.
 
 ## Layout
 

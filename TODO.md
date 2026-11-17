@@ -7,10 +7,9 @@ says what it is, what it would touch, and what has to be settled before it can s
 Fifteen entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
 something the board cannot do yet, **chore** is work on the code itself.
 
-Four decisions have to be answered by you before some of these can start, and each is named in the
-entry it blocks: whether "nothing to install" stays a promise, how the git strip should notice the
-pointer, where a screenshot's bytes live once the daemon has restarted, and whether the microphone
-stays in the daemon or moves into the page.
+Three decisions have to be answered by you before some of these can start, and each is named in the
+entry it blocks: how the git strip should notice the pointer, where a screenshot's bytes live once the
+daemon has restarted, and whether the microphone stays in the daemon or moves into the page.
 
 ## fix
 
@@ -87,7 +86,7 @@ saves. Files are named rather than numbered here because these are all new, and 
 for them yet. To settle: what the board says to a thread whose checkout moved under it while the thread
 was idle, because the live guard only knows a child that is running now, so a human merging or resetting
 an idle thread's tree moves it in silence. And whether a remote write reaches this daemon at all, which
-is the same question as whether "nothing to install" survives a push that needs a token.
+is the same question as where a push that needs a token gets that token.
 
 **Voice, on a card.** The `voice` extension drove the console by speech, and it was retired from the
 extensions repository rather than ported, because every one of its hooks checked `ctx.mode === "tui"`
@@ -147,5 +146,7 @@ checks, which `precheck` says before it fails. And **subagents are organised by 
 thread has a mode, a spawned child has a role, and a boss's flow is a file under `prompts/flows/`, which
 is what replaced the `delegate` tool; `docs/boss-and-subagents.md` is the one page that says how.
 
-The one promise still to decide is "nothing to install". Running the app needs nothing today and running
-the checks needs a devDependency, and that line in the README shapes every option here.
+**Installation is decided**: a release installs for the current user from one download line and keeps one
+folder per version, while `npm run install:local` installs a build from a checkout and reads custom.
+Running the daemon needs Node, `git` and `pi` on the machine; `npm ci` is needed only for the checks and
+for building a release.
