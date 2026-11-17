@@ -223,6 +223,628 @@ const el = (tag, cls) => {
   if (cls) node.className = cls;
   return node;
 };
+// ---------- explorer: the decisions --------------------------------------
+/**
+ * The file tree's decisions, and none of its paint: paths, folders first, the pages a folder arrives in,
+ * what is selected, the clipboard, what a drag may do, what a delete left undone, and which key belongs
+ * to which surface.
+ *
+ * Every function here takes what it needs as an argument and touches no page, so `test/explorer.test.ts`
+ * loads this block whole — from the banner above to the one that closes it — and drives it directly. It
+ * must therefore keep calling nothing of the board's while it is being defined.
+ */
+
+/** The type a drag from the tree carries. It is the only proof that a drop is a reference rather than an
+ *  upload, so a payload that did not come from this board's own tree is read and refused. */
+const EXPLORER_PATH_MIME = "application/x-pi-studio-path";
+
+/** POSIX, relative to the workspace root; `""` is the root itself. */
+const exJoin = (dir, name) => (dir ? `${dir}/${name}` : name);
+const exParentOf = (path) => {
+  const cut = path.lastIndexOf("/");
+  return cut < 0 ? "" : path.slice(0, cut);
+};
+const exDepthOf = (path) => (path ? path.split("/").length : 0);
+const exUnder = (path, dir) => (dir === "" ? true : path === dir || path.startsWith(`${dir}/`));
+
+/**
+ * A path from a page or from a drag, made safe: no `.`, no `..`, no empty step and no leading or trailing
+ * separator. A walk above the root answers `null`, which is how a payload that leaves the workspace is
+ * refused rather than clamped to something it was not.
+ */
+function exCleanPath(value) {
+  if (typeof value !== "string" || value.includes("\0")) return null;
+  const out = [];
+  for (const part of value.replaceAll("\\", "/").split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (!out.length) return null;
+      out.pop();
+      continue;
+    }
+    out.push(part);
+  }
+  return out.join("/");
+}
+
+/** `.git` is the repository's own bookkeeping, so the tree never lists it. A dot folder such as `.agents`
+ *  is the human's and stays. */
+const exHidden = (name) => name === ".git";
+
+/**
+ * The last step of a path, which is the folder's own name. The drawer's header says this, so a workspace
+ * is named after the folder the human opened rather than after the route that reached it, and a flag such
+ * as `repo: true` is never printed in its place.
+ */
+function exBasename(path) {
+  const steps = String(path ?? "")
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter(Boolean);
+  return steps.length ? steps[steps.length - 1] : "";
+}
+
+/** Folders first, then names the way a person reads them: `file2` comes before `file10`. */
+function exSortEntries(entries) {
+  return [...entries].sort((a, b) => {
+    if (Boolean(a.dir) !== Boolean(b.dir)) return a.dir ? -1 : 1;
+    const left = a.name.toLowerCase();
+    const right = b.name.toLowerCase();
+    if (left === right) return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+    return left.localeCompare(right, undefined, { numeric: true });
+  });
+}
+
+// ---------- one folder, in as many pages as it arrives in -------------------
+/** A folder's listing, as the drawer keeps it while the pages land. */
+function exListing() {
+  return {
+    seq: 0,
+    parent: "",
+    entries: [],
+    seen: new Set(),
+    total: 0,
+    truncated: false,
+    next: null,
+    root: "",
+    // Whether the workspace folder is itself a repository. It is a flag, never a name: the header says
+    // the folder's own basename.
+    repo: false,
+    dirty: [],
+    dirtyTruncated: false,
+    state: "new",
+    trouble: "",
+  };
+}
+
+/** A new read of this folder: every earlier reply is stale from here on. */
+function exListingStart(listing, parent = listing.parent) {
+  listing.seq += 1;
+  listing.parent = parent;
+  listing.entries = [];
+  listing.seen = new Set();
+  listing.total = 0;
+  listing.truncated = false;
+  listing.next = null;
+  listing.state = "loading";
+  listing.trouble = "";
+  return listing.seq;
+}
+
+/**
+ * One page of a folder. A page whose ticket is not the listing's is a reply from a folder the human has
+ * already left, so it is dropped rather than merged. Duplicate names are folded, and every page is sorted
+ * into the list it belongs to, because a folder of more than one page arrives in name order per page.
+ */
+function exListingPage(listing, ticket, page) {
+  if (ticket !== listing.seq) return false;
+  for (const raw of Array.isArray(page?.entries) ? page.entries : []) {
+    const name = typeof raw?.name === "string" ? raw.name : "";
+    if (!name || exHidden(name)) continue;
+    const path = exCleanPath(raw.path) ?? exJoin(listing.parent, name);
+    if (listing.seen.has(path)) continue;
+    listing.seen.add(path);
+    listing.entries.push({
+      name,
+      path,
+      dir: Boolean(raw.dir),
+      size: Number(raw.size) || 0,
+      mtime: Number(raw.mtime) || 0,
+      link: Boolean(raw.link),
+      git: typeof raw.git === "string" ? raw.git : "",
+    });
+  }
+  listing.total = Number(page?.total) || listing.entries.length;
+  listing.next = page?.next ?? null;
+  listing.truncated = Boolean(page?.truncated);
+  if (typeof page?.root === "string" && page.root) listing.root = page.root;
+  listing.repo = Boolean(page?.repo);
+  for (const dir of Array.isArray(page?.dirty) ? page.dirty : []) {
+    const clean = exCleanPath(dir);
+    if (clean !== null && !listing.dirty.includes(clean)) listing.dirty.push(clean);
+  }
+  if (page?.dirtyTruncated) listing.dirtyTruncated = true;
+  listing.entries = exSortEntries(listing.entries);
+  listing.state = listing.next ? "loading" : "ready";
+  return true;
+}
+
+// ---------- what is selected ----------------------------------------------
+function exSelection() {
+  return { paths: new Set(), anchor: "", lead: "" };
+}
+
+function exSelect(sel, path) {
+  sel.paths.clear();
+  if (path) sel.paths.add(path);
+  sel.anchor = path;
+  sel.lead = path;
+  return sel;
+}
+
+function exSelectToggle(sel, path) {
+  if (sel.paths.has(path)) sel.paths.delete(path);
+  else sel.paths.add(path);
+  sel.anchor = path;
+  sel.lead = path;
+  return sel;
+}
+
+/** The range between the anchor and this row, in the order the rows are drawn. */
+function exSelectRange(sel, order, path) {
+  const from = order.indexOf(sel.anchor);
+  const to = order.indexOf(path);
+  if (from < 0 || to < 0) return exSelect(sel, path);
+  sel.paths.clear();
+  for (const one of order.slice(Math.min(from, to), Math.max(from, to) + 1)) sel.paths.add(one);
+  sel.lead = path;
+  return sel;
+}
+
+function exSelectAll(sel, order) {
+  sel.paths = new Set(order);
+  sel.anchor = order[0] ?? "";
+  sel.lead = order[order.length - 1] ?? "";
+  return sel;
+}
+
+/**
+ * A press that lands on the same row twice inside a moment is one intent, not two: a folder opened by a
+ * double press stays open instead of being shut again by the second half of the same gesture. The clock
+ * is handed in so the answer is a fact about the press, not about when this ran.
+ */
+function exPressAgain(held, path, now) {
+  const repeated = Boolean(path) && held.path === path && now - held.at < 400;
+  return { repeated, next: repeated ? { path: "", at: 0 } : { path, at: now } };
+}
+
+/**
+ * Whether a press on this row opens or closes it. A folder is a switch, and the whole row is its handle:
+ * the arrow toggles, and so does the name, because that is how the explorer this one copies behaves. A
+ * press carrying shift, ctrl or command is picking several rows instead, so it only picks.
+ */
+function exPressOpens(entry, event) {
+  if (!entry?.dir) return false;
+  if (event?.target?.classList?.contains("ex-twist")) return true;
+  return !event?.shiftKey && !event?.ctrlKey && !event?.metaKey;
+}
+
+// ---------- a path that moved, and everything that named it -----------------
+/**
+ * Where a path stands after the folder it lived in was renamed or moved: it and every descendant follow
+ * the prefix. A path that stood somewhere else is left exactly where it was, so a name that merely starts
+ * with the same letters is never dragged along.
+ */
+function exRebasePath(path, from, to) {
+  if (!from) return path;
+  if (path === from) return to;
+  return path.startsWith(`${from}/`) ? `${to}${path.slice(from.length)}` : path;
+}
+
+/**
+ * A listing that stood under a renamed or moved folder. Its own key, every row's path and the set of names
+ * it has already taken all move together: a descendant row that kept its old path would name a file that
+ * is no longer there, and a later refresh would add the new spelling beside the stale one.
+ */
+function exRebaseListing(listing, from, to) {
+  listing.parent = exRebasePath(listing.parent, from, to);
+  for (const entry of listing.entries) entry.path = exRebasePath(entry.path, from, to);
+  listing.seen = new Set([...listing.seen].map((path) => exRebasePath(path, from, to)));
+  return listing;
+}
+
+/**
+ * Everything else the drawer holds by path: the selection and its lead row, the file clipboard, a name
+ * being typed and the folder a new name was going into. They follow the file they named, so a rename does
+ * not silently drop the selection or the cut the human was about to paste.
+ */
+function exRebaseHeld(held, from, to) {
+  if (held.sel) {
+    held.sel.paths = new Set([...held.sel.paths].map((path) => exRebasePath(path, from, to)));
+    held.sel.anchor = exRebasePath(held.sel.anchor, from, to);
+    held.sel.lead = exRebasePath(held.sel.lead, from, to);
+  }
+  if (held.clip) held.clip.paths = held.clip.paths.map((path) => exRebasePath(path, from, to));
+  if (held.renaming) held.renaming = exRebasePath(held.renaming, from, to);
+  if (held.draft?.dir) held.draft = { ...held.draft, dir: exRebasePath(held.draft.dir, from, to) };
+  return held;
+}
+
+/**
+ * The whole tree after a path moved. Every listing is rekeyed under its new name and every row inside it
+ * with it, the folders left open stay open on the rows they were opened on, and the selection, the
+ * clipboard and the inline names follow their own paths. Nothing is left keyed by a spelling that no
+ * longer exists on disk, so a later read of the folder adds no twin beside it.
+ */
+function exRebaseTree(state, from, to) {
+  const held = new Map();
+  for (const [dir, listing] of state.folders) {
+    held.set(exRebasePath(dir, from, to), exRebaseListing(listing, from, to));
+  }
+  state.folders = held;
+  state.expanded = new Set([...state.expanded].map((dir) => exRebasePath(dir, from, to)));
+  return exRebaseHeld(state, from, to);
+}
+
+/** A refresh keeps what still exists and lets go of what does not; the dropped names come back so a
+ *  message holding one can be told it lost its file. */
+function exSelectKeep(sel, known) {
+  const gone = [];
+  for (const path of [...sel.paths]) {
+    if (!known.has(path)) {
+      sel.paths.delete(path);
+      gone.push(path);
+    }
+  }
+  if (!known.has(sel.lead)) sel.lead = "";
+  if (!known.has(sel.anchor)) sel.anchor = "";
+  return gone;
+}
+
+// ---------- cut and copy --------------------------------------------------
+function exClip() {
+  return { mode: "", paths: [] };
+}
+
+function exClipSet(clip, mode, paths) {
+  clip.paths = [...paths];
+  clip.mode = clip.paths.length ? mode : "";
+  return clip;
+}
+
+function exClipClear(clip) {
+  clip.mode = "";
+  clip.paths = [];
+  return clip;
+}
+
+/** Why this paste cannot land in that folder, or `""` when it can. A folder cannot go inside itself, and
+ *  neither a cut nor a copy may land where it already is. */
+function exPasteTrouble(clip, dest) {
+  if (!clip.paths.length) return "nothing is on the file clipboard";
+  for (const path of clip.paths) {
+    if (exUnder(dest, path)) return "a folder cannot go inside itself";
+    if (clip.mode === "cut" && exParentOf(path) === dest) return "that is where it already is";
+  }
+  return "";
+}
+
+// ---------- a drag from the tree ------------------------------------------
+/** What a transfer carries: the tree's own paths, a file from the desktop, or nothing this drawer wants. */
+function exDragKind(types) {
+  const held = [...(types ?? [])];
+  if (held.includes(EXPLORER_PATH_MIME)) return "path";
+  if (held.includes("Files")) return "os";
+  return "";
+}
+
+function exDragPayload(workspace, refs) {
+  return JSON.stringify({ workspace, paths: refs.map((one) => ({ path: one.path, dir: Boolean(one.dir) })) });
+}
+
+/**
+ * A dropped payload, read against the workspace it lands in. The workspace has to be this board's, and
+ * every path has to be a relative path that stays inside it: a payload naming `/etc/passwd`, `../..` or
+ * another board's folder is refused with a reason rather than trimmed into something plausible.
+ */
+function exReadDrag(text, expectedWorkspace) {
+  let data;
+  try {
+    data = JSON.parse(typeof text === "string" ? text : "");
+  } catch {
+    return { ok: false, reason: "that drag carried nothing this board can read" };
+  }
+  if (!data || data.workspace !== expectedWorkspace) return { ok: false, reason: "that drag came from another workspace" };
+  const refs = [];
+  for (const one of Array.isArray(data.paths) ? data.paths : []) {
+    const raw = typeof one === "string" ? one : one?.path;
+    // A payload carries paths relative to the root it names. An absolute one, a UNC one or a drive
+    // letter is refused outright rather than trimmed down to something that looks local.
+    if (typeof raw !== "string" || raw === "" || raw !== raw.trim() || raw.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(raw)) {
+      return { ok: false, reason: "that drag named a path outside the workspace" };
+    }
+    const path = exCleanPath(raw);
+    if (path === null || path === "") return { ok: false, reason: "that drag named a path outside the workspace" };
+    if (refs.some((held) => held.path === path)) continue;
+    refs.push({ path, dir: Boolean(typeof one === "object" && one?.dir) });
+  }
+  if (!refs.length) return { ok: false, reason: "that drag named no files" };
+  return { ok: true, paths: refs };
+}
+
+// ---------- paths a message carries ---------------------------------------
+/** The absolute path a relative one names. The board's root is the workspace's own, never a thread's. */
+const exAbsolute = (root, rel) => (rel ? `${root.replace(/\/+$/, "")}/${rel}` : root.replace(/\/+$/, ""));
+
+/** The relative path under the root, or `null` when the absolute one stands somewhere else. */
+function exRelative(root, absolute) {
+  const base = root.replace(/\/+$/, "");
+  if (absolute === base) return "";
+  return absolute.startsWith(`${base}/`) ? absolute.slice(base.length + 1) : null;
+}
+
+/** Add these paths to what a message carries, once each. */
+function exAttachRefs(picked, root, refs) {
+  let added = 0;
+  let known = 0;
+  for (const one of refs) {
+    const absolute = exAbsolute(root, one.path);
+    if (picked.has(absolute)) {
+      known += 1;
+      continue;
+    }
+    picked.set(absolute, { dir: Boolean(one.dir), missing: false });
+    added += 1;
+  }
+  return { added, known };
+}
+
+/**
+ * A rename or a move rewrote a path: every reference at or under the old one follows it, so a message
+ * still names the file it was written about.
+ */
+function exRetargetRefs(picked, root, from, to) {
+  const moved = [];
+  for (const [absolute, meta] of [...picked]) {
+    const rel = exRelative(root, absolute);
+    if (rel === null) continue;
+    if (rel !== from && !rel.startsWith(`${from}/`)) continue;
+    const next = exAbsolute(root, `${to}${rel.slice(from.length)}`);
+    picked.delete(absolute);
+    picked.set(next, meta);
+    moved.push([absolute, next]);
+  }
+  return moved;
+}
+
+/** A path that is gone stays in the message, marked: a reference that vanished is worth seeing. */
+function exMarkMissing(picked, root, removed) {
+  let marked = 0;
+  for (const [absolute, meta] of picked) {
+    const rel = exRelative(root, absolute);
+    if (rel === null) continue;
+    if (removed.some((one) => exUnder(rel, one))) {
+      if (!meta.missing) marked += 1;
+      meta.missing = true;
+    }
+  }
+  return marked;
+}
+
+// ---------- what a delete left undone -------------------------------------
+/**
+ * A delete answers 200, or 207 when only some of it happened. Nothing is retried that already went, and
+ * a name the trash bin could not take is asked about on its own before anything permanent is done.
+ */
+function exDeleteResult(status, body) {
+  const result = { deleted: [], trashed: Boolean(body?.trashed), needsPermanent: [], failed: [], partial: status === 207 };
+  for (const one of Array.isArray(body?.deleted) ? body.deleted : []) {
+    const path = exCleanPath(one);
+    if (path) result.deleted.push(path);
+  }
+  for (const one of Array.isArray(body?.needsPermanent) ? body.needsPermanent : []) {
+    const path = exCleanPath(one);
+    if (path && !result.deleted.includes(path) && !result.needsPermanent.includes(path)) result.needsPermanent.push(path);
+  }
+  for (const one of Array.isArray(body?.failed) ? body.failed : []) {
+    const path = exCleanPath(one?.path) ?? String(one?.path ?? "");
+    if (!path || result.deleted.includes(path)) continue;
+    result.failed.push({ path, error: String(one?.error ?? "failed") });
+  }
+  return result;
+}
+
+/** The names to resend with `permanent: true`: only those the trash refused, never one already gone. */
+const exPermanentPaths = (result) =>
+  result.needsPermanent.filter((path) => !result.deleted.includes(path) && !result.failed.some((one) => one.path === path));
+
+/**
+ * What a batch operation refused, in the daemon's own words. A single-name clash answers 409 with one
+ * reason, and a batch answers 207 with a row per name; both carry `failed[].error`, and both are read here
+ * so the human is told the actual cause instead of a guess at it.
+ */
+function exFailedLines(body) {
+  const lines = [];
+  for (const one of Array.isArray(body?.failed) ? body.failed : []) {
+    const path = String(one?.path ?? "").trim();
+    const error = String(one?.error ?? "").trim() || "refused";
+    const line = path ? `${path}: ${error}` : error;
+    if (!lines.includes(line)) lines.push(line);
+  }
+  return lines;
+}
+
+// ---------- names a file may take -----------------------------------------
+/** Why this name cannot be made in that folder, or `""` when it can. */
+function exNameTrouble(name) {
+  const name_ = String(name ?? "").trim();
+  if (!name_) return "a name is needed";
+  if (name_ === "." || name_ === "..") return "that is not a name";
+  if (/[\\/]/.test(name_)) return "a name holds no slash";
+  if (name === " ") return "a name is needed";
+  if (name_ === ".git") return ".git belongs to the repository";
+  if (name_.length > 255) return "that name is too long";
+  return "";
+}
+
+// ---------- the three drawers ---------------------------------------------
+function exDrawers(open = "") {
+  return { open };
+}
+
+function exDrawerOpen(state, name) {
+  state.open = name;
+  return state;
+}
+
+function exDrawerClose(state) {
+  state.open = "";
+  return state;
+}
+
+function exDrawerToggle(state, name) {
+  state.open = state.open === name ? "" : name;
+  return state;
+}
+
+// ---------- which key belongs where ---------------------------------------
+/**
+ * A plain letter reaches the board only while nothing is being typed and no surface of the drawer is
+ * reading the keyboard. The order Escape works through is the same order as this list: a name being
+ * edited or a menu standing open goes before the drawer, and the drawer goes before the card the board
+ * is reading.
+ */
+const EX_ESCAPE_ORDER = ["confirm", "menu", "rename", "create", "sheet", "git", "drawer", "card"];
+
+function exEscapeTarget(open) {
+  for (const one of EX_ESCAPE_ORDER) if (open?.[one]) return one;
+  return "";
+}
+
+/** What a plain letter does on the board, or `""` when it does nothing here. */
+function exBoardLetter(key, { shift = false, typing = false, panel = false, surface = false } = {}) {
+  if (typing || panel || surface) return "";
+  const raw = String(key ?? "");
+  // A browser reports a shifted letter as the capital itself, so the capital stands as its own proof.
+  const shifted = shift || raw !== raw.toLowerCase();
+  const lower = raw.toLowerCase();
+  if (lower === "f") return shifted ? "fit" : "files";
+  if (shifted) return "";
+  if (lower === "a") return "activity";
+  if (lower === "c") return "cards";
+  return "";
+}
+
+// ---------- text onto the clipboard ---------------------------------------
+/**
+ * Copying a path goes through the browser's clipboard where there is one. A board reached over the
+ * network is not a secure context and has none, so the caller's selection-copy stands in for it; a copy
+ * that neither can do rejects, and the drawer then says the path out loud instead.
+ */
+function exCopyText(text, ports) {
+  if (ports?.writeText) return Promise.resolve(ports.writeText(text));
+  if (ports?.selectCopy) return Promise.resolve(ports.selectCopy(text));
+  return Promise.reject(new Error("no clipboard on this page"));
+}
+
+// ---------- the icon a name wears ----------------------------------------
+/**
+ * The Seti theme's own answer for a file: its exact name first, then the longest extension it knows,
+ * then the theme's default. Folders are the theme's codicons, which is what VS Code draws for an icon
+ * theme that names no folder of its own — and this one names none.
+ */
+function exIcon(theme, entry) {
+  if (!theme || entry?.dir) return null;
+  const name = String(entry.name ?? "").toLowerCase();
+  const defs = theme.iconDefinitions ?? {};
+  let key = theme.fileNames?.[name];
+  if (!key) {
+    const parts = name.split(".");
+    for (let at = 1; at < parts.length && !key; at += 1) key = theme.fileExtensions?.[parts.slice(at).join(".")];
+  }
+  const def = defs[key ?? theme.file];
+  if (!def?.fontCharacter) return null;
+  const code = Number.parseInt(String(def.fontCharacter).replace(/^\\/, ""), 16);
+  if (!Number.isFinite(code)) return null;
+  return { glyph: String.fromCodePoint(code), color: def.fontColor || "" };
+}
+
+/** What Git says about a name, in the one word the row's colour is chosen by. */
+function exGitKind(git) {
+  const xy = String(git ?? "");
+  if (!xy.trim()) return "";
+  if (xy.includes("U") || xy === "AA" || xy === "DD") return "conflicting";
+  if (xy.includes("D")) return "deleted";
+  if (xy.includes("A") || xy === "??") return "untracked";
+  if (xy.includes("!")) return "ignored";
+  if (xy.includes("M") || xy.includes("R") || xy.includes("T")) return "modified";
+  return "modified";
+}
+
+/**
+ * The letter VS Code puts at the right of a decorated row. A name Git has never tracked wears `U`, which
+ * is the badge VS Code shows; `?` is only how Git's own porcelain spells it.
+ */
+function exGitBadge(git) {
+  const letters = String(git ?? "").replace(/\s/g, "");
+  if (!letters) return "";
+  if (letters === "??") return "U";
+  return letters[0];
+}
+
+const explorerCore = {
+  join: exJoin,
+  parentOf: exParentOf,
+  depthOf: exDepthOf,
+  under: exUnder,
+  cleanPath: exCleanPath,
+  basename: exBasename,
+  sortEntries: exSortEntries,
+  listing: exListing,
+  listingStart: exListingStart,
+  listingPage: exListingPage,
+  selection: exSelection,
+  select: exSelect,
+  selectToggle: exSelectToggle,
+  selectRange: exSelectRange,
+  selectAll: exSelectAll,
+  pressOpens: exPressOpens,
+  pressAgain: exPressAgain,
+  selectKeep: exSelectKeep,
+  rebasePath: exRebasePath,
+  rebaseListing: exRebaseListing,
+  rebaseHeld: exRebaseHeld,
+  rebaseTree: exRebaseTree,
+  clipboard: exClip,
+  clipSet: exClipSet,
+  clipClear: exClipClear,
+  pasteTrouble: exPasteTrouble,
+  dragKind: exDragKind,
+  dragPayload: exDragPayload,
+  readDrag: exReadDrag,
+  absolute: exAbsolute,
+  relative: exRelative,
+  attachRefs: exAttachRefs,
+  retargetRefs: exRetargetRefs,
+  markMissing: exMarkMissing,
+  deleteResult: exDeleteResult,
+  permanentPaths: exPermanentPaths,
+  failedLines: exFailedLines,
+  nameTrouble: exNameTrouble,
+  drawers: exDrawers,
+  drawerOpen: exDrawerOpen,
+  drawerClose: exDrawerClose,
+  drawerToggle: exDrawerToggle,
+  escapeTarget: exEscapeTarget,
+  boardLetter: exBoardLetter,
+  copyText: exCopyText,
+  icon: exIcon,
+  gitKind: exGitKind,
+  gitBadge: exGitBadge,
+  PATH_MIME: EXPLORER_PATH_MIME,
+};
+
+// ---------- explorer: the decisions end ----------------------------------
 /** The card dot's colour, in one place so the card and its rail row cannot drift apart. */
 const dotKind = (kind) =>
   kind === "source" ? "code" : kind === "question" ? "question" : kind === "sticky" ? "sticky" : "note";
@@ -4717,12 +5339,22 @@ document.addEventListener("visibilitychange", startPulse);
 const railNow = document.getElementById("railNow");
 const railLog = document.getElementById("railLog");
 const railRunning = document.getElementById("railRunning");
-const railOpenCount = document.getElementById("railOpenCount");
 const actEls = new Map();
 /** A thought with no patch for this long is stalled, and its row says so with the clock. */
 const THOUGHT_STALL_MS = 3000;
 
-// The rail is the user's furniture: its width and whether it is showing survive a reload.
+// ---------- the left drawers ---------------------------------------------
+// Three drawers share the rail's column: the workspace's files, what the agents are doing, and the
+// board's cards. One is open at a time, and the width and the hidden choice a human left on the old
+// rail are the ones these open with, because this is that rail with doors on it.
+const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards" };
+const drawerState = explorerCore.drawers();
+// The three doors in the header, read before anything paints them.
+const filesBtn = document.getElementById("filesBtn");
+const activityBtn = document.getElementById("activityBtn");
+const cardsBtn = document.getElementById("cardsBtn");
+
+// The rail is the user's furniture: its width survives a reload, and so does whether a drawer is up.
 const RAIL_MIN = 160;
 const RAIL_MAX = 720;
 const root = document.documentElement;
@@ -4736,14 +5368,52 @@ function railWidth(px) {
   return width;
 }
 
-function railShown(shown) {
-  document.body.classList.toggle("rail-off", !shown);
+/** Paint which drawer is up, and say so on the three doors in the header. */
+function paintDrawers() {
+  document.body.classList.toggle("rail-off", !drawerState.open);
+  for (const [name, id] of Object.entries(DRAWER_NAMES)) {
+    const pane = document.getElementById(id);
+    pane.classList.toggle("on", drawerState.open === name);
+  }
+  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn };
+  for (const [name, door] of Object.entries(doors)) {
+    door.setAttribute("aria-expanded", drawerState.open === name ? "true" : "false");
+  }
   try {
-    localStorage.setItem("board.railOff", shown ? "0" : "1");
+    localStorage.setItem("board.railOff", drawerState.open ? "0" : "1");
   } catch {}
 }
 
-function restoreRail() {
+/** Show one drawer. The door in the header and the keys toggle; this only opens. */
+function showDrawer(name) {
+  // The git graph covers the whole board, so it cannot stand over a drawer and be alive at both ends.
+  if (gitDrawer.isOpen()) gitDrawer.close();
+  if (name === "files") exPrime();
+  explorerCore.drawerOpen(drawerState, name);
+  paintDrawers();
+}
+
+function toggleDrawer(name) {
+  const open = drawerState.open === name;
+  if (gitDrawer.isOpen()) gitDrawer.close();
+  explorerCore.drawerToggle(drawerState, name);
+  if (!open && name === "files") exPrime();
+  paintDrawers();
+}
+
+function closeDrawers() {
+  if (!drawerState.open) return;
+  explorerCore.drawerClose(drawerState);
+  paintDrawers();
+  // The keyboard goes back to the board rather than dying with the element that had it.
+  if (document.activeElement instanceof Element && document.activeElement.closest("#drawers")) {
+    document.activeElement.blur();
+  }
+}
+
+// A board that never hid its rail opens on activity, which is the strip a human was reading before;
+// one whose rail was shut stays shut until a door is pressed.
+function restoreDrawers() {
   let saved = 0;
   let off = "0";
   try {
@@ -4751,10 +5421,17 @@ function restoreRail() {
     off = localStorage.getItem("board.railOff") || "0";
   } catch {}
   if (saved) railWidth(saved);
-  if (off === "1") railShown(false);
+  if (off !== "1") drawerState.open = "activity";
+  paintDrawers();
 }
-restoreRail();
-document.getElementById("railToggle").onclick = () => railShown(false);
+restoreDrawers();
+
+for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn })) {
+  door.addEventListener("click", () => toggleDrawer(name));
+}
+for (const shut of document.querySelectorAll("#drawers .rail-close")) {
+  shut.addEventListener("click", () => closeDrawers());
+}
 
 // ---------- the conversation behind a thread ------------------------------
 //
@@ -4853,8 +5530,6 @@ railLog.addEventListener("contextmenu", (event) => {
   event.preventDefault();
   trOpen(threadId);
 });
-
-document.getElementById("railOpen").onclick = () => railShown(true);
 
 (() => {
   const grip = document.getElementById("railGrip");
@@ -5995,7 +6670,6 @@ function applyActivity(row) {
   paintLive();
   const running = runningCount();
   railRunning.textContent = running ? String(running) : "";
-  railOpenCount.textContent = running ? String(running) : "";
   syncTicker();
 }
 
@@ -6305,10 +6979,11 @@ function wireComposer(inst) {
     openCmdPick(inst, true);
   });
   inst.filesBtn.addEventListener("click", () => {
-    // Attaching files is a question the picker asks of one field, so it becomes the current one.
+    // A path is attached in the workspace's tree, and that tree belongs to this message while the field
+    // is the one in hand: the drawer's own footer names it, and its name is what the chips land on.
     activeComposer = inst;
-    if (!picker.hidden) closePicker();
-    else void browse(pickerAt);
+    exPaintTarget();
+    showDrawer("files");
   });
 }
 
@@ -7651,7 +8326,10 @@ const SHORTCUTS = [
     group: "board",
     rows: [
       { keys: "ctrl", does: "is ⌘ on a Mac, wherever this list says ctrl" },
-      { keys: "f", does: "fit every card on the screen" },
+      { keys: "f", does: "open the files drawer, and press it again to roll it up" },
+      { keys: "a", does: "open the activity drawer, and press it again to roll it up" },
+      { keys: "c", does: "open the cards drawer, and press it again to roll it up" },
+      { keys: "shift+f", does: "fit every card on the screen" },
       { keys: "0", does: "back to real size, 100%" },
       { keys: "m", does: "hide or show the small overview map" },
       { keys: "n", does: "jump to the next new card or waiting question" },
@@ -7661,7 +8339,7 @@ const SHORTCUTS = [
       { keys: "r", does: "reply to the card you are reading" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
       { keys: "q", does: "close the card you are reading" },
-      { keys: "esc", does: "close the open panel or roll the git graph up, or with nothing open, let go of the selected card" },
+      { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the git graph, then the files drawer, or with nothing open, let go of the selected card" },
       { keys: "ctrl+z", does: "undo a close and put the card back" },
       { keys: "ctrl+m", does: "cycle the mode of the card you are reading: agent, plan, boss, discuss, then back on" },
     ],
@@ -7695,8 +8373,24 @@ const SHORTCUTS = [
       { keys: "enter / space", does: "on a row in the activity list, open its detail" },
       { keys: "tab", does: "take the first row of a list, or step along the form" },
       { keys: "tab / shift+tab", does: "cycle through the buttons of the panel that is open" },
-      { keys: "→", does: "open a folder in the file picker" },
+      { keys: "→", does: "open a folder in the files drawer" },
       { keys: "esc", does: "close the list and keep what you typed" },
+    ],
+  },
+  {
+    group: "files drawer",
+    rows: [
+      { keys: "↑ ↓", does: "walk the tree, and with shift, select the rows it crosses" },
+      { keys: "← →", does: "close or open a folder, or step to the folder above" },
+      { keys: "home / end", does: "the first or the last row" },
+      { keys: "ctrl+a", does: "select every row on screen" },
+      { keys: "shift / ctrl + click", does: "select a range, or add one row to the selection" },
+      { keys: "F2", does: "rename the row you are on, and enter keeps the name" },
+      { keys: "delete", does: "delete the selected paths, through the trash bin first" },
+      { keys: "ctrl+x / ctrl+c / ctrl+v", does: "cut, copy and paste paths inside the tree" },
+      { keys: "drag a row", does: "move it into a folder, and onto a thread card to reference it there" },
+      { keys: "right-click a row", does: "cut, copy, paste, rename, delete, copy a path, or reference it in a thread" },
+      { keys: "esc", does: "close the menu or the name being typed first, then the drawer" },
     ],
   },
   {
@@ -9049,7 +9743,6 @@ function takeFile(inst, file) {
       if (!path) throw new Error("the daemon kept no copy");
       inst.picked.set(path, { dir: false });
       drawChips(inst);
-      if (!picker.hidden) drawList();
       hintLine(`${file.name} goes with the message`, false, inst);
     } catch (error) {
       hintLine(`could not keep ${file.name}: ${error.message || error}`, true, inst);
@@ -9079,45 +9772,1065 @@ function settle(inst, landing) {
   if (at >= 0) inst.pending.splice(at, 1);
 }
 
-// ---------- file picker --------------------------------------------------
-// The agent works on paths, so the picker attaches paths: it lists a folder's names and never
-// pulls file contents through the browser. Picking starts at the folder the board was opened on
-// and walks anywhere the server can read, which is what the user asked for when attaching a file.
-const picker = document.getElementById("picker");
-const pickList = document.getElementById("pickList");
-const pickPathInput = document.getElementById("pickPath");
-const pickFilter = document.getElementById("pickFilter");
-const pickHidden = document.getElementById("pickHidden");
-const pickUp = document.getElementById("pickUp");
+// ---------- explorer: on screen ------------------------------------------
+// The files drawer is VS Code's Explorer over the daemon's `/files` route: the workspace's own tree, the
+// file operations a human expects from it, and the one thing this board adds — a path dragged onto a
+// thread becomes a reference in that thread's next message rather than an upload.
+const exTitleEl = document.getElementById("exTitle");
+const exTreeEl = document.getElementById("exTree");
+const exFilterEl = document.getElementById("exFilter");
+const exTargetEl = document.getElementById("exTarget");
+const exMenuEl = document.getElementById("exMenu");
+const exConfirmEl = document.getElementById("exConfirm");
+const exConfirmTitle = document.getElementById("exConfirmTitle");
+const exConfirmBody = document.getElementById("exConfirmBody");
+const exConfirmYes = document.getElementById("exConfirmYes");
+const exConfirmNo = document.getElementById("exConfirmNo");
 const pickCount = document.getElementById("pickCount");
-const pickError = document.getElementById("pickError");
-/**
- * The paths the open picker is attaching. They belong to the field it was opened from, and survive
- * walking to another folder, so one message can name files from several places.
- */
-const pickPaths = () => activeComposer?.picked ?? new Map();
-let pickerAt = "";
-let listed = [];
-/**
- * The folder this tab's board was opened on, from the last meta the daemon sent. A page with no
- * board behind it has none yet, and the listing then starts where the daemon itself stands.
- */
-const boardFolder = () => boardMetaCache?.cwd || "";
-let listedTotal = 0;
-/**
- * The row the arrow keys are on, which the filter keeps the focus away from so typing works.
- * `-1` is no row: a fresh list starts unhighlighted, so Enter never attaches what the list
- * happened to open on.
- */
-let pickAt = -1;
-/** Every listing bumps this, so a slow reply cannot land on top of a newer one. */
-let browseSeq = 0;
-let filterTimer = 0;
 
-/** `~` in place of the home folder keeps a chip short enough to read in a row. */
-function shortenPath(path) {
-  const home = picker.dataset.home || "";
-  return home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+/**
+ * Everything the tree knows: the board's root — never the tree of a selected thread — the folders it has
+ * read, what is selected, the file clipboard, and the two inline things a human can have open.
+ */
+const exState = {
+  root: "",
+  folders: new Map(),
+  expanded: new Set([""]),
+  filter: "",
+  sel: explorerCore.selection(),
+  clip: explorerCore.clipboard(),
+  theme: null,
+  themeTried: false,
+  menu: null,
+  draft: null,
+  renaming: "",
+  trouble: "",
+};
+
+/** The listing the tree keeps for one folder. */
+function exFolder(dir) {
+  if (!exState.folders.has(dir)) {
+    const listing = explorerCore.listing();
+    listing.parent = dir;
+    exState.folders.set(dir, listing);
+  }
+  return exState.folders.get(dir);
+}
+
+/** The entry a path names, wherever the tree has read it. */
+function exEntry(path) {
+  for (const listing of exState.folders.values()) {
+    const hit = listing.entries.find((entry) => entry.path === path);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** The paths the rows are drawn in, which is the order a range selection and the arrows follow. */
+function exOrder() {
+  return exVisibleRows().map(({ entry }) => entry.path);
+}
+
+/** The folder a row sits in: itself when it is a folder, else the folder that holds it. */
+function exDirOf(path) {
+  const entry = exEntry(path);
+  return entry?.dir ? entry.path : explorerCore.parentOf(path);
+}
+
+/**
+ * Read one folder, every page of it. Each page paints as it lands, so a folder of a thousand names fills
+ * as it arrives rather than after it; a reply that belongs to a folder the human has left is dropped by
+ * the listing's own ticket.
+ */
+async function exLoad(dir, { quiet = false } = {}) {
+  const listing = exFolder(dir);
+  const ticket = explorerCore.listingStart(listing, dir);
+  if (!quiet) exState.trouble = "";
+  try {
+    let after = "";
+    for (;;) {
+      const query = new URLSearchParams({ path: dir, git: "1", limit: "200" });
+      // The workspace is this page's own board: the drawer never reads another folder's tree.
+      query.set("workspace", workspace);
+      if (after) query.set("after", after);
+      const response = await fetch(`/files?${query.toString()}`);
+      if (!response.ok) {
+        const detail = (await response.text()).trim().slice(0, 160);
+        throw new Error(detail || response.statusText);
+      }
+      const page = await response.json();
+      if (!explorerCore.listingPage(listing, ticket, page)) return false;
+      // The canonical root comes from the daemon, so a path copied from the tree is the one its own
+      // file tools open, whatever the workspace was reached by.
+      if (typeof page.root === "string" && page.root) exState.root = page.root;
+      if (dir === "") {
+        // The section header is the folder the human opened, not the route that reached it, and not
+        // whether that folder happens to be a repository.
+        const label = explorerCore.basename(exState.root) || "explorer";
+        exTitleEl.textContent = label;
+        exTitleEl.title = exState.root || label;
+      }
+      exPaint();
+      after = page.next ?? "";
+      if (!after) break;
+    }
+    return true;
+  } catch (error) {
+    if (ticket !== listing.seq) return false;
+    listing.state = "error";
+    listing.trouble = error.message || String(error);
+    exPaint();
+    return false;
+  }
+}
+
+/**
+ * The Seti theme's own table, read once. Until it lands a file wears the codicon VS Code falls back to,
+ * and a folder always does: this theme names no folder of its own.
+ */
+async function exLoadTheme() {
+  if (exState.theme || exState.themeTried) return;
+  exState.themeTried = true;
+  try {
+    const response = await fetch("/explorer/vs-seti-icon-theme.json");
+    if (!response.ok) return;
+    exState.theme = await response.json();
+    exPaint();
+  } catch {}
+}
+
+/** The first read, once per page: the drawer opens on the workspace root as it stands now. */
+function exPrime({ refresh = false } = {}) {
+  void exLoadTheme();
+  if (refresh) return exRefreshTree();
+  if (exState.folders.has("") && exFolder("").state !== "new") return Promise.resolve(true);
+  return exLoad("");
+}
+
+/** Every open folder read again, with the expansion and a selection of names that still exist kept. */
+async function exRefreshTree() {
+  const dirs = [...exState.expanded];
+  await Promise.all(dirs.map((dir) => exLoad(dir, { quiet: true })));
+  // A folder that is gone closes, so a deleted tree does not keep a stale list behind a collapsed row.
+  for (const dir of [...exState.expanded]) {
+    if (dir === "") continue;
+    if (!exEntry(dir)) exState.expanded.delete(dir);
+  }
+  const known = new Set([...exState.folders.values()].flatMap((listing) => listing.entries.map((entry) => entry.path)));
+  explorerCore.selectKeep(exState.sel, known);
+  exPaint();
+}
+
+/** The rows on screen, in the order they are drawn, filter included. */
+function exVisibleRows() {
+  const needle = exState.filter.trim().toLowerCase();
+  const rows = [];
+  const seen = new Set([""]);
+  const walk = (dir, level) => {
+    const listing = exState.folders.get(dir);
+    if (!listing || listing.state === "new") return;
+    for (const entry of listing.entries) {
+      const hit = !needle || entry.name.toLowerCase().includes(needle);
+      if (!hit) continue;
+      rows.push({ entry, level });
+      const open = entry.dir && (exState.expanded.has(entry.path) || Boolean(needle));
+      if (!open || seen.has(entry.path)) continue;
+      seen.add(entry.path);
+      if (exState.folders.has(entry.path)) walk(entry.path, level + 1);
+    }
+  };
+  walk("", 0);
+  return rows;
+}
+
+/** One row: a twist for a folder, its icon, its name, and what Git says about it. */
+/** The last press the tree saw, so a double press on one row is read as one intent. */
+let exPress = { path: "", at: 0 };
+
+function exRowEl(entry, level) {
+  const open = entry.dir && exState.expanded.has(entry.path);
+  const selected = exState.sel.paths.has(entry.path);
+  const row = el(
+    "div",
+    `ex-row${entry.dir ? " dir" : " file"}${selected ? " sel" : ""}${exState.sel.lead === entry.path ? " lead" : ""}`,
+  );
+  row.dataset.path = entry.path;
+  row.dataset.dir = entry.dir ? "1" : "";
+  row.setAttribute("role", "treeitem");
+  row.title = entry.path;
+  row.setAttribute("aria-level", String(level + 1));
+  row.setAttribute("aria-selected", selected ? "true" : "false");
+  if (entry.dir) row.setAttribute("aria-expanded", open ? "true" : "false");
+  row.style.setProperty("--depth", String(level));
+  const kind = explorerCore.gitKind(entry.git);
+  if (kind) row.classList.add(`kind-${kind}`);
+  // A folder that holds a change is bold, the way VS Code says where to look. The root's page carries
+  // the whole ancestor list, so one listing answers for every folder on screen.
+  if (entry.dir && exFolder("").dirty.includes(entry.path)) row.classList.add("dirty");
+
+  const twist = el("span", `ex-twist${entry.dir ? ` codicon ${open ? "codicon-chevron-down" : "codicon-chevron-right"}` : " blank"}`);
+  row.append(twist);
+
+  const icon = el("span", "ex-icon");
+  const seti = explorerCore.icon(exState.theme, entry);
+  if (entry.dir) icon.className = `ex-icon codicon ${open ? "codicon-folder-opened" : "codicon-folder"}`;
+  else if (seti) {
+    icon.className = "ex-icon seti";
+    icon.textContent = seti.glyph;
+    if (seti.color) icon.style.color = seti.color;
+  } else icon.className = "ex-icon codicon codicon-file";
+  row.append(icon);
+
+  if (exState.renaming === entry.path) {
+    const box = el("input", "ex-rename");
+    box.type = "text";
+    box.value = entry.name;
+    box.spellcheck = false;
+    box.setAttribute("aria-label", `rename ${entry.name}`);
+    box.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        void exRenameCommit(entry, box.value);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        exState.renaming = "";
+        exPaint();
+      }
+    });
+    box.addEventListener("blur", () => {
+      if (exState.renaming !== entry.path) return;
+      exState.renaming = "";
+      exPaint();
+    });
+    row.append(box);
+    row.dataset.fresh = "1";
+  } else {
+    const label = el("span", "ex-label");
+    label.textContent = entry.name;
+    row.append(label);
+    const badge = el("span", "ex-badge");
+    badge.textContent = explorerCore.gitBadge(entry.git);
+    if (badge.textContent) row.append(badge);
+  }
+
+  row.addEventListener("click", (event) => {
+    if (event.shiftKey) explorerCore.selectRange(exState.sel, exOrder(), entry.path);
+    else if (event.metaKey || event.ctrlKey) explorerCore.selectToggle(exState.sel, entry.path);
+    else explorerCore.select(exState.sel, entry.path);
+    exTreeEl.focus();
+    // A double press is one intent, so the second land on the same row does not shut what the first
+    // opened before it could be seen.
+    const press = explorerCore.pressAgain(exPress, entry.path, Date.now());
+    exPress = press.next;
+    if (!explorerCore.pressOpens(entry, event) || press.repeated) return void exPaintSelection();
+    void exToggleFolder(entry);
+  });
+  row.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    if (!exState.sel.paths.has(entry.path)) explorerCore.select(exState.sel, entry.path);
+    exPaint();
+    exOpenMenu([...exState.sel.paths], event.clientX, event.clientY);
+  });
+  row.setAttribute("draggable", "true");
+  row.addEventListener("dragstart", (event) => {
+    if (!exState.sel.paths.has(entry.path)) explorerCore.select(exState.sel, entry.path);
+    const refs = [...exState.sel.paths].map((path) => ({ path, dir: Boolean(exEntry(path)?.dir) }));
+    event.dataTransfer.effectAllowed = "copyMove";
+    event.dataTransfer.setData(explorerCore.PATH_MIME, explorerCore.dragPayload(workspace, refs));
+    event.dataTransfer.setData("text/plain", refs.map((one) => one.path).join("\n"));
+  });
+  row.addEventListener("dragend", () => exPaint());
+  if (entry.dir) {
+    row.addEventListener("dragover", (event) => {
+      if (explorerCore.dragKind(event.dataTransfer?.types) !== "path") return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "move";
+      row.classList.add("drop");
+    });
+    row.addEventListener("dragleave", () => row.classList.remove("drop"));
+    row.addEventListener("drop", (event) => {
+      if (explorerCore.dragKind(event.dataTransfer?.types) !== "path") return;
+      event.preventDefault();
+      event.stopPropagation();
+      row.classList.remove("drop");
+      const read = explorerCore.readDrag(event.dataTransfer.getData(explorerCore.PATH_MIME), workspace);
+      if (!read.ok) return footNote(read.reason, true);
+      void exMoveTo(read.paths.map((one) => one.path), entry.path);
+    });
+  }
+  return row;
+}
+
+/** The row a new file or folder is being named in, while it is being named. */
+function exDraftRow(dir) {
+  const row = el("div", "ex-row draft");
+  row.style.setProperty("--depth", String(explorerCore.depthOf(dir)));
+  row.append(el("span", "ex-twist blank"), el("span", `ex-icon codicon ${exState.draft.asDir ? "codicon-folder" : "codicon-file"}`));
+  const box = el("input", "ex-rename");
+  box.type = "text";
+  box.spellcheck = false;
+  box.placeholder = exState.draft.asDir ? "new folder name" : "new file name";
+  box.value = exState.draft.name ?? "";
+  box.setAttribute("aria-label", exState.draft.asDir ? "name the new folder" : "name the new file");
+  box.dataset.fresh = "1";
+  box.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      void exCreateCommit(box.value);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      exState.draft = null;
+      exPaint();
+    }
+  });
+  box.addEventListener("blur", () => {
+    if (!exState.draft) return;
+    exState.draft = null;
+    exPaint();
+  });
+  row.append(box);
+  return row;
+}
+
+/** Paint the tree, and put the caret back in whichever name is being typed. */
+function exPaint() {
+  const rows = [];
+  if (exState.trouble) {
+    const note = el("div", "ex-note bad");
+    note.textContent = exState.trouble;
+    rows.push(note);
+  }
+  const listing = exState.folders.get("");
+  if (!listing || listing.state === "new") {
+    const note = el("div", "ex-note");
+    note.textContent = "reading the workspace…";
+    rows.push(note);
+  } else if (listing.state === "error") {
+    const note = el("div", "ex-note bad");
+    note.textContent = listing.trouble;
+    rows.push(note);
+  }
+  const tree = [];
+  const needle = exState.filter.trim().toLowerCase();
+  const seen = new Set([""]);
+  const walk = (dir, level) => {
+    const held = exState.folders.get(dir);
+    if (!held || held.state === "new") return;
+    if (held.state === "error") {
+      const note = el("div", "ex-note bad");
+      note.textContent = held.trouble;
+      tree.push(note);
+      return;
+    }
+    if (exState.draft?.dir === dir) tree.push(exDraftRow(dir));
+    for (const entry of held.entries) {
+      if (needle && !entry.name.toLowerCase().includes(needle)) continue;
+      tree.push(exRowEl(entry, level));
+      const open = entry.dir && (exState.expanded.has(entry.path) || Boolean(needle));
+      if (!open || seen.has(entry.path)) continue;
+      seen.add(entry.path);
+      if (!exState.folders.has(entry.path)) continue;
+      if (exFolder(entry.path).state === "new") void exLoad(entry.path, { quiet: true });
+      walk(entry.path, level + 1);
+    }
+  };
+  walk("", 0);
+  exTreeEl.replaceChildren(...rows, ...tree);
+  const fresh = exTreeEl.querySelector("input[data-fresh]");
+  if (fresh) {
+    fresh.focus();
+    fresh.select?.();
+  }
+}
+
+/**
+ * The selection, painted onto the rows already on screen. A press must not rebuild the tree under itself:
+ * a double-click is two presses on one node, and a fresh node between them never hears the second.
+ */
+function exPaintSelection() {
+  for (const row of exTreeEl.querySelectorAll(".ex-row")) {
+    const path = row.dataset.path;
+    if (!path) continue;
+    const selected = exState.sel.paths.has(path);
+    row.classList.toggle("sel", selected);
+    row.classList.toggle("lead", exState.sel.lead === path);
+    row.setAttribute("aria-selected", selected ? "true" : "false");
+  }
+  exPaintTarget();
+}
+
+/** Open a folder, reading it the first time it is opened. */
+async function exToggleFolder(entry) {
+  const path = entry.path;
+  if (exState.expanded.has(path)) exState.expanded.delete(path);
+  else {
+    exState.expanded.add(path);
+    if (exFolder(path).state === "new") await exLoad(path, { quiet: true });
+  }
+  exPaint();
+}
+
+/** What the message in hand will carry, named beside the count the composer's chips keep. */
+function exPaintTarget() {
+  const inst = activeComposer;
+  if (!inst) {
+    exTargetEl.textContent = "";
+    return;
+  }
+  const title = inst.entry?.titleEl?.textContent?.trim() || "";
+  exTargetEl.textContent = title ? `for ${title}` : "for the message below";
+}
+
+// ---------- the file clipboard and the menu -------------------------------
+/** Whether a row is a folder, for the operations that differ by kind. */
+const exIsDir = (path) => Boolean(exEntry(path)?.dir);
+
+function exOpenMenu(paths, x, y) {
+  if (!paths.length) return;
+  const clip = exState.clip;
+  const dest = exIsDir(paths[0]) ? paths[0] : explorerCore.parentOf(paths[0]);
+  const items = [
+    { id: "cut", label: "Cut", keys: "ctrl+x" },
+    { id: "copy", label: "Copy", keys: "ctrl+c" },
+    { id: "paste", label: "Paste", keys: "ctrl+v", disabled: Boolean(explorerCore.pasteTrouble(clip, dest)) },
+    { sep: true },
+    { id: "rename", label: "Rename…", keys: "F2", disabled: paths.length !== 1 },
+    { id: "delete", label: "Delete", keys: "Del" },
+    { sep: true },
+    { id: "copyPath", label: "Copy Path" },
+    { id: "copyRel", label: "Copy Relative Path" },
+    { id: "reference", label: "Reference in Thread" },
+  ];
+  exMenuEl.replaceChildren(
+    ...items.flatMap((item) => {
+      if (item.sep) return [el("div", "ex-sep")];
+      const button = el("button");
+      button.type = "button";
+      button.dataset.ex = item.id;
+      button.setAttribute("role", "menuitem");
+      button.disabled = Boolean(item.disabled);
+      const name = el("span", "");
+      name.textContent = item.label;
+      button.append(name);
+      if (item.keys) {
+        const keys = el("span", "ex-keys");
+        keys.textContent = item.keys;
+        button.append(keys);
+      }
+      return [button];
+    }),
+  );
+  exState.menu = { paths, dest };
+  exMenuEl.hidden = false;
+  // Placed where the press was, and pulled back inside the window when the menu would hang over an edge.
+  const box = exMenuEl.getBoundingClientRect();
+  exMenuEl.style.left = `${Math.max(4, Math.min(x, window.innerWidth - box.width - 4))}px`;
+  exMenuEl.style.top = `${Math.max(4, Math.min(y, window.innerHeight - box.height - 4))}px`;
+  const first = exMenuEl.querySelector("button:not(:disabled)");
+  first?.focus();
+}
+
+function exCloseMenu() {
+  if (!exState.menu) return;
+  exState.menu = null;
+  exMenuEl.hidden = true;
+}
+
+/** One press of the file menu, by name, so the keyboard and the pointer share one path. */
+function exMenuRun(id) {
+  const held = exState.menu;
+  if (!held) return;
+  exCloseMenu();
+  const paths = [...held.paths];
+  if (id === "cut" || id === "copy") {
+    explorerCore.clipSet(exState.clip, id, paths);
+    footNote(`${paths.length} ${paths.length === 1 ? "path" : "paths"} on the file clipboard — paste with ctrl+v`);
+    return;
+  }
+  if (id === "paste") return void exPasteInto(held.dest);
+  if (id === "rename") {
+    exState.renaming = paths[0];
+    exPaint();
+    return;
+  }
+  if (id === "delete") return void exDelete(paths);
+  if (id === "copyPath") return void exCopyPath(paths, true);
+  if (id === "copyRel") return void exCopyPath(paths, false);
+  if (id === "reference") return void exReference(paths);
+}
+
+exMenuEl.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-ex]");
+  if (button && !button.disabled) return exMenuRun(button.dataset.ex);
+  // The thread chooser a reference opens when the board is reading no card of its own.
+  const pick = event.target.closest("button[data-thread]");
+  const held = exState.menu;
+  if (!pick || !held?.pick) return;
+  const record = held.pick.find((one) => one.id === pick.dataset.thread);
+  exCloseMenu();
+  if (record) exAttachTo(record, held.refs);
+});
+exMenuEl.addEventListener("keydown", (event) => {
+  const buttons = [...exMenuEl.querySelectorAll("button:not(:disabled)")];
+  const at = buttons.indexOf(document.activeElement);
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    exCloseMenu();
+    exTreeEl.focus();
+    return;
+  }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    buttons[(at + step + buttons.length) % buttons.length]?.focus();
+    return;
+  }
+  if (event.key === "Tab") exCloseMenu();
+});
+document.addEventListener(
+  "pointerdown",
+  (event) => {
+    if (!exState.menu) return;
+    if (event.target.closest("#exMenu")) return;
+    exCloseMenu();
+  },
+  true,
+);
+
+// ---------- the tree's operations ----------------------------------------
+/** One POST to the daemon, with the answer read either way: 207 is a partial answer, not a failure. */
+async function exPost(path, body) {
+  const response = await fetch(`${path}?${auth}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = (await response.text()).trim();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {}
+  return { status: response.status, ok: response.ok, data, text };
+}
+
+/** A folder the tree holds, read again after something in it changed. */
+async function exReload(dirs) {
+  for (const dir of new Set(dirs)) if (dir !== undefined && dir !== null) await exLoad(dir, { quiet: true });
+  exPaint();
+}
+
+async function exCreateCommit(name) {
+  if (!exState.draft) return;
+  const trouble = explorerCore.nameTrouble(name);
+  if (trouble) {
+    footNote(trouble, true);
+    return;
+  }
+  const { dir, asDir } = exState.draft;
+  exState.draft = null;
+  const answer = await exPost("/files/new", { path: dir, name: String(name).trim(), dir: asDir });
+  if (answer.status === 409) {
+    footNote(`“${String(name).trim()}” is already there`, true);
+    exState.draft = { dir, asDir, name: String(name) };
+    exPaint();
+    return;
+  }
+  if (!answer.ok) {
+    footNote(answer.text.slice(0, 120) || `could not make ${name}`, true);
+    return;
+  }
+  const made = answer.data?.entry;
+  await exReload([dir]);
+  if (made?.path) {
+    explorerCore.select(exState.sel, made.path);
+    exPaint();
+    exPaintTarget();
+  }
+  footNote(`${asDir ? "folder" : "file"} “${String(name).trim()}” made`);
+}
+
+async function exRenameCommit(entry, name) {
+  exState.renaming = "";
+  const trimmed = String(name).trim();
+  if (trimmed === entry.name) return exPaint();
+  const trouble = explorerCore.nameTrouble(trimmed);
+  if (trouble) {
+    footNote(trouble, true);
+    return exPaint();
+  }
+  const answer = await exPost("/files/rename", { path: entry.path, name: trimmed });
+  if (!answer.ok) {
+    const reasons = explorerCore.failedLines(answer.data);
+    const why = reasons.length ? reasons.join(" · ") : answer.status === 409 ? `“${trimmed}” is already there` : answer.text.slice(0, 120);
+    footNote(why, true);
+    return exPaint();
+  }
+  const from = answer.data?.from ?? entry.path;
+  const to = answer.data?.to ?? explorerCore.join(explorerCore.parentOf(entry.path), trimmed);
+  // Every message that named the old path names the new one.
+  for (const inst of composers.values()) {
+    if (!inst.picked.size) continue;
+    if (explorerCore.retargetRefs(inst.picked, exState.root, from, to).length) drawChips(inst);
+  }
+  // The whole subtree follows, rows and all: a listing that kept the old spelling would paint a folder
+  // whose children name files that are no longer there, and the selection and clipboard named it too.
+  explorerCore.rebaseTree(exState, from, to);
+  explorerCore.select(exState.sel, to);
+  await exReload([explorerCore.parentOf(to)]);
+}
+
+/**
+ * The outcome of a batch operation, read for what actually happened: the names that arrived, in the order
+ * they arrived, and the reasons the rest did not. A 207 is a partial answer rather than a failure, and a
+ * 409 carries the daemon's own `failed[].error`, so neither is turned into a guess.
+ */
+function exBatchOutcome(answer, key) {
+  if (!answer.ok && answer.status !== 207) {
+    return { ok: false, arrived: [], refused: explorerCore.failedLines(answer.data), text: answer.text };
+  }
+  const arrived = (Array.isArray(answer.data?.[key]) ? answer.data[key] : []).flatMap((one) => {
+    const from = explorerCore.cleanPath(one?.from);
+    const to = explorerCore.cleanPath(one?.to);
+    return from === null || to === null ? [] : [{ from, to }];
+  });
+  return { ok: true, arrived, refused: explorerCore.failedLines(answer.data), text: answer.text };
+}
+
+/** What to say about an operation: the daemon's own reasons when it refused anything, else the count. */
+function exBatchLine(outcome, verb) {
+  const gone = outcome.refused;
+  const count = outcome.arrived.length;
+  if (gone.length) return `${count} ${verb}, ${gone.length} not — ${gone.slice(0, 3).join(" · ")}`;
+  return `${count} ${count === 1 ? "path" : "paths"} ${verb}`;
+}
+
+/** Move these paths into that folder. A folder never moves inside itself. */
+async function exMoveTo(paths, dest) {
+  const bad = paths.find((path) => path === dest || explorerCore.under(dest, path));
+  if (bad !== undefined) {
+    footNote("a folder cannot go inside itself", true);
+    return { ok: false, arrived: [], dest };
+  }
+  const parents = paths.map((path) => explorerCore.parentOf(path));
+  const outcome = exBatchOutcome(await exPost("/files/move", { paths, to: dest }), "moved");
+  if (!outcome.ok) {
+    footNote(outcome.refused.slice(0, 3).join(" · ") || outcome.text.slice(0, 140) || "the move failed", true);
+    return { ok: false, arrived: [], dest };
+  }
+  const moved = outcome.arrived;
+  for (const one of moved) {
+    for (const inst of composers.values()) {
+      if (inst.picked.size && explorerCore.retargetRefs(inst.picked, exState.root, one.from, one.to).length) drawChips(inst);
+    }
+    explorerCore.rebaseTree(exState, one.from, one.to);
+  }
+  // A folder that was itself moved is read under its new name, not its old one.
+  const reread = new Set([dest, ...parents.map((dir) => moved.reduce((held, one) => explorerCore.rebasePath(held, one.from, one.to), dir))]);
+  explorerCore.select(exState.sel, moved.length ? moved[moved.length - 1].to : exState.sel.lead);
+  await exReload([...reread]);
+  footNote(exBatchLine(outcome, "moved"), outcome.refused.length > 0);
+  return { ok: true, arrived: moved, dest };
+}
+
+/** Copy these paths into that folder. */
+async function exCopyTo(paths, dest) {
+  const bad = paths.find((path) => path === dest || explorerCore.under(dest, path));
+  if (bad !== undefined) {
+    footNote("a folder cannot be copied inside itself", true);
+    return { ok: false, arrived: [], dest };
+  }
+  // A copy landing on a name that is already there lands beside it as "copy of …" rather than failing:
+  // pasting a file into the folder it already sits in is how a duplicate is made.
+  const outcome = exBatchOutcome(await exPost("/files/copy", { paths, to: dest, onCollision: "copy" }), "copied");
+  if (!outcome.ok) {
+    footNote(outcome.refused.slice(0, 3).join(" · ") || outcome.text.slice(0, 140) || "the copy failed", true);
+    return { ok: false, arrived: [], dest };
+  }
+  if (outcome.arrived.length) explorerCore.select(exState.sel, outcome.arrived[outcome.arrived.length - 1].to);
+  await exReload([dest]);
+  footNote(exBatchLine(outcome, "copied"), outcome.refused.length > 0);
+  return { ok: true, arrived: outcome.arrived, dest };
+}
+
+/**
+ * Paste the file clipboard into a folder, cut or copied as it was put there. The clipboard is the human's,
+ * so a copy keeps it and can be pasted again. A cut is spent only on the names that actually arrived: the
+ * ones the daemon refused stay on it, to be tried again rather than silently lost.
+ */
+async function exPasteInto(dest) {
+  const trouble = explorerCore.pasteTrouble(exState.clip, dest);
+  if (trouble) return footNote(trouble, true);
+  const paths = [...exState.clip.paths];
+  const mode = exState.clip.mode;
+  const outcome = mode === "cut" ? await exMoveTo(paths, dest) : await exCopyTo(paths, dest);
+  if (mode !== "cut") return;
+  // A name that moved takes its own descendants with it, so a cut folder counts as spent by its prefix.
+  const spent = (path) => outcome.arrived.some((one) => explorerCore.under(path, one.from));
+  explorerCore.clipSet(exState.clip, "cut", paths.filter((path) => !spent(path)));
+  const left = exState.clip.paths;
+  if (left.length) {
+    footNote(`${exBatchLine(outcome, "moved")} — ${left.length} still on the clipboard, paste again to retry`, true);
+  }
+}
+
+/**
+ * Delete, and never quietly: the trash bin first, and only the names it could not take are asked about
+ * again, one explicit press for a permanent delete. A name that already went is never sent twice.
+ */
+async function exDelete(paths) {
+  if (!paths.length) return;
+  const answer = await exPost("/files/delete", { paths });
+  if (!answer.ok && answer.status !== 207) {
+    // A refused batch says why per name, and that reason is what the human needs, not the status.
+    footNote(explorerCore.failedLines(answer.data).slice(0, 3).join(" · ") || answer.text.slice(0, 140) || "the delete failed", true);
+    return;
+  }
+  const result = explorerCore.deleteResult(answer.status, answer.data);
+  // A name the trash refused is still on disk, so a message holding it is not told otherwise yet.
+  for (const inst of composers.values()) {
+    if (inst.picked.size && explorerCore.markMissing(inst.picked, exState.root, result.deleted)) drawChips(inst);
+  }
+  await exReload([...new Set(paths.map((path) => explorerCore.parentOf(path)))]);
+  if (result.failed.length) {
+    const lines = explorerCore.failedLines({ failed: result.failed });
+    footNote(`${result.deleted.length} gone, ${result.failed.length} not — ${lines.slice(0, 3).join(" · ")}`, true);
+  } else if (result.deleted.length) footNote(`${result.deleted.length} ${result.deleted.length === 1 ? "path" : "paths"} ${result.trashed ? "moved to the trash" : "deleted"}`);
+
+  const permanent = explorerCore.permanentPaths(result);
+  if (!permanent.length) return;
+  const yes = await exAskPermanent(permanent);
+  if (!yes) {
+    footNote("left in place: the trash bin refused them", true);
+    return;
+  }
+  const second = await exPost("/files/delete", { paths: permanent, permanent: true });
+  const after = explorerCore.deleteResult(second.status, second.data);
+  for (const inst of composers.values()) {
+    if (inst.picked.size && explorerCore.markMissing(inst.picked, exState.root, permanent)) drawChips(inst);
+  }
+  await exReload([...new Set(permanent.map((path) => explorerCore.parentOf(path)))]);
+  if (after.failed.length) footNote(`could not delete ${after.failed[0].path}: ${after.failed[0].error}`, true);
+  else footNote(`${permanent.length} ${permanent.length === 1 ? "path" : "paths"} deleted for good`);
+}
+
+/**
+ * The question a permanent delete asks, in words a human can weigh. While it stands it holds the keyboard:
+ * Tab moves between its own two buttons and nothing else, in either direction, and the focus the human had
+ * before it was asked is handed back to them afterwards. Escape is the drawer's own: the modal is the first
+ * name in its escape order, and cancelling is what that press does.
+ */
+function exAskPermanent(paths) {
+  return new Promise((resolve) => {
+    const prior = document.activeElement;
+    exConfirmTitle.textContent = "delete for good";
+    const note = el("p", "act-note");
+    note.textContent =
+      "the trash bin refused these names, so they can only be removed outright. Anything Git has not committed may not be recoverable.";
+    const list = el("div", "cut");
+    list.textContent = paths.join("\n");
+    exConfirmBody.replaceChildren(note, list);
+    exConfirmEl.hidden = false;
+    exConfirmYes.focus();
+    // One press of Tab inside the question stays inside it: everything behind it is out of reach.
+    const trap = (event) => {
+      if (event.key !== "Tab") return;
+      const stops = [...exConfirmEl.querySelectorAll("button:not([disabled])")];
+      if (!stops.length) return;
+      event.preventDefault();
+      const at = stops.indexOf(document.activeElement);
+      const step = event.shiftKey ? -1 : 1;
+      stops[(at + step + stops.length) % stops.length].focus();
+    };
+    exConfirmEl.addEventListener("keydown", trap);
+    const done = (answer) => {
+      exConfirmEl.removeEventListener("keydown", trap);
+      exConfirmEl.hidden = true;
+      exConfirmYes.onclick = null;
+      exConfirmNo.onclick = null;
+      if (prior instanceof HTMLElement && document.contains(prior)) prior.focus();
+      else exTreeEl.focus();
+      resolve(answer);
+    };
+    exConfirmYes.onclick = () => done(true);
+    exConfirmNo.onclick = () => done(false);
+  });
+}
+
+/** A path onto the clipboard; the relative one is what a message wants to carry. */
+async function exCopyPath(paths, absolute) {
+  const lines = paths.map((path) => (absolute ? explorerCore.absolute(exState.root, path) : path));
+  try {
+    await explorerCore.copyText(lines.join("\n"), {
+      writeText: navigator.clipboard?.writeText ? (text) => navigator.clipboard.writeText(text) : null,
+      selectCopy: exSelectCopy,
+    });
+    footNote(`${lines.length} ${lines.length === 1 ? "path" : "paths"} copied`);
+  } catch {
+    footNote(lines.join("  "), true);
+  }
+}
+
+/** The old copy trick, for a board that is not a secure context: the text is selected and the browser is
+ *  asked to copy the selection. */
+function exSelectCopy(text) {
+  const box = el("textarea");
+  box.value = text;
+  box.style.cssText = "position:fixed;left:-9999px;top:0";
+  document.body.appendChild(box);
+  box.select();
+  try {
+    if (document.execCommand("copy")) return true;
+    throw new Error("copy refused");
+  } finally {
+    box.remove();
+  }
+}
+
+/** A referenced file lands in a message, not in the folder: nothing is uploaded, moved or sent. */
+function exAttachTo(entry, refs) {
+  const inst = entry ? composerOf(entry) : composers.get("");
+  if (!inst) return footNote("that thread has no message field", true);
+  // A reference is an absolute path, so it can only be made once the daemon has said where the
+  // workspace's root actually is.
+  if (!exState.root) return footNote("the workspace tree has not been read yet — press refresh", true);
+  const { added, known } = explorerCore.attachRefs(inst.picked, exState.root, refs);
+  drawChips(inst);
+  const name = entry?.titleEl?.textContent?.trim() || "the message below";
+  if (added === 0) return footNote(`already referenced in ${name}`);
+  footNote(`${added} ${added === 1 ? "path" : "paths"} referenced in ${name}${known ? `, ${known} already there` : ""}`);
+}
+
+/** The card the board is reading, which is the thread a reference goes to unless the human says otherwise. */
+const exActiveRecord = () => {
+  const node = document.querySelector(".card.active");
+  return node ? byId.get(node.dataset.id) ?? null : null;
+};
+
+/** Reference these paths in a thread: the selected one, or a chooser when the board holds several. */
+function exReference(paths) {
+  const refs = paths.map((path) => ({ path, dir: Boolean(exEntry(path)?.dir) }));
+  const chosen = exActiveRecord();
+  if (chosen && composerOf(chosen)) return exAttachTo(chosen, refs);
+  const records = [...byId.values()].filter((record) => composerOf(record));
+  if (records.length === 1) return exAttachTo(records[0], refs);
+  if (!records.length) return footNote("no thread on this board has a message field", true);
+  // Several threads and none being read: the menu asks which one rather than guessing.
+  exMenuEl.replaceChildren(
+    ...records.map((record) => {
+      const button = el("button");
+      button.type = "button";
+      button.dataset.thread = record.id;
+      button.setAttribute("role", "menuitem");
+      button.textContent = record.titleEl?.textContent?.trim() || record.id.slice(0, 8);
+      return button;
+    }),
+  );
+  exState.menu = { paths: [], pick: records, refs };
+  exMenuEl.hidden = false;
+  const box = exMenuEl.getBoundingClientRect();
+  const at = filesBtn.getBoundingClientRect();
+  exMenuEl.style.left = `${Math.max(4, at.left)}px`;
+  exMenuEl.style.top = `${Math.max(4, Math.min(at.bottom + 4, window.innerHeight - box.height - 4))}px`;
+  exMenuEl.querySelector("button")?.focus();
+}
+
+// ---------- the tree's own keys ------------------------------------------
+/** Where the lead row is in the rows on screen. */
+function exLeadIndex(rows) {
+  const at = rows.findIndex(({ entry }) => entry.path === exState.sel.lead);
+  return at < 0 ? -1 : at;
+}
+
+/** Walk the lead to another row, keeping the selection one row or a range behind it. */
+function exWalk(to, { extend = false } = {}) {
+  const rows = exVisibleRows();
+  if (!rows.length) return;
+  const at = Math.max(0, Math.min(rows.length - 1, to));
+  const path = rows[at].entry.path;
+  if (extend) explorerCore.selectRange(exState.sel, rows.map(({ entry }) => entry.path), path);
+  else explorerCore.select(exState.sel, path);
+  exPaint();
+  exTreeEl.focus();
+  exPaintTarget();
+  exTreeEl.querySelector(`.ex-row[data-path="${CSS.escape(path)}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+exTreeEl.addEventListener("keydown", (event) => {
+  const rows = exVisibleRows();
+  const at = exLeadIndex(rows);
+  const held = rows[at]?.entry ?? null;
+  const meta = event.metaKey || event.ctrlKey;
+  const key = event.key;
+  // An inline name owns the keys while it stands, so the tree under it never sees them.
+  if (event.target.closest("input")) return;
+  if (key === "ArrowDown" || key === "ArrowUp") {
+    event.preventDefault();
+    exWalk(at + (key === "ArrowDown" ? 1 : -1), { extend: event.shiftKey });
+    return;
+  }
+  if (key === "Home" || key === "End") {
+    event.preventDefault();
+    exWalk(key === "Home" ? 0 : rows.length - 1, { extend: event.shiftKey });
+    return;
+  }
+  if (key === "ArrowRight" && held?.dir) {
+    event.preventDefault();
+    if (!exState.expanded.has(held.path)) return void exToggleFolder(held);
+    const next = rows[at + 1];
+    if (next && explorerCore.parentOf(next.entry.path) === held.path) exWalk(at + 1);
+    return;
+  }
+  if (key === "ArrowLeft") {
+    event.preventDefault();
+    if (held?.dir && exState.expanded.has(held.path)) return void exToggleFolder(held);
+    const parent = explorerCore.parentOf(held?.path ?? "");
+    if (parent !== "") exWalk(rows.findIndex(({ entry }) => entry.path === parent));
+    return;
+  }
+  if (key === "Enter") {
+    event.preventDefault();
+    if (held?.dir) return void exToggleFolder(held);
+    if (held) footNote("opening a file in an editor is not built yet");
+    return;
+  }
+  if (meta && key.toLowerCase() === "a") {
+    event.preventDefault();
+    explorerCore.selectAll(exState.sel, rows.map(({ entry }) => entry.path));
+    exPaintSelection();
+    return;
+  }
+  if (key === "F2" && at >= 0) {
+    event.preventDefault();
+    exState.renaming = rows[at].entry.path;
+    exPaint();
+    return;
+  }
+  if ((key === "Delete" || key === "Del") && exState.sel.paths.size) {
+    event.preventDefault();
+    void exDelete([...exState.sel.paths]);
+    return;
+  }
+  if (meta && key.toLowerCase() === "x" && exState.sel.paths.size) {
+    event.preventDefault();
+    explorerCore.clipSet(exState.clip, "cut", [...exState.sel.paths]);
+    footNote("cut — paste with ctrl+v");
+    return;
+  }
+  if (meta && key.toLowerCase() === "c" && exState.sel.paths.size) {
+    event.preventDefault();
+    explorerCore.clipSet(exState.clip, "copy", [...exState.sel.paths]);
+    footNote("copied — paste with ctrl+v");
+    return;
+  }
+  if (meta && key.toLowerCase() === "v") {
+    event.preventDefault();
+    const dest = held ? exDirOf(held.path) : "";
+    void exPasteInto(held?.dir ? held.path : dest);
+  }
+});
+
+// ---------- what the toolbar and the filter do ---------------------------
+exFilterEl.addEventListener("input", () => {
+  exState.filter = exFilterEl.value;
+  exPaint();
+});
+
+document.getElementById("exRefresh").addEventListener("click", () => void exRefreshTree());
+document.getElementById("exCollapse").addEventListener("click", () => {
+  exState.expanded = new Set([""]);
+  exPaint();
+});
+
+/** Where a new file or folder goes: the folder being read, else the one the lead sits in. */
+function exDraftDir() {
+  const lead = exState.sel.lead;
+  if (!lead) return "";
+  return exDirOf(lead);
+}
+
+function exBeginDraft(asDir) {
+  const dir = exDraftDir();
+  exState.expanded.add(dir);
+  exState.draft = { dir, asDir };
+  exPaint();
+}
+
+document.getElementById("exNewFile").addEventListener("click", () => exBeginDraft(false));
+document.getElementById("exNewFolder").addEventListener("click", () => exBeginDraft(true));
+
+// A press on the tree's own background selects nothing and lets a drop land at the root.
+exTreeEl.addEventListener("dragover", (event) => {
+  if (explorerCore.dragKind(event.dataTransfer?.types) !== "path") return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+});
+exTreeEl.addEventListener("drop", (event) => {
+  if (explorerCore.dragKind(event.dataTransfer?.types) !== "path") return;
+  if (event.target.closest(".ex-row")) return;
+  event.preventDefault();
+  const read = explorerCore.readDrag(event.dataTransfer.getData(explorerCore.PATH_MIME), workspace);
+  if (!read.ok) return footNote(read.reason, true);
+  void exMoveTo(read.paths.map((one) => one.path), "");
+});
+
+// ---------- a path dropped on a thread ------------------------------------
+/**
+ * A drag from the files tree onto a thread's card, its field, or the bottom bar adds a reference to that
+ * message. Nothing is uploaded, moved or sent, and the draft the message holds is left as it was. A drop
+ * that landed on the tree itself was a move and has already been taken.
+ */
+function exComposerAt(node) {
+  if (!(node instanceof Element)) return null;
+  const card = node.closest(".card");
+  if (card) {
+    const record = byId.get(card.dataset.id);
+    return record ? composerOf(record) : null;
+  }
+  return node.closest("#composerHome, .composer") ? composers.get("") ?? null : null;
+}
+
+document.addEventListener("dragover", (event) => {
+  if (explorerCore.dragKind(event.dataTransfer?.types) !== "path") return;
+  const target = event.target instanceof Element ? event.target.closest(".card, .composer") : null;
+  if (!target) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+  target.classList.add("ref-drop");
+});
+document.addEventListener("dragleave", (event) => {
+  if (explorerCore.dragKind(event.dataTransfer?.types) !== "path") return;
+  const target = event.target instanceof Element ? event.target.closest(".card, .composer") : null;
+  if (target) target.classList.remove("ref-drop");
+});
+// A drag abandoned anywhere — over the board, over the browser, cancelled with Escape — leaves no ring.
+document.addEventListener("dragend", () => {
+  for (const node of document.querySelectorAll(".ref-drop")) node.classList.remove("ref-drop");
+});
+document.addEventListener("drop", (event) => {
+  if (explorerCore.dragKind(event.dataTransfer?.types) !== "path") return;
+  const target = event.target instanceof Element ? event.target.closest(".card, .composer") : null;
+  if (!target) return;
+  event.preventDefault();
+  target.classList.remove("ref-drop");
+  const read = explorerCore.readDrag(event.dataTransfer.getData(explorerCore.PATH_MIME), workspace);
+  if (!read.ok) return footNote(read.reason, true);
+  const inst = exComposerAt(target);
+  const record = inst?.entry ?? null;
+  if (!inst) return footNote("that card has no message field", true);
+  exAttachTo(record, read.paths);
+});
+
+// ---------- what a message carries ---------------------------------------
+/** A chip names a path the way the message will read it: relative to the board's own root. */
+function chipLabel(path) {
+  const rel = exState.root ? explorerCore.relative(exState.root, path) : null;
+  return rel === null ? path : rel || ".";
 }
 
 function drawChips(inst = activeComposer) {
@@ -9125,238 +10838,24 @@ function drawChips(inst = activeComposer) {
   const held = inst.picked;
   inst.paths.replaceChildren();
   for (const [path, meta] of held) {
-    const chip = el("div", meta.dir ? "chip folder" : "chip");
-    chip.title = path;
+    const chip = el("div", `chip${meta.dir ? " folder" : ""}${meta.missing ? " missing" : ""}`);
+    chip.title = meta.missing ? `${path} — gone from the folder` : path;
     const label = el("span", "");
-    label.textContent = shortenPath(path);
+    label.textContent = chipLabel(path);
     const remove = el("button", "");
     remove.textContent = "×";
     remove.title = "remove";
     remove.addEventListener("click", () => {
       held.delete(path);
       drawChips(inst);
-      drawList();
     });
     chip.append(label, remove);
     inst.paths.appendChild(chip);
   }
   const count = held.size;
   pickCount.textContent = count === 0 ? "nothing picked" : count === 1 ? "1 path" : `${count} paths`;
+  exPaintTarget();
 }
-
-function drawList() {
-  pickList.replaceChildren();
-  if (listed.length === 0) {
-    const hint = el("div", "p-empty");
-    hint.textContent = pickFilter.value.trim() ? "nothing matches" : "empty folder";
-    pickList.appendChild(hint);
-    return;
-  }
-  const held = pickPaths();
-  for (const entry of listed) {
-    const isPicked = held.has(entry.path);
-    // A real button, so the list can be walked with the keyboard: Enter or Space is a pick.
-    const row = el("button", `p-item${entry.dir ? " dir" : ""}${isPicked ? " on" : ""}`);
-    row.type = "button";
-    row.title = entry.path;
-    const tick = el("span", "p-tick");
-    tick.textContent = isPicked ? "●" : "○";
-    // The row's name is the file, so the glyph says nothing out loud and `aria-pressed` says it.
-    tick.setAttribute("aria-hidden", "true");
-    row.setAttribute("aria-pressed", String(isPicked));
-    const name = el("span", "p-name");
-    name.textContent = entry.name;
-    row.append(tick, name);
-    // A click picks; the chevron opens, because walking a tree and choosing in it are two acts.
-    // A button cannot hold another button, so the chevron is decoration the row listens for.
-    row.addEventListener("click", (event) => {
-      if (event.target.classList.contains("p-open")) return void browse(entry.path);
-      if (isPicked) held.delete(entry.path);
-      else held.set(entry.path, { dir: entry.dir });
-      drawList();
-      drawChips();
-    });
-    if (entry.dir) {
-      const open = el("span", "p-open");
-      open.textContent = "›";
-      open.title = "open this folder";
-      // ArrowRight opens from the keyboard, so the glyph is not a second control to stop at.
-      open.setAttribute("aria-hidden", "true");
-      row.appendChild(open);
-    }
-    pickList.appendChild(row);
-  }
-  markHighlight();
-  if (listedTotal > listed.length) {
-    const note = el("div", "p-empty");
-    note.textContent = `${listedTotal - listed.length} more — type in the filter to narrow it`;
-    pickList.appendChild(note);
-  }
-}
-
-/** Paint the row the arrows are on; the filter keeps the focus so typing keeps filtering. */
-function markHighlight() {
-  const rows = [...pickList.querySelectorAll(".p-item")];
-  rows.forEach((row, at) => row.classList.toggle("hl", at === pickAt));
-}
-
-/** The list hangs off the composer's top edge, which is where the field is however the page moves. */
-function placePicker() {
-  // The list hangs off the field it was opened from, so a pick made in one card's field lands there.
-  const box = (activeComposer?.root ?? composerHome).getBoundingClientRect();
-  const width = Math.min(430, window.innerWidth - 28);
-  picker.style.width = `${width}px`;
-  const left = Math.min(Math.max(14, box.left + 14), window.innerWidth - width - 14);
-  picker.style.left = `${left}px`;
-  // Anchored by its bottom, so the list grows upward and never drifts across the field.
-  picker.style.bottom = `${Math.max(14, window.innerHeight - box.top + 8)}px`;
-}
-
-async function browse(path, { focus = true } = {}) {
-  const seq = (browseSeq += 1);
-  pickError.hidden = true;
-  try {
-    // A caller that names no folder asks for the board's own, so the picker opens where the human
-    // works. It is asked by path rather than by workspace id: this picker walks anywhere the server
-    // can read, which is what attaching a file needs.
-    const asked = path || boardFolder();
-    const query = new URLSearchParams({ path: asked });
-    // The server names the entries the picker hides by default `dots`, the same word the `!` completion
-    // asks with; `hidden` reached no branch of its own and the box did nothing.
-    if (pickHidden.checked) query.set("dots", "1");
-    const needle = pickFilter.value.trim();
-    // Filtering happens on the server because the server is what caps how many names travel.
-    if (needle) query.set("q", needle);
-    const response = await fetch(`/browse?${query}`);
-    if (seq !== browseSeq) return;
-    if (!response.ok) throw new Error((await response.text()).slice(0, 120) || response.statusText);
-    const data = await response.json();
-    if (seq !== browseSeq) return;
-    pickerAt = data.path;
-    picker.dataset.home = data.home || "";
-    pickPathInput.value = shortenPath(data.path);
-    pickUp.disabled = data.parent === data.path;
-    pickUp.dataset.parent = data.parent;
-    listed = data.entries;
-    listedTotal = data.total ?? data.entries.length;
-    // A new folder starts the walk nowhere, so no row is armed until an arrow key moves.
-    pickAt = -1;
-    drawList();
-    drawChips();
-    picker.hidden = false;
-    placePicker();
-    // Typing a filter must not have its text selected out from under it, so only an
-    // open or a deliberate move takes focus.
-    if (focus) {
-      pickFilter.focus();
-      pickFilter.select();
-    }
-  } catch (error) {
-    if (seq !== browseSeq) return;
-    // The folder already open stays open: a typo in a path should not wipe the list.
-    pickError.textContent = error.message || String(error);
-    pickError.hidden = false;
-    picker.hidden = false;
-    placePicker();
-  }
-}
-
-const closePicker = () => {
-  // A keyboard user inside the list gets the keyboard back on the control that opened it; a
-  // click elsewhere has already chosen its own target.
-  const inside = !picker.hidden && picker.contains(document.activeElement);
-  picker.hidden = true;
-  // Whatever is still in flight belongs to a picker that is gone.
-  browseSeq += 1;
-  clearTimeout(filterTimer);
-  // Picking files is rarely the end of the message, so a draft in hand takes the keyboard back.
-  const back = activeComposer;
-  if (!inside) return;
-  if (back && back.msg.value.trim()) back.msg.focus();
-  else if (back) back.filesBtn.focus();
-};
-
-document.getElementById("pickDone").addEventListener("click", closePicker);
-document.getElementById("pickClose").addEventListener("click", closePicker);
-document.getElementById("pickHere").addEventListener("click", () => {
-  if (!pickerAt) return;
-  const held = pickPaths();
-  if (held.has(pickerAt)) held.delete(pickerAt);
-  else held.set(pickerAt, { dir: true });
-  drawList();
-  drawChips();
-});
-pickUp.addEventListener("click", () => {
-  if (pickUp.dataset.parent) void browse(pickUp.dataset.parent);
-});
-document.getElementById("pickHome").addEventListener("click", () => void browse("~"));
-document.getElementById("pickCwd").addEventListener("click", () => void browse(""));
-pickHidden.addEventListener("change", () => void browse(pickerAt, { focus: false }));
-pickFilter.addEventListener("input", () => {
-  clearTimeout(filterTimer);
-  filterTimer = setTimeout(() => {
-    if (!picker.hidden) void browse(pickerAt, { focus: false });
-  }, 160);
-});
-// The whole overlay answers the keyboard, so Escape leaves from a row or the hidden box, not
-// only from the two fields, and the arrows walk the list while the filter keeps the focus.
-picker.addEventListener("keydown", (event) => {
-  // The path field already took this keystroke (it browses what was typed).
-  if (event.defaultPrevented) return;
-  if (event.key === "Escape") {
-    // The overlay takes Escape first, so leaving it does not also give up the board's selection
-    // and the reply the field is holding.
-    event.preventDefault();
-    event.stopPropagation();
-    closePicker();
-    return;
-  }
-  const rows = [...pickList.querySelectorAll(".p-item")];
-  const onRow = event.target.closest(".p-item");
-  // Walking continues from the row the focus is on, which Tab can reach without the arrows.
-  const from = onRow ? rows.indexOf(onRow) : pickAt;
-  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-    if (!listed.length) return;
-    event.preventDefault();
-    const step = event.key === "ArrowDown" ? 1 : -1;
-    pickAt = (from + step + listed.length) % listed.length;
-    markHighlight();
-    if (onRow) rows[pickAt]?.focus();
-    rows[pickAt]?.scrollIntoView({ block: "nearest" });
-    return;
-  }
-  if (event.key === "Enter" && !event.target.closest("button")) {
-    // A row is a button, so Enter on one clicks it natively, and every other button in the
-    // dialog keeps its own Enter; only a field hands the keystroke to the highlight.
-    if (!rows[pickAt]) return;
-    event.preventDefault();
-    rows[pickAt].click();
-    return;
-  }
-  // Right only opens a folder from a row, so it stays a caret move inside the fields.
-  if (event.key === "ArrowRight" && onRow && listed[from] && listed[from].dir) {
-    event.preventDefault();
-    void browse(listed[from].path);
-  }
-});
-pickPathInput.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") return;
-  event.preventDefault();
-  void browse(pickPathInput.value.trim() || "/");
-});
-window.addEventListener("resize", () => {
-  if (!picker.hidden) placePicker();
-});
-// A click anywhere else puts the picker away, the same as closing it. The chip row is part of
-// the composer's own furniture, so removing a pick is not a click on the board.
-document.addEventListener(
-  "pointerdown",
-  (event) => {
-    if (picker.hidden || event.target.closest("#picker, .composer")) return;
-    closePicker();
-  },
-  true,
-);
 
 // ---------- the `@` list in a field ------------------------------------------
 // Typing `@` at the start of a word opens the folder the token names, and a row takes the path
@@ -10198,7 +11697,6 @@ async function sendMessage(inst = activeComposer) {
     inst.commands = inst.commands.filter((name) => !sentCmds.includes(name));
     paintRefs(inst);
     paintReferenceRings();
-    closePicker();
     // The send button keeps the keyboard inside the field, so a list left open would float over the
     // field the send just emptied until the next keystroke, Enter or blur.
     closeAtPick();
@@ -10419,18 +11917,56 @@ newThreadBtn.addEventListener("click", () => void startThread());
  */
 const openSheet = () => document.querySelector(".sheet:not([hidden])");
 
+/**
+ * A surface of the files drawer that is reading the keyboard right now. The tree itself is not one: the
+ * board stays usable behind it, which is what makes a file droppable on a thread while the drawer is
+ * open. A menu and a name being typed are.
+ */
+const drawerSurface = () =>
+  !exConfirmEl.hidden || Boolean(exState.menu) || Boolean(exState.renaming) || Boolean(exState.draft);
+
+/** Every surface that stands over the board right now, named the way the drawer's escape order names them. */
+function exOpenSurfaces() {
+  const sheet = openSheet();
+  return {
+    confirm: !exConfirmEl.hidden,
+    menu: Boolean(exState.menu),
+    rename: Boolean(exState.renaming),
+    create: Boolean(exState.draft),
+    sheet: Boolean(sheet),
+    git: gitDrawer.isOpen(),
+    drawer: Boolean(drawerState.open),
+    card: Boolean(document.querySelector(".card.active")) || selectedIds.size > 0,
+  };
+}
+
 // The selection is a reading position, so Escape gives it up: the board stops dimming and the wheel
-// goes back to moving the board. A panel or an editor takes Escape first and stops it there.
+// goes back to moving the board. Everything that stands over the board takes Escape first and stops it
+// there, and the order it is read in is the drawer's own list — the permanent-delete question, a name or
+// a menu of the files drawer, a sheet, the git graph, the drawer, and only then the card being read.
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   // The `@` list is its own surface and takes Escape first, so shutting it does not also drop
   // the card being read.
   if (!atPick.hidden) return;
+  const target = explorerCore.escapeTarget(exOpenSurfaces());
+  if (!target) return;
+  // One press is spent here, once: nothing behind this surface hears it as well.
+  event.preventDefault();
+  event.stopPropagation();
+  if (target === "confirm") return exConfirmNo.click();
+  // A menu or a name in the drawer, when the focus has already left the drawer's own handler.
+  if (target === "menu") return exCloseMenu();
+  if (target === "rename" || target === "create") {
+    exState.renaming = "";
+    exState.draft = null;
+    exPaint();
+    return;
+  }
   // A click on the sheet's padding leaves the focus on the body, so the sheet's own handler never sees
   // the press: it is closed here, which also keeps it from giving up the card it hides.
-  const sheet = openSheet();
-  if (sheet) {
-    event.preventDefault();
+  if (target === "sheet") {
+    const sheet = openSheet();
     if (sheet === actPanel) closeActPanel();
     else if (sheet === cleanPanel) closeCleanSheet();
     else if (sheet === leftPanel) closeLeftoversSheet();
@@ -10439,13 +11975,11 @@ document.addEventListener("keydown", (event) => {
   }
   // The drawer covers the board, so Escape rolls it up before it lets go of the card being read. A press
   // inside its page never reaches this handler, and comes back as the page's own `close` message.
-  if (gitDrawer.isOpen()) {
-    event.preventDefault();
-    gitDrawer.close();
-    return;
-  }
+  if (target === "git") return gitDrawer.close();
+  // The files drawer is an overlay of the left column, so Escape rolls it up before it lets go of the
+  // card the board is reading.
+  if (target === "drawer") return closeDrawers();
   // The selection is a reading position and a set of cards to move, so Escape gives up both.
-  if (!document.querySelector(".card.active") && !selectedIds.size) return;
   selectCard(null);
   clearSelection();
 });
@@ -10458,7 +11992,7 @@ document.addEventListener("keydown", (event) => {
   if (typingSomewhere()) return;
   // The map of the keys is a thing to read, not to press through: while either header panel is up, the
   // letters below wait.
-  if (panelUp()) return;
+  if (panelUp() || drawerSurface()) return;
   // The panel covers the board, so its closing key wins over the card it hides. The other sheet has no
   // closing key of its own, so every board key waits behind it.
   const sheet = openSheet();
@@ -10469,8 +12003,8 @@ document.addEventListener("keydown", (event) => {
     }
     return;
   }
-  // The picker is its own surface: a board shortcut behind it would act on what is out of reach.
-  if (!picker.hidden || !atPick.hidden) return;
+  // The `@` list is its own surface: a board key behind it would act on what is out of reach.
+  if (!atPick.hidden) return;
   const active = document.querySelector(".card.active");
   const record = active ? byId.get(active.dataset.id) : null;
   if (!record) return;
@@ -10492,10 +12026,13 @@ document.addEventListener("keydown", (event) => {
 });
 
 // `ctrl+z` is the undo a close needs: the daemon holds the last cards a close removed, so one key puts
-// back the one that went by mistake. A field keeps its own undo, so half-typed text is never replaced.
+// back the one that went by mistake. A field keeps its own undo, so half-typed text is never replaced,
+// and neither is the file drawer's: with the tree holding the focus, an undo belongs to the files the
+// human is moving, not to the card behind them.
 document.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() !== "z" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
-  if (typingSomewhere() || panelUp() || !atPick.hidden || openSheet()) return;
+  if (typingSomewhere() || panelUp() || !atPick.hidden || openSheet() || drawerSurface()) return;
+  if (exTreeEl.contains(document.activeElement)) return;
   event.preventDefault();
   undoClose();
 });
@@ -10504,7 +12041,7 @@ document.addEventListener("keydown", (event) => {
 // picker's list without the picking: a field keeps its own keys, so half-typed text is never cycled away.
 document.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() !== "m" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
-  if (typingSomewhere() || panelUp() || !atPick.hidden || openSheet()) return;
+  if (typingSomewhere() || panelUp() || !atPick.hidden || openSheet() || drawerSurface()) return;
   event.preventDefault();
   void cycleMode();
 });
@@ -10552,7 +12089,7 @@ document.addEventListener(
 document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (typingSomewhere()) return;
-  if (panelUp() || openSheet() || !picker.hidden || !atPick.hidden) return;
+  if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
   // A tab row, a picker or a list takes its own arrows first, and has already said so.
   if (event.defaultPrevented) return;
   const record = openQuestion();
@@ -10589,7 +12126,7 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey || !/^[1-4]$/.test(event.key)) return;
   if (typingSomewhere()) return;
-  if (panelUp() || openSheet() || !atPick.hidden) return;
+  if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
   const record = openQuestion();
   if (!record) return;
   const options = questionOptions(record);
@@ -10605,12 +12142,20 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (typingSomewhere()) return;
-  // The picker is its own surface: a board shortcut behind it would move what is out of reach.
-  if (panelUp() || !picker.hidden || openSheet() || !atPick.hidden) return;
-  if (event.key === "f") {
+  // A surface of the files drawer and the `@` list are their own: a board letter would move what is
+  // out of reach.
+  if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
+  // `f`, `a` and `c` are the drawers, and `shift+f` is the fit they took `f` from. One list decides,
+  // so a letter the drawer owns never also moves the board.
+  const letter = explorerCore.boardLetter(event.key, { shift: event.shiftKey });
+  if (letter) {
     event.preventDefault();
-    fitAll();
-  } else if (event.key === "0") {
+    if (letter === "fit") fitAll();
+    else toggleDrawer(letter);
+    return;
+  }
+  if (event.shiftKey) return;
+  if (event.key === "0") {
     event.preventDefault();
     resetZoom();
   } else if (event.key === "m") {
@@ -10632,13 +12177,15 @@ document.addEventListener("keydown", (event) => {
 });
 
 // `g` rolls the git graph down over the board, and the drawer's own handler rolls it up: this one only
-// opens. It waits for the panels and the pickers the way the letters above do, because a graph over the
-// board would hide what they are showing, and for a field, because `g` is a letter like any other.
+// opens. It waits for the panels and the drawers' own surfaces the way the letters above do, because a
+// graph over the board would hide what they are showing, and for a field, because `g` is a letter like
+// any other. The two cover the same board, so a left drawer rolls up as the graph comes down.
 document.addEventListener("keydown", (event) => {
   if (event.key !== "g" || event.metaKey || event.ctrlKey || event.altKey) return;
   if (typingSomewhere()) return;
-  if (panelUp() || openSheet() || !picker.hidden || !atPick.hidden) return;
+  if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
   event.preventDefault();
+  closeDrawers();
   gitDrawer.toggle();
 });
 
