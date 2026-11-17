@@ -245,9 +245,9 @@ export function send(target, payload) {
 	const data = JSON.stringify(payload);
 	for (const client of target) {
 		// A tab that closed is still in the set for a moment; writing to its dead socket would raise
-		// an error nobody is listening for. Live clients are WebSocket adapters, so the JSON is the
-		// frame; tests carry the same shape in a fake client.
-		const frame = data;
+		// an error nobody is listening for. WebSocket adapters carry the JSON itself. A plain
+		// Server-Sent Events response still needs the `data:` framing the EventSource client reads.
+		const frame = client.webSocket ? data : `data: ${data}\n\n`;
 		if (client.writableEnded || client.destroyed || client.closed) {
 			target.delete(client);
 			continue;

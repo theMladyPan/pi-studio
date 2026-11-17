@@ -159,8 +159,9 @@ export function sameOriginRequest(headers) {
 		// Garbage is refused as a stranger, not thrown: a guard that throws answers 500 instead of 403.
 		return false;
 	}
-	const host = headers.host;
-	return typeof host === "string" && host !== "" && parts.host === host;
+	const forwardedHost = headers["x-forwarded-host"] || headers.host;
+	const host = typeof forwardedHost === "string" ? forwardedHost.split(",")[0].trim() : "";
+	return host !== "" && parts.host === host;
 }
 
 
@@ -329,8 +330,46 @@ export const server = createServer((req, res) => {
 		}
 
 		// ----- streams -----
-		// Live board data is upgraded in startLiveStream. A plain HTTP request to /events is
-		// no longer a stream; it falls through to the ordinary request handling below.
+		// Live board data is upgraded in startLiveStream. A plain HTTP request to /events is the
+		// fallback for a proxy that does not carry the upgrade. Browsers use it only when the
+		// WebSocket cannot open, and through HTTPS it still multiplexes over the one connection.
+		if (req.method === "GET" && url.pathname === "/events") {
+			res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
+			const scope = url.searchParams.get("scope");
+			if (scope === "welcome") {
+				send(new Set([res]), { type: "workspaces", workspaces: workspaceList().map(describeWorkspace) });
+				welcomeClients.add(res);
+				const keepAlive = setInterval(() => res.write(": ping\n\n"), 20_000);
+				const forget = () => {
+					clearInterval(keepAlive);
+					welcomeClients.delete(res);
+				};
+				req.on("close", forget);
+				res.on("error", forget);
+				return;
+			}
+			const board = boardFrom(url, res);
+			if (!board) return;
+			send(new Set([res]), {
+				type: "snapshot",
+				cards: cardsFor(board),
+				closed: closedCards(board),
+				activity: board.activity,
+				meta: boardMeta(board),
+				git: refreshGit(board, true),
+			});
+			board.clients.add(res);
+			watchGit(board);
+			const keepAlive = setInterval(() => res.write(": ping\n\n"), 20_000);
+			const forget = () => {
+				clearInterval(keepAlive);
+				board.clients.delete(res);
+				unwatchGit(board);
+			};
+			req.on("close", forget);
+			res.on("error", forget);
+			return;
+		}
 
 		// ----- crossroads -----
 		if (req.method === "GET" && url.pathname === "/workspaces") {

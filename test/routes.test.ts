@@ -1435,6 +1435,29 @@ describe("routes", { concurrency: 8 }, () => {
 		}
 	});
 
+	test("the event-stream fallback opens with the same snapshot", async () => {
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-events-"));
+		const daemon = await boot(folder);
+		try {
+			const opened = await post(daemon, "/workspace", { folder });
+			const board = JSON.parse(opened.body).board;
+			const controller = new AbortController();
+			const response = await fetch(`${daemon.base}/events?token=${daemon.token}&workspace=${board.id}`, { signal: controller.signal });
+			assert.equal(response.status, 200);
+			assert.match(response.headers.get("content-type") ?? "", /event-stream/);
+			assert.ok(response.body, "no stream body");
+			const reader = response.body.getReader();
+			const { value } = await reader.read();
+			controller.abort();
+			const text = new TextDecoder().decode(value ?? new Uint8Array());
+			const payload = JSON.parse((text.split("\n").find((each) => each.startsWith("data: ")) ?? "").slice("data: ".length));
+			assert.equal(payload.type, "snapshot");
+		} finally {
+			daemon.child.kill();
+			rmSync(folder, { recursive: true, force: true });
+		}
+	});
+
 	test("a live upgrade is refused before a handshake when the caller is not authenticated", async () => {
 		const folder = mkdtempSync(join(tmpdir(), "pi-studio-events-"));
 		const daemon = await boot(folder);
