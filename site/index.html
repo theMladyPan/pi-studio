@@ -236,7 +236,7 @@
           <li>node &gt;= 22.18</li>
           <li>zero runtime deps</li>
           <li>loopback + token</li>
-          <li>no build step</li>
+          <li>no sudo</li>
         </ul>
         <div class="card quickstart">
           <div class="card-head">
@@ -245,10 +245,9 @@
             <button class="copy-btn" type="button" aria-label="Copy quickstart command" id="copy-btn">copy</button>
           </div>
           <div class="card-body">
-            <pre id="quickstart-cmds">git clone https://github.com/theMladyPan/pi-studio.git
-cd pi-studio
-node server.ts</pre>
-            <p class="note">Add <code>--no-open</code> for a service, or run <code>pi-studio</code> from <code>bin/pi-studio</code> once the repo's <code>bin/</code> directory is on your <code>PATH</code>, or <code>./bin/pi-studio</code>.</p>
+            <pre id="quickstart-cmds">curl -fsSL https://github.com/theMladyPan/pi-studio/releases/latest/download/install.sh | sh
+pi-studio</pre>
+            <p class="note">Installs the latest release for the current user: the app in <code>~/.local/share/pi-studio</code> and the <code>pi-studio</code> command in <code>~/.local/bin</code>, checked against the release's sha256 first. No <code>sudo</code>, no <code>PATH</code> edits. From a checkout instead: <code>git clone</code>, <code>npm ci</code>, <code>node server.ts</code>.</p>
             <p class="copy-status" role="status" aria-live="polite" id="copy-status"></p>
           </div>
         </div>
@@ -282,7 +281,7 @@ node server.ts</pre>
           <ul class="tight">
             <li><strong>Steer</strong> redirects a run still in flight; <strong>queue</strong> waits behind it. No killing the run to fix it.</li>
             <li>Cards beside a thread are structured: <strong>notes</strong> with tables and charts, <strong>source</strong> views at the line that matters, and <strong>questions</strong> with buttons to answer.</li>
-            <li>Sessions persist under <code>~/.pi/agent/state/pi-studio/</code>, so a board is resumed after a restart, not restarted.</li>
+            <li>Sessions persist under the project's own <code>.pi-studio/</code>, so a board is resumed after a restart, not restarted.</li>
           </ul>
         </div>
         <div class="mini" aria-label="Diagram: a thread card with a note, a question, and a source card beside it">
@@ -366,7 +365,11 @@ node server.ts</pre>
         <tbody>
           <tr>
             <td data-label="needs">Node.js</td>
-            <td data-label="detail">&gt;= 22.18 from nodejs.org, or a version-manager build with TypeScript stripping enabled. A distribution package often compiles TypeScript support out: Ubuntu 26.04 ships 22.22, which passes the version check and then fails with <code>ERR_UNKNOWN_FILE_EXTENSION</code>. If pi brought its own Node, put <code>$HOME/.local/share/pi-node/current/bin</code> ahead on <code>PATH</code>.</td>
+            <td data-label="detail">&gt;= 22.18, from nodejs.org, a version manager, or a distribution package: a release is compiled JavaScript, so it needs no TypeScript support. Running the <code>.ts</code> sources from a checkout is stricter, and Ubuntu 26.04's 22.22 passes the version check and then fails with <code>ERR_UNKNOWN_FILE_EXTENSION</code>. If pi brought its own Node, put <code>$HOME/.local/share/pi-node/current/bin</code> ahead on <code>PATH</code>.</td>
+          </tr>
+          <tr>
+            <td data-label="needs">Git</td>
+            <td data-label="detail">On <code>PATH</code>. Every thread works in its own worktree under the repository's <code>.agents/</code> on a branch of its own; a folder that is not a repository runs in place.</td>
           </tr>
           <tr>
             <td data-label="needs">pi CLI</td>
@@ -374,11 +377,15 @@ node server.ts</pre>
           </tr>
           <tr>
             <td data-label="needs">Dependencies</td>
-            <td data-label="detail">Zero runtime npm dependencies: <code>node server.ts</code> runs the TypeScript directly, with no build step. <code>npm install</code> is only needed for <code>npm run check</code>, which uses the TypeScript dev dependency.</td>
+            <td data-label="detail">Zero runtime npm dependencies: the installed copy is self-contained JavaScript and starts with no build step, and the installer installs no npm packages. <code>npm ci</code> is only for a checkout, for <code>npm run check</code> and for building a release.</td>
           </tr>
           <tr>
             <td data-label="needs">Network &amp; security</td>
             <td data-label="detail">Loopback-only (<code>127.0.0.1</code>) by default, gated by a persistent daemon token saved on disk (browser sessions last 30 days; restarting the daemon does not revoke a leaked link). <code>--host 0.0.0.0</code> exposes plain HTTP to anyone holding the printed link, who can then ask agents to run commands on that machine: use only on a trusted network, or put a tunnel in front of it.</td>
+          </tr>
+          <tr>
+            <td data-label="needs">Platform</td>
+            <td data-label="detail">Linux only, so far. The daemon proves whether a managed copy is still running through <code>/proc</code>, which makes other platforms unverified until they are tested.</td>
           </tr>
           <tr>
             <td data-label="needs">Scope</td>
@@ -408,6 +415,7 @@ node server.ts</pre>
   <div class="container">
     <ul class="footer-links">
       <li><a href="https://github.com/theMladyPan/pi-studio">github</a></li>
+      <li><a href="https://github.com/theMladyPan/pi-studio/releases/latest">releases</a></li>
       <li><a href="https://github.com/theMladyPan/pi-studio/blob/main/README.md">README.md</a></li>
       <li><a href="https://github.com/theMladyPan/pi-studio/blob/main/docs/boss-and-subagents.md">docs/boss-and-subagents.md</a></li>
     </ul>

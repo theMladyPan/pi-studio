@@ -26,48 +26,98 @@
 Type into a card and the agent answers there. `steer` puts a correction into a run that is still going,
 `queue` waits behind it, and the rail lists what the agent is doing while it does it.
 
-## Run it
+## Install it
 
 ```bash
+curl -fsSL https://github.com/theMladyPan/pi-studio/releases/latest/download/install.sh | sh
+pi-studio
+```
+
+The script installs the latest release for the current user and nothing else: the app in
+`~/.local/share/pi-studio`, one folder per version, and a `pi-studio` command in `~/.local/bin`. It
+needs no `sudo`, writes nothing outside your home folder and edits no shell startup file, so
+`~/.local/bin` has to be on your `PATH` already for the command to answer. It checks the release's
+published sha256 before it installs anything, and a failed check leaves the copy you already had alone.
+
+Node 22.18 or newer, `git` and the `pi` CLI have to be on that machine already; the installer ships
+none of them and installs no npm packages. A release is compiled JavaScript, so the Node you have does
+not have to read TypeScript.
+
+### From a checkout
+
+```bash
+npm ci                    # the locked development dependencies, for the checks and the build
 node server.ts            # prints the URL and opens the crossroads in your browser
 node server.ts --no-open  # for a service, or when you open it yourself
 ```
 
-Or, with the repository in `PATH` or linked into `~/.local/bin`:
-
-```bash
-pi-studio
-```
-
-Node 22.18 or newer runs the `.ts` files directly, and `pi` has to be on the same machine: that is the
-whole requirement, given a Node whose build reads TypeScript — a distribution package often does not.
-There is no build step and nothing to install.
-
-`npm install` is for the checks only: TypeScript is a dev dependency, and `npm run check` uses it to
-type check the code.
+With the repository in `PATH`, `./bin/pi-studio` is the same start in one word.
+`npm run install:local` builds the release tree from your own source and installs it the way the
+download does. Running the `.ts` sources is the development path and is the stricter case: that one
+needs a Node whose build reads TypeScript.
 
 ### Where Node comes from
 
-On a fresh Ubuntu the system's Node does not run the daemon, on either release, and it fails differently
-each time. 24.04 ships Node 18, below the version above, so the first command here answers
-`node: command not found` unless another Node is already on the path; pi brings an official one there,
-but adds only its own `bin` to the login path. 26.04 ships 22.22, which passes every version check and
-still cannot run the daemon, because the distribution builds Node with TypeScript support compiled out:
-`node server.ts` answers `Node.js is not compiled with TypeScript support` when asked to strip types,
-and `ERR_UNKNOWN_FILE_EXTENSION` when it is not asked. Both read like a fault in this repository.
+The release needs Node 22.18 or newer and nothing else about it, because the published files are
+JavaScript; a distribution build is fine. Running the `.ts` sources is where a fresh Ubuntu fails, and
+it fails differently on each release. 24.04 ships Node 18, below the version above, so `node server.ts`
+answers `node: command not found` unless another Node is already on the path; pi brings an official one
+there, but adds only its own `bin` to the login path. 26.04 ships 22.22, which passes every version
+check and still cannot run the sources, because the distribution builds Node with TypeScript support
+compiled out: `node server.ts` answers `Node.js is not compiled with TypeScript support` when asked to
+strip types, and `ERR_UNKNOWN_FILE_EXTENSION` when it is not asked. Both read like a fault in this
+repository.
 
-So the Node to have is an official build — the archive from nodejs.org, or a version manager — and a
-machine where pi brought one needs that folder on the path ahead of the distribution's:
+So the Node to have for the sources is an official build — the archive from nodejs.org, or a version
+manager — and a machine where pi brought one needs that folder on the path ahead of the distribution's:
 
 ```bash
 export PATH="$HOME/.local/share/pi-node/current/bin:$PATH"
 ```
 
-### Two at once
+## Everyday commands
 
-`--state` moves the state folder, which is what lets a development instance run beside the stable one.
-Each keeps its own token, port, workspaces, boards and pi sessions, so they cannot read or overwrite
-each other:
+```bash
+pi-studio --version                # the version, the commit and whether the build is official
+pi-studio update                   # the latest official release, checked before it is installed
+pi-studio update --replace-custom  # replace a copy you built from your own source
+pi-studio uninstall
+```
+
+`update` refuses a downgrade, and refuses to replace a custom build unless you ask it to with
+`--replace-custom`. The new version is unpacked and tried before anything is switched over, the earlier
+version folders stay on disk, and a running daemon keeps running on the old one until you restart it.
+`uninstall` refuses while a managed copy is running and removes only what it installed: the version
+folders and the launcher. Boards, sessions, prompt edits, the cloned source, Node and `pi` all stay
+where they are. None of this uses `sudo` and none of it edits `PATH`.
+
+## What lives where
+
+Two kinds of state, and the difference matters the day a folder moves.
+
+- **The project's own state lives in the project.** The first time a folder is opened, the daemon makes
+  `.pi-studio` inside it, holding `board.json`, `sessions/` (one pi transcript per thread) and
+  `gitgraph.json`. That folder and `.agents/` are kept out of `git status` through the repository's
+  local `info/exclude`, never a tracked `.gitignore`. Worktrees are where they were: a thread works in
+  `<repo>/.agents/<id>` on a branch of its own.
+- **The machine's records live under XDG state**, in `~/.local/state/pi-studio`: the daemon token and
+  port, the list of opened folders, and the prompt edits. `--state <folder>` or `PI_STUDIO_STATE` moves
+  that folder only, which is what lets a development instance keep records of its own.
+
+A folder that is moved or cloned elsewhere does not bring its state with it: no path is rewritten, so a
+registered folder that is gone reads as missing instead of quietly opening an empty board. One opened
+folder has one `.pi-studio`, so two daemons must not work on the same project folder at once. Where
+`.pi-studio` cannot be made or written — a read-only folder, a link standing at that path — the board
+refuses to open and says why, rather than accepting work it could not save.
+
+Boards and sessions an older pi-studio kept under `~/.pi/agent/state/pi-studio` are imported once, by
+copy, the next time their folder is opened: the board, the whole session files and the Git view state,
+with ids and history intact. The old files stay where they are.
+
+### A second instance
+
+`--state` moves the machine's records, which is what lets a development instance run beside the stable
+one. Each keeps its own token, port and list of folders:
 
 ```bash
 pi-studio                                                        # stable
@@ -77,12 +127,20 @@ npm run dev:alt                                                  # the same, wat
 
 A daemon whose folder is not the usual one names itself after that folder: in its console line, in the
 board header next to the workspace, and in the browser tab title (`pi - pi-studio · pi-studio-dev`).
-Opening the same repository in both is fine and expected: the board id follows the folder, so both
-serve the same board id out of their own folder, with their own threads.
+The board's id follows the folder, so the same repository opened in both is one board with two daemons
+writing the same files — which is why the two instances belong to different folders.
 
-`PI_STUDIO_STATE` does the same as `--state` for anything that would rather set an environment.
+## Prompt edits survive an update
 
-### From another computer
+Every prompt the studio ships — the board conventions, the roles, the modes, the flows, the verbosity
+and audience files — is edited on its settings page. The edit is kept under the machine's state folder,
+with the shipped default it was based on pinned beside it, so an update replaces the defaults and never
+your words. When an update changes a prompt you have edited, `pi-studio update` writes a report under
+`prompt-update-reports/` that puts your copy, the old default and the new one side by side with diffs.
+Nothing is merged and no screen shows it: the report is a file, and a thread can read it and settle each
+prompt with you.
+
+## From another computer
 
 `--host 0.0.0.0` (or `PI_STUDIO_HOST`) puts the board on every address the machine answers on, which is
 what another computer on the same network needs:
@@ -110,7 +168,7 @@ flowchart LR
   daemon["pi-studio daemon<br>loopback, one token"]
   agent["pi --mode rpc<br>one child per thread"]
   tree["git worktree<br>a branch per thread"]
-  state["state folder<br>boards, layout, sessions"]
+  state["project folder<br>.pi-studio: board, sessions"]
 
   tab -- "type, steer, answer" --> daemon
   daemon -- "prompt and steer" --> agent
@@ -122,7 +180,8 @@ flowchart LR
 **Workspaces** are folders you have opened before. The crossroads at `/` lists them, previews the
 selected one, and opens it as a board in a tab of its own (`/w/<id>`); asking again reuses that tab.
 The folder dialog is the machine's own, through `zenity`. A workspace's board, its threads and their
-layout live in `~/.pi/agent/state/pi-studio/boards/<id>.json`.
+layout live in that folder's own `.pi-studio/board.json`, and the list of folders you have opened lives
+in the machine's state folder.
 
 **Scratch** is the first row of that list. A folder in the machine's temp spot, made again whenever it
 is gone, for the question that deserves no project and for the scripts that are all thrash. Its threads
@@ -131,8 +190,8 @@ its row stops whatever is running, then deletes the files and the cards and keep
 twice, and the first press only arms it for four seconds.
 
 **Threads** are cards. A thread is created with `+` and starts its agent on the first message. Its pi
-session is written under `~/.pi/agent/state/pi-studio/sessions/<workspace>/`, so a restart of the daemon
-resumes the conversation instead of starting over.
+session is written under the folder's own `.pi-studio/sessions/`, so a restart of the daemon resumes the
+conversation instead of starting over.
 
 **Notes, sources and questions** are what a thread draws beside itself: a table or a chart, a file opened
 at the line that matters, a question with buttons it needs answered. The board keeps each one where it
@@ -161,11 +220,22 @@ The daemon listens on loopback only, and every data route needs the token it pri
 ## Checks
 
 ```bash
-npm install     # once, for the checks only; running the daemon needs nothing
-npm run check   # syntax, imports, tsc, node --test, then the smoke suite
-npm test        # the unit and route tests on their own
-npm run smoke   # two daemons against scratch folders; exits 1 on the first failure
+npm ci           # once; the checks and the build use the locked dev dependencies
+npm run check    # syntax, imports, tsc, node --test, then the smoke suite
+npm test         # the unit and route tests on their own
+npm run smoke    # two daemons against scratch folders; exits 1 on the first failure
+npm run package  # the release assets: the tarball, its .sha256 and install.sh, under release/
 ```
+
+## Releases
+
+Versions are ZeroVer (`0.MINOR.PATCH`) and the notes for each one are in [CHANGELOG.md](CHANGELOG.md).
+Work lands on `dev`; merging `dev` into `main` and tagging that merge with an annotated
+`v0.MINOR.PATCH` is what publishes. The tag starts `.github/workflows/release.yml`, which proves the
+tag, `package.json` and `package-lock.json` name one version, runs the full check gate, builds
+`pi-studio-<version>.tar.gz` with its `.sha256` and `install.sh`, and uploads those three to a draft
+release before publishing it as the latest. A published version is never replaced: a broken release is
+repaired with a new version.
 
 ## Layout
 
@@ -187,9 +257,14 @@ public/           the board client: index.html with its styles, welcome.html for
   gitgraph.html   the graph page a tab or the drawer loads, its host script and viewer under
                   client/gitgraph/, and the drawer the board rolls down (client/git-drawer.js)
 bridge/           the extension a child loads so a thread can draw on its board
-bin/pi-studio     the wrapper: one word to start it
+bin/pi-studio     the launcher: `--version`, `update`, `uninstall`, then the daemon
+bin/manage.mjs    the managed copy: version folders, the update, the uninstall
+bin/build-release.mjs  the release build: compiled JavaScript staged into the tree an install copies
+bin/install.mjs   `npm run install:local`: build that tree, then install it for this user
 bin/smoke.mjs     two daemons against scratch folders, and the routes a change can break
 bin/check-imports.mjs  every import resolves, and every client module is served
+.github/workflows/release.yml  an annotated version tag checked, built and published
+.github/workflows/pages.yml    `site/` published as the project page
 test/             node --test: the restore paths, git, worktrees, the child, the routes
 docs/             settled plans and briefs; docs/media holds the picture above
 TODO.md           the one list of what is open: a fix, a feature, a chore
