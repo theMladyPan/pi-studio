@@ -1356,9 +1356,17 @@
      The area's own text is transparent so only the colours under it are read, and it keeps the caret and
      the selection visible. The classes on the spans are the board's code colours, above. */
   .tp { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: #0f141b; }
-  .tp > .tp-code, .tp > .tp-input { position: absolute; inset: 0; margin: 0; border: 0; padding: 8px 10px;
-    font: 13px/20px var(--mono); tab-size: 4; white-space: pre; overflow: auto; }
+  /* A textarea is a replaced element, so `inset` alone leaves it at its own rows and columns rather than
+     the panel's. Both layers are given the whole box outright, and every metric that moves a glyph — the
+     box, the padding, the border, the font, the line height, the tab size and the room a scrollbar takes —
+     is written once for the two of them, because the colour and the caret have to land on the same cells. */
+  .tp > .tp-code, .tp > .tp-input { position: absolute; inset: 0; box-sizing: border-box; width: 100%;
+    height: 100%; margin: 0; border: 0; padding: 8px 10px; font: 13px/20px var(--mono); tab-size: 4;
+    white-space: pre; overflow: auto; scrollbar-gutter: stable; }
   .tp > .tp-code { overflow: hidden; color: #c9d1d9; pointer-events: none; }
+  /* A `<code>` chooses a monospace of the engine's own; the colours are drawn on the panel's font, so
+     the one inside the coloured layer inherits it instead of defaulting away from it. */
+  .tp > .tp-code code { font: inherit; }
   .tp > .tp-input { color: transparent; background: transparent; caret-color: #e6edf3; resize: none; outline: none;
     -webkit-text-fill-color: transparent; }
   .tp > .tp-input::selection { background: rgba(56, 139, 253, .4); -webkit-text-fill-color: transparent; }

@@ -17,12 +17,14 @@ const module = async () =>
 		escapeHtml: (text: unknown) => string;
 		languageOf: (path: string) => string;
 		highlight: (raw: string, language?: string) => string;
+		paintText: (raw: string, language?: string) => string;
 		PLAIN_LANGUAGE: string;
 		createTextPreview: (
 			container: FakeElement,
 			options?: { readOnly?: boolean; onInput?: (text: string) => void },
 		) => {
 			setDocument: (next: { path: string; content: string }) => void;
+			setReadOnly: (next: boolean) => void;
 			getText: () => string;
 			focus: () => void;
 			setLine: (line: number) => void;
@@ -154,6 +156,22 @@ test("a path chooses its language by extension, and an unknown one is plain", as
 	assert.ok(!out.includes('<span class="k">'), "no keyword is invented for an unknown extension");
 });
 
+test("a text that ends in a newline keeps its last, empty line on the coloured layer", async () => {
+	const { paintText, highlight } = await module();
+	// A textarea draws a line box for the text after the last newline, so the `<pre>` under it has to as well.
+	const lines = paintText("one\ntwo\n", "plain");
+	assert.equal(lines, `${highlight("one\ntwo\n", "plain")}\n`, "the empty last line is drawn");
+	assert.ok(lines.endsWith("\n"));
+	// A text with no final newline gains none, or the layers would end at different heights the other way.
+	assert.equal(paintText("one\ntwo"), highlight("one\ntwo", "plain"));
+	assert.ok(!paintText("one\ntwo").endsWith("\n"));
+	// A blank file is one empty line, which `highlight` already paints; a newline alone is two.
+	assert.equal(paintText(""), "&nbsp;");
+	assert.equal(paintText("\n"), "\n\n");
+	// One final newline, never two: a text ending in a blank line already ends with one.
+	assert.equal(paintText("x\n\n"), `${highlight("x\n\n")}\n`);
+});
+
 test("the surface gives the document back, both before and after a human types into it", async () => {
 	const { createTextPreview } = await module();
 	const container = standInContainer();
@@ -175,4 +193,18 @@ test("the surface gives the document back, both before and after a human types i
 	reader.setDocument({ path: "src/a.py", content });
 	assert.equal(readOnly.children[1].readOnly, true);
 	assert.equal(reader.getText(), content);
+	// Whether the file is the human's to write is decided by the daemon after the read, so the surface has
+	// to be able to change its mind: the textarea itself refuses the typing, not only the save button.
+	const editable = standInContainer();
+	const surface = createTextPreview(editable);
+	surface.setDocument({ path: "src/a.py", content });
+	const surfaceArea = editable.children[1];
+	assert.equal(surfaceArea.readOnly, false, "an editable file takes typing");
+	surface.setReadOnly(true);
+	assert.equal(surfaceArea.readOnly, true);
+	surface.setReadOnly(false);
+	assert.equal(surfaceArea.readOnly, false, "the next file opens editable again");
+	// The coloured layer is painted through the same function the test above drives, trailing line included.
+	surface.setDocument({ path: "a.txt", content: "one\ntwo\n" });
+	assert.ok(editable.children[0].children[0].innerHTML.endsWith("\n"), "the surface paints the final empty line");
 });

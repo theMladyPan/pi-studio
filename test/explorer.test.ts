@@ -62,6 +62,7 @@ type ExDraft = { dir: string; asDir: boolean; name?: string };
 type ExPorts = { writeText?: (text: string) => unknown; selectCopy?: (text: string) => unknown };
 type ExIcon = { glyph: string; color: string };
 type ExSortable = { path: string; name: string; dir?: boolean };
+type ExSavedDoc = { path: string; text: string; mtime: number; size: number; editable: boolean };
 type ExDeleteResult = {
 	deleted: string[];
 	trashed: boolean;
@@ -133,6 +134,8 @@ type ExCore = {
 	icon(theme: unknown, entry: { name: string; dir?: boolean }): ExIcon | null;
 	gitKind(git: string): string;
 	gitBadge(git: string): string;
+	saveDoc(doc: ExSavedDoc, content: string, answer: { mtime?: number; size?: number } | null): ExSavedDoc;
+	saveStatus(dirty: boolean): { text: string; tone: string };
 	PATH_MIME: string;
 };
 
@@ -644,6 +647,33 @@ test("a second press on a row asks for an edit, a read, or nothing", () => {
 	assert.equal(core.editTarget({ ...entry("link.py"), link: true }), "read");
 	assert.equal(core.editTarget(null), "");
 	assert.equal(core.editTarget(undefined), "");
+});
+
+// ---------------------------------------------------------------- what a save leaves behind
+
+test("a save keeps a size of zero, because zero is the size the next save is checked against", () => {
+	const doc: ExSavedDoc = { path: "notes.txt", text: "one\n", mtime: 5, size: 4, editable: true };
+	// An emptied file is 4 bytes smaller than nothing: its size is 0, and 0 is a real number here.
+	const emptied = core.saveDoc(doc, "", { mtime: 9, size: 0 });
+	assert.equal(emptied.size, 0, "a size of zero is the file's size, not a missing number");
+	assert.equal(emptied.mtime, 9);
+	assert.equal(emptied.text, "", "the text that was written is the text the editor now holds");
+	assert.equal(emptied.editable, true, "a save leaves the rest of the file as it was");
+	// The next save carries that zero, which is what the daemon compares the file on disk against.
+	assert.equal(core.saveDoc(emptied, "", { mtime: 11, size: 3 }).size, 3);
+	// An answer with no numbers is the old stamp, and the document it came from is not changed in place.
+	const kept = core.saveDoc(doc, "two\n", null);
+	assert.deepEqual([kept.mtime, kept.size], [5, 4]);
+	assert.deepEqual([doc.text, doc.mtime, doc.size], ["one\n", 5, 4], "the document handed in is untouched");
+	assert.equal(kept.text, "two\n");
+	// The route answers with numbers; a number that arrived as a string is still one.
+	assert.equal(core.saveDoc(doc, "three\n", { mtime: "21" as unknown as number, size: "0" as unknown as number }).size, 0);
+});
+
+test("a landed save is read from the text as it stands, not from the text that was sent", () => {
+	assert.deepEqual(core.saveStatus(false), { text: "saved", tone: "" });
+	// Text typed while the write was out leaves the editor dirty, and that is what it has to say.
+	assert.deepEqual(core.saveStatus(true), { text: "unsaved changes", tone: "dirty" });
 });
 
 // ---------------------------------------------------------------- the page

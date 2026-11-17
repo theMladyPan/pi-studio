@@ -803,6 +803,33 @@ function exGitBadge(git) {
   return letters[0];
 }
 
+// ---------- what the editor's save leaves behind ---------------------------
+/**
+ * The file the editor holds once the daemon has taken the write. The two stamps are the ones the answer
+ * named, and they are kept when they are numbers of their own: an emptied file's size is `0`, and that
+ * zero is what the next save is checked against, so it may not be folded away like a missing number.
+ */
+function exSavedDoc(doc, content, answer) {
+  const stamp = (value, fallback) => {
+    const number = typeof value === "string" && value.trim() ? Number(value) : value;
+    return typeof number === "number" && Number.isFinite(number) ? number : fallback;
+  };
+  return {
+    ...doc,
+    text: String(content ?? ""),
+    mtime: stamp(answer?.mtime, doc.mtime),
+    size: stamp(answer?.size, doc.size),
+  };
+}
+
+/**
+ * What the status line says when a save lands. Text typed while the write was out is still unsaved, so
+ * the answer is read against what the surface holds now rather than against the text that was sent.
+ */
+function exSaveStatus(dirty) {
+  return dirty ? { text: "unsaved changes", tone: "dirty" } : { text: "saved", tone: "" };
+}
+
 const explorerCore = {
   join: exJoin,
   parentOf: exParentOf,
@@ -853,6 +880,8 @@ const explorerCore = {
   icon: exIcon,
   gitKind: exGitKind,
   gitBadge: exGitBadge,
+  saveDoc: exSavedDoc,
+  saveStatus: exSaveStatus,
   PATH_MIME: EXPLORER_PATH_MIME,
 };
 
@@ -10566,9 +10595,10 @@ function exAskPermanent(paths) {
  * The file the editor holds: the path the daemon knows it by, the stamp it was read with — `mtime` and
  * `size`, which is what the writer checks before it writes — the text exactly as it was read, and
  * whether the daemon will take a write at all. The surface is made once for the life of the page, so
- * opening a second file reuses the same textarea rather than growing a new one.
+ * opening a second file reuses the same textarea rather than growing a new one; a save replaces this
+ * record whole, which is why it is bound with `let`.
  */
-const exEditorDoc = { path: "", text: "", mtime: 0, size: 0, editable: false };
+let exEditorDoc = { path: "", text: "", mtime: 0, size: 0, editable: false };
 /** What had the focus before the editor opened, handed back when it closes. */
 let exEditorPrior = null;
 const exEditorPreview = createTextPreview(exEditorBody, {
@@ -10622,9 +10652,21 @@ async function exEditOpen(path, target = "edit") {
   exEditorDoc.text = "";
   exEditorDoc.editable = false;
   exEditorPreview.setDocument({ path, content: "" });
+  // Nothing is typed into a file until the daemon has said the file may be written: the surface refuses
+  // the caret while the read is in the air, not only after it has answered.
+  exEditorPreview.setReadOnly(true);
   exEditorSay("reading\u2026");
   exEditorPreview.focus();
-  const answer = await exGet(`/files/read?${auth}&path=${encodeURIComponent(path)}`);
+  let answer;
+  try {
+    answer = await exGet(`/files/read?${auth}&path=${encodeURIComponent(path)}`);
+  } catch {
+    if (!exEditorEl.hidden && exEditorDoc.path === path) {
+      exEditorSay("could not reach the daemon \u2014 nothing was read", "bad");
+      exEditorCloseBtn.focus();
+    }
+    return;
+  }
   // The editor may have been shut while the read was in the air, or another file may have taken it.
   if (exEditorEl.hidden || exEditorDoc.path !== path) return;
   if (!answer.ok) {
@@ -10638,6 +10680,7 @@ async function exEditOpen(path, target = "edit") {
   exEditorDoc.size = Number(data.size) || 0;
   exEditorDoc.editable = data.editable !== false && target !== "read";
   exEditorPreview.setDocument({ path, content: exEditorDoc.text });
+  exEditorPreview.setReadOnly(!exEditorDoc.editable);
   exEditorSay(
     exEditorDoc.editable ? `read ${exEditorDoc.size} bytes` : "read only \u2014 this path is a link, or the workspace has no root",
   );
@@ -10655,13 +10698,23 @@ async function exEditSave() {
   if (!exEditorDoc.editable) return exEditorSay("read only \u2014 there is nothing here to save", "bad");
   const content = exEditorPreview.getText();
   exEditorSay("saving\u2026");
-  const answer = await exPost("/files/write", { path, content, mtime: exEditorDoc.mtime, size: exEditorDoc.size });
+  let answer;
+  try {
+    answer = await exPost("/files/write", { path, content, mtime: exEditorDoc.mtime, size: exEditorDoc.size });
+  } catch {
+    // A daemon that went away is not an answer, and the text stays where it is rather than saying saved.
+    if (!exEditorEl.hidden && exEditorDoc.path === path) {
+      exEditorSay("could not reach the daemon \u2014 the text is not saved", "bad");
+    }
+    return;
+  }
   if (exEditorEl.hidden || exEditorDoc.path !== path) return;
   if (!answer.ok || !answer.data) return exEditorSay(exEditorTrouble(answer.status, answer.text), "bad");
-  exEditorDoc.text = content;
-  exEditorDoc.mtime = Number(answer.data.mtime) || exEditorDoc.mtime;
-  exEditorDoc.size = Number(answer.data.size) || exEditorDoc.size;
-  exEditorSay("saved");
+  exEditorDoc = explorerCore.saveDoc(exEditorDoc, content, answer.data);
+  // A human who kept typing while the write was out is not looking at a saved file, and the size of an
+  // emptied file is the zero the daemon has just answered with.
+  const said = explorerCore.saveStatus(exEditorDirty());
+  exEditorSay(said.text, said.tone);
 }
 
 /** Shut the editor and hand the keyboard back: the tree the file came from, when that is still there. */

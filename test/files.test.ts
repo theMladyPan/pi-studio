@@ -1148,6 +1148,27 @@ describe("saving one file", () => {
 			assert.equal(readFileSync(plainPath, "utf8"), "no newline at all");
 			assert.equal(statSync(plainPath).mode & 0o7777, 0o600);
 
+			// A name at the edge of the filesystem's 255 bytes is still a file the editor saves. The temp file
+			// it is written through is a name of its own, so the save does not have to repeat this one.
+			const longName = `${"n".repeat(220)}.txt`;
+			assert.equal(Buffer.byteLength(longName), 224);
+			writeFileSync(join(folder, longName), "short\n");
+			const longRead = await readFile(daemon, board, longName);
+			assert.equal(longRead.status, 200, JSON.stringify(longRead.body));
+			const longSaved = await saveFile(daemon, board, {
+				path: longName,
+				content: "a longer body\n",
+				mtime: longRead.body.mtime,
+				size: longRead.body.size,
+			});
+			assert.equal(longSaved.status, 200, longSaved.body);
+			assert.equal(readFileSync(join(folder, longName), "utf8"), "a longer body\n");
+			assert.deepEqual(
+				readdirSync(folder).filter((name) => name.endsWith(".tmp")),
+				[],
+				"the temp file a save writes through is gone",
+			);
+
 			// A token that is not the human's is not a request this route answers.
 			const foreign = await saveFile(daemon, board, { path: "plain.txt", content: "x", mtime: 1, size: 1 }, "thread-secret-token");
 			assert.equal(foreign.status, 403, foreign.body);

@@ -226,6 +226,17 @@ export function highlight(raw, language = PLAIN_LANGUAGE) {
   return out || "&nbsp;";
 }
 
+/**
+ * The colour one text wears on the surface, with its last line kept. A text that ends in a newline has an
+ * empty line after it, and the area draws a line box for that line; the colours under the area have to
+ * draw it too, or the two layers stop at different heights and the bottom of a long file drifts.
+ */
+export function paintText(raw, language = PLAIN_LANGUAGE) {
+  const text = String(raw ?? "");
+  const out = highlight(text, language);
+  return text.endsWith("\n") ? `${out}\n` : out;
+}
+
 // ---------- the surface ----------------------------------------------------
 /**
  * A text area laid over a `<pre>` that holds the same text coloured, both scrolled as one. The area is
@@ -234,6 +245,8 @@ export function highlight(raw, language = PLAIN_LANGUAGE) {
  * `aria-hidden`, which keeps a screen reader from reading the file twice.
  *
  * The container is emptied and filled with the two layers; the page styles them by the `tp` class.
+ * `readOnly` is set on the area itself rather than on the button that saves it, because a surface that
+ * refuses typing has to refuse it where the typing would happen.
  */
 export function createTextPreview(container, { readOnly = false, onInput = null } = {}) {
   const doc = container?.ownerDocument ?? globalThis.document;
@@ -259,7 +272,7 @@ export function createTextPreview(container, { readOnly = false, onInput = null 
   let text = "";
 
   const paint = () => {
-    lines.innerHTML = highlight(area.value, language);
+    lines.innerHTML = paintText(area.value, language);
   };
 
   area.addEventListener("scroll", () => {
@@ -272,6 +285,10 @@ export function createTextPreview(container, { readOnly = false, onInput = null 
   });
 
   return {
+    /** Whether the surface takes typing: a read, or a file the daemon will not write, has no caret. */
+    setReadOnly(next) {
+      area.readOnly = Boolean(next);
+    },
     /** The file now on the surface: its path decides the colour, its content is what is shown. */
     setDocument(next = {}) {
       path = String(next.path ?? "");

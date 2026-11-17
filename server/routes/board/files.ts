@@ -1025,7 +1025,9 @@ export async function onFileWrite(req: IncomingMessage, res: ServerResponse, boa
 		// editor has to be able to open again.
 		if (bytes.length > MAX_FILE_BYTES) return { status: 413, error: `${wanted.rel} would be larger than ${MAX_FILE_BYTES} bytes with its own line endings` };
 		const dir = leaf.abs.slice(0, leaf.abs.length - leaf.name.length);
-		const temp = join(dir, `.${leaf.name}.${randomUUID()}.tmp`);
+		// The temp file is a sibling with a name of its own rather than the file's name again: the filesystem
+		// stops at 255 bytes, and a long name repeated here would make a save fail with ENAMETOOLONG.
+		const temp = join(dir, `.pi-studio-${randomUUID()}.tmp`);
 		const mode = stat.mode & 0o7777;
 		try {
 			const fd = openSync(temp, "wx", mode);
