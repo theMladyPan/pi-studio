@@ -4,9 +4,9 @@
  * it is cut from.
  */
 import { baseRef, gitIn, repoOf } from "../git/repo.ts";
-import { isScratchFolder } from "../paths.ts";
+import { isScratchFolder, writeFileThroughTemp } from "../paths.ts";
 import { join, resolve } from "node:path";
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 
 
 
@@ -52,9 +52,7 @@ export function ensureStateExcludes(folder: string): boolean {
 	try {
 		// Written whole beside the file and renamed over it, so a crash cannot leave a half-written
 		// exclude behind; the content already there is carried over untouched.
-		const temp = `${exclude}.${process.pid}.tmp`;
-		writeFileSync(temp, next, { mode: 0o600 });
-		renameSync(temp, exclude);
+		writeFileThroughTemp(exclude, next, 0o600);
 	} catch (error) {
 		throw new Error(`git exclude file could not be written: ${exclude}: ${(error as Error).message}`);
 	}

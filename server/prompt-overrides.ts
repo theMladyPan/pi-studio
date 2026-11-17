@@ -14,11 +14,11 @@
  * shipped roots agree on every prompt, so the caller writes nothing at all in that case.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { STATE_DIR } from "./paths.ts";
+import { STATE_DIR, writeFileThroughTemp } from "./paths.ts";
 
 /** The folders a prompt may live in. This is the one list every prompt reader and writer shares. */
 export const PROMPT_OVERRIDE_FOLDERS = ["board", "roles", "modes", "flows", "verbosity", "audiences", "skills"];
@@ -86,24 +86,13 @@ function readPlainFile(path: string): string | null {
 	}
 }
 
-/** Replace a file in one move, from a temporary beside it, refusing a symlink or a non-file target. */
+/** Replace a file in one move, from a temporary this call alone owns, refusing a symlink or a non-file target. */
 function writeFileAtomically(path: string, text: string, mode?: number): void {
 	if (existsSync(path)) {
 		const held = lstatSync(path);
 		if (held.isSymbolicLink() || !held.isFile()) throw new Error("that is not a plain file");
 	}
-	const temporary = `${path}.tmp-${process.pid}`;
-	try {
-		writeFileSync(temporary, text, mode === undefined ? undefined : { mode });
-		renameSync(temporary, path);
-	} catch (error) {
-		try {
-			unlinkSync(temporary);
-		} catch {
-			// Nothing was left behind, which is the usual case for a failed write.
-		}
-		throw error;
-	}
+	writeFileThroughTemp(path, text, mode);
 }
 
 /** The names of every override held under a state folder, in folder order. */

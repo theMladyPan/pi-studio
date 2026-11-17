@@ -9,7 +9,7 @@
  * point at real files exist.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -184,13 +184,45 @@ export function readJsonFile<T>(file: string, fallback: T): T {
 	}
 }
 
+/**
+ * Write a file whole through a temporary this call alone owns, so a crash mid-write cannot leave half a
+ * file behind.
+ *
+ * The temporary's name comes from the process id plus a fresh random tail, and it is created exclusively:
+ * anything already sitting at that name — a file, or a symlink someone planted — makes the open fail
+ * instead of being followed or taken over. The rename then carries that temporary over the file in one
+ * move. A failed write cleans up only the temporary this call created, never one it found. This narrows
+ * the window; it does not make two concurrent writers of the same file safe.
+ */
+export function writeFileThroughTemp(file: string, text: string, mode?: number): void {
+	const temporary = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+	let created = false;
+	try {
+		const handle = openSync(temporary, "wx", mode);
+		created = true;
+		try {
+			writeFileSync(handle, text);
+		} finally {
+			closeSync(handle);
+		}
+		renameSync(temporary, file);
+	} catch (error) {
+		if (created) {
+			try {
+				unlinkSync(temporary);
+			} catch {
+				// The temporary is already gone, which is what a failed rename leaves behind.
+			}
+		}
+		throw error;
+	}
+}
+
 /** Write a JSON file whole, so a crash mid-write cannot leave half a board behind. Answers whether it landed. */
 export function writeJsonFile(file: string, data: unknown): boolean {
 	try {
 		mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-		const temp = `${file}.${process.pid}.tmp`;
-		writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-		renameSync(temp, file);
+		writeFileThroughTemp(file, `${JSON.stringify(data, null, 2)}\n`, 0o600);
 		return true;
 	} catch (error) {
 		console.error(`pi-studio: could not write ${file}: ${(error as Error).message}`);

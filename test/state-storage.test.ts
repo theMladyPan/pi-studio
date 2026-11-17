@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -113,6 +113,28 @@ test("a restored board gets local excludes too, and unrelated exclude lines are 
 		assert.equal(git(repo, "status", "--porcelain"), "", "the opened folder dirtied the tree");
 	} finally {
 		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a planted temporary path beside the git exclude is never written through", () => {
+	const repo = scratchRepo();
+	const elsewhere = mkdtempSync(join(tmpdir(), "pi-studio-exclude-target-"));
+	try {
+		const excludePath = join(repo, ".git", "info", "exclude");
+		const outside = join(elsewhere, "keep.txt");
+		writeFileSync(outside, "outside\n");
+		// The name a temporary beside the exclude has carried, planted by someone else beforehand.
+		const planted = `${excludePath}.${process.pid}.tmp`;
+		symlinkSync(outside, planted);
+		assert.equal(ensureStateExcludes(repo), true);
+		assert.equal(readFileSync(outside, "utf8"), "outside\n", "the planted link's target was not written through");
+		assert.equal(lstatSync(planted).isSymbolicLink(), true, "a link this call did not create is left alone");
+		assert.equal(lstatSync(excludePath).isFile(), true, "the exclude is a plain file of its own");
+		const exclude = readFileSync(excludePath, "utf8");
+		for (const line of ["/.agents/", "/.pi-studio/", "**/.pi-studio/"]) assert.ok(exclude.includes(line), `${line} missing`);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+		rmSync(elsewhere, { recursive: true, force: true });
 	}
 });
 

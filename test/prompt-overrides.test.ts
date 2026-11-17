@@ -3,7 +3,7 @@
  * report shows what a shipped change means for them without touching either copy.
  */
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -233,6 +233,42 @@ test("a pre-planted report symlink is refused and the outside file survives", ()
 		);
 		assert.equal(readFileSync(outside, "utf8"), "outside\n", "the link target was not written through");
 		assert.equal(lstatSync(link).isSymbolicLink(), true, "the link itself is left in place");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+		rmSync(from, { recursive: true, force: true });
+		rmSync(to, { recursive: true, force: true });
+	}
+});
+
+test("a planted temporary path beside an override or a report is never written through", () => {
+	const dir = stateDir();
+	const from = shippedRoot({ "modes/boss.md": "old boss\n" });
+	const to = shippedRoot({ "modes/boss.md": "new boss\n" });
+	try {
+		const outside = join(dir, "outside.md");
+		writeFileSync(outside, "outside\n");
+		// The name a temporary beside the target used to carry, planted by someone else beforehand.
+		const overridePath = overrides.promptOverridePath("modes/boss.md", dir);
+		mkdirSync(join(dir, "prompt-overrides", "modes"), { recursive: true });
+		const plantedOverride = `${overridePath}.tmp-${process.pid}`;
+		symlinkSync(outside, plantedOverride);
+		assert.deepEqual(overrides.savePromptOverride("modes/boss.md", "my boss\n", dir, from), { ok: true });
+		assert.equal(readFileSync(outside, "utf8"), "outside\n", "the planted link's target was not written through");
+		assert.equal(lstatSync(plantedOverride).isSymbolicLink(), true, "a link this call did not create is left alone");
+		assert.equal(lstatSync(overridePath).isFile(), true, "the override is a plain file of its own");
+		assert.equal(readFileSync(overridePath, "utf8"), "my boss\n");
+		assert.deepEqual(readdirSync(join(dir, "prompt-overrides", "modes")).sort(), ["boss.md", `boss.md.tmp-${process.pid}`].sort(), "no temporary of this call was left behind");
+
+		// The same hold on the report beside it.
+		const reportsDir = join(dir, "prompt-update-reports");
+		mkdirSync(reportsDir, { recursive: true });
+		const reportPath = join(reportsDir, "prompt-update-0.1.0-to-0.2.0.md");
+		const plantedReport = `${reportPath}.tmp-${process.pid}`;
+		symlinkSync(outside, plantedReport);
+		assert.equal(overrides.createPromptUpdateReport({ fromRoot: from, toRoot: to, stateDir: dir, fromVersion: "0.1.0", toVersion: "0.2.0" }), reportPath);
+		assert.equal(readFileSync(outside, "utf8"), "outside\n", "the report's planted link target was not written through");
+		assert.equal(lstatSync(plantedReport).isSymbolicLink(), true, "the report link this call did not create is left alone");
+		assert.equal(lstatSync(reportPath).isFile(), true, "the report is a plain file of its own");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 		rmSync(from, { recursive: true, force: true });
