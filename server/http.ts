@@ -204,6 +204,12 @@ export function upgradeWebSocket(req, socket, head) {
 						socket.destroy();
 						return;
 					}
+					try {
+						new TextDecoder("utf-8", { fatal: true }).decode(payload.subarray(2));
+					} catch {
+						socket.destroy();
+						return;
+					}
 				}
 				client.close();
 				return;

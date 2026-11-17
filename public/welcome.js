@@ -1370,11 +1370,15 @@
     link.onclose = () => {
       void (async () => {
         let signedIn = true;
+        const probe = new AbortController();
+        const probeTimer = setTimeout(() => probe.abort(), 3_000);
         try {
-          const response = await fetch("/workspaces", { cache: "no-store" });
+          const response = await fetch("/workspaces", { cache: "no-store", signal: probe.signal });
           signedIn = response.status !== 401 && response.status !== 403;
         } catch {
           signedIn = true;
+        } finally {
+          clearTimeout(probeTimer);
         }
         if (!signedIn) return;
         if (!linkTimer) {
