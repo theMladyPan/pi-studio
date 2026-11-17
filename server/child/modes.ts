@@ -7,6 +7,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { effectivePromptText, listPromptOverrides, readPromptOverride } from "../prompt-overrides.ts";
 
 /** A human thread picks one of these. A spawned thread carries a role instead, never a mode. */
 export const MODE_NAMES = ["agent", "plan", "boss", "discuss"];
@@ -38,12 +39,14 @@ export const PROMPT_FOLDERS = ["board", "roles", "modes", "flows", "verbosity", 
 export type PromptFile = { name: string; folder: string; file: string; text: string; firstLine: string };
 
 /**
- * Every prompt file on disk right now, folder by folder, each folder in name order. Read per call rather
- * than kept, because a file a human added to `prompts/` is a prompt that exists: the settings page lists
- * what is there, not what was there when the daemon started.
+ * Every prompt file there is, folder by folder, each folder in name order. Read per call rather than
+ * kept, because a file a human added to `prompts/` is a prompt that exists: the settings page lists
+ * what is there, not what was there when the daemon started. A saved override under the state folder
+ * replaces the shipped copy, and an override-only name is listed too, so a file the page lists is a
+ * file a save accepts and a run reads.
  */
-export function promptFiles(): PromptFile[] {
-	const found: PromptFile[] = [];
+export function promptFiles(stateDir?: string): PromptFile[] {
+	const byName = new Map<string, PromptFile>();
 	for (const folder of PROMPT_FOLDERS) {
 		let files: string[] = [];
 		try {
@@ -61,19 +64,38 @@ export function promptFiles(): PromptFile[] {
 			} catch {
 				continue;
 			}
-			found.push({ name: `${folder}/${file}`, folder, file, text, firstLine: text.split("\n").find((line) => line.trim()) ?? "" });
+			const name = `${folder}/${file}`;
+			const effective = effectivePromptText(name, text, stateDir);
+			byName.set(name, { name, folder, file, text: effective, firstLine: effective.split("\n").find((line) => line.trim()) ?? "" });
 		}
 	}
-	return found;
+	for (const name of listPromptOverrides(stateDir)) {
+		if (byName.has(name)) continue;
+		const text = readPromptOverride(name, stateDir) ?? "";
+		const [folder, file] = name.split("/");
+		byName.set(name, { name, folder, file, text, firstLine: text.split("\n").find((line) => line.trim()) ?? "" });
+	}
+	return [...byName.values()].sort((a, b) => PROMPT_FOLDERS.indexOf(a.folder) - PROMPT_FOLDERS.indexOf(b.folder) || a.file.localeCompare(b.file));
 }
 
-/** One prompt file, or the empty string when it is missing: a caller decides what a miss means. */
-export function promptText(folder: string, name: string): string {
+/**
+ * One prompt file, or the empty string when it is missing: a caller decides what a miss means. A saved
+ * override under the state folder is what is read. The folder and name are guarded so a stored value
+ * cannot step outside the folders a prompt may live in.
+ */
+export function promptText(folder: string, name: string, stateDir?: string): string {
+	if (!PROMPT_FOLDERS.includes(folder) || !/^[a-z][a-z-]*$/.test(name)) return "";
+	let shipped = "";
+	let held = false;
 	try {
-		return readFileSync(join(PROMPT_DIR, folder, `${name}.md`), "utf8").trim();
+		shipped = readFileSync(join(PROMPT_DIR, folder, `${name}.md`), "utf8");
+		held = true;
 	} catch {
-		return "";
+		held = false;
 	}
+	const override = readPromptOverride(`${folder}/${name}.md`, stateDir);
+	if (!held && override === null) return "";
+	return effectivePromptText(`${folder}/${name}.md`, shipped, stateDir).trim();
 }
 
 /**

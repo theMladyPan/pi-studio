@@ -9,6 +9,7 @@ import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { answer, fail, readJson } from "../../http.ts";
 import { PROMPT_DIR, promptFiles } from "../../child/modes.ts";
+import { effectivePromptText, readPromptOverride, savePromptOverride } from "../../prompt-overrides.ts";
 import { AGENTS_FILE, agentsOverride, workspacePromptName, workspacePromptText } from "../../workspace-prompt.ts";
 import { MAX_WORKSPACE_PROMPT_CHARS } from "../../limits.ts";
 
@@ -36,15 +37,21 @@ export function onPrompts(res: ServerResponse) {
 	answer(res, 200, { prompts });
 }
 
-/** One file, whole: the editor shows exactly what the daemon will read. */
+/** One file, whole: the editor shows exactly what the daemon will read, override first. */
 export function onPrompt(url: URL, res: ServerResponse) {
 	const name = promptName(url.searchParams.get("name") ?? "");
 	if (!name) return void fail(res, 400, "no such prompt");
+	let shipped = "";
+	let held = false;
 	try {
-		answer(res, 200, { name, text: readFileSync(join(PROMPT_DIR, name), "utf8") });
+		shipped = readFileSync(join(PROMPT_DIR, name), "utf8");
+		held = true;
 	} catch {
-		fail(res, 404, "no such prompt");
+		held = false;
 	}
+	const override = readPromptOverride(name);
+	if (!held && override === null) return void fail(res, 404, "no such prompt");
+	answer(res, 200, { name, text: effectivePromptText(name, shipped) });
 }
 
 /**
@@ -71,14 +78,18 @@ function replaceFile(path: string, text: string): { ok: true } | { ok: false; st
 	}
 }
 
-/** Saving one. The next thread that starts reads it; nothing already running changes under it. */
+/**
+ * Saving one. The save lands as an override under the state folder, never in the shipped copy, so an
+ * update cannot silently discard it. The next thread that starts reads it; nothing already running
+ * changes under it.
+ */
 export async function onPromptWrite(req: IncomingMessage, res: ServerResponse) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const name = promptName(body.name);
 	if (!name) return void fail(res, 400, "no such prompt");
 	if (typeof body.text !== "string") return void fail(res, 400, "a prompt is text");
-	const written = replaceFile(join(PROMPT_DIR, name), body.text);
+	const written = savePromptOverride(name, body.text);
 	if (!written.ok) return void fail(res, written.status, `could not save that prompt: ${written.reason}`);
 	answer(res, 200, { name, saved: true });
 }
