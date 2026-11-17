@@ -4,13 +4,16 @@
  * can be read back from.
  */
 import { join } from "node:path";
-import { STATE_DIR } from "./paths.ts";
+import { STATE_DIR, projectRootFor } from "./paths.ts";
 import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 
 
 
 export function sessionDir(workspace) {
-	return join(STATE_DIR, "sessions", workspace.id);
+	// Sessions live beside the board, per opened folder. The header cwd inside each file is untouched
+	// by the move; a child that has moved worktrees already resumes with `--fork` (see childArgv).
+	const root = projectRootFor(workspace);
+	return root ? join(root, "sessions", workspace.id) : join(STATE_DIR, "sessions", workspace.id);
 }
 
 

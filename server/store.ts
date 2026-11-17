@@ -4,7 +4,7 @@
  * across three generations of on-disk shape that must keep loading.
  */
 import { join } from "node:path";
-import { STATE_VERSION, boardFile, readJsonFile, writeJsonFile } from "./paths.ts";
+import { STATE_VERSION, boardFile, isScratchFolder, readJsonFile, registerWorkspaceFolder, writeJsonFile } from "./paths.ts";
 import { card, diskRow } from "./bus.ts";
 import { ownedCards } from "./routes/board/message.ts";
 import { activeConfig, homeDefaults, workspaceById } from "./workspaces.ts";
@@ -14,6 +14,8 @@ import { ROLE_NAMES } from "./child/roles.ts";
 import { MODE_NAMES, PATH_NAMES } from "./child/modes.ts";
 import { sweepTrees, thumbImages } from "./cards.ts";
 import { MAX_PUT_AWAY_CHILDREN } from "./limits.ts";
+import { ensureProjectStateDir, importLegacyProjectState } from "./state-storage.ts";
+import { existsSync, statSync } from "node:fs";
 
 
 
@@ -349,6 +351,7 @@ export function pruneHiddenThreads(board) {
 
 /** Load a workspace's board into memory, or hand back the one already there. */
 export function boardFor(workspace) {
+	registerWorkspaceFolder(workspace.id, workspace.folder);
 	const existing = boards.get(workspace.id);
 	if (existing) {
 		// A workspace that has simply been opened again keeps its place in the recent list.
@@ -373,6 +376,13 @@ export function boardFor(workspace) {
 		trash: [],
 		saveTimer: null,
 	};
+	// An unwritable or unsafe project home is a clear error here, never an unsaved in-memory board
+	// that only looks real until the first save is dropped. A folder that is gone is reported
+	// stale by the crossroads (`describeWorkspace`) rather than created as a side effect here.
+	if (workspace.folder && !isScratchFolder(workspace.folder) && existsSync(workspace.folder) && statSync(workspace.folder).isDirectory()) {
+		ensureProjectStateDir(workspace.folder, workspace.id);
+		importLegacyProjectState(workspace);
+	}
 	const saved = readJsonFile(boardFile(workspace), null);
 	// A board is born with the crossroads' defaults; its own file takes over from there. Boards saved
 	// before this was called `config` kept the same three fields under `defaults`.
@@ -455,7 +465,12 @@ export function boardFrom(url, res) {
 		fail(res, 409, "no such workspace");
 		return null;
 	}
-	return boardFor(workspace);
+	try {
+		return boardFor(workspace);
+	} catch (error) {
+		fail(res, 503, `project state could not be opened: ${error.message}`);
+		return null;
+	}
 }
 
 

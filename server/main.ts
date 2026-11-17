@@ -8,9 +8,9 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { INSTANCE, STATE_DIR, STATE_FILE, buildHash, readJsonFile, writeJsonFile } from "./paths.ts";
-import { createSession, endSession, hasSession, sessionCookie, token } from "./login.ts";
+import { createSession, endSession, hasSession, reloadLoginState, sessionCookie, token } from "./login.ts";
 import { answer, fail, rejectUpgrade, send, serveStatic, upgradeWebSocket } from "./http.ts";
-import { activeConfig, activeHomeDefaults, describeWorkspace, ensureScratch, welcomeClients, workspaceById, workspaceList, workspaces } from "./workspaces.ts";
+import { activeConfig, activeHomeDefaults, describeWorkspace, ensureScratch, reloadWorkspaces, welcomeClients, workspaceById, workspaceList, workspaces } from "./workspaces.ts";
 import { boardFor, boardFrom, boards, flushBoard } from "./store.ts";
 import { boardSettingsValues, settingsDocument } from "./settings-document.ts";
 import { boardMeta, cardsFor } from "./cards.ts";
@@ -39,6 +39,7 @@ import { onGitInit, onGitMsg, onGitPage, onGitVendor } from "./routes/gitgraph.t
 import { onCommand } from "./routes/board/command.ts";
 import { commandList, forMenu } from "./commands.ts";
 import { workdirOf } from "./worktrees/make.ts";
+import { acquireStateProfileLock, migrateLegacyGlobalState } from "./state-storage.ts";
 
 
 /** Opening a browser is what a desktop app does; a service run asks for `--no-open`. */
@@ -831,6 +832,18 @@ export function onListening() {
  * The entry calls this and nothing else, so importing this file never binds a socket.
  */
 export function start() {
+	// The one-time legacy import and the profile lock run here, at startup, rather than at import,
+	// so importing daemon code writes nothing. What the import copied is re-read into memory below.
+	try {
+		if (migrateLegacyGlobalState()) {
+			reloadWorkspaces();
+			reloadLoginState();
+		}
+		acquireStateProfileLock();
+	} catch (error) {
+		console.error(`pi-studio: ${error.message}`);
+		process.exit(1);
+	}
 	let host;
 	try {
 		host = bindHost();

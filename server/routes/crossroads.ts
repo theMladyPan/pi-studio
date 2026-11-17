@@ -10,6 +10,8 @@ import { SCRATCH_DIR } from "../paths.ts";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
 import { activeHomeDefaults, describeWorkspace, emptyScratchFolder, ensureScratch, homeDefaults, rememberWorkspace, setHomeDefaults } from "../workspaces.ts";
+import { ensureProjectStateDir } from "../state-storage.ts";
+import { ensureStateExcludes } from "../worktrees/make.ts";
 import { boardFor } from "../store.ts";
 import { nudgeWelcome, resync } from "../bus.ts";
 import { cardFor, clearBoard } from "../cards.ts";
@@ -38,7 +40,19 @@ export async function onOpenWorkspace(req, res) {
 		// A typo fails here rather than creating a tree somewhere the human did not look.
 		return void fail(res, 404, `no such folder: ${absolute}`);
 	}
-	const workspace = rememberWorkspace(absolute);
+	let workspace;
+	try {
+		// The scratch row keeps its temporary global state; every other folder gets a checked
+		// project home and, in a repository, the local excludes, before it is remembered. An
+		// unwritable or unsafe home is a clear refusal here, never an unsaved board.
+		if (absolute !== resolve(SCRATCH_DIR)) {
+			ensureProjectStateDir(absolute);
+			ensureStateExcludes(absolute);
+		}
+		workspace = rememberWorkspace(absolute);
+	} catch (error) {
+		return void fail(res, 503, `project state could not be opened: ${error.message}`);
+	}
 	const board = boardFor(workspace);
 	nudgeWelcome();
 	answer(res, 200, { workspace: describeWorkspace(workspace), board: { id: board.id }, cards: [...board.threads.values()].map(cardFor) });

@@ -11,7 +11,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** The repository root: this file is one directory inside it. */
@@ -20,9 +20,17 @@ export const PUBLIC_DIR = join(REPO_DIR, "public");
 /** The extension a child loads so a thread can draw on the board it belongs to. */
 export const BRIDGE = join(REPO_DIR, "bridge", "child-bridge.mjs");
 
-/** The folder a normal daemon uses; `INSTANCE` is empty only for this one. */
-function homeStateDir() {
+/** The folder a normal daemon used before global records moved to XDG state. Kept only as a copy-only import source. */
+function legacyStateDir() {
 	return join(homedir(), ".pi", "agent", "state", "pi-studio");
+}
+
+export const LEGACY_STATE_DIR = legacyStateDir();
+
+/** Global records by default live under XDG state, not beside pi's own state. */
+function defaultGlobalStateDir() {
+	const xdg = process.env.XDG_STATE_HOME ?? "";
+	return xdg && isAbsolute(xdg) ? join(xdg, "pi-studio") : join(homedir(), ".local", "state", "pi-studio");
 }
 
 function stateFromArgs() {
@@ -35,23 +43,31 @@ function stateFromArgs() {
 }
 
 /**
- * Everything durable lives beside pi's own state under a folder named after the app: the token, the
- * workspaces the human has opened, one board file per workspace, and the pi sessions behind its
- * threads.
+ * Global records live in `STATE_DIR`: the token, browser sessions, recent folders and defaults.
+ * Per-folder boards, sessions and Git-view state live under each opened folder's own `.pi-studio`
+ * directory instead (see `projectStateDir`).
  *
- * `PI_STUDIO_STATE` or `--state <folder>` moves all of it, so a second daemon can be booted against
- * its own folder while the real one keeps running. Without that, the only way to see a change work
- * was somebody's own board, which is a hope rather than a check.
+ * `PI_STUDIO_STATE` or `--state <folder>` moves the global records, so a second daemon can be booted
+ * against its own folder while the real one keeps running. An explicit root also namespaces the
+ * per-folder state under that root (see `PROJECT_NAMESPACE`), so development instances never share
+ * a project's board files with the real daemon.
  */
 const stateArg = stateFromArgs() || process.env.PI_STUDIO_STATE || "";
+export const HAS_EXPLICIT_STATE = Boolean(stateArg);
 // A `~` reaches node unexpanded when nobody goes through a shell, and `.agents/…` should be relative to
 // the folder the daemon was started in, which is what `resolve` already does.
-export const STATE_DIR = resolve(stateArg.startsWith("~/") ? join(homedir(), stateArg.slice(2)) : stateArg || homeStateDir());
+export const STATE_DIR = resolve(stateArg.startsWith("~/") ? join(homedir(), stateArg.slice(2)) : stateArg || defaultGlobalStateDir());
 /**
  * What this daemon calls itself when its folder is not the usual one. Two instances with the same
  * boards in two tabs are indistinguishable, and the tab title is the only place that can say which.
  */
-export const INSTANCE = STATE_DIR === homeStateDir() ? "" : basename(STATE_DIR);
+export const INSTANCE = HAS_EXPLICIT_STATE ? basename(STATE_DIR) : "";
+/**
+ * The namespace a project's `.pi-studio` directory is filed under. The default instance uses a plain
+ * name; an explicit `--state`/`PI_STUDIO_STATE` root uses a hash of that root, so two development
+ * instances pointed at the same project keep separate boards, sessions and Git-view state.
+ */
+export const PROJECT_NAMESPACE = HAS_EXPLICIT_STATE ? createHash("sha256").update(STATE_DIR).digest("hex").slice(0, 12) : "default";
 export const STATE_FILE = join(STATE_DIR, "daemon.json");
 export const WORKSPACES_FILE = join(STATE_DIR, "workspaces.json");
 
@@ -86,14 +102,62 @@ export function isScratchFolder(folder: string): boolean {
 /** The schema the board and workspace files are written with. */
 export const STATE_VERSION = 1;
 
-/** One board file per workspace, named by the folder's identity rather than by its path. */
-export function boardFile(workspace: { id: string }) {
-	return join(STATE_DIR, "boards", `${workspace.id}.json`);
+/** One board file per workspace. Per opened folder under `.pi-studio/<namespace>/boards/`; the legacy global layout is the fallback for callers that name only an id. */
+export function boardFile(workspace: { id: string; folder?: string }) {
+	const root = projectRootFor(workspace);
+	return root ? join(root, "boards", `${workspace.id}.json`) : join(STATE_DIR, "boards", `${workspace.id}.json`);
 }
 
-/** Persisted Git Graph view state and code reviews for one workspace. */
-export function gitgraphStateFile(workspace: { id: string }) {
-	return join(STATE_DIR, "gitgraph", `${workspace.id}.json`);
+/** Persisted Git Graph view state and code reviews for one workspace, beside its board. */
+export function gitgraphStateFile(workspace: { id: string; folder?: string }) {
+	const root = projectRootFor(workspace);
+	return root ? join(root, "gitgraph", `${workspace.id}.json`) : join(STATE_DIR, "gitgraph", `${workspace.id}.json`);
+}
+
+/**
+ * Where one opened folder's own state lives: `<folder>/.pi-studio/<namespace>`.
+ * State is per opened folder, while worktrees keep the existing repo-root `.agents` behaviour.
+ * No automatic remapping is done for renamed or cloned repositories: a workspace whose folder no
+ * longer exists is reported stale (see `describeWorkspace`), never silently repointed.
+ */
+export function projectStateDir(folder: string) {
+	return join(resolve(folder), ".pi-studio", PROJECT_NAMESPACE);
+}
+
+/**
+ * The folder an id was opened under, recorded when a workspace is remembered or its board loads.
+ * Callers that only carry an id (a transcript lookup, a removal) resolve through this registry so
+ * they land in the same project-local directory as the board that opened it.
+ */
+const openedFolders = new Map<string, string>();
+
+export function registerWorkspaceFolder(id: string, folder: string): void {
+	if (id && folder) openedFolders.set(id, resolve(folder));
+}
+
+export function workspaceFolderFor(id: string): string {
+	return openedFolders.get(id) ?? "";
+}
+
+/**
+ * The project root for a workspace, or "" when it has no project-local home: the scratch folder
+ * (whose state stays temporary and global) and callers that name only an id nobody registered.
+ */
+export function projectRootFor(workspace: { id: string; folder?: string }): string {
+	const folder = workspace.folder ? resolve(workspace.folder) : workspaceFolderFor(workspace.id);
+	if (!folder || isScratchPath(folder)) return "";
+	return projectStateDir(folder);
+}
+
+/** Whether a folder is the scratch folder, by path; the scratch row keeps global, temporary state. */
+function isScratchPath(folder: string): boolean {
+	if (!folder) return false;
+	if (resolve(folder) === resolve(SCRATCH_DIR)) return true;
+	try {
+		return realpathSync(folder) === realpathSync(SCRATCH_DIR);
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -119,15 +183,17 @@ export function readJsonFile<T>(file: string, fallback: T): T {
 	}
 }
 
-/** Write a JSON file whole, so a crash mid-write cannot leave half a board behind. */
-export function writeJsonFile(file: string, data: unknown): void {
+/** Write a JSON file whole, so a crash mid-write cannot leave half a board behind. Answers whether it landed. */
+export function writeJsonFile(file: string, data: unknown): boolean {
 	try {
 		mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
 		const temp = `${file}.${process.pid}.tmp`;
 		writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
 		renameSync(temp, file);
+		return true;
 	} catch (error) {
 		console.error(`pi-studio: could not write ${file}: ${(error as Error).message}`);
+		return false;
 	}
 }
 

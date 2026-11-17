@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
 	BRIDGE,
+	PROJECT_NAMESPACE,
 	PUBLIC_DIR,
 	REPO_DIR,
 	buildHash,
+	projectStateDir,
 	randomToken,
 	readJsonFile,
 	workspaceId,
@@ -47,6 +49,12 @@ test("a JSON file written whole reads back identical", () => {
 	} finally {
 		rmSync(folder, { recursive: true, force: true });
 	}
+});
+
+test("the default instance files project state under a plain namespace in the opened folder", () => {
+	// This file imports paths without an explicit state root, so the default namespace applies.
+	assert.equal(PROJECT_NAMESPACE, "default");
+	assert.equal(projectStateDir("/a/folder"), join("/a/folder", ".pi-studio", "default"));
 });
 
 test("a folder keeps one id, and a token is 32 hex", () => {

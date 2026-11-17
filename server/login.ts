@@ -17,14 +17,14 @@ const SESSIONS_FILE = join(STATE_DIR, "sessions.json");
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
-export const token: string = (() => {
+export let token: string = (() => {
 	const saved = readJsonFile<any>(STATE_FILE, null);
 	return typeof saved?.token === "string" && saved.token ? saved.token : randomToken();
 })();
 
 /** Cookies are not isolated by port, so two daemons on one host would share a name without the token's hash in it. */
-const COOKIE = `pi-studio-${sha(token).slice(0, 8)}`;
-const owner = sha(token).slice(0, 16);
+let COOKIE = `pi-studio-${sha(token).slice(0, 8)}`;
+let owner = sha(token).slice(0, 16);
 
 /** sha256(session id) to the moment it ends, in milliseconds. Insertion order is age, so the first key is the oldest. */
 const sessions = new Map<string, number>();
@@ -38,7 +38,8 @@ function prune() {
 	for (const [key, ends] of sessions) if (ends <= Date.now()) sessions.delete(key);
 }
 
-{
+function loadSessions() {
+	sessions.clear();
 	const saved = readJsonFile<any>(SESSIONS_FILE, null);
 	const kept = saved?.owner === owner && saved.sessions && typeof saved.sessions === "object" ? saved.sessions : {};
 	for (const [key, ends] of Object.entries(kept)) if (typeof ends === "number") sessions.set(key, ends);
@@ -46,6 +47,20 @@ function prune() {
 	// file follows on the next create or logout: a test that only imports the daemon would otherwise prune
 	// the human's own state folder the moment it ran.
 	prune();
+}
+
+loadSessions();
+
+/**
+ * Re-read token and browser sessions from disk. Called after the one-time legacy import copies them
+ * into the XDG home at startup, so the token in memory is the imported one.
+ */
+export function reloadLoginState(): void {
+	const saved = readJsonFile<any>(STATE_FILE, null);
+	if (typeof saved?.token === "string" && saved.token) token = saved.token;
+	COOKIE = `pi-studio-${sha(token).slice(0, 8)}`;
+	owner = sha(token).slice(0, 16);
+	loadSessions();
 }
 
 /** A new session's id, to be set as a cookie. Never expires early and is never extended. */

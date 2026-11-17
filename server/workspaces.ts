@@ -3,7 +3,7 @@
  * The workspaces on disk: the list the crossroads shows, the defaults a new board starts with, and the
  * one line of facts each one is described by.
  */
-import { SCRATCH_DIR, STATE_VERSION, WORKSPACES_FILE, boardFile, readJsonFile, workspaceId, writeJsonFile } from "./paths.ts";
+import { SCRATCH_DIR, STATE_VERSION, WORKSPACES_FILE, boardFile, readJsonFile, registerWorkspaceFolder, workspaceId, writeJsonFile } from "./paths.ts";
 import { boards } from "./store.ts";
 import { sessionFacts } from "./session.ts";
 import { basename, join } from "node:path";
@@ -117,27 +117,42 @@ import { spawnSync } from "node:child_process";
  */
 
 /** @type {Workspace[]} newest first, because that is the order the crossroads shows. */
-export const workspaces = (() => {
-	const saved = readJsonFile(WORKSPACES_FILE, null);
-	if (!saved || saved.version !== STATE_VERSION || !Array.isArray(saved.workspaces)) return [];
-	return saved.workspaces
-		.filter((workspace) => typeof workspace?.folder === "string" && workspace.folder)
-		.map((workspace) => ({
-			id: typeof workspace.id === "string" && workspace.id ? workspace.id : workspaceId(workspace.folder),
-			folder: workspace.folder,
-			name: typeof workspace.name === "string" && workspace.name ? workspace.name : basename(workspace.folder),
-			openedAt: Number.isFinite(workspace.openedAt) ? workspace.openedAt : 0,
-		}));
-})();
+export const workspaces = [];
+
+function savedWorkspacesFile() {
+	return readJsonFile(WORKSPACES_FILE, null);
+}
+
+function loadWorkspaces() {
+	const saved = savedWorkspacesFile();
+	workspaces.length = 0;
+	if (!saved || saved.version !== STATE_VERSION || !Array.isArray(saved.workspaces)) return;
+	workspaces.push(
+		...saved.workspaces
+			.filter((workspace) => typeof workspace?.folder === "string" && workspace.folder)
+			.map((workspace) => ({
+				id: typeof workspace.id === "string" && workspace.id ? workspace.id : workspaceId(workspace.folder),
+				folder: workspace.folder,
+				name: typeof workspace.name === "string" && workspace.name ? workspace.name : basename(workspace.folder),
+				openedAt: Number.isFinite(workspace.openedAt) ? workspace.openedAt : 0,
+			}))
+	);
+	for (const workspace of workspaces) registerWorkspaceFolder(workspace.id, workspace.folder);
+}
 
 
 
 /** What a new board is born with, set on the crossroads and shared by every workspace opened after it. */
-export let homeDefaults = (() => {
-	const saved = readJsonFile(WORKSPACES_FILE, null);
+export let homeDefaults = {};
+
+function loadHomeDefaults() {
+	const saved = savedWorkspacesFile();
 	const held = saved?.defaults;
-	if (!held || typeof held !== "object") return {};
 	const known = {};
+	if (!held || typeof held !== "object") {
+		homeDefaults = known;
+		return;
+	}
 	if (typeof held.provider === "string" && held.provider) known.provider = held.provider;
 	if (typeof held.model === "string" && held.model) known.model = held.model;
 	if (THINKING_LEVELS.includes(held.thinking)) known.thinking = held.thinking;
@@ -163,8 +178,21 @@ export let homeDefaults = (() => {
 	// The program a code card's file opens in. A name found on PATH, or the path to the binary; empty is
 	// "nobody chose one yet", so an empty string is dropped rather than carried around.
 	if (typeof held.editor === "string" && held.editor) known.editor = held.editor;
-	return known;
-})();
+	homeDefaults = known;
+}
+
+loadWorkspaces();
+loadHomeDefaults();
+
+/**
+ * Re-read the global records from disk. Called after the one-time legacy import copies them into
+ * the XDG home at startup, so in-memory rows and defaults are the imported ones, not the empty
+ * home this module first loaded.
+ */
+export function reloadWorkspaces() {
+	loadWorkspaces();
+	loadHomeDefaults();
+}
 
 
 
@@ -231,6 +259,7 @@ export function rememberWorkspace(folder) {
 		workspaces.sort((a, b) => b.openedAt - a.openedAt);
 	}
 	saveWorkspaces();
+	registerWorkspaceFolder(workspace.id, resolved);
 	return workspace;
 }
 
