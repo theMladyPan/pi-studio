@@ -78,6 +78,32 @@ test("an installed 1.30.x whose files cannot be read is not served, and the next
 	});
 });
 
+test("a copy the editor has since deleted is not served from the memory of it", () => {
+	// The daemon remembers a hit so it does not walk five folders per page load, but VS Code deletes an
+	// extension folder on its next restart while the daemon keeps running. The remembered paths then name
+	// files that are gone, which the page reads as a 404 on every reload until the daemon is restarted.
+	const home = mkdtempSync(join(tmpdir(), "pi-studio-vendor-home-"));
+	const before = process.env.HOME;
+	try {
+		process.env.HOME = home;
+		clearBundleCache();
+		const retired = install(join(home, ".vscode", "extensions"), "1.30.0");
+		const left = install(join(home, ".vscode-server", "extensions"), "1.30.0");
+		const first = findBundle();
+		assert.equal(first.ok, true, first.ok ? "" : first.reason);
+		if (first.ok) assert.equal(first.dir, retired, "the first copy found is the one served");
+		rmSync(retired, { recursive: true, force: true });
+		const second = findBundle();
+		assert.equal(second.ok, true, second.ok ? "" : second.reason);
+		if (second.ok) assert.equal(second.dir, left, "the copy still on disk is served instead of the dead one");
+	} finally {
+		if (before === undefined) delete process.env.HOME;
+		else process.env.HOME = before;
+		clearBundleCache();
+		rmSync(home, { recursive: true, force: true });
+	}
+});
+
 test("a folder named 1.30.x but declaring another version is skipped", () => {
 	withRoots((root) => {
 		clearBundleCache();
