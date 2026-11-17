@@ -6,10 +6,10 @@ test("the menus still hide every action this tab cannot run", () => {
 	// These are the entries whose command `dispatch.ts` still answers with "This tab cannot do that
 	// yet.": a remote write, an archive, or a terminal. `test/gitgraph-actions.test.ts` holds the other
 	// half of this decision, that nothing enabled here is refused there.
-	for (const action of ["push", "createPullRequest", "createArchive"] as const) {
+	for (const action of ["createPullRequest", "createArchive"] as const) {
 		assert.equal(ENABLED_CONTEXT_ACTIONS.branch[action], false, `branch.${action}`);
 	}
-	for (const action of ["delete", "fetch", "pull", "createPullRequest", "createArchive"] as const) {
+	for (const action of ["delete", "fetch", "createPullRequest", "createArchive"] as const) {
 		assert.equal(ENABLED_CONTEXT_ACTIONS.remoteBranch[action], false, `remoteBranch.${action}`);
 	}
 	for (const action of ["push", "createArchive"] as const) {

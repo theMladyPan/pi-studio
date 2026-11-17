@@ -59,8 +59,6 @@ const UNAVAILABLE_COMMANDS = [
 	"openExternalDirDiff",
 	"openExtensionSettings",
 	"openTerminal",
-	"pullBranch",
-	"pushBranch",
 	"pushTag",
 	"rescanForRepos",
 	"showErrorMessage",
@@ -296,6 +294,9 @@ async function answer(board: DispatchBoard, request: GitGraphRequest, paths: str
 		case "createBranch":
 			// The page's commands that report every step they ran, because they run more than one.
 			return [{ command: request.command, errors: (await runAction(request.repo, request, entry)).errors }];
+		case "pushBranch":
+			// The push reports every remote it ran, and echoes the flag the bundle asked with.
+			return [{ command: "pushBranch", willUpdateBranchConfig: request.willUpdateBranchConfig, errors: (await runAction(request.repo, request, entry)).errors }];
 		case "checkoutBranch": {
 			// The page words its own failure report from this field ("… & Pull Changes"), so the pull it asked
 			// for is echoed whether or not the checkout worked.
@@ -323,6 +324,7 @@ async function answer(board: DispatchBoard, request: GitGraphRequest, paths: str
 		case "fetch":
 		case "popStash":
 		case "pruneRemote":
+		case "pullBranch":
 		case "pushStash":
 		case "renameBranch":
 		case "resetToCommit":

@@ -122,7 +122,7 @@ test("loadRepoInfo and loadCommits echo the refreshId the page is waiting for", 
 test("a command this tab still has no way to run is answered with one sentence and no git call at all", async () => {
 	const reply = await one({ command: "createArchive", repo, ref: "HEAD" });
 	assert.equal(reply.error, "This tab cannot do that yet.");
-	for (const command of ["openTerminal", "pushBranch", "pullBranch", "createPullRequest", "exportRepoConfig", "deleteRemoteBranch"]) {
+	for (const command of ["openTerminal", "createPullRequest", "exportRepoConfig", "deleteRemoteBranch"]) {
 		assert.equal(dispatch.UNAVAILABLE[command], "This tab cannot do that yet.");
 	}
 });

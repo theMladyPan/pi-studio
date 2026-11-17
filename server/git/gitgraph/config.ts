@@ -88,7 +88,7 @@ export const ENABLED_CONTEXT_ACTIONS: ContextMenuActionsVisibility = {
 		delete: true,
 		merge: true,
 		rebase: true,
-		push: false,
+		push: true,
 		createPullRequest: false,
 		createArchive: false,
 		selectInBranchesDropdown: true,
@@ -110,12 +110,12 @@ export const ENABLED_CONTEXT_ACTIONS: ContextMenuActionsVisibility = {
 	},
 	remoteBranch: {
 		checkout: true,
-		// Deleting a remote branch, fetching one into a local branch and pulling one are remote writes, and
-		// the commands behind them are still refused; the menu entry would be a click that goes nowhere.
+		// Deleting a remote branch and fetching one into a local branch are remote writes whose commands are
+		// still refused; the menu entry would be a click that goes nowhere.
 		delete: false,
 		fetch: false,
 		merge: true,
-		pull: false,
+		pull: true,
 		createPullRequest: false,
 		createArchive: false,
 		selectInBranchesDropdown: true,
