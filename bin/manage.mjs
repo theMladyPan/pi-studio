@@ -156,6 +156,13 @@ export function installFromDir(sourceDir, flags = {}) {
 	const identity = validateTree(sourceDir);
 	const buildBytes = readFileSync(join(resolve(sourceDir), "build.json"));
 	checkInstallOwnership(installRoot, binDir);
+	// One rule for every entry that installs a tree (the download installer, `install:local`, the
+	// update): an older tree never replaces a newer managed copy, so a stale installer left in a shell
+	// history cannot walk an installation backwards.
+	const installed = installedIdentity(installRoot);
+	if (installed && compareVersions(identity.version, installed.identity.version) < 0) {
+		fail(`refusing downgrade from ${installed.identity.version} to ${identity.version}; the installed copy is newer and was left unchanged`);
+	}
 
 	ensurePlainDir(join(installRoot, "versions"), "versions folder");
 	let name = versionDirName(identity, buildBytes);

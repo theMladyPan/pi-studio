@@ -59,8 +59,16 @@ function tarLines(archive: string, verbose: boolean): string[] {
 }
 
 type Packaged = { out: string; version: string; archiveName: string; archive: Buffer; checksum: string; installer: string };
+type Official = { version: string; commit: string; archiveName: string; bytes: Buffer; sha: string; checksum: string };
+
+/** The one path the manager asks for the latest release, under the fixture's API root. */
+const RELEASE_PATH = "/api/repos/theMladyPan/pi-studio/releases/latest";
 
 let packaged: Packaged;
+/** The official build of the packaged version, which is the only archive the download installer takes. */
+let official: Official;
+/** Trees this file makes (official archives, pinned installers), removed when the file is done. */
+const scratch: string[] = [];
 
 before(async () => {
 	const out = mkdtempSync(join(tmpdir(), "pi-studio-package-out-"));
@@ -76,20 +84,32 @@ before(async () => {
 		checksum: readFileSync(join(out, `${archiveName}.sha256`), "utf8"),
 		installer: readFileSync(join(out, "install.sh"), "utf8"),
 	};
+	official = officialArchive(version);
 });
 
 after(() => {
 	if (packaged) rmSync(packaged.out, { recursive: true, force: true });
+	for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
 });
 
-type Served = { installScript: string; archive: Buffer; checksum: string; release: unknown; assets: Record<string, Buffer> };
+type Served = {
+	version: string;
+	archiveName: string;
+	installScript: string;
+	archive: Buffer;
+	checksum: string;
+	release: unknown;
+	assets: Record<string, Buffer>;
+};
 type Fixture = { baseUrl: string; apiUrl: string; serve: (next: Partial<Served>) => void; close: () => Promise<void> };
 
 async function startFixture(t: { after: (fn: () => Promise<void> | void) => void }): Promise<Fixture> {
 	const served: Served = {
+		version: packaged.version,
+		archiveName: official.archiveName,
 		installScript: packaged.installer,
-		archive: packaged.archive,
-		checksum: packaged.checksum,
+		archive: official.bytes,
+		checksum: official.checksum,
 		release: null,
 		assets: {},
 	};
@@ -101,12 +121,12 @@ async function startFixture(t: { after: (fn: () => Promise<void> | void) => void
 			res.end(served.installScript);
 			return;
 		}
-		if (url.pathname === `/v${packaged.version}/${packaged.archiveName}`) {
+		if (url.pathname === `/v${served.version}/${served.archiveName}`) {
 			res.writeHead(200, { "content-type": "application/octet-stream" });
 			res.end(served.archive);
 			return;
 		}
-		if (url.pathname === `/v${packaged.version}/${packaged.archiveName}.sha256`) {
+		if (url.pathname === `/v${served.version}/${served.archiveName}.sha256`) {
 			res.writeHead(200, { "content-type": "text/plain" });
 			res.end(served.checksum);
 			return;
@@ -117,7 +137,7 @@ async function startFixture(t: { after: (fn: () => Promise<void> | void) => void
 			res.end(asset);
 			return;
 		}
-		if (url.pathname === "/api/theMladyPan/pi-studio/releases/latest") {
+		if (url.pathname === RELEASE_PATH) {
 			res.writeHead(200, { "content-type": "application/json" });
 			res.end(JSON.stringify(served.release));
 			return;
@@ -208,10 +228,10 @@ function installedVersion(roots: ReturnType<typeof tempRoots>): string {
 	return entry.version;
 }
 
-/** An official archive of another version, built the way a release is, to update onto. */
-function officialArchive(version: string, t: { after: (fn: () => void) => void }) {
+/** An official archive of a version, built from the packaged tree the way a release build is. */
+function officialArchive(version: string, buildOverrides: Record<string, unknown> = {}): Official {
 	const dir = mkdtempSync(join(tmpdir(), `pi-studio-official-${version}-`));
-	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	scratch.push(dir);
 	const folder = `pi-studio-${version}`;
 	const tree = join(dir, folder);
 	mkdirSync(tree, { recursive: true });
@@ -222,14 +242,23 @@ function officialArchive(version: string, t: { after: (fn: () => void) => void }
 	const commit = "b".repeat(40);
 	writeFileSync(
 		join(tree, "build.json"),
-		`${JSON.stringify({ name: "pi-studio", version, commit, commitShort: commit.slice(0, 7), tag: `v${version}`, official: true, custom: false, dirty: false, source: "source-build" }, null, 2)}\n`,
+		`${JSON.stringify({ name: "pi-studio", version, commit, commitShort: commit.slice(0, 7), tag: `v${version}`, official: true, custom: false, dirty: false, source: "source-build", ...buildOverrides }, null, 2)}\n`,
 	);
 	const archiveName = `${folder}.tar.gz`;
 	const archivePath = join(dir, archiveName);
 	execFileSync("tar", ["-czf", archivePath, "-C", dir, folder], { timeout: CHILD_TIMEOUT_MS });
 	const bytes = readFileSync(archivePath);
 	const sha = createHash("sha256").update(bytes).digest("hex");
-	return { version, commit, archiveName, bytes, sha, checksumName: `${archiveName}.sha256` };
+	return { version, commit, archiveName, bytes, sha, checksum: `${sha}  ${archiveName}\n` };
+}
+
+/** The published installer for a version: the template with its version token filled in. */
+function installerFor(version: string): string {
+	const dir = mkdtempSync(join(tmpdir(), `pi-studio-pinned-${version}-`));
+	scratch.push(dir);
+	const path = join(dir, "install.sh");
+	writeFileSync(path, readFileSync(template, "utf8").replaceAll("@@PI_STUDIO_VERSION@@", version));
+	return path;
 }
 
 test("package writes the tarball, its checksum and the pinned installer under the names the updater downloads", () => {
@@ -316,37 +345,31 @@ test("curl … | sh installs the pinned release, which then answers --version an
 	assert.deepEqual(readdirSync(roots.tmp), [], "the private temporary folder is cleaned up");
 });
 
-test("the installed copy updates to the next official release, then uninstalls and keeps state", async (t) => {
+test("the official copy updates to the next official release, then uninstalls and keeps state", async (t) => {
 	const roots = tempRoots(t);
 	const fixture = await startFixture(t);
 	const installed = await runInstaller(roots, fixture);
 	assert.equal(installed.status, 0, installed.stderr || installed.stdout);
 
-	const next = officialArchive("0.2.0", t);
+	const next = officialArchive("0.2.0");
 	// The update path reads the release from the GitHub API root and its assets from the URLs the
 	// release names, so both are answered by the one loopback fixture.
 	fixture.serve({
-		assets: { [next.archiveName]: next.bytes, [next.checksumName]: Buffer.from(`${next.sha}  ${next.archiveName}\n`) },
+		assets: { [next.archiveName]: next.bytes, [`${next.archiveName}.sha256`]: Buffer.from(next.checksum) },
 		release: {
 			tag_name: "v0.2.0",
 			draft: false,
 			prerelease: false,
 			assets: [
 				{ name: next.archiveName, browser_download_url: `${fixture.baseUrl}/assets/${next.archiveName}` },
-				{ name: next.checksumName, browser_download_url: `${fixture.baseUrl}/assets/${next.checksumName}` },
+				{ name: `${next.archiveName}.sha256`, browser_download_url: `${fixture.baseUrl}/assets/${next.archiveName}.sha256` },
 			],
 		},
 	});
 
 	writeFileSync(join(roots.stateDir, "keep.txt"), "user data stays\n");
-	const refused = await run(process.execPath, [join(roots.binDir, "pi-studio"), "update"], {
-		env: envFor(roots, fixture, { PI_STUDIO_GITHUB_API: fixture.apiUrl }),
-	});
-	assert.notEqual(refused.status, 0);
-	assert.match(refused.stderr, /--replace-custom/, "a custom copy is never replaced without consent");
-	assert.equal(installedVersion(roots), packaged.version);
-
-	const updated = await run(process.execPath, [join(roots.binDir, "pi-studio"), "update", "--replace-custom"], {
+	// The bootstrap installs the official build, so the update needs no --replace-custom consent.
+	const updated = await run(process.execPath, [join(roots.binDir, "pi-studio"), "update"], {
 		env: envFor(roots, fixture, { PI_STUDIO_GITHUB_API: fixture.apiUrl }),
 	});
 	assert.equal(updated.status, 0, updated.stderr || updated.stdout);
@@ -416,7 +439,7 @@ test("an archive holding a link, a special file or an escaping path is refused e
 test("a release asset of another version is refused rather than installed in place of the pinned one", async (t) => {
 	const roots = tempRoots(t);
 	const fixture = await startFixture(t);
-	const other = officialArchive("0.2.0", t);
+	const other = officialArchive("0.2.0");
 	fixture.serve({
 		archive: other.bytes,
 		checksum: `${other.sha}  ${packaged.archiveName}\n`,
@@ -425,6 +448,46 @@ test("a release asset of another version is refused rather than installed in pla
 	assert.notEqual(refused.status, 0);
 	assert.match(refused.stderr, /holds 0\.2\.0, and this installer names/);
 	assert.ok(!existsSync(roots.installRoot), "nothing was installed");
+});
+
+test("a custom archive is refused by the download installer, which installs only the release it names", async (t) => {
+	const roots = tempRoots(t);
+	const fixture = await startFixture(t);
+	// The same version, repacked from a checkout that is not the clean release tag: `npm run package`
+	// still writes it, and it is not something a public download may install.
+	const custom = officialArchive(packaged.version, { tag: null, official: false, custom: true });
+	fixture.serve({ archive: custom.bytes, checksum: custom.checksum });
+	const refused = await runInstaller(roots, fixture);
+	assert.notEqual(refused.status, 0);
+	assert.match(refused.stderr, /not the official build of a release/);
+	assert.ok(!existsSync(roots.installRoot), "nothing was installed");
+	assert.ok(!existsSync(join(roots.binDir, "pi-studio")), "no launcher was written");
+	assert.deepEqual(readdirSync(roots.tmp), [], "the archive is not left behind");
+});
+
+test("an older installer refuses to replace a newer managed copy", async (t) => {
+	const roots = tempRoots(t);
+	const fixture = await startFixture(t);
+	const [major, minor] = packaged.version.split(".").map(Number);
+	const newerVersion = `${major}.${minor + 1}.0`;
+	const newer = officialArchive(newerVersion);
+	fixture.serve({
+		version: newerVersion,
+		archiveName: newer.archiveName,
+		archive: newer.bytes,
+		checksum: newer.checksum,
+	});
+	const newerInstaller = installerFor(newerVersion);
+	const installed = await run("sh", [newerInstaller], { env: envFor(roots, fixture) });
+	assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+	assert.equal(installedVersion(roots), newerVersion);
+
+	// The pinned installer from before that release, offered the same release host: it is a downgrade.
+	fixture.serve({ version: packaged.version, archiveName: official.archiveName, archive: official.bytes, checksum: official.checksum });
+	const downgrade = await runInstaller(roots, fixture);
+	assert.notEqual(downgrade.status, 0);
+	assert.match(downgrade.stderr, /downgrade/);
+	assert.equal(installedVersion(roots), newerVersion, "the newer installed copy is left in place");
 });
 
 test("a foreign launcher and a foreign install root are refused, and their files are kept", async (t) => {

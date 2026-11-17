@@ -4,9 +4,10 @@
 #   curl -fsSL https://github.com/theMladyPan/pi-studio/releases/latest/download/install.sh | sh
 #
 # This file downloads the one release it names, verifies its checksum, extracts it into a private
-# temporary folder, and hands the verified tree to the same manager the app updates itself with
-# (`bin/manage.mjs`, `installFromDir`). It never runs npm, git or sudo, never edits your shell
-# profile, and never touches a state folder, a source clone, Node or pi.
+# temporary folder, checks that the archive is the official build of exactly that release, and hands
+# the verified tree to the same manager the app updates itself with (`bin/manage.mjs`,
+# `installFromDir`). It never runs npm, git or sudo, never edits your shell profile, and never touches
+# a state folder, a source clone, Node or pi.
 #
 # Only POSIX sh, curl, tar and an external Node >= 22.18 are used. Node, git and pi are checked;
 # missing ones are reported with guidance instead of being installed for you.
@@ -37,6 +38,12 @@ PI_STUDIO_VERSION='@@PI_STUDIO_VERSION@@'
 
 # Two programs handed to node: the release's own verifier and the staged install entry. They are
 # single-quoted, so sh expands nothing inside them; neither contains a single quote.
+#
+# The install entry reads the archive's own metadata before the manager module is imported, so an
+# archive that is not the official build of this release never reaches installation code: build.json
+# and package.json both have to name this version, the build tag has to be v<version>, and the build
+# has to read official with its custom flag clear. `npm run install:local` is the path for a custom
+# build from a checkout; a public download installs only the published release.
 PI_STUDIO_CHECKSUM_JS='
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -62,16 +69,26 @@ import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const [appDir, consent, version] = process.argv.slice(1);
-const manager = await import(pathToFileURL(join(appDir, "bin", "manage.mjs")).href);
-const runtime = await import(pathToFileURL(join(appDir, "bin", "runtime.mjs")).href);
 const flags = {};
 if (consent === "1") flags["replace-custom"] = true;
 
 try {
 	const identity = JSON.parse(readFileSync(join(appDir, "build.json"), "utf8"));
+	const pkg = JSON.parse(readFileSync(join(appDir, "package.json"), "utf8"));
 	if (identity.version !== version) {
 		throw new Error("pi-studio: the archive holds " + identity.version + ", and this installer names " + version + ", so it was not installed");
 	}
+	if (pkg.version !== version) {
+		throw new Error("pi-studio: the archive package.json holds " + pkg.version + ", and this installer names " + version + ", so it was not installed");
+	}
+	if (identity.official !== true || identity.custom !== false) {
+		throw new Error("pi-studio: the archive is not the official build of a release (official " + String(identity.official) + ", tag " + JSON.stringify(identity.tag ?? null) + "); a build from a checkout is installed with npm run install:local, so nothing was installed");
+	}
+	if (identity.tag !== "v" + version) {
+		throw new Error("pi-studio: the archive names tag " + JSON.stringify(identity.tag ?? null) + ", and this installer installs v" + version + ", so nothing was installed");
+	}
+	const manager = await import(pathToFileURL(join(appDir, "bin", "manage.mjs")).href);
+	const runtime = await import(pathToFileURL(join(appDir, "bin", "runtime.mjs")).href);
 	const installed = manager.installedIdentity(runtime.installRootDir(flags));
 	if (installed && installed.identity.custom && !flags["replace-custom"]) {
 		throw new Error(
