@@ -507,7 +507,10 @@
 
   header {
     position: fixed; top: 0; left: 0; right: 0; height: 44px; z-index: 10;
-    display: flex; align-items: center; gap: 14px; padding: 0 14px; font-size: 13px;
+    /* The three drawer doors sit beside the board's own buttons. A window too narrow to hold them all
+       scrolls the row rather than hiding the last ones, because a key with no visible door is a key
+       nobody finds. */
+    display: flex; align-items: center; gap: 14px; padding: 0 14px; font-size: 13px; overflow-x: auto;
     background: rgba(13,17,23,.9); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border);
   }
   header .brand { font-weight: 700; letter-spacing: .3px; }
@@ -567,35 +570,30 @@
   #statCtx.busy:hover #statCtxValue, #statCtx.busy:focus-visible #statCtxValue { visibility: visible; }
   #statCtx.busy:hover .act, #statCtx.busy:focus-visible .act { visibility: hidden; }
 
-  /* activity rail */
-  #rail {
+  /* The left drawers: files, activity and cards share one column, and one of them is open at a time.
+     The width is the rail's, so the drag handle and the remembered width outlive the rail they came
+     from. `rail-off` is the shut column, which is what a human who hid the rail chose. */
+  #drawers {
     position: fixed; top: 44px; left: 0; bottom: 0; width: var(--rail); z-index: 8;
     background: #0a0f16; border-right: 1px solid var(--border);
     display: flex; flex-direction: column; font: 12px var(--mono); overflow: hidden;
   }
-  body.rail-off #rail { display: none; }
-  /* A collapsed rail leaves a small tab, so activity is never more than one click away. */
-  #railOpen { display: none; position: fixed; top: 52px; left: 0; z-index: 8;
-    background: #0a0f16; border: 1px solid var(--border); border-left: none;
-    border-radius: 0 6px 6px 0; color: var(--muted); font: 11px var(--mono);
-    text-transform: uppercase; letter-spacing: .6px; padding: 8px 6px; cursor: pointer;
-    writing-mode: vertical-rl; }
-  #railOpen:hover { color: var(--text); }
-  #railOpen b { color: var(--accent); }
-  body.rail-off #railOpen { display: block; }
+  body.rail-off #drawers { display: none; }
+  #drawers > .drawer { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  #drawers > .drawer.on { display: flex; }
   /* Drag handle. Six invisible pixels that turn into a line under the cursor. */
   #railGrip { position: absolute; top: 0; bottom: 0; right: 0; width: 6px;
     cursor: col-resize; background: transparent; z-index: 2; }
   #railGrip:hover, body.rail-resizing #railGrip { background: var(--accent-dim); }
   body.rail-resizing { cursor: col-resize; user-select: none; }
-  #rail .rail-head { padding: 8px 12px 4px; color: var(--muted); font-size: 11px;
+  .rail-head { padding: 8px 12px 4px; color: var(--muted); font-size: 11px;
     text-transform: uppercase; letter-spacing: .6px; display: flex; gap: 6px; align-items: center; }
   /* `display: flex` above outranks the browser's own `[hidden]`, so an empty head is hidden here too. */
-  #rail .rail-head[hidden] { display: none; }
-  #rail .rail-head b { color: var(--accent); font-weight: 600; }
-  #railToggle { margin-left: auto; background: none; border: none; color: var(--muted);
+  .rail-head[hidden] { display: none; }
+  .rail-head b { color: var(--accent); font-weight: 600; }
+  .rail-head .rail-close { margin-left: auto; background: none; border: none; color: var(--muted);
     cursor: pointer; font: 12px var(--mono); padding: 0 2px; line-height: 1; }
-  #railToggle:hover { color: var(--text); }
+  .rail-head .rail-close:hover { color: var(--text); }
   #railNow { padding: 0 8px 6px; display: flex; flex-direction: column; gap: 4px; }
   /* A running row lives in its thread's card, so this strip holds only the runs whose card is closed. */
   #railNow:empty { display: none; }
@@ -902,7 +900,6 @@
     font: 12px var(--mono); line-height: 1; padding: 1px 4px; border-radius: 50%; }
   .composer .ref button:hover { background: rgba(210,153,34,.25); }
 
-  /* Folder picker: anchored above the composer, sized so a folder fits in one glance. */
   /* One button starts a thread. It sits where the eye goes for "make another one" and stays out
      of the canvas, so it can never be buried under a card. */
   #newThread {
@@ -957,44 +954,8 @@
   #runtimeList .pick-more.first { border-bottom: 1px solid var(--border); border-radius: 6px 6px 0 0; margin-bottom: 2px; }
   #runtimeList .pick-note, #cmdList .pick-note { color: var(--muted); font: 11px var(--mono); padding: 4px 6px; }
 
-  #picker { position: fixed; z-index: 2000; display: flex; flex-direction: column; gap: 6px;
-    padding: 8px; background: rgba(13,17,23,.98); border: 1px solid var(--border-bright);
-    border-radius: 10px; box-shadow: 0 18px 40px rgba(0,0,0,.55); }
-  #picker[hidden] { display: none; }
-  #picker .p-row { display: flex; gap: 6px; align-items: center; }
-  #picker input[type=text] { flex: 1; min-width: 0; font: 11px var(--mono); color: var(--text);
-    background: #0d1117; border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
-  #picker input[type=text]:focus { outline: none; border-color: var(--accent-dim); }
-  #picker button { font: 11px var(--mono); color: var(--muted); background: #161b22;
-    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
-  #picker button:hover { color: var(--text); border-color: var(--border-bright); }
-  #picker button:disabled { opacity: .4; cursor: default; }
-  #picker .p-hidden { display: flex; align-items: center; gap: 4px; font: 11px var(--mono);
-    color: var(--muted); white-space: nowrap; cursor: pointer; }
-  #pickList { max-height: 230px; overflow: auto; border: 1px solid var(--border);
-    border-radius: 6px; background: #0d1117; }
-  /* Each row is a real button so the list can be walked with the keyboard; the button look is
-     stripped so a row still reads as a row. */
-  #pickList .p-item { display: flex; align-items: center; gap: 7px; padding: 3px 6px; width: 100%;
-    font: 12px var(--mono); color: var(--text); background: none; border: 0; text-align: left;
-    cursor: pointer; }
-  #pickList .p-item:hover, #pickList .p-item.hl { background: #161b22; }
-  #pickList .p-item.on .p-name { color: var(--green); }
-  #pickList .p-item .p-tick { color: var(--muted); font-size: 10px; width: 9px; }
-  #pickList .p-item.on .p-tick { color: var(--green); }
-  #pickList .p-item .p-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #pickList .p-item.dir .p-name { color: var(--accent); }
-  #pickList .p-item .p-open { border: 0; background: transparent; color: var(--muted);
-    cursor: pointer; font: 13px var(--mono); padding: 0 4px; }
-  #pickList .p-item .p-open:hover { color: var(--text); }
-  #pickList .p-empty { padding: 12px; color: var(--muted); font: 11px var(--mono); text-align: center; }
-  #pickError { font: 11px var(--mono); color: var(--red); padding: 0 2px; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; }
-  #pickError[hidden] { display: none; }
-  #pickCount { flex: 1; font: 11px var(--mono); color: var(--muted); }
-
-  /* The `@` list: the same panel and the same rows as the picker above, hung off the field that is
-     being typed in. It is one element for the whole board, reused by every field. */
+  /* The `@` list: the same panel the model picker wears, hung off the field that is being typed in.
+     It is one element for the whole board, reused by every field. */
   #atPick { position: fixed; z-index: 2000; display: flex; flex-direction: column;
     padding: 6px; background: rgba(13,17,23,.98); border: 1px solid var(--border-bright);
     border-radius: 10px; box-shadow: 0 18px 40px rgba(0,0,0,.55); }
@@ -1255,6 +1216,117 @@
      paints no scrim at all. */
   #gitScrim[hidden] { display: none; }
 
+  /* ---------- the files drawer: VS Code's Explorer ---------- */
+  /* The two fonts the Explorer draws with are the ones VS Code installs beside the theme these colours
+     come from; their notices sit under /explorer/. */
+  @font-face { font-family: seti; font-display: block; src: url("/explorer/seti.woff") format("woff"); }
+  @font-face { font-family: codicon; font-display: block; src: url("/explorer/codicon.ttf") format("truetype"); }
+  .codicon { font-family: codicon; font-style: normal; font-weight: normal; font-size: 16px; line-height: 1;
+    display: inline-block; text-align: center; }
+  .codicon-new-file::before { content: "\ea7f"; }
+  .codicon-new-folder::before { content: "\ea80"; }
+  .codicon-refresh::before { content: "\eb37"; }
+  .codicon-collapse-all::before { content: "\eac5"; }
+  .codicon-chevron-right::before { content: "\eab6"; }
+  .codicon-chevron-down::before { content: "\eab4"; }
+  .codicon-folder::before { content: "\ea83"; }
+  .codicon-folder-opened::before { content: "\eaf7"; }
+  .codicon-file::before { content: "\ea7b"; }
+
+  #filesPane { display: flex; flex-direction: column; flex: 1; min-height: 0;
+    font: 13px/18px system-ui, -apple-system, "Segoe UI", sans-serif; color: #e6edf3; }
+  #filesPane .ex-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 6px 4px 10px; }
+  #filesPane .ex-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: #e6edf3; font-size: 11px; letter-spacing: .5px; text-transform: uppercase; }
+  #filesPane .ex-act { flex: none; display: flex; align-items: center; gap: 2px; }
+  #filesPane .ex-act button { width: 22px; height: 22px; padding: 0; display: grid; place-items: center;
+    background: transparent; border: 0; border-radius: 4px; color: #cccccc; cursor: pointer; }
+  #filesPane .ex-act button:hover { background: rgba(90, 93, 94, .31); color: #ffffff; }
+  #filesPane .ex-act button:disabled { opacity: .4; cursor: default; }
+  #filesPane .ex-act button:focus-visible { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
+  #filesPane .ex-search { flex: none; padding: 0 8px 4px; }
+  #filesPane .ex-search input { width: 100%; font: 12px system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: #cccccc; background: #0d1117; border: 1px solid #30363d; border-radius: 2px; padding: 2px 6px; }
+  #filesPane .ex-search input:focus { outline: none; border-color: var(--accent-dim); }
+  #exTree { flex: 1; min-height: 0; overflow: auto; outline: none; padding-bottom: 6px; }
+  #exTree:focus-visible { outline: none; }
+  .ex-row { display: flex; align-items: center; gap: 4px; height: 22px; padding-right: 8px;
+    padding-left: calc(var(--depth, 0) * 8px + 4px); color: #cccccc; cursor: pointer; user-select: none;
+    white-space: nowrap; }
+  .ex-row:hover { background: rgba(90, 93, 94, .1); }
+  /* The theme's own list colours: a selected row keeps the inactive selection, and the keyboard's row
+     takes the focus tint while the tree holds the keyboard. */
+  .ex-row.sel { background: #6e768166; }
+  #exTree:focus-within .ex-row.sel.lead { background: #388bfd26; }
+  .ex-row .ex-twist { flex: none; width: 16px; height: 16px; display: grid; place-items: center;
+    color: #cccccc; font-size: 14px; line-height: 1; }
+  .ex-row .ex-twist.blank { visibility: hidden; }
+  .ex-row .ex-icon { flex: none; width: 16px; height: 16px; display: grid; place-items: center;
+    font-size: 15px; line-height: 1; }
+  .ex-row .ex-icon.seti { font-family: seti; font-size: 20px; }
+  .ex-row .ex-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .ex-row .ex-badge { flex: none; margin-left: 6px; font-size: 11px; }
+  .ex-row.kind-untracked .ex-label, .ex-row.kind-untracked .ex-badge { color: #3fb950; }
+  .ex-row.kind-modified .ex-label, .ex-row.kind-modified .ex-badge { color: #d29922; }
+  .ex-row.kind-deleted .ex-label, .ex-row.kind-deleted .ex-badge { color: #f85149; }
+  .ex-row.kind-conflicting .ex-label, .ex-row.kind-conflicting .ex-badge { color: #db6d28; }
+  .ex-row.kind-ignored .ex-label, .ex-row.kind-ignored .ex-badge { color: #6e7681; }
+  /* A folder that holds a change is bold, the way VS Code's Explorer says where to look. */
+  .ex-row.dirty > .ex-label { font-weight: 600; }
+  .ex-row.missing .ex-label { text-decoration: line-through; }
+  .ex-row input.ex-rename { flex: 1; min-width: 0; font: 13px system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: #cccccc; background: #0d1117; border: 1px solid var(--accent-dim); border-radius: 2px; padding: 0 4px; }
+  .ex-row input.ex-rename:focus { outline: none; }
+  #exTree .ex-note { padding: 6px 10px; color: #7d8590; font: 11px var(--mono); white-space: normal; }
+  #exTree .ex-note.bad { color: var(--red); }
+  #filesPane .ex-foot { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 10px;
+    border-top: 1px solid #21262d; color: #7d8590; font: 10px var(--mono); }
+  #pickCount { flex: none; }
+  #filesPane .ex-target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    text-align: right; }
+  /* A path dragged over a thread: the card takes a ring instead of the drop being a guess, because the
+     drop only ever adds the file to the message that lives there. */
+  .card.ref-drop, .composer.ref-drop { box-shadow: inset 0 0 0 1px var(--accent-dim); }
+  .ex-row.drop { background: rgba(56, 139, 253, .16); outline: 1px solid var(--accent-dim); outline-offset: -1px; }
+  /* A path deleted out from under a message keeps its chip and says so, rather than vanishing quietly. */
+  .composer .paths .chip.missing { color: var(--muted); border-color: var(--border); }
+  .composer .paths .chip.missing span { text-decoration: line-through; }
+
+  /* The file menu: the colours the theme names, and where it names none, VS Code's own dark defaults. */
+  #exMenu { position: fixed; z-index: 2000; min-width: 224px; padding: 4px 0; background: #1f1f1f;
+    color: #cccccc; border: 1px solid #454545; border-radius: 5px; box-shadow: 0 4px 12px rgba(0,0,0,.45);
+    font: 13px/18px system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #exMenu[hidden] { display: none; }
+  #exMenu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 3px 22px;
+    background: transparent; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  #exMenu button:hover:not(:disabled), #exMenu button.hl { background: #0078d4; color: #ffffff; }
+  #exMenu button:disabled { color: #6e7681; cursor: default; }
+  #exMenu button .ex-keys { margin-left: auto; font-size: 11px; opacity: .8; }
+  #exMenu .ex-sep { height: 1px; margin: 4px 0; background: #454545; }
+  /* The permanent-delete question, in the sheet's own frame: it is the one press here that no Git can undo. */
+  #exConfirm { position: fixed; inset: 0; z-index: 2300; padding: 40px 24px; background: rgba(1, 4, 9, .66);
+    display: flex; align-items: center; justify-content: center; }
+  #exConfirm[hidden] { display: none; }
+  #exConfirm .panel { display: flex; flex-direction: column; width: min(560px, 100%); max-height: 100%;
+    overflow: hidden; background: var(--card); border: 1px solid var(--border-bright); border-radius: 10px;
+    box-shadow: 0 18px 40px rgba(0,0,0,.55); }
+  #exConfirm .panel-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex: none;
+    background: var(--card-head); border-bottom: 1px solid var(--border); font: 12px var(--mono); }
+  #exConfirm .name { color: var(--text); font-weight: 600; }
+  #exConfirm .sheet-body { overflow: auto; min-height: 0; padding: 10px; display: flex;
+    flex-direction: column; gap: 8px; }
+  #exConfirm .act-note { font-size: 12.5px; color: #c9d1d9; }
+  /* One refused name per line, kept as it was written: a path is read, not reflowed. */
+  #exConfirm .cut { color: var(--amber); font: 11px var(--mono); white-space: pre-wrap; word-break: break-all; }
+  #exConfirm .sheet-actions { display: flex; gap: 8px; justify-content: flex-end; flex: none; padding: 8px 10px;
+    border-top: 1px solid var(--border); background: var(--card-head); }
+  #exConfirm .sheet-btn { font: 11px var(--mono); color: var(--muted); background: #161b22;
+    border: 1px solid var(--border); border-radius: 5px; padding: 3px 10px; cursor: pointer; }
+  #exConfirm .sheet-btn:hover { color: var(--text); border-color: var(--border-bright); }
+  #exConfirm .sheet-btn.danger { color: #f85149; border-color: rgba(248, 81, 73, .45); }
+  #exConfirm .sheet-btn.danger:hover { color: #ff7b72; border-color: rgba(248, 81, 73, .8);
+    background: rgba(248, 81, 73, .1); }
+
   /* Each of the board's three animations repeats a state the text already spells out, so the board
      loses nothing when the reader asks for less motion. Last, because it kills rules from the card
      states, the header and the rail alike. */
@@ -1286,6 +1358,10 @@
   <button id="cleanBtn" title="forget dead threads and their logs">clean</button>
   <button id="leftBtn" title="folders and branches the board left behind, cleared one at a time">leftovers</button>
   <button id="newBtn" title="start over in this workspace: same folder, same settings, empty board">new</button>
+  <!-- The three left drawers. One is open at a time, and each door names the key that opens it. -->
+  <button id="filesBtn" type="button" aria-controls="drawerFiles" aria-expanded="false" title="show the files drawer (f)">files</button>
+  <button id="activityBtn" type="button" aria-controls="drawerActivity" aria-expanded="false" title="show the activity drawer (a)">activity</button>
+  <button id="cardsBtn" type="button" aria-controls="drawerCards" aria-expanded="false" title="show the cards drawer (c)">cards</button>
   <button id="gitBtn" type="button" aria-expanded="false" aria-controls="gitDrawer" title="roll the git graph down (g)">git</button>
   <button id="keysBtn" title="every keyboard shortcut" aria-haspopup="dialog" aria-expanded="false">keys</button>
   <button id="configBtn" title="this board's settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
@@ -1326,17 +1402,45 @@
   </div>
 </div>
 
-<aside id="rail">
-  <div class="rail-head">cards <b id="railCardCount"></b><button id="railToggle" title="hide the rail">«</button></div>
-  <div id="railCards"></div>
-  <div class="rail-head" id="railClosedHead" hidden>closed <b id="railClosedCount"></b><button type="button" id="railClosedClean" title="delete the closed threads whose work is saved somewhere else, with their folders, branches and conversations">clean</button></div>
-  <div id="railClosed"></div>
-  <div class="rail-head">activity <b id="railRunning"></b></div>
-  <div id="railNow"></div>
-  <div id="railLog"></div>
+<!-- The left drawers. One column, one width, one open at a time: `f` for the workspace's files, `a` for
+     what the agents are doing, `c` for the board's cards. The rail's remembered width and its hidden
+     choice carry over, because this is the rail with doors on it rather than a second place. -->
+<div id="drawers">
+  <section class="drawer" id="drawerFiles" aria-label="files" tabindex="-1">
+    <div id="filesPane">
+      <div class="ex-head">
+        <span class="ex-title" id="exTitle">explorer</span>
+        <span class="ex-act">
+          <button type="button" id="exNewFile" class="codicon codicon-new-file" aria-label="new file" title="new file"></button>
+          <button type="button" id="exNewFolder" class="codicon codicon-new-folder" aria-label="new folder" title="new folder"></button>
+          <button type="button" id="exRefresh" class="codicon codicon-refresh" aria-label="refresh" title="refresh the tree"></button>
+          <button type="button" id="exCollapse" class="codicon codicon-collapse-all" aria-label="collapse every folder" title="collapse every folder"></button>
+        </span>
+      </div>
+      <div class="ex-search"><input id="exFilter" type="text" spellcheck="false" autocomplete="off"
+        placeholder="filter by name…" aria-label="filter the tree by name" /></div>
+      <!-- The tree is drawn by the client from /files: the daemon names the entries, this one says where
+           they sit, what is selected, and what Git thinks of each. -->
+      <div id="exTree" role="tree" aria-label="files in this workspace" tabindex="0"></div>
+      <div class="ex-foot">
+        <span id="pickCount">nothing picked</span>
+        <span class="ex-target" id="exTarget"></span>
+      </div>
+    </div>
+  </section>
+  <section class="drawer" id="drawerActivity" aria-label="activity" tabindex="-1">
+    <div class="rail-head">activity <b id="railRunning"></b><button type="button" class="rail-close" title="hide the drawer (esc)">«</button></div>
+    <div id="railNow"></div>
+    <div id="railLog"></div>
+  </section>
+  <section class="drawer" id="drawerCards" aria-label="cards" tabindex="-1">
+    <div class="rail-head">cards <b id="railCardCount"></b><button type="button" class="rail-close" title="hide the drawer (esc)">«</button></div>
+    <div id="railCards"></div>
+    <div class="rail-head" id="railClosedHead" hidden>closed <b id="railClosedCount"></b><button type="button" id="railClosedClean" title="delete the closed threads whose work is saved somewhere else, with their folders, branches and conversations">clean</button></div>
+    <div id="railClosed"></div>
+  </section>
   <div id="railGrip" title="drag to resize"></div>
-</aside>
-<button id="railOpen" title="show activity">activity <b id="railOpenCount"></b></button>
+</div>
 
 <!-- Where the field of a board with a single session behind it lives. A board of threads has none:
      every thread card carries its own field, built from the template below. -->
@@ -1361,7 +1465,7 @@
         <button class="model-pick" type="button" title="the model this card answers with">model</button>
         <button class="think-pick" type="button" title="how hard the model thinks before answering">think</button>
         <button class="ctx-btn" type="button" hidden><span class="ctx-label"></span></button>
-        <button class="files" type="button" title="attach files or folders from disk">files</button>
+        <button class="files" type="button" title="attach a file or folder from the workspace tree (f)">files</button>
         <!-- A command runs in a thread, so this chip is hidden on the bottom bar, which has none. -->
         <button class="cmd-pick" type="button" aria-label="run a command from pi" title="run a command from pi (/scan_codebase and friends)">/</button>
       </div>
@@ -1408,6 +1512,21 @@
   <div id="cmdList"></div>
 </div>
 
+<div id="exMenu" role="menu" aria-label="what to do with these files" hidden></div>
+
+<!-- The one press the files drawer asks twice about: a trash bin that cannot take these names sends them
+     back, and deleting them for good is not something to guess at. -->
+<div id="exConfirm" hidden role="dialog" aria-modal="true" aria-labelledby="exConfirmTitle">
+  <div class="panel">
+    <div class="panel-head"><span id="exConfirmTitle">delete for good</span></div>
+    <div class="sheet-body" id="exConfirmBody"></div>
+    <div class="sheet-actions">
+      <button type="button" class="sheet-btn" id="exConfirmNo">keep them</button>
+      <button type="button" class="sheet-btn danger" id="exConfirmYes">delete for good</button>
+    </div>
+  </div>
+</div>
+
 <div id="viewport">
   <div id="world"></div>
   <div class="empty" id="empty">press + or t to start a thread</div>
@@ -1421,27 +1540,6 @@
      board's own page never runs git. It says nothing when the folder is not a repository. -->
 <div id="gitstrip">
   <canvas id="gitgraph" role="img" aria-label="branches and commits in this workspace"></canvas>
-</div>
-
-<div id="picker" role="dialog" aria-label="attach files or folders" hidden>
-  <div class="p-row">
-    <button id="pickUp" title="parent folder">↑</button>
-    <input id="pickPath" type="text" spellcheck="false" title="type a folder and press enter" />
-    <button id="pickHome" title="home folder">home</button>
-    <button id="pickCwd" title="the folder this board was opened on">workspace</button>
-    <button id="pickClose" title="close">×</button>
-  </div>
-  <div class="p-row">
-    <input id="pickFilter" type="text" placeholder="filter this folder…" spellcheck="false" />
-    <label class="p-hidden"><input type="checkbox" id="pickHidden" /> hidden</label>
-  </div>
-  <div id="pickError" hidden></div>
-  <div id="pickList"></div>
-  <div class="p-row">
-    <span id="pickCount">nothing picked</span>
-    <button id="pickHere" title="pick the folder you are looking at">+ this folder</button>
-    <button id="pickDone" title="keep what is picked and close">done</button>
-  </div>
 </div>
 
 <!-- The full text behind one activity row: its arguments, log, output, thought or answer. -->
