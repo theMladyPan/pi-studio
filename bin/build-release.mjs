@@ -16,6 +16,7 @@
  *   public/, bridge/, prompts/  copied verbatim (browser assets, child extension, prompts)
  *   docs/boss-and-subagents.md  the one runtime document, at the path flow-diagrams reads
  *   bin/pi-studio               staged copy of the launcher, pointed at server.js
+ *   bin/runtime.mjs, bin/manage.mjs  lifecycle helpers the launcher imports (no server code)
  *   package.json                name/version/type/bin/engines only; no dependencies at all
  *   build.json                  { name, version, commit, commitShort, tag, official, custom,
  *                                 dirty, source }
@@ -92,10 +93,16 @@ function main() {
 	cpSync(join(root, "docs", "boss-and-subagents.md"), join(out, "docs", "boss-and-subagents.md"));
 
 	// Staged launcher only; the source bin/pi-studio keeps pointing at server.ts for dev.
+	// The launcher imports its lifecycle helpers by relative path, so the staged tree must
+	// carry them too; the source-only install entry (bin/install.mjs) stays out.
 	const launcher = readFileSync(join(root, "bin", "pi-studio"), "utf8").replaceAll("server.ts", "server.js");
 	mkdirSync(join(out, "bin"), { recursive: true });
 	writeFileSync(join(out, "bin", "pi-studio"), launcher);
 	chmodSync(join(out, "bin", "pi-studio"), 0o755);
+	for (const helper of ["runtime.mjs", "manage.mjs"]) {
+		cpSync(join(root, "bin", helper), join(out, "bin", helper));
+		chmodSync(join(out, "bin", helper), 0o755);
+	}
 
 	const stagedPkg = {
 		name: sourcePkg.name,
