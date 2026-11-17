@@ -946,6 +946,18 @@ function sourcesOf(root: string, raw: unknown): { sources: Source[] } | { failed
 	return { sources: kept };
 }
 
+/**
+ * The name a copy takes when its own name is already in the folder: "copy of notes.txt" the first time,
+ * "copy 2 of notes.txt" beside that, and so on. A dot file keeps its whole name as the base, because
+ * `.env` has no extension to keep apart from it.
+ */
+function copyOf(name: string, round: number): string {
+	const dot = name.lastIndexOf(".");
+	const base = dot > 0 ? name.slice(0, dot) : name;
+	const ext = dot > 0 ? name.slice(dot) : "";
+	return `${round === 1 ? "copy of" : `copy ${round} of`} ${base}${ext}`;
+}
+
 /** One batch of moves or copies: validated whole, then executed item by item with what each one did. */
 async function batchRoute(req: IncomingMessage, res: ServerResponse, board: BoardFolder, mode: "move" | "copy"): Promise<void> {
 	const body = await readJson(req, res);
@@ -965,10 +977,20 @@ async function batchRoute(req: IncomingMessage, res: ServerResponse, board: Boar
 		const steps: { source: Source; to: string; toRel: string }[] = [];
 		const failed: Failure[] = [];
 		const taken = new Set<string>();
+		// A copy asked for the paste habit never refuses a taken name: it lands beside it as "copy of ...".
+		const alongside = mode === "copy" && body.onCollision === "copy";
 		for (const source of found.sources) {
-			const target = join(folder.dir, source.name);
+			let name = source.name;
+			let target = join(folder.dir, name);
 			// The answer names the destination the way the request named it; the checks below use the disk.
-			const toRel = dest.rel ? `${dest.rel}/${source.name}` : source.name;
+			let toRel = dest.rel ? `${dest.rel}/${name}` : name;
+			if (alongside) {
+				for (let round = 1; present(target) || taken.has(target); round += 1) {
+					name = copyOf(source.name, round);
+					target = join(folder.dir, name);
+					toRel = dest.rel ? `${dest.rel}/${name}` : name;
+				}
+			}
 			if (target === source.abs) {
 				failed.push({ path: source.rel, error: "it is already there" });
 				continue;

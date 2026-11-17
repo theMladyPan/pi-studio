@@ -445,6 +445,16 @@ describe("changing a workspace", () => {
 			assert.deepEqual(copied.body.copied, [{ from: "keep.txt", to: "docs/sub/keep.txt" }]);
 			assert.equal(readFileSync(join(folder, "keep.txt"), "utf8"), "KEEP");
 
+			// The paste habit: a copy asked to land beside a taken name takes it with "copy of", the next
+			// one counts itself, and neither touches the file that was already there.
+			const beside = json(await postJson(daemon, board, "/files/copy", { paths: ["keep.txt"], to: "docs", onCollision: "copy" }));
+			assert.equal(beside.status, 200, beside.body);
+			assert.deepEqual(beside.body.copied, [{ from: "keep.txt", to: "docs/copy of keep.txt" }]);
+			assert.equal(readFileSync(join(folder, "docs", "copy of keep.txt"), "utf8"), "KEEP");
+			const again = json(await postJson(daemon, board, "/files/copy", { paths: ["keep.txt"], to: "docs", onCollision: "copy" }));
+			assert.deepEqual(again.body.copied, [{ from: "keep.txt", to: "docs/copy 2 of keep.txt" }]);
+			assert.equal(readFileSync(join(folder, "docs", "keep.txt"), "utf8"), "DOCS");
+
 			// A folder cannot be carried into itself, and a batch says nothing was done before it starts.
 			const intoSelf = await postJson(daemon, board, "/files/copy", { paths: ["docs"], to: "docs/sub" });
 			assert.equal(intoSelf.status, 409, intoSelf.body);

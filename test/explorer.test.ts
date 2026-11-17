@@ -82,6 +82,8 @@ type ExCore = {
 	selectToggle(sel: ExSelection, path: string): ExSelection;
 	selectRange(sel: ExSelection, order: string[], path: string): ExSelection;
 	selectAll(sel: ExSelection, order: string[]): ExSelection;
+	pressOpens(entry: { dir?: boolean } | null, event: { target?: { classList?: { contains(name: string): boolean } }; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean } | null): boolean;
+	pressAgain(held: { path: string; at: number }, path: string, now: number): { repeated: boolean; next: { path: string; at: number } };
 	selectKeep(sel: ExSelection, known: Set<string>): string[];
 	rebasePath(path: string, from: string, to: string): string;
 	rebaseListing(listing: ExListing, from: string, to: string): ExListing;
@@ -382,6 +384,32 @@ test("selecting is one row, ctrl adds a row, shift takes the range, and ctrl+a t
 	core.selectAll(sel, order);
 	assert.deepEqual([...sel.paths], order);
 	assert.equal(sel.lead, "d.ts");
+});
+
+test("a press on a folder opens it, and a press that picks several rows only picks", () => {
+	assert.equal(core.pressOpens({ dir: true }, {}), true);
+	assert.equal(core.pressOpens({ dir: false }, {}), false);
+	assert.equal(core.pressOpens(null, {}), false);
+	// Building a selection is not opening: shift and the two multi-pick keys only pick.
+	assert.equal(core.pressOpens({ dir: true }, { shiftKey: true }), false);
+	assert.equal(core.pressOpens({ dir: true }, { ctrlKey: true }), false);
+	assert.equal(core.pressOpens({ dir: true }, { metaKey: true }), false);
+	// The arrow is the switch on its own, whatever is held for the selection.
+	const twist = { classList: { contains: (name: string) => name === "ex-twist" }, ctrlKey: true };
+	assert.equal(core.pressOpens({ dir: true }, { target: twist, ctrlKey: true }), true);
+	assert.equal(core.pressOpens({ dir: false }, { target: twist }), false);
+});
+
+test("a second press on the same row inside a moment is the same intent, not another one", () => {
+	const first = core.pressAgain({ path: "", at: 0 }, "src", 1_000);
+	assert.deepEqual([first.repeated, first.next], [false, { path: "src", at: 1_000 }]);
+	// A real double press: the second click lands inside the window and opens nothing again.
+	const second = core.pressAgain(first.next, "src", 1_180);
+	assert.deepEqual([second.repeated, second.next], [true, { path: "", at: 0 }]);
+	// Long after, or on another row, the press is its own intent again.
+	assert.equal(core.pressAgain({ path: "src", at: 1_000 }, "src", 2_000).repeated, false);
+	assert.equal(core.pressAgain({ path: "src", at: 1_000 }, "docs", 1_100).repeated, false);
+	assert.equal(core.pressAgain({ path: "", at: 0 }, "", 1_000).repeated, false);
 });
 
 // ---------------------------------------------------------------- paths and drags
