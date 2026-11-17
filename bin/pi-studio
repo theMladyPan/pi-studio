@@ -4,10 +4,9 @@
 //
 // `--version`, `update` and `uninstall` are handled here, before the server is imported, so they
 // work in a source clone and in a staged/installed copy alike. Everything else starts the app.
-import { existsSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildIdentity, formatVersion, installRootDir, parseFlags, registerRuntime } from "./runtime.mjs";
+import { buildIdentity, formatVersion, parseFlags, registerManagedRuntime, selfInstallFlags } from "./runtime.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = join(here, "..");
@@ -24,20 +23,20 @@ if (command === "--version" || command === "-V" || command === "version") {
 	}
 } else if (command === "update" || command === "uninstall") {
 	const { update, uninstall } = await import("./manage.mjs");
+	// An installed copy knows its own install root and bin folder, so a later update or uninstall
+	// need not be handed the flags the install used. Explicit flags still win.
+	const installFlags = { ...selfInstallFlags(appRoot), ...flags };
 	try {
-		if (command === "update") await update(flags);
-		else uninstall(flags);
+		if (command === "update") await update(installFlags);
+		else uninstall(installFlags);
 	} catch (error) {
 		console.error(error.message);
 		process.exit(1);
 	}
 } else {
-	// Record this managed copy as running (a no-op outside an owned installation), then start.
-	// An installed copy lives at <installRoot>/versions/<name>, so its root is two levels up.
-	const managedRoot = existsSync(join(appRoot, "build.json")) && basename(dirname(appRoot)) === "versions"
-		? dirname(dirname(appRoot))
-		: installRootDir();
-	registerRuntime(managedRoot, basename(appRoot));
+	// Record this managed copy as running (a no-op for a source clone or a dist tree, which must
+	// never claim or clear an installation's marker), then start.
+	registerManagedRuntime(appRoot);
 	process.argv[1] = join(appRoot, "server.ts");
 	await import("../server.ts");
 }

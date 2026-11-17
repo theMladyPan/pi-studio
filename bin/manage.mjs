@@ -3,7 +3,7 @@
 // never written or removed here (update only adds a prompt report through the prompt helper).
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
 	APP_NAME, GITHUB_REPO, assertPlainDir, assertSafeUrl, assertSupportedNode, binDirOf, buildIdentity,
 	compareVersions, ensurePlainDir, fail, formatVersion, githubApiRoot, installRootDir, isLoopbackHost,
-	lstatOrNull, parseVersion, readInstallMetadata, runningState, clearStaleMarker, sha256Hex, stateDirOf, writeJsonAtomic,
+	lstatOrNull, markerPath, parseVersion, readInstallMetadata, runningState, clearStaleMarker, sha256Hex, stateDirOf, writeJsonAtomic,
 } from "./runtime.mjs";
 
 const REQUIRED_FILES = ["server.js", "public/index.html", "bridge/child-bridge.mjs", "bin/pi-studio", "package.json", "build.json"];
@@ -51,6 +51,7 @@ export function validateTree(dir) {
 
 /** Copy a tree rejecting symlinks and special files, so a planted link is never followed. */
 function copyTreeNoLinks(source, destination) {
+	assertPlainDir(destination, "copy destination");
 	mkdirSync(destination, { recursive: true });
 	const walk = (from, to) => {
 		for (const entry of readdirSync(from, { withFileTypes: true })) {
@@ -59,12 +60,15 @@ function copyTreeNoLinks(source, destination) {
 			const held = lstatSync(src);
 			if (held.isSymbolicLink()) fail(`refusing to copy symlink: ${src}`);
 			if (held.isDirectory()) {
+				assertPlainDir(dst, "copy destination");
 				mkdirSync(dst, { mode: 0o755 });
 				walk(src, dst);
 			} else if (held.isFile()) {
+				const heldDst = lstatOrNull(dst);
+				if (heldDst && heldDst.isSymbolicLink()) fail(`refusing to write through a symlink: ${dst}`);
 				writeFileSync(dst, readFileSync(src));
 				try {
-					if (held.mode & 0o111) execFileSync("chmod", ["u+x", dst]);
+					if (held.mode & 0o111) chmodSync(dst, 0o755);
 				} catch {
 					// Mode is not load-bearing except for the launcher, fixed below.
 				}
@@ -75,7 +79,7 @@ function copyTreeNoLinks(source, destination) {
 	};
 	walk(source, destination);
 	const launcher = join(destination, "bin", "pi-studio");
-	if (existsSync(launcher)) execFileSync("chmod", ["755", launcher]);
+	if (existsSync(launcher)) chmodSync(launcher, 0o755);
 }
 
 function versionDirName(identity, buildBytes) {
@@ -216,6 +220,10 @@ export function installedIdentity(installRoot) {
 
 // ---------- tar.gz extraction (regular files and folders only) ----------
 
+/** Bounds on what a release host may hand the launcher, so a hostile release cannot fill the disk. */
+const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
+const MAX_TAR_BYTES = 512 * 1024 * 1024;
+
 function tarString(buffer, offset, length) {
 	const slice = buffer.subarray(offset, offset + length);
 	const end = slice.indexOf(0);
@@ -253,12 +261,15 @@ function safeArchivePath(name) {
 
 export function extractTarGz(buffer, destination) {
 	ensurePlainDir(destination, "extraction folder");
+	if (buffer.length > MAX_DOWNLOAD_BYTES) fail(`release archive is larger than ${MAX_DOWNLOAD_BYTES} bytes; refusing`);
 	let tar;
 	try {
-		tar = gunzipSync(buffer);
-	} catch {
+		tar = gunzipSync(buffer, { maxOutputLength: MAX_TAR_BYTES });
+	} catch (error) {
+		if (error && error.code === "ERR_BUFFER_TOO_LARGE") fail(`release archive unpacks to more than ${MAX_TAR_BYTES} bytes; refusing`);
 		fail("release asset is not a valid gzip archive");
 	}
+	if (tar.length > MAX_TAR_BYTES) fail(`release archive unpacks to more than ${MAX_TAR_BYTES} bytes; refusing`);
 	const entries = [];
 	let offset = 0;
 	let pendingLongName = "";
@@ -267,12 +278,17 @@ export function extractTarGz(buffer, destination) {
 		const header = tar.subarray(offset, offset + 512);
 		if (header.every((byte) => byte === 0)) break;
 		const sizeText = tarString(header, 124, 12).trim();
+		if (sizeText && !/^[0-7]{1,12}$/.test(sizeText)) fail("invalid tar entry size");
 		const size = sizeText ? Number.parseInt(sizeText, 8) : 0;
 		if (!Number.isFinite(size) || size < 0) fail("invalid tar entry size");
 		let name = tarString(header, 0, 100);
 		const prefix = tarString(header, 345, 155);
 		if (prefix) name = `${prefix}/${name}`;
 		const type = String.fromCharCode(header[156] || 48);
+		// A short file, or a header that claims more than the archive can hold, must not be read
+		// as a smaller entry: the declared size has to fit before any of it is trusted.
+		if (size > MAX_TAR_BYTES) fail(`tar entry ${name} declares ${size} bytes, more than ${MAX_TAR_BYTES}; refusing`);
+		if (offset + 512 + size > tar.length) fail(`tar entry ${name} is truncated: it declares ${size} bytes and the archive ends early`);
 		const data = tar.subarray(offset + 512, offset + 512 + size);
 
 		if (type === "L") {
@@ -316,13 +332,15 @@ export function extractTarGz(buffer, destination) {
 		}
 	}
 	const launcher = join(destination, "bin", "pi-studio");
-	if (existsSync(launcher)) execFileSync("chmod", ["755", launcher]);
+	if (existsSync(launcher)) chmodSync(launcher, 0o755);
 }
 
 // ---------- GitHub Releases update ----------
 
 /** No release host may hold the launcher forever: every request is bounded. */
 const FETCH_TIMEOUT_MS = 60_000;
+/** The staged package's own checks share the same rule: a check that hangs must not hang the update. */
+const EXEC_TIMEOUT_MS = 60_000;
 
 async function fetchChecked(url, { allowHttpLoopback }) {
 	assertSafeUrl(url, { allowHttpLoopback });
@@ -336,7 +354,11 @@ async function fetchChecked(url, { allowHttpLoopback }) {
 		fail(`download failed for ${url}: ${error.message}`);
 	}
 	if (!response.ok) fail(`download failed for ${url}: HTTP ${response.status}`);
-	return Buffer.from(await response.arrayBuffer());
+	const declared = Number.parseInt(response.headers.get("content-length") || "", 10);
+	if (Number.isFinite(declared) && declared > MAX_DOWNLOAD_BYTES) fail(`download from ${url} is larger than ${MAX_DOWNLOAD_BYTES} bytes; refusing`);
+	const bytes = Buffer.from(await response.arrayBuffer());
+	if (bytes.length > MAX_DOWNLOAD_BYTES) fail(`download from ${url} is larger than ${MAX_DOWNLOAD_BYTES} bytes; refusing`);
+	return bytes;
 }
 
 function parseChecksum(text, tarballName) {
@@ -377,7 +399,7 @@ export async function update(flags = {}) {
 	const apiRoot = githubApiRoot();
 	const apiUrl = assertSafeUrl(apiRoot, { allowHttpLoopback: true });
 	const loopbackApi = apiUrl.protocol === "http:" && isLoopbackHost(apiUrl.hostname);
-	const releaseUrl = `${apiRoot}/${GITHUB_REPO}/releases/latest`;
+	const releaseUrl = `${apiRoot}/repos/${GITHUB_REPO}/releases/latest`;
 	const release = JSON.parse((await fetchChecked(releaseUrl, { allowHttpLoopback: true })).toString("utf8"));
 	if (release.draft) fail("latest release is a draft; refusing");
 	if (release.prerelease) fail("latest release is a prerelease; refusing");
@@ -416,9 +438,14 @@ export async function update(flags = {}) {
 		assertSupportedNode(identity.engines?.node);
 		// Stage/test the new package before switching: syntax-check and run --version.
 		for (const file of ["server.js", "bin/pi-studio", "bin/runtime.mjs", "bin/manage.mjs"]) {
-			execFileSync(process.execPath, ["--check", join(extracted, file)], { stdio: "pipe" });
+			execFileSync(process.execPath, ["--check", join(extracted, file)], { stdio: "pipe", timeout: EXEC_TIMEOUT_MS, killSignal: "SIGKILL" });
 		}
-		const versionOut = execFileSync(process.execPath, [join(extracted, "bin", "pi-studio"), "--version"], { encoding: "utf8" });
+		const versionOut = execFileSync(process.execPath, [join(extracted, "bin", "pi-studio"), "--version"], {
+			encoding: "utf8",
+			stdio: "pipe",
+			timeout: EXEC_TIMEOUT_MS,
+			killSignal: "SIGKILL",
+		});
 		if (!versionOut.includes(identity.version)) fail("staged package --version did not report its version; refusing");
 
 		let promptReport = null;
@@ -443,6 +470,13 @@ export function uninstall(flags = {}) {
 	const installRoot = installRootDir(flags);
 	const binDir = binDirOf(flags);
 	const stateDir = stateDirOf(flags);
+	// The state folder is never written or removed here: if it sits inside the root being removed,
+	// removing the root would delete it, so stop instead.
+	const removedRoot = resolve(installRoot);
+	const statePath = resolve(stateDir);
+	if (statePath === removedRoot || statePath.startsWith(removedRoot + sep)) {
+		fail(`app state ${statePath} is inside the install root ${removedRoot}; refusing to remove it`);
+	}
 	const meta = readInstallMetadata(installRoot);
 	if (!meta) fail(`pi-studio is not installed under ${installRoot}`);
 	assertPlainDir(installRoot, "install root");
@@ -451,8 +485,8 @@ export function uninstall(flags = {}) {
 	if (check.held && !check.ours) fail(`refusing to remove foreign command: ${check.launcher}`);
 
 	const running = runningState(installRoot);
-	if (running.state === "live") fail(`pi-studio is running (pid ${running.marker.pid}); stop it before uninstalling`);
-	if (running.state === "unknown") fail("a pi-studio running marker exists but cannot be proven stale; refusing to uninstall");
+	if (running.state === "live") fail(`pi-studio is running (pid ${running.marker.pid}, marker ${markerPath(installRoot)}); stop it before uninstalling`);
+	if (running.state === "unknown") fail(`a pi-studio running marker at ${markerPath(installRoot)} cannot be proven stale; stop pi-studio, then remove that marker and run uninstall again`);
 	clearStaleMarker(installRoot);
 
 	if (check.held) rmSync(check.launcher, { force: true });

@@ -13,9 +13,10 @@ import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, re
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const launcher = join(root, "bin", "pi-studio");
@@ -142,13 +143,16 @@ function makeOfficialTree(version: string, promptText: string | null, buildOverr
 
 type Fixture = { baseUrl: string; setRelease: (release: unknown, files: Record<string, Buffer>) => void; close: () => Promise<void> };
 
+/** The one endpoint GitHub documents for the latest release; anything else is not found. */
+const RELEASE_PATH = "/repos/theMladyPan/pi-studio/releases/latest";
+
 async function startFixture(t: { after: (fn: () => Promise<void> | void) => void }): Promise<Fixture> {
 	let release: unknown = null;
 	let files: Record<string, Buffer> = {};
 	const sockets = new Set<Socket>();
 	const server = createServer((req, res) => {
 		const url = new URL(req.url || "/", "http://127.0.0.1");
-		if (url.pathname.endsWith("/releases/latest")) {
+		if (url.pathname === RELEASE_PATH) {
 			res.writeHead(200, { "content-type": "application/json" });
 			res.end(JSON.stringify(release));
 			return;
@@ -383,6 +387,39 @@ test("update refuses a draft, a prerelease, a tag that is not v<version>, and an
 	assert.equal(currentVersion(roots), customVersion, "every refusal left the installed copy alone");
 });
 
+/**
+ * A minimal ustar archive written byte by byte, so a member name `tar` itself would refuse to
+ * create (a `../` escape, or a size larger than the bytes that follow) can still be tested.
+ */
+function rawTar(entries: { name: string; data?: string; size?: number }[]): Buffer {
+	const blocks: Buffer[] = [];
+	for (const entry of entries) {
+		const payload = Buffer.from(entry.data ?? "", "utf8");
+		const size = entry.size ?? payload.length;
+		const header = Buffer.alloc(512);
+		header.write(entry.name, 0, 100, "utf8");
+		header.write("0000644\0", 100, "latin1");
+		header.write("0000000\0", 108, "latin1");
+		header.write("0000000\0", 116, "latin1");
+		header.write(`${size.toString(8).padStart(11, "0")}\0`, 124, "latin1");
+		header.write("00000000000\0", 136, "latin1");
+		header.write("        ", 148, "latin1");
+		header.write("0", 156, "latin1");
+		header.write("ustar\0" + "00", 257, "latin1");
+		let sum = 0;
+		for (const byte of header) sum += byte;
+		header.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, "latin1");
+		blocks.push(header);
+		if (payload.length) {
+			const padded = Buffer.alloc(Math.ceil(payload.length / 512) * 512);
+			payload.copy(padded);
+			blocks.push(padded);
+		}
+	}
+	blocks.push(Buffer.alloc(1024));
+	return Buffer.concat(blocks);
+}
+
 test("archive extraction rejects traversal and link entries", async () => {
 	const { extractTarGz } = (await import(join(root, "bin", "manage.mjs"))) as unknown as {
 		extractTarGz: (buffer: Buffer, destination: string) => void;
@@ -399,6 +436,89 @@ test("archive extraction rejects traversal and link entries", async () => {
 	assert.throws(() => extractTarGz(readFileSync(tarball), out), /link entry/);
 	assert.ok(!existsSync(join(dir, "x.txt")) || readFileSync(join(dir, "x.txt"), "utf8") === "x\n");
 	rmSync(dir, { recursive: true, force: true });
+});
+
+test("archive extraction rejects a real ../ member, a truncated entry and an oversized entry", async () => {
+	const { extractTarGz } = (await import(join(root, "bin", "manage.mjs"))) as unknown as {
+		extractTarGz: (buffer: Buffer, destination: string) => void;
+	};
+	const dir = mkdtempSync(join(tmpdir(), "pi-studio-escape-"));
+	const out = join(dir, "out");
+	mkdirSync(out, { recursive: true });
+	const inside = join(dir, "pi-studio-0.0.0");
+	mkdirSync(inside, { recursive: true });
+
+	const escaping = gzipSync(rawTar([{ name: "../escape.txt", data: "pwned\n" }]));
+	assert.throws(() => extractTarGz(escaping, out), /escapes its folder/);
+	assert.ok(!existsSync(join(dir, "escape.txt")), "nothing was written outside the extraction folder");
+
+	const truncated = gzipSync(rawTar([{ name: "pi-studio-0.0.0/big.bin", data: "x", size: 4_000_000 }]));
+	assert.throws(() => extractTarGz(truncated, out), /is truncated/);
+
+	const oversized = gzipSync(rawTar([{ name: "pi-studio-0.0.0/huge.bin", data: "x", size: 600 * 1024 * 1024 }]));
+	assert.throws(() => extractTarGz(oversized, out), /declares 629145600 bytes, more than/);
+
+	assert.ok(!existsSync(join(inside, "big.bin")) && !existsSync(join(out, "pi-studio-0.0.0", "big.bin")), "no entry bytes landed");
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("only a registered version folder of the owned install records the running marker", async (t) => {
+	const roots = tempRoots(t);
+	await installStaged(roots);
+	const runtime = (await import(join(root, "bin", "runtime.mjs"))) as unknown as {
+		managedRootOf: (appRoot: string) => { installRoot: string; versionDir: string } | null;
+		registerManagedRuntime: (appRoot: string) => string | null;
+	};
+	const meta = JSON.parse(readFileSync(join(roots.installRoot, "install.json"), "utf8"));
+	const versionDir = join(roots.installRoot, "versions", meta.currentVersionDir);
+	const marker = join(roots.installRoot, "running.json");
+
+	assert.equal(runtime.managedRootOf(root), null, "the source clone is not a managed copy");
+	assert.equal(runtime.managedRootOf(staged), null, "a staged tree outside an install root is not managed");
+	assert.deepEqual(runtime.managedRootOf(versionDir), { installRoot: roots.installRoot, versionDir: basename(versionDir) });
+
+	// A version folder the install metadata does not register is not part of the installation.
+	const stray = join(roots.installRoot, "versions", "stray-0.0.0");
+	mkdirSync(stray, { recursive: true });
+	writeFileSync(join(stray, "build.json"), "{}\n");
+	assert.equal(runtime.managedRootOf(stray), null, "an unregistered version folder is not owned");
+
+	// A source clone starting while the managed app runs must leave the managed marker alone.
+	writeFileSync(marker, `${JSON.stringify({ pid: process.pid, versionDir: meta.currentVersionDir })}\n`);
+	const before = readFileSync(marker, "utf8");
+	assert.equal(runtime.registerManagedRuntime(root), null, "a source clone records nothing");
+	assert.equal(readFileSync(marker, "utf8"), before, "the managed marker is untouched");
+
+	// The launcher must never fall back to a guessed install root.
+	assert.doesNotMatch(readFileSync(launcher, "utf8"), /installRootDir\(/, "the launcher derives its root from itself, never from a default");
+
+	assert.equal(runtime.registerManagedRuntime(versionDir), marker, "a registered version folder records itself");
+	assert.equal(runtime.registerManagedRuntime(staged), null, "a staged tree never claims the marker");
+});
+
+test("an installed launcher finds its own install root and bin folder", async (t) => {
+	const roots = tempRoots(t);
+	await installStaged(roots);
+	const installedLauncher = join(roots.installRoot, "current", "bin", "pi-studio");
+	// No install root, bin folder or state flags: only what the installed copy can rediscover.
+	const { PI_STUDIO_INSTALL_ROOT: _root, PI_STUDIO_BIN_DIR: _bin, ...inherited } = process.env;
+	const done = await run(process.execPath, [installedLauncher, "uninstall"], { env: { ...inherited, PI_STUDIO_STATE: roots.stateDir } });
+	assert.equal(done.status, 0, done.stderr);
+	assert.ok(!existsSync(roots.installRoot), "the install root it found is gone");
+	assert.ok(!existsSync(join(roots.binDir, "pi-studio")), "the launcher it found is gone");
+});
+
+test("uninstall refuses when the app state sits inside the install root", async (t) => {
+	const roots = tempRoots(t);
+	await installStaged(roots);
+	const innerState = join(roots.installRoot, "state");
+	mkdirSync(join(innerState, "prompt-overrides"), { recursive: true });
+	writeFileSync(join(innerState, "board.json"), "{}\n");
+	const refused = await runLauncher(["uninstall"], roots, { PI_STUDIO_STATE: innerState });
+	assert.notEqual(refused.status, 0);
+	assert.match(refused.stderr, /is inside the install root/);
+	assert.equal(readFileSync(join(innerState, "board.json"), "utf8"), "{}\n", "the state folder is kept");
+	assert.ok(existsSync(roots.installRoot), "a refused uninstall removes nothing");
 });
 
 test("runtime marker: a live marker blocks uninstall, a proven-stale marker does not", async (t) => {

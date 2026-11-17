@@ -1,7 +1,7 @@
 // Shared primitives for the pi-studio launcher and install manager.
 // No server code is imported here, so this module is safe to load before the app starts.
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -216,8 +216,18 @@ export function ensurePlainDir(path, label, mode = 0o755) {
 export function writeJsonAtomic(path, value) {
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 	const temp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-	writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-	renameSync(temp, path);
+	try {
+		// `wx` fails instead of writing through a file someone else put at the temp path.
+		writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+		renameSync(temp, path);
+	} catch (error) {
+		try {
+			unlinkSync(temp);
+		} catch {
+			// Nothing of ours to clean up.
+		}
+		throw error;
+	}
 }
 
 export function readInstallMetadata(installRoot) {
@@ -228,6 +238,51 @@ export function readInstallMetadata(installRoot) {
 
 export function markerPath(installRoot) {
 	return join(installRoot, "running.json");
+}
+
+function realOrResolved(path) {
+	try {
+		return realpathSync(path);
+	} catch {
+		return resolve(path);
+	}
+}
+
+/**
+ * The owned installation this app copy belongs to, or null.
+ *
+ * A copy is managed only when it lives at `<installRoot>/versions/<dir>`, `<dir>` is a version the
+ * install metadata registers, and the copy carries build metadata. A source clone or a `dist/`
+ * tree never qualifies, so neither can claim or clear an installation's running marker.
+ */
+export function managedRootOf(appRoot) {
+	const rootDir = realOrResolved(appRoot);
+	const versionsDir = dirname(rootDir);
+	if (basename(versionsDir) !== "versions") return null;
+	const installRoot = dirname(versionsDir);
+	const meta = readInstallMetadata(installRoot);
+	if (!meta) return null;
+	const versionDir = basename(rootDir);
+	if (!meta.versions.some((entry) => entry && entry.dir === versionDir)) return null;
+	if (!existsSync(join(rootDir, "build.json"))) return null;
+	return { installRoot, versionDir };
+}
+
+/** Install flags an installed copy can rediscover from itself; empty outside an installation. */
+export function selfInstallFlags(appRoot) {
+	const managed = managedRootOf(appRoot);
+	if (!managed) return {};
+	const meta = readInstallMetadata(managed.installRoot);
+	const flags = { "install-root": managed.installRoot };
+	if (meta && typeof meta.launcher === "string" && meta.launcher) flags["bin-dir"] = dirname(meta.launcher);
+	return flags;
+}
+
+/** Record this copy as the managed app's running process, if it is a managed copy at all. */
+export function registerManagedRuntime(appRoot) {
+	const managed = managedRootOf(appRoot);
+	if (!managed) return null;
+	return registerRuntime(managed.installRoot, managed.versionDir);
 }
 
 /** Write this process as the managed app's runtime marker. Returns the path or null when not managed. */
