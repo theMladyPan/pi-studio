@@ -103,6 +103,7 @@ const running = new Map<string, Promise<ActionAnswer>>();
  */
 function movesTheTree(request: GitGraphRequest): boolean {
 	switch (request.command) {
+		case "pullBranch":
 		case "checkoutBranch":
 		case "checkoutCommit":
 		case "cherrypickCommit":
@@ -268,6 +269,21 @@ async function perform(repo: string, request: GitGraphRequest): Promise<ActionAn
 		}
 		case "pruneRemote":
 			return { errors: [await gitWrite(repo, ["remote", "prune", "--end-of-options", request.name], "network")] };
+		case "pushBranch": {
+			const errors: (string | null)[] = [];
+			for (const remote of request.remotes) {
+				const pushed = await gitWrite(repo, ["push", ...(request.setUpstream ? ["--set-upstream"] : []), ...(request.mode ? [`--${request.mode}`] : []), "--end-of-options", remote, request.branchName], "network");
+				errors.push(pushed);
+				// A push that git refused leaves the later remotes alone: the branch is not where the human
+				// thinks it is, and pushing it further would spread the half that failed.
+				if (pushed !== null) break;
+			}
+			return { errors };
+		}
+		case "pullBranch": {
+			const args = ["pull", ...(request.squash ? ["--squash"] : request.createNewCommit ? ["--no-ff"] : []), "--end-of-options", request.remote, request.branchName];
+			return { errors: [await gitWrite(repo, args, "network")] };
+		}
 		default:
 			// A command this table does not write is one the dispatch never sends here.
 			return { errors: [null] };

@@ -243,6 +243,40 @@ test("a checkout that carries the page's pull brings the remote's work in", asyn
 	});
 });
 
+// ---------- push and pull ----------
+
+test("a branch is pushed to the remote, and a pull brings the remote's work in", async () => {
+	await withRepo(async (place) => {
+		const bare = withRemote(place.folder);
+		const elsewhere = mkdtempSync(join(tmpdir(), "pi-studio-clone-"));
+		try {
+			git(place.folder, "checkout", "-q", "-b", "feat/pushed");
+			const pushed = commitFile(place.folder, "pushed.txt", "pushed work");
+			git(place.folder, "checkout", "-q", "dev");
+
+			const pushedReply = await act(place, { command: "pushBranch", repo: place.folder, branchName: "feat/pushed", remotes: ["origin"], setUpstream: true, mode: "", willUpdateBranchConfig: true });
+			assert.deepEqual(pushedReply.errors, [null]);
+			assert.equal(pushedReply.willUpdateBranchConfig, true, "the flag the bundle asked with is echoed back");
+			assert.equal(git(bare, "rev-parse", "feat/pushed"), pushed, "the bare repository must hold the pushed branch");
+
+			// Somebody else's clone, so the remote has a commit this checkout has not seen.
+			git(elsewhere, "clone", "-q", bare, "theirs");
+			const theirs = join(elsewhere, "theirs");
+			git(theirs, "config", "user.email", "test@example.invalid");
+			git(theirs, "config", "user.name", "test");
+			commitFile(theirs, "theirs.txt", "work from elsewhere");
+			git(theirs, "push", "-q", "origin", "dev");
+
+			const pulled = await act(place, { command: "pullBranch", repo: place.folder, branchName: "dev", remote: "origin", createNewCommit: false, squash: false });
+			assert.equal(pulled.error, null);
+			assert.equal(subjects(place.folder)[0], "work from elsewhere", "the pull brought the commit in");
+		} finally {
+			rmSync(bare, { recursive: true, force: true });
+			rmSync(elsewhere, { recursive: true, force: true });
+		}
+	});
+});
+
 // ---------- merging, cherry-picking, reverting ----------
 
 test("a merge that is asked for a commit makes one, and a squash merge stages without committing", async () => {
