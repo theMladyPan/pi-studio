@@ -271,6 +271,19 @@ function exCleanPath(value) {
  *  is the human's and stays. */
 const exHidden = (name) => name === ".git";
 
+/**
+ * The last step of a path, which is the folder's own name. The drawer's header says this, so a workspace
+ * is named after the folder the human opened rather than after the route that reached it, and a flag such
+ * as `repo: true` is never printed in its place.
+ */
+function exBasename(path) {
+  const steps = String(path ?? "")
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter(Boolean);
+  return steps.length ? steps[steps.length - 1] : "";
+}
+
 /** Folders first, then names the way a person reads them: `file2` comes before `file10`. */
 function exSortEntries(entries) {
   return [...entries].sort((a, b) => {
@@ -294,7 +307,9 @@ function exListing() {
     truncated: false,
     next: null,
     root: "",
-    repo: "",
+    // Whether the workspace folder is itself a repository. It is a flag, never a name: the header says
+    // the folder's own basename.
+    repo: false,
     dirty: [],
     dirtyTruncated: false,
     state: "new",
@@ -343,7 +358,7 @@ function exListingPage(listing, ticket, page) {
   listing.next = page?.next ?? null;
   listing.truncated = Boolean(page?.truncated);
   if (typeof page?.root === "string" && page.root) listing.root = page.root;
-  if (typeof page?.repo === "string") listing.repo = page.repo;
+  listing.repo = Boolean(page?.repo);
   for (const dir of Array.isArray(page?.dirty) ? page.dirty : []) {
     const clean = exCleanPath(dir);
     if (clean !== null && !listing.dirty.includes(clean)) listing.dirty.push(clean);
@@ -391,6 +406,63 @@ function exSelectAll(sel, order) {
   sel.anchor = order[0] ?? "";
   sel.lead = order[order.length - 1] ?? "";
   return sel;
+}
+
+// ---------- a path that moved, and everything that named it -----------------
+/**
+ * Where a path stands after the folder it lived in was renamed or moved: it and every descendant follow
+ * the prefix. A path that stood somewhere else is left exactly where it was, so a name that merely starts
+ * with the same letters is never dragged along.
+ */
+function exRebasePath(path, from, to) {
+  if (!from) return path;
+  if (path === from) return to;
+  return path.startsWith(`${from}/`) ? `${to}${path.slice(from.length)}` : path;
+}
+
+/**
+ * A listing that stood under a renamed or moved folder. Its own key, every row's path and the set of names
+ * it has already taken all move together: a descendant row that kept its old path would name a file that
+ * is no longer there, and a later refresh would add the new spelling beside the stale one.
+ */
+function exRebaseListing(listing, from, to) {
+  listing.parent = exRebasePath(listing.parent, from, to);
+  for (const entry of listing.entries) entry.path = exRebasePath(entry.path, from, to);
+  listing.seen = new Set([...listing.seen].map((path) => exRebasePath(path, from, to)));
+  return listing;
+}
+
+/**
+ * Everything else the drawer holds by path: the selection and its lead row, the file clipboard, a name
+ * being typed and the folder a new name was going into. They follow the file they named, so a rename does
+ * not silently drop the selection or the cut the human was about to paste.
+ */
+function exRebaseHeld(held, from, to) {
+  if (held.sel) {
+    held.sel.paths = new Set([...held.sel.paths].map((path) => exRebasePath(path, from, to)));
+    held.sel.anchor = exRebasePath(held.sel.anchor, from, to);
+    held.sel.lead = exRebasePath(held.sel.lead, from, to);
+  }
+  if (held.clip) held.clip.paths = held.clip.paths.map((path) => exRebasePath(path, from, to));
+  if (held.renaming) held.renaming = exRebasePath(held.renaming, from, to);
+  if (held.draft?.dir) held.draft = { ...held.draft, dir: exRebasePath(held.draft.dir, from, to) };
+  return held;
+}
+
+/**
+ * The whole tree after a path moved. Every listing is rekeyed under its new name and every row inside it
+ * with it, the folders left open stay open on the rows they were opened on, and the selection, the
+ * clipboard and the inline names follow their own paths. Nothing is left keyed by a spelling that no
+ * longer exists on disk, so a later read of the folder adds no twin beside it.
+ */
+function exRebaseTree(state, from, to) {
+  const held = new Map();
+  for (const [dir, listing] of state.folders) {
+    held.set(exRebasePath(dir, from, to), exRebaseListing(listing, from, to));
+  }
+  state.folders = held;
+  state.expanded = new Set([...state.expanded].map((dir) => exRebasePath(dir, from, to)));
+  return exRebaseHeld(state, from, to);
 }
 
 /** A refresh keeps what still exists and lets go of what does not; the dropped names come back so a
@@ -565,6 +637,22 @@ function exDeleteResult(status, body) {
 const exPermanentPaths = (result) =>
   result.needsPermanent.filter((path) => !result.deleted.includes(path) && !result.failed.some((one) => one.path === path));
 
+/**
+ * What a batch operation refused, in the daemon's own words. A single-name clash answers 409 with one
+ * reason, and a batch answers 207 with a row per name; both carry `failed[].error`, and both are read here
+ * so the human is told the actual cause instead of a guess at it.
+ */
+function exFailedLines(body) {
+  const lines = [];
+  for (const one of Array.isArray(body?.failed) ? body.failed : []) {
+    const path = String(one?.path ?? "").trim();
+    const error = String(one?.error ?? "").trim() || "refused";
+    const line = path ? `${path}: ${error}` : error;
+    if (!lines.includes(line)) lines.push(line);
+  }
+  return lines;
+}
+
 // ---------- names a file may take -----------------------------------------
 /** Why this name cannot be made in that folder, or `""` when it can. */
 function exNameTrouble(name) {
@@ -605,7 +693,7 @@ function exDrawerToggle(state, name) {
  * edited or a menu standing open goes before the drawer, and the drawer goes before the card the board
  * is reading.
  */
-const EX_ESCAPE_ORDER = ["menu", "rename", "create", "sheet", "git", "drawer", "card"];
+const EX_ESCAPE_ORDER = ["confirm", "menu", "rename", "create", "sheet", "git", "drawer", "card"];
 
 function exEscapeTarget(open) {
   for (const one of EX_ESCAPE_ORDER) if (open?.[one]) return one;
@@ -672,10 +760,15 @@ function exGitKind(git) {
   return "modified";
 }
 
-/** The letter VS Code puts at the right of a decorated row. */
+/**
+ * The letter VS Code puts at the right of a decorated row. A name Git has never tracked wears `U`, which
+ * is the badge VS Code shows; `?` is only how Git's own porcelain spells it.
+ */
 function exGitBadge(git) {
   const letters = String(git ?? "").replace(/\s/g, "");
-  return letters ? letters[0] : "";
+  if (!letters) return "";
+  if (letters === "??") return "U";
+  return letters[0];
 }
 
 const explorerCore = {
@@ -684,6 +777,7 @@ const explorerCore = {
   depthOf: exDepthOf,
   under: exUnder,
   cleanPath: exCleanPath,
+  basename: exBasename,
   sortEntries: exSortEntries,
   listing: exListing,
   listingStart: exListingStart,
@@ -694,6 +788,10 @@ const explorerCore = {
   selectRange: exSelectRange,
   selectAll: exSelectAll,
   selectKeep: exSelectKeep,
+  rebasePath: exRebasePath,
+  rebaseListing: exRebaseListing,
+  rebaseHeld: exRebaseHeld,
+  rebaseTree: exRebaseTree,
   clipboard: exClip,
   clipSet: exClipSet,
   clipClear: exClipClear,
@@ -708,6 +806,7 @@ const explorerCore = {
   markMissing: exMarkMissing,
   deleteResult: exDeleteResult,
   permanentPaths: exPermanentPaths,
+  failedLines: exFailedLines,
   nameTrouble: exNameTrouble,
   drawers: exDrawers,
   drawerOpen: exDrawerOpen,
@@ -9742,8 +9841,9 @@ async function exLoad(dir, { quiet = false } = {}) {
       // file tools open, whatever the workspace was reached by.
       if (typeof page.root === "string" && page.root) exState.root = page.root;
       if (dir === "") {
-        // The section header is the folder the human opened, not the route that reached it.
-        const label = page.repo || String(exState.root || "").split("/").filter(Boolean).pop() || "explorer";
+        // The section header is the folder the human opened, not the route that reached it, and not
+        // whether that folder happens to be a repository.
+        const label = explorerCore.basename(exState.root) || "explorer";
         exTitleEl.textContent = label;
         exTitleEl.title = exState.root || label;
       }
@@ -10240,7 +10340,9 @@ async function exRenameCommit(entry, name) {
   }
   const answer = await exPost("/files/rename", { path: entry.path, name: trimmed });
   if (!answer.ok) {
-    footNote(answer.status === 409 ? `“${trimmed}” is already there` : answer.text.slice(0, 120), true);
+    const reasons = explorerCore.failedLines(answer.data);
+    const why = reasons.length ? reasons.join(" · ") : answer.status === 409 ? `“${trimmed}” is already there` : answer.text.slice(0, 120);
+    footNote(why, true);
     return exPaint();
   }
   const from = answer.data?.from ?? entry.path;
@@ -10250,77 +10352,103 @@ async function exRenameCommit(entry, name) {
     if (!inst.picked.size) continue;
     if (explorerCore.retargetRefs(inst.picked, exState.root, from, to).length) drawChips(inst);
   }
-  // A parent that changed path takes its open children with it.
-  const rebase = (dir) => (dir === from || dir.startsWith(`${from}/`) ? to + dir.slice(from.length) : dir);
-  exState.expanded = new Set([...exState.expanded].map(rebase));
-  const held = new Map();
-  for (const [dir, listing] of exState.folders) {
-    const now = rebase(dir);
-    listing.parent = now;
-    held.set(now, listing);
-  }
-  exState.folders = held;
+  // The whole subtree follows, rows and all: a listing that kept the old spelling would paint a folder
+  // whose children name files that are no longer there, and the selection and clipboard named it too.
+  explorerCore.rebaseTree(exState, from, to);
   explorerCore.select(exState.sel, to);
   await exReload([explorerCore.parentOf(to)]);
+}
+
+/**
+ * The outcome of a batch operation, read for what actually happened: the names that arrived, in the order
+ * they arrived, and the reasons the rest did not. A 207 is a partial answer rather than a failure, and a
+ * 409 carries the daemon's own `failed[].error`, so neither is turned into a guess.
+ */
+function exBatchOutcome(answer, key) {
+  if (!answer.ok && answer.status !== 207) {
+    return { ok: false, arrived: [], refused: explorerCore.failedLines(answer.data), text: answer.text };
+  }
+  const arrived = (Array.isArray(answer.data?.[key]) ? answer.data[key] : []).flatMap((one) => {
+    const from = explorerCore.cleanPath(one?.from);
+    const to = explorerCore.cleanPath(one?.to);
+    return from === null || to === null ? [] : [{ from, to }];
+  });
+  return { ok: true, arrived, refused: explorerCore.failedLines(answer.data), text: answer.text };
+}
+
+/** What to say about an operation: the daemon's own reasons when it refused anything, else the count. */
+function exBatchLine(outcome, verb) {
+  const gone = outcome.refused;
+  const count = outcome.arrived.length;
+  if (gone.length) return `${count} ${verb}, ${gone.length} not — ${gone.slice(0, 3).join(" · ")}`;
+  return `${count} ${count === 1 ? "path" : "paths"} ${verb}`;
 }
 
 /** Move these paths into that folder. A folder never moves inside itself. */
 async function exMoveTo(paths, dest) {
   const bad = paths.find((path) => path === dest || explorerCore.under(dest, path));
-  if (bad !== undefined) return footNote("a folder cannot go inside itself", true);
-  const parents = paths.map((path) => explorerCore.parentOf(path));
-  const answer = await exPost("/files/move", { paths, to: dest });
-  if (answer.status === 409) return footNote("one of those names is already there", true);
-  if (!answer.ok && answer.status !== 207) return footNote(answer.text.slice(0, 140) || "the move failed", true);
-  const moved = Array.isArray(answer.data?.moved) ? answer.data.moved : [];
-  const failed = Array.isArray(answer.data?.failed) ? answer.data.failed : [];
-  for (const one of moved) {
-    const from = explorerCore.cleanPath(one?.from);
-    const to = explorerCore.cleanPath(one?.to);
-    if (from === null || to === null) continue;
-    for (const inst of composers.values()) {
-      if (inst.picked.size && explorerCore.retargetRefs(inst.picked, exState.root, from, to).length) drawChips(inst);
-    }
-    const rebase = (dir) => (dir === from || dir.startsWith(`${from}/`) ? to + dir.slice(from.length) : dir);
-    exState.expanded = new Set([...exState.expanded].map(rebase));
-    const held = new Map();
-    for (const [dir, listing] of exState.folders) {
-      const now = rebase(dir);
-      listing.parent = now;
-      held.set(now, listing);
-    }
-    exState.folders = held;
+  if (bad !== undefined) {
+    footNote("a folder cannot go inside itself", true);
+    return { ok: false, arrived: [], dest };
   }
-  explorerCore.select(exState.sel, moved.length ? explorerCore.cleanPath(moved[moved.length - 1].to) ?? "" : exState.sel.lead);
-  await exReload([...parents, dest]);
-  if (failed.length) footNote(`${moved.length} moved, ${failed.length} not: ${failed[0].error ?? "refused"}`, true);
-  else footNote(`${moved.length} ${moved.length === 1 ? "path" : "paths"} moved`);
+  const parents = paths.map((path) => explorerCore.parentOf(path));
+  const outcome = exBatchOutcome(await exPost("/files/move", { paths, to: dest }), "moved");
+  if (!outcome.ok) {
+    footNote(outcome.refused.slice(0, 3).join(" · ") || outcome.text.slice(0, 140) || "the move failed", true);
+    return { ok: false, arrived: [], dest };
+  }
+  const moved = outcome.arrived;
+  for (const one of moved) {
+    for (const inst of composers.values()) {
+      if (inst.picked.size && explorerCore.retargetRefs(inst.picked, exState.root, one.from, one.to).length) drawChips(inst);
+    }
+    explorerCore.rebaseTree(exState, one.from, one.to);
+  }
+  // A folder that was itself moved is read under its new name, not its old one.
+  const reread = new Set([dest, ...parents.map((dir) => moved.reduce((held, one) => explorerCore.rebasePath(held, one.from, one.to), dir))]);
+  explorerCore.select(exState.sel, moved.length ? moved[moved.length - 1].to : exState.sel.lead);
+  await exReload([...reread]);
+  footNote(exBatchLine(outcome, "moved"), outcome.refused.length > 0);
+  return { ok: true, arrived: moved, dest };
 }
 
 /** Copy these paths into that folder. */
 async function exCopyTo(paths, dest) {
   const bad = paths.find((path) => path === dest || explorerCore.under(dest, path));
-  if (bad !== undefined) return footNote("a folder cannot be copied inside itself", true);
-  const answer = await exPost("/files/copy", { paths, to: dest });
-  if (answer.status === 409) return footNote("one of those names is already there", true);
-  if (!answer.ok && answer.status !== 207) return footNote(answer.text.slice(0, 140) || "the copy failed", true);
-  const copied = Array.isArray(answer.data?.copied) ? answer.data.copied : [];
-  const failed = Array.isArray(answer.data?.failed) ? answer.data.failed : [];
-  if (copied.length) explorerCore.select(exState.sel, explorerCore.cleanPath(copied[copied.length - 1].to) ?? "");
+  if (bad !== undefined) {
+    footNote("a folder cannot be copied inside itself", true);
+    return { ok: false, arrived: [], dest };
+  }
+  const outcome = exBatchOutcome(await exPost("/files/copy", { paths, to: dest }), "copied");
+  if (!outcome.ok) {
+    footNote(outcome.refused.slice(0, 3).join(" · ") || outcome.text.slice(0, 140) || "the copy failed", true);
+    return { ok: false, arrived: [], dest };
+  }
+  if (outcome.arrived.length) explorerCore.select(exState.sel, outcome.arrived[outcome.arrived.length - 1].to);
   await exReload([dest]);
-  if (failed.length) footNote(`${copied.length} copied, ${failed.length} not: ${failed[0].error ?? "refused"}`, true);
-  else footNote(`${copied.length} ${copied.length === 1 ? "path" : "paths"} copied`);
+  footNote(exBatchLine(outcome, "copied"), outcome.refused.length > 0);
+  return { ok: true, arrived: outcome.arrived, dest };
 }
 
-/** Paste the file clipboard into a folder, cut or copied as it was put there. */
+/**
+ * Paste the file clipboard into a folder, cut or copied as it was put there. The clipboard is the human's,
+ * so a copy keeps it and can be pasted again. A cut is spent only on the names that actually arrived: the
+ * ones the daemon refused stay on it, to be tried again rather than silently lost.
+ */
 async function exPasteInto(dest) {
   const trouble = explorerCore.pasteTrouble(exState.clip, dest);
   if (trouble) return footNote(trouble, true);
   const paths = [...exState.clip.paths];
   const mode = exState.clip.mode;
-  explorerCore.clipClear(exState.clip);
-  if (mode === "cut") await exMoveTo(paths, dest);
-  else await exCopyTo(paths, dest);
+  const outcome = mode === "cut" ? await exMoveTo(paths, dest) : await exCopyTo(paths, dest);
+  if (mode !== "cut") return;
+  // A name that moved takes its own descendants with it, so a cut folder counts as spent by its prefix.
+  const spent = (path) => outcome.arrived.some((one) => explorerCore.under(path, one.from));
+  explorerCore.clipSet(exState.clip, "cut", paths.filter((path) => !spent(path)));
+  const left = exState.clip.paths;
+  if (left.length) {
+    footNote(`${exBatchLine(outcome, "moved")} — ${left.length} still on the clipboard, paste again to retry`, true);
+  }
 }
 
 /**
@@ -10331,7 +10459,8 @@ async function exDelete(paths) {
   if (!paths.length) return;
   const answer = await exPost("/files/delete", { paths });
   if (!answer.ok && answer.status !== 207) {
-    footNote(answer.text.slice(0, 140) || "the delete failed", true);
+    // A refused batch says why per name, and that reason is what the human needs, not the status.
+    footNote(explorerCore.failedLines(answer.data).slice(0, 3).join(" · ") || answer.text.slice(0, 140) || "the delete failed", true);
     return;
   }
   const result = explorerCore.deleteResult(answer.status, answer.data);
@@ -10340,8 +10469,10 @@ async function exDelete(paths) {
     if (inst.picked.size && explorerCore.markMissing(inst.picked, exState.root, result.deleted)) drawChips(inst);
   }
   await exReload([...new Set(paths.map((path) => explorerCore.parentOf(path)))]);
-  if (result.failed.length) footNote(`${result.deleted.length} gone, ${result.failed.length} not: ${result.failed[0].error}`, true);
-  else if (result.deleted.length) footNote(`${result.deleted.length} ${result.deleted.length === 1 ? "path" : "paths"} ${result.trashed ? "moved to the trash" : "deleted"}`);
+  if (result.failed.length) {
+    const lines = explorerCore.failedLines({ failed: result.failed });
+    footNote(`${result.deleted.length} gone, ${result.failed.length} not — ${lines.slice(0, 3).join(" · ")}`, true);
+  } else if (result.deleted.length) footNote(`${result.deleted.length} ${result.deleted.length === 1 ? "path" : "paths"} ${result.trashed ? "moved to the trash" : "deleted"}`);
 
   const permanent = explorerCore.permanentPaths(result);
   if (!permanent.length) return;
@@ -10360,9 +10491,15 @@ async function exDelete(paths) {
   else footNote(`${permanent.length} ${permanent.length === 1 ? "path" : "paths"} deleted for good`);
 }
 
-/** The question a permanent delete asks, in words a human can weigh. */
+/**
+ * The question a permanent delete asks, in words a human can weigh. While it stands it holds the keyboard:
+ * Tab moves between its own two buttons and nothing else, in either direction, and the focus the human had
+ * before it was asked is handed back to them afterwards. Escape is the drawer's own: the modal is the first
+ * name in its escape order, and cancelling is what that press does.
+ */
 function exAskPermanent(paths) {
   return new Promise((resolve) => {
+    const prior = document.activeElement;
     exConfirmTitle.textContent = "delete for good";
     const note = el("p", "act-note");
     note.textContent =
@@ -10372,10 +10509,24 @@ function exAskPermanent(paths) {
     exConfirmBody.replaceChildren(note, list);
     exConfirmEl.hidden = false;
     exConfirmYes.focus();
+    // One press of Tab inside the question stays inside it: everything behind it is out of reach.
+    const trap = (event) => {
+      if (event.key !== "Tab") return;
+      const stops = [...exConfirmEl.querySelectorAll("button:not([disabled])")];
+      if (!stops.length) return;
+      event.preventDefault();
+      const at = stops.indexOf(document.activeElement);
+      const step = event.shiftKey ? -1 : 1;
+      stops[(at + step + stops.length) % stops.length].focus();
+    };
+    exConfirmEl.addEventListener("keydown", trap);
     const done = (answer) => {
+      exConfirmEl.removeEventListener("keydown", trap);
       exConfirmEl.hidden = true;
       exConfirmYes.onclick = null;
       exConfirmNo.onclick = null;
+      if (prior instanceof HTMLElement && document.contains(prior)) prior.focus();
+      else exTreeEl.focus();
       resolve(answer);
     };
     exConfirmYes.onclick = () => done(true);
@@ -11743,31 +11894,42 @@ const openSheet = () => document.querySelector(".sheet:not([hidden])");
  * board stays usable behind it, which is what makes a file droppable on a thread while the drawer is
  * open. A menu and a name being typed are.
  */
-const drawerSurface = () => Boolean(exState.menu) || Boolean(exState.renaming) || Boolean(exState.draft);
+const drawerSurface = () =>
+  !exConfirmEl.hidden || Boolean(exState.menu) || Boolean(exState.renaming) || Boolean(exState.draft);
+
+/** Every surface that stands over the board right now, named the way the drawer's escape order names them. */
+function exOpenSurfaces() {
+  const sheet = openSheet();
+  return {
+    confirm: !exConfirmEl.hidden,
+    menu: Boolean(exState.menu),
+    rename: Boolean(exState.renaming),
+    create: Boolean(exState.draft),
+    sheet: Boolean(sheet),
+    git: gitDrawer.isOpen(),
+    drawer: Boolean(drawerState.open),
+    card: Boolean(document.querySelector(".card.active")) || selectedIds.size > 0,
+  };
+}
 
 // The selection is a reading position, so Escape gives it up: the board stops dimming and the wheel
 // goes back to moving the board. Everything that stands over the board takes Escape first and stops it
-// there, in this order: a name or a menu of the files drawer, a sheet, the git graph, the drawer, and
-// only then the card being read.
+// there, and the order it is read in is the drawer's own list — the permanent-delete question, a name or
+// a menu of the files drawer, a sheet, the git graph, the drawer, and only then the card being read.
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   // The `@` list is its own surface and takes Escape first, so shutting it does not also drop
   // the card being read.
   if (!atPick.hidden) return;
-  // The permanent-delete question is the last word on a press that destroys work, so it goes first.
-  if (!exConfirmEl.hidden) {
-    event.preventDefault();
-    exConfirmNo.click();
-    return;
-  }
+  const target = explorerCore.escapeTarget(exOpenSurfaces());
+  if (!target) return;
+  // One press is spent here, once: nothing behind this surface hears it as well.
+  event.preventDefault();
+  event.stopPropagation();
+  if (target === "confirm") return exConfirmNo.click();
   // A menu or a name in the drawer, when the focus has already left the drawer's own handler.
-  if (exState.menu) {
-    event.preventDefault();
-    exCloseMenu();
-    return;
-  }
-  if (exState.renaming || exState.draft) {
-    event.preventDefault();
+  if (target === "menu") return exCloseMenu();
+  if (target === "rename" || target === "create") {
     exState.renaming = "";
     exState.draft = null;
     exPaint();
@@ -11775,9 +11937,8 @@ document.addEventListener("keydown", (event) => {
   }
   // A click on the sheet's padding leaves the focus on the body, so the sheet's own handler never sees
   // the press: it is closed here, which also keeps it from giving up the card it hides.
-  const sheet = openSheet();
-  if (sheet) {
-    event.preventDefault();
+  if (target === "sheet") {
+    const sheet = openSheet();
     if (sheet === actPanel) closeActPanel();
     else if (sheet === cleanPanel) closeCleanSheet();
     else if (sheet === leftPanel) closeLeftoversSheet();
@@ -11786,20 +11947,11 @@ document.addEventListener("keydown", (event) => {
   }
   // The drawer covers the board, so Escape rolls it up before it lets go of the card being read. A press
   // inside its page never reaches this handler, and comes back as the page's own `close` message.
-  if (gitDrawer.isOpen()) {
-    event.preventDefault();
-    gitDrawer.close();
-    return;
-  }
+  if (target === "git") return gitDrawer.close();
   // The files drawer is an overlay of the left column, so Escape rolls it up before it lets go of the
   // card the board is reading.
-  if (drawerState.open) {
-    event.preventDefault();
-    closeDrawers();
-    return;
-  }
+  if (target === "drawer") return closeDrawers();
   // The selection is a reading position and a set of cards to move, so Escape gives up both.
-  if (!document.querySelector(".card.active") && !selectedIds.size) return;
   selectCard(null);
   clearSelection();
 });
@@ -11846,10 +11998,13 @@ document.addEventListener("keydown", (event) => {
 });
 
 // `ctrl+z` is the undo a close needs: the daemon holds the last cards a close removed, so one key puts
-// back the one that went by mistake. A field keeps its own undo, so half-typed text is never replaced.
+// back the one that went by mistake. A field keeps its own undo, so half-typed text is never replaced,
+// and neither is the file drawer's: with the tree holding the focus, an undo belongs to the files the
+// human is moving, not to the card behind them.
 document.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() !== "z" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
   if (typingSomewhere() || panelUp() || !atPick.hidden || openSheet() || drawerSurface()) return;
+  if (exTreeEl.contains(document.activeElement)) return;
   event.preventDefault();
   undoClose();
 });

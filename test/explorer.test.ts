@@ -17,21 +17,138 @@ import { test } from "node:test";
 const BOARD = new URL("../public/client/board.js", import.meta.url);
 const HTML = new URL("../public/index.html", import.meta.url);
 
-/** The explorer's own block, as the page loads it. Its shape is the page's, which has no types. */
-function loadCore(): any {
+// The shapes the explorer's block deals in, named here once. The page itself carries no types, so these
+// interfaces are the seam between it and this file: every call below is checked against them.
+
+/** One row of a folder, as `/files` names it. */
+type ExEntry = { name: string; path: string; dir: boolean; size: number; mtime: number; link: boolean; git: string };
+
+/** One folder's listing, as the drawer keeps it while the pages land. */
+type ExListing = {
+	seq: number;
+	parent: string;
+	entries: ExEntry[];
+	seen: Set<string>;
+	total: number;
+	truncated: boolean;
+	next: string | null;
+	root: string;
+	repo: boolean;
+	dirty: string[];
+	dirtyTruncated: boolean;
+	state: string;
+	trouble: string;
+};
+
+/** One page of a folder, in the shape `/files` answers with. */
+type ExPage = {
+	root?: string;
+	path?: string;
+	parent?: string | null;
+	canonical?: string;
+	entries?: ExEntry[];
+	total?: number;
+	next?: string | null;
+	truncated?: boolean;
+	repo?: boolean;
+	dirty?: string[];
+	dirtyTruncated?: boolean;
+};
+
+type ExSelection = { paths: Set<string>; anchor: string; lead: string };
+type ExClip = { mode: string; paths: string[] };
+type ExRef = { dir: boolean; missing: boolean };
+type ExDraft = { dir: string; asDir: boolean; name?: string };
+type ExPorts = { writeText?: (text: string) => unknown; selectCopy?: (text: string) => unknown };
+type ExIcon = { glyph: string; color: string };
+type ExSortable = { path: string; name: string; dir?: boolean };
+type ExDeleteResult = {
+	deleted: string[];
+	trashed: boolean;
+	needsPermanent: string[];
+	failed: { path: string; error: string }[];
+	partial: boolean;
+};
+
+/** Everything the block hands the page, and therefore everything this file may drive. */
+type ExCore = {
+	sortEntries(entries: ExSortable[]): ExSortable[];
+	basename(path: string): string;
+	listing(): ExListing;
+	listingStart(listing: ExListing, parent?: string): number;
+	listingPage(listing: ExListing, ticket: number, page: ExPage): boolean;
+	selection(): ExSelection;
+	select(sel: ExSelection, path: string): ExSelection;
+	selectToggle(sel: ExSelection, path: string): ExSelection;
+	selectRange(sel: ExSelection, order: string[], path: string): ExSelection;
+	selectAll(sel: ExSelection, order: string[]): ExSelection;
+	selectKeep(sel: ExSelection, known: Set<string>): string[];
+	rebasePath(path: string, from: string, to: string): string;
+	rebaseListing(listing: ExListing, from: string, to: string): ExListing;
+	rebaseHeld(
+		held: { sel: ExSelection; clip: ExClip; renaming: string; draft: ExDraft | null },
+		from: string,
+		to: string,
+	): unknown;
+	rebaseTree(
+		state: {
+			folders: Map<string, ExListing>;
+			expanded: Set<string>;
+			sel: ExSelection;
+			clip: ExClip;
+			renaming: string;
+			draft: ExDraft | null;
+		},
+		from: string,
+		to: string,
+	): unknown;
+	clipboard(): ExClip;
+	clipSet(clip: ExClip, mode: string, paths: string[]): ExClip;
+	clipClear(clip: ExClip): ExClip;
+	pasteTrouble(clip: ExClip, dest: string): string;
+	cleanPath(value: unknown): string | null;
+	under(path: string, dir: string): boolean;
+	dragPayload(workspace: string, refs: { path: string; dir?: boolean }[]): string;
+	readDrag(text: string, workspace: string): { ok: boolean; reason?: string; paths?: { path: string; dir: boolean }[] };
+	dragKind(types: string[]): string;
+	absolute(root: string, rel: string): string;
+	relative(root: string, absolute: string): string | null;
+	attachRefs(picked: Map<string, ExRef>, root: string, refs: { path: string; dir?: boolean }[]): { added: number; known: number };
+	retargetRefs(picked: Map<string, ExRef>, root: string, from: string, to: string): [string, string][];
+	markMissing(picked: Map<string, ExRef>, root: string, removed: string[]): number;
+	deleteResult(status: number, body: unknown): ExDeleteResult;
+	permanentPaths(result: ExDeleteResult): string[];
+	failedLines(body: unknown): string[];
+	nameTrouble(name: unknown): string;
+	drawers(open?: string): { open: string };
+	drawerOpen(state: { open: string }, name: string): { open: string };
+	drawerClose(state: { open: string }): { open: string };
+	drawerToggle(state: { open: string }, name: string): { open: string };
+	escapeTarget(open: Record<string, boolean | undefined>): string;
+	boardLetter(key: string, flags?: { shift?: boolean; typing?: boolean; panel?: boolean; surface?: boolean }): string;
+	copyText(text: string, ports: ExPorts): Promise<unknown>;
+	icon(theme: unknown, entry: { name: string; dir?: boolean }): ExIcon | null;
+	gitKind(git: string): string;
+	gitBadge(git: string): string;
+	PATH_MIME: string;
+};
+
+/** The explorer's own block, as the page loads it. Its shape is the page's, which it has no types for. */
+function loadCore(): ExCore {
 	const source = readFileSync(BOARD, "utf8");
 	const start = source.indexOf("// ---------- explorer: the decisions ---");
 	const end = source.indexOf("// ---------- explorer: the decisions end ---");
 	assert.ok(start >= 0 && end > start, "the explorer core is marked off in public/client/board.js");
 	const body = source.slice(start, end);
-	// One function, so the block keeps its own consts and hands back exactly what the page uses.
-	return new Function(`${body}\nreturn explorerCore;`)();
+	// One function, so the block keeps its own consts and hands back exactly what the page uses. The
+	// interfaces above are the promise it keeps; nothing below them is unchecked.
+	return new Function(`${body}\nreturn explorerCore;`)() as ExCore;
 }
 
-const core: any = loadCore();
+const core: ExCore = loadCore();
 
 /** The entry a listing holds for one name. */
-const entry = (path: string, dir = false, git = "") => ({
+const entry = (path: string, dir = false, git = ""): ExEntry => ({
 	name: path.slice(path.lastIndexOf("/") + 1),
 	path,
 	dir,
@@ -42,7 +159,7 @@ const entry = (path: string, dir = false, git = "") => ({
 });
 
 /** One page of a folder, in the shape `/files` answers with. */
-const page = (entries: ReturnType<typeof entry>[], extra: Record<string, unknown> = {}) => ({
+const page = (entries: ExEntry[], extra: Partial<ExPage> = {}): ExPage => ({
 	root: "/work/project",
 	path: "",
 	parent: null,
@@ -99,12 +216,15 @@ test("Escape works down one order: a name or a menu, a sheet, the git graph, the
 	assert.equal(core.escapeTarget({ sheet: true, git: true }), "sheet");
 	assert.equal(core.escapeTarget({ rename: true, menu: true, sheet: true }), "menu");
 	assert.equal(core.escapeTarget({ rename: true, card: true }), "rename");
+	// The question about a permanent delete is the last word on a destructive press, so it goes first.
+	assert.equal(core.escapeTarget({ confirm: true, menu: true, rename: true, drawer: true }), "confirm");
+	assert.equal(core.escapeTarget({ confirm: false, drawer: true }), "drawer", "a hidden question holds nothing");
 });
 
 // ---------------------------------------------------------------- the tree
 
 test("a folder is sorted the way the explorer shows it: folders first, then names people can read", () => {
-	const sorted = core
+	const sorted: string[] = core
 		.sortEntries([
 			{ path: "b.txt", name: "b.txt", dir: false },
 			{ path: "Folder10", name: "Folder10", dir: true },
@@ -161,12 +281,80 @@ test("a page from a folder already left is dropped rather than merged", () => {
 	// The human walked to another folder: the listing starts again, and the old ticket is history.
 	const fresh = core.listingStart(listing, "docs");
 	assert.equal(core.listingPage(listing, stale, page([entry("src/old.ts")])), false);
-	assert.deepEqual(listing.entries, []);
+	assert.deepEqual(listing.entries, [] as ExEntry[]);
 	assert.equal(core.listingPage(listing, fresh, page([entry("docs/readme.md")])), true);
 	assert.deepEqual(
 		listing.entries.map((one) => one.path),
 		["docs/readme.md"],
 	);
+});
+
+test("a folder that moved takes its open descendants, their rows and the held paths with it", () => {
+	// The root, the folder being moved, and one folder under it that is also open.
+	const root = core.listing();
+	core.listingStart(root, "");
+	core.listingPage(root, root.seq, page([entry("old", true)]));
+	const child = core.listing();
+	core.listingStart(child, "old");
+	core.listingPage(child, child.seq, page([entry("old/a.ts"), entry("old/nested", true)], { total: 2 }));
+	const nested = core.listing();
+	core.listingStart(nested, "old/nested");
+	core.listingPage(nested, nested.seq, page([entry("old/nested/deep.ts")]));
+
+	const state = {
+		folders: new Map([
+			["", root],
+			["old", child],
+			["old/nested", nested],
+		]),
+		expanded: new Set(["", "old", "old/nested"]),
+		sel: core.selection(),
+		clip: core.clipboard(),
+		renaming: "old/a.ts",
+		draft: { dir: "old/nested", asDir: false } as ExDraft | null,
+	};
+	core.select(state.sel, "old/a.ts");
+	state.sel.paths.add("old/nested/deep.ts");
+	core.clipSet(state.clip, "cut", ["old/nested"]);
+
+	core.rebaseTree(state, "old", "renamed");
+
+	// The listing that stood under the folder is keyed by its new name, and every row inside it too.
+	assert.deepEqual([...state.folders.keys()].sort(), ["", "renamed", "renamed/nested"]);
+	assert.equal(state.folders.get("renamed")?.parent, "renamed");
+	assert.deepEqual(
+		state.folders.get("renamed")?.entries.map((one) => one.path),
+		["renamed/nested", "renamed/a.ts"],
+		"folders first, as the listing is drawn",
+	);
+	// The names a listing has taken follow as well, so the next page cannot add the old spelling beside.
+	assert.deepEqual([...state.folders.get("renamed")?.seen ?? []].sort(), ["renamed/a.ts", "renamed/nested"]);
+	assert.deepEqual(state.folders.get("renamed/nested")?.entries.map((one) => one.path), ["renamed/nested/deep.ts"]);
+	// The folders that were open are still open, on the rows they were opened on.
+	assert.deepEqual([...state.expanded].sort(), ["", "renamed", "renamed/nested"]);
+	// The selection, its lead row, the clipboard and the two inline names follow their own paths.
+	assert.deepEqual([...state.sel.paths].sort(), ["renamed/a.ts", "renamed/nested/deep.ts"]);
+	assert.equal(state.sel.lead, "renamed/a.ts");
+	assert.deepEqual(state.clip.paths, ["renamed/nested"]);
+	assert.equal(state.clip.mode, "cut");
+	assert.equal(state.renaming, "renamed/a.ts");
+	assert.equal(state.draft?.dir, "renamed/nested");
+	// A move uses the same walk, and a name that only starts with the same letters is never dragged along.
+	assert.equal(core.rebasePath("old", "old", "vendor/old"), "vendor/old");
+	assert.equal(core.rebasePath("older/a.ts", "old", "vendor/old"), "older/a.ts");
+});
+
+test("the drawer's header names the folder the human opened, and a repository stays a flag", () => {
+	assert.equal(core.basename("/work/project"), "project");
+	assert.equal(core.basename("/work/project/"), "project");
+	assert.equal(core.basename("C:\\work\\project"), "project", "a Windows root is read the same way");
+	assert.equal(core.basename(""), "", "there is no name to print before the daemon has answered");
+	const listing = core.listing();
+	assert.equal(listing.repo, false, "a fresh listing is not a repository");
+	const ticket = core.listingStart(listing, "");
+	core.listingPage(listing, ticket, page([entry("a.ts")], { repo: true }));
+	assert.equal(listing.repo, true);
+	assert.equal(typeof listing.repo, "boolean", "`repo` is a flag, never the string the header prints");
 });
 
 test("a refresh keeps the selection that still exists and lets go of the rest", () => {
@@ -223,11 +411,11 @@ test("a drag from this tree reads as paths, and one from another workspace or ou
 
 	const elsewhere = core.readDrag(payload, "00000000");
 	assert.equal(elsewhere.ok, false);
-	assert.match(elsewhere.reason, /another workspace/);
+	assert.match(elsewhere.reason ?? "", /another workspace/);
 
 	const outside = core.readDrag(JSON.stringify({ workspace: "b08b6688", paths: [{ path: "../secrets" }] }), "b08b6688");
 	assert.equal(outside.ok, false);
-	assert.match(outside.reason, /outside the workspace/);
+	assert.match(outside.reason ?? "", /outside the workspace/);
 
 	const absolute = core.readDrag(JSON.stringify({ workspace: "b08b6688", paths: [{ path: "/etc/shadow" }] }), "b08b6688");
 	assert.equal(absolute.ok, false, "an absolute payload path never leaves as one");
@@ -272,8 +460,9 @@ test("a rename or a move rewrites the references that named the old path, and a 
 	assert.ok(picked.has("/work/project/other/b.ts"), "the reference that was not renamed stays");
 	const marked = core.markMissing(picked, "/work/project", ["other"]);
 	assert.equal(marked, 1);
-	assert.equal(picked.get("/work/project/other/b.ts").missing, true);
-	assert.equal(picked.get("/work/project/new/nested/a.ts").missing, false);
+	// `?.` is the guard: a reference that fell out of the map is `undefined`, which is not `true` either.
+	assert.equal(picked.get("/work/project/other/b.ts")?.missing, true);
+	assert.equal(picked.get("/work/project/new/nested/a.ts")?.missing, false);
 });
 
 test("a path is named relative to the board's root, and one outside it stays absolute", () => {
@@ -300,14 +489,14 @@ test("cut and copy are in-app state, and a folder never lands inside itself", ()
 });
 
 test("Copy Path uses the browser clipboard, and the selection trick when the page has none", async () => {
-	const written = [];
-	await core.copyText("/work/project/a.ts", { writeText: (text) => written.push(text) });
+	const written: string[] = [];
+	await core.copyText("/work/project/a.ts", { writeText: (text: string) => written.push(text) });
 	assert.deepEqual(written, ["/work/project/a.ts"]);
 
 	// A board reached over plain http is not a secure context: `navigator.clipboard` is absent, so the
 	// text is selected and the browser is asked to copy that selection.
-	const selected = [];
-	await core.copyText("src/a.ts", { selectCopy: (text) => selected.push(text) });
+	const selected: string[] = [];
+	await core.copyText("src/a.ts", { selectCopy: (text: string) => selected.push(text) });
 	assert.deepEqual(selected, ["src/a.ts"]);
 
 	await assert.rejects(() => core.copyText("src/a.ts", {}), /no clipboard/);
@@ -333,6 +522,23 @@ test("a partial delete is read for what happened, and only the trash's refusals 
 test("a name reported as both gone and refused is not asked for twice", () => {
 	const result = core.deleteResult(207, { deleted: ["a"], needsPermanent: ["a", "b"], failed: [{ path: "b", error: "no" }] });
 	assert.deepEqual(core.permanentPaths(result), [], "a deleted name is not resent, and a failed one gave its reason");
+});
+
+test("a refused batch is read for the daemon's own reasons, whatever status carried them", () => {
+	// 207 and 409 both answer with a row per name; the reason is the daemon's, not one guessed here.
+	assert.deepEqual(
+		core.failedLines({
+			failed: [
+				{ path: "vendor/big.bin", error: "permission denied" },
+				{ path: "build/locked", error: "no such file" },
+			],
+		}),
+		["vendor/big.bin: permission denied", "build/locked: no such file"],
+	);
+	assert.deepEqual(core.failedLines({ failed: [{ path: "a.bin" }] }), ["a.bin: refused"], "a reasonless refusal still names the file");
+	assert.deepEqual(core.failedLines({ failed: [] }), []);
+	assert.deepEqual(core.failedLines({ error: "already there" }), [], "a single-body answer adds no row of its own");
+	assert.deepEqual(core.failedLines(null), []);
 });
 
 test("a 200 delete with nothing refused asks for nothing permanent", () => {
@@ -373,9 +579,9 @@ test("a file wears the Seti theme's own glyph, and a folder wears the codicon VS
 		},
 	};
 	assert.deepEqual(core.icon(theme, { name: "readme.md", dir: false }), { glyph: "\uE012", color: "#519aba" });
-	assert.equal(core.icon(theme, { name: "a.spec.ts", dir: false }).glyph, "\uE021", "the longest extension wins");
-	assert.equal(core.icon(theme, { name: "main.ts", dir: false }).glyph, "\uE020");
-	assert.equal(core.icon(theme, { name: "notes", dir: false }).glyph, "\uE023", "an unknown name takes the default");
+	assert.equal(core.icon(theme, { name: "a.spec.ts", dir: false })?.glyph, "\uE021", "the longest extension wins");
+	assert.equal(core.icon(theme, { name: "main.ts", dir: false })?.glyph, "\uE020");
+	assert.equal(core.icon(theme, { name: "notes", dir: false })?.glyph, "\uE023", "an unknown name takes the default");
 	assert.equal(core.icon(theme, { name: "src", dir: true }), null, "a folder is not the theme's to draw");
 	assert.equal(core.icon(null, { name: "a.ts", dir: false }), null, "no theme read yet is no icon");
 });
@@ -391,7 +597,7 @@ test("Git's two letters become the one colour and the one badge a row shows", ()
 	assert.equal(core.gitKind("!!"), "ignored");
 	assert.equal(core.gitKind(""), "");
 	assert.equal(core.gitBadge(" M"), "M");
-	assert.equal(core.gitBadge("??"), "?");
+	assert.equal(core.gitBadge("??"), "U", "a name Git has never tracked wears VS Code's own letter");
 	assert.equal(core.gitBadge(""), "");
 });
 
