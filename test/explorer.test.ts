@@ -84,6 +84,12 @@ type ExCore = {
 	selectRange(sel: ExSelection, order: string[], path: string): ExSelection;
 	selectAll(sel: ExSelection, order: string[]): ExSelection;
 	pressOpens(entry: { dir?: boolean } | null, event: { target?: { classList?: { contains(name: string): boolean } }; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean } | null): boolean;
+	pressAction(
+		entry: { dir?: boolean } | null,
+		press: { repeated: boolean } | null,
+		event: { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean } | null,
+		renaming?: boolean,
+	): string;
 	editTarget(entry: { dir?: boolean; link?: boolean } | null | undefined): string;
 	pressAgain(held: { path: string; at: number }, path: string, now: number): { repeated: boolean; next: { path: string; at: number } };
 	selectKeep(sel: ExSelection, known: Set<string>): string[];
@@ -417,6 +423,41 @@ test("a second press on the same row inside a moment is the same intent, not ano
 	assert.equal(core.pressAgain({ path: "src", at: 1_000 }, "src", 2_000).repeated, false);
 	assert.equal(core.pressAgain({ path: "src", at: 1_000 }, "docs", 1_100).repeated, false);
 	assert.equal(core.pressAgain({ path: "", at: 0 }, "", 1_000).repeated, false);
+});
+
+test("a file pressed twice inside a moment asks to open, and a slow pair only selects", () => {
+	const file = entry("src/main.ts");
+	const first = core.pressAgain({ path: "", at: 0 }, file.path, 1_000);
+	assert.deepEqual([first.repeated, core.pressAction(file, first, {})], [false, "select"]);
+	const quick = core.pressAgain(first.next, file.path, 1_180);
+	assert.deepEqual([quick.repeated, core.pressAction(file, quick, {})], [true, "open"]);
+	// Half a second later the browser still calls it a double press, and nothing is opened for it.
+	const slow = core.pressAgain(first.next, file.path, 1_600);
+	assert.deepEqual([slow.repeated, core.pressAction(file, slow, {})], [false, "select"]);
+});
+
+test("a pair of presses that builds a selection never opens a file", () => {
+	const file = entry("src/main.ts");
+	const first = core.pressAgain({ path: "", at: 0 }, file.path, 1_000);
+	const quick = core.pressAgain(first.next, file.path, 1_180);
+	assert.equal(quick.repeated, true, "the pair is still a pair");
+	assert.equal(core.pressAction(file, quick, { shiftKey: true }), "select");
+	assert.equal(core.pressAction(file, quick, { ctrlKey: true }), "select");
+	assert.equal(core.pressAction(file, quick, { metaKey: true }), "select");
+	// A row whose name is being typed asks for nothing, however its presses land.
+	assert.equal(core.pressAction(file, quick, {}, true), "");
+	assert.equal(core.pressAction(file, first, {}, true), "");
+});
+
+test("a folder pair opens once, and its second press asks for nothing more", () => {
+	const folder = entry("src", true);
+	const first = core.pressAgain({ path: "", at: 0 }, folder.path, 1_000);
+	assert.equal(core.pressAction(folder, first, {}), "toggle");
+	const quick = core.pressAgain(first.next, folder.path, 1_180);
+	assert.deepEqual([quick.repeated, core.pressAction(folder, quick, {})], [true, ""]);
+	// A folder is never opened as a file, however its presses land.
+	assert.notEqual(core.pressAction(folder, first, {}), "open");
+	assert.notEqual(core.pressAction(folder, quick, {}), "open");
 });
 
 // ---------------------------------------------------------------- paths and drags

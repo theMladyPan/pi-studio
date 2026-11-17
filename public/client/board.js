@@ -440,6 +440,22 @@ function exPressOpens(entry, event) {
   return !event?.shiftKey && !event?.ctrlKey && !event?.metaKey;
 }
 
+/**
+ * What one press on a row asks the drawer to do, once the press before it is known. A press that is picking
+ * several rows only picks; a folder is a switch whose second half is swallowed; a file's second press is
+ * the edit its row exists for, while a slow second press is a new choice and only selects. A row being
+ * renamed asks for nothing, because the field over it is what the presses land on.
+ */
+function exPressAction(entry, press, event, renaming = false) {
+  if (renaming) return "";
+  if (!entry?.dir) {
+    if (event?.shiftKey || event?.ctrlKey || event?.metaKey) return "select";
+    return press?.repeated ? "open" : "select";
+  }
+  if (!exPressOpens(entry, event)) return "select";
+  return press?.repeated ? "" : "toggle";
+}
+
 // ---------- a path that moved, and everything that named it -----------------
 /**
  * Where a path stands after the folder it lived in was renamed or moved: it and every descendant follow
@@ -848,6 +864,7 @@ const explorerCore = {
   selectAll: exSelectAll,
   pressOpens: exPressOpens,
   pressAgain: exPressAgain,
+  pressAction: exPressAction,
   editTarget: exEditTarget,
   selectKeep: exSelectKeep,
   rebasePath: exRebasePath,
@@ -10042,18 +10059,15 @@ function exRowEl(entry, level) {
     else explorerCore.select(exState.sel, entry.path);
     exTreeEl.focus();
     // A double press is one intent, so the second land on the same row does not shut what the first
-    // opened before it could be seen.
+    // opened before it could be seen, and a file's second press is the edit the row asks for.
     const press = explorerCore.pressAgain(exPress, entry.path, Date.now());
     exPress = press.next;
-    if (!explorerCore.pressOpens(entry, event) || press.repeated) return void exPaintSelection();
-    void exToggleFolder(entry);
-  });
-  // A second press on a file is the one thing a file row asks for: open it. A row being renamed has a
-  // field over it, and that field keeps its own double press.
-  row.addEventListener("dblclick", () => {
-    if (exState.renaming === entry.path) return;
-    const target = explorerCore.editTarget(entry);
-    if (target) void exEditOpen(entry.path, target);
+    const action = explorerCore.pressAction(entry, press, event, exState.renaming === entry.path);
+    if (action === "open") {
+      const target = explorerCore.editTarget(entry);
+      if (target) void exEditOpen(entry.path, target);
+    } else if (action === "toggle") void exToggleFolder(entry);
+    else exPaintSelection();
   });
   row.addEventListener("contextmenu", (event) => {
     event.preventDefault();
