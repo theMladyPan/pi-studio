@@ -2,4 +2,4 @@
 
 ## [Unreleased]
 
-- fix: Define how changes are tracked and released so each version has a consistent history. [t-c70e4c65]
+- fix: Define a release workflow that maintains existing changelog entries and combines duplicate notes for the same feature or fix. [t-c70e4c65]

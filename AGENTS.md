@@ -57,14 +57,24 @@ title in the same client, which names its own key (`"hide the board overview (m)
 
 - Keep the release history at the repository root, in Keep a Changelog style: `# Changelog`,
   then `## [Unreleased]`, then `## [0.MINOR.PATCH] - YYYY-MM-DD` sections, newest first.
-- Every work merge into `dev` needs an unreleased bullet. Use `- feat: ...` for a new capability
-  or `- fix: ...` for a correction, including documentation or maintenance. Say what changed and
-  why the reader cares in one or two sentences. Avoid file paths, commit hashes and vague claims.
-- Each worker appends its own bullet under `[Unreleased]`, ending with its branch's thread id,
-  for example `[t-c70e4c65]`. It edits no other worker's entry or released section.
-- The thread handling the merge deduplicates entries for that work, unifies their wording and
-  prefers one bullet for the whole work merge. Work merged to `dev` stays unreleased until the
-  release preparation above.
+- Every change merged into `dev` must be covered by an unreleased bullet. Use `- feat: ...` for
+  a new capability or `- fix: ...` for a correction, including documentation or maintenance.
+  Say what changed and why the reader cares in one or two sentences. Avoid file paths, commit
+  hashes and vague claims.
+- Read `[Unreleased]` before editing. Maintain an existing bullet when continuing the same
+  feature or fix; update its wording as the work evolves. If it already covers the change, leave
+  it as is. Add a new bullet only for a distinct feature or fix, never just for another commit,
+  thread or merge.
+- Deduplicate overlapping unreleased bullets whenever possible. Combine entries for the same
+  feature or fix while preserving distinct behavior, breaking changes and migration guidance.
+  Keep unrelated changes separate. Workers may update matching entries from other threads;
+  never edit released sections during ordinary work.
+- End new bullets with the contributing branch's thread id, for example `[t-c70e4c65]`.
+  When updating or combining entries, preserve existing thread watermarks and add your own once
+  if you contribute to the change.
+- The thread handling the merge checks that all changes are covered, consolidates duplicates
+  and unifies their wording. Work merged to `dev` stays unreleased until the release preparation
+  above.
 - During release preparation, move all unreleased bullets into the new dated version section
   and remove every `[t-...]` watermark from those bullets. Leave an empty `[Unreleased]` section
   at the top. Release preparation does not need a changelog bullet about itself.
@@ -73,9 +83,10 @@ title in the same client, which names its own key (`"hide the board overview (m)
 
 ### Parallel threads
 
-- Append below the last unreleased bullet. Never rewrite, reorder or drop another thread's
-  entry; the watermark identifies its owner until the merge handler deduplicates that work.
-- On a changelog conflict, keep both sides' unreleased bullets and all released history.
-  Never resolve the conflict by taking one side of the file wholesale.
+- Recheck the latest unreleased entries before merging. Update a matching bullet first; append
+  below the last unreleased bullet only when the feature or fix is new. Preserve unrelated entries
+  and all contributing thread watermarks when maintaining or deduplicating shared notes.
+- On a changelog conflict, retain every distinct change and all released history. Combine
+  duplicate unreleased notes using the rules above. Never take one side of the file wholesale.
 - Recheck the version and release tags at release time. If `dev` has already released the work
   your bullet would describe, do not add a duplicate entry.
