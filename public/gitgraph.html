@@ -170,6 +170,39 @@
 			.ggViewerLine_hunk { color: #79c0ff; }
 			.ggViewerLine_meta { color: #8b949e; }
 			.ggViewerEmpty { padding: 1.2em; color: #8b949e; }
+			/* A whole file is read on the surface the board's drawer uses, imported with its colour: a
+			   coloured <pre> under a textarea that is transparent and only carries the caret and the
+			   selection. The token classes are the board's own five. */
+			.ggViewerText { display: flex; height: 100%; min-height: 0; }
+			.tp { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: #0d1117; }
+			.tp > .tp-code, .tp > .tp-input {
+				position: absolute;
+				inset: 0;
+				margin: 0;
+				border: 0;
+				padding: 0.6em 0.8em;
+				font-family: var(--vscode-editor-font-family);
+				font-size: 12px;
+				line-height: 1.5;
+				tab-size: 4;
+				white-space: pre;
+				overflow: auto;
+			}
+			.tp > .tp-code { overflow: hidden; color: #c9d1d9; pointer-events: none; }
+			.tp > .tp-input {
+				color: transparent;
+				background: transparent;
+				resize: none;
+				outline: none;
+				-webkit-text-fill-color: transparent;
+			}
+			.tp > .tp-input[readonly] { caret-color: transparent; }
+			.tp > .tp-input::selection { background: rgba(56, 139, 253, 0.4); }
+			.tp .k { color: #ff7b72; }
+			.tp .s { color: #a5d6ff; }
+			.tp .c { color: #8b949e; font-style: italic; }
+			.tp .f { color: #d2a8ff; }
+			.tp .n2 { color: #79c0ff; }
 		</style>
 	</head>
 	<body>

@@ -1326,6 +1326,45 @@
   #exConfirm .sheet-btn.danger { color: #f85149; border-color: rgba(248, 81, 73, .45); }
   #exConfirm .sheet-btn.danger:hover { color: #ff7b72; border-color: rgba(248, 81, 73, .8);
     background: rgba(248, 81, 73, .1); }
+  /* The text editor a file opens in, in the same frame: a file is read across rather than down, so this
+     panel is the widest the drawer owns. */
+  #exEditor { position: fixed; inset: 0; z-index: 2300; padding: 40px 24px; background: rgba(1, 4, 9, .66);
+    display: flex; align-items: center; justify-content: center; }
+  #exEditor[hidden] { display: none; }
+  #exEditor .panel { display: flex; flex-direction: column; width: min(980px, 100%); height: 100%;
+    overflow: hidden; background: var(--card); border: 1px solid var(--border-bright); border-radius: 10px;
+    box-shadow: 0 18px 40px rgba(0,0,0,.55); }
+  #exEditor .panel-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex: none;
+    background: var(--card-head); border-bottom: 1px solid var(--border); font: 12px var(--mono); }
+  /* The path is the head's own text: it is long, and it is what says which file this is. */
+  #exEditor .name { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  #exEditor .ex-editor-body { flex: 1; min-height: 0; display: flex; }
+  #exEditorBody { flex: 1; min-width: 0; display: flex; }
+  #exEditor .sheet-actions { display: flex; align-items: center; gap: 8px; flex: none; padding: 8px 10px;
+    border-top: 1px solid var(--border); background: var(--card-head); }
+  #exEditor .ex-editor-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font: 11px var(--mono); color: var(--muted); }
+  #exEditor .ex-editor-status.bad { color: #f85149; }
+  #exEditor .ex-editor-status.dirty { color: var(--amber); }
+  #exEditor .sheet-btn { font: 11px var(--mono); color: var(--muted); background: #161b22;
+    border: 1px solid var(--border); border-radius: 5px; padding: 3px 10px; cursor: pointer; }
+  #exEditor .sheet-btn:hover { color: var(--text); border-color: var(--border-bright); }
+  #exEditor .sheet-btn:disabled { cursor: default; opacity: .5; }
+
+  /* One text surface: a coloured `<pre>` under the textarea that owns the caret, both scrolled as one.
+     The area's own text is transparent so only the colours under it are read, and it keeps the caret and
+     the selection visible. The classes on the spans are the board's code colours, above. */
+  .tp { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: #0f141b; }
+  .tp > .tp-code, .tp > .tp-input { position: absolute; inset: 0; margin: 0; border: 0; padding: 8px 10px;
+    font: 13px/20px var(--mono); tab-size: 4; white-space: pre; overflow: auto; }
+  .tp > .tp-code { overflow: hidden; color: #c9d1d9; pointer-events: none; }
+  .tp > .tp-input { color: transparent; background: transparent; caret-color: #e6edf3; resize: none; outline: none;
+    -webkit-text-fill-color: transparent; }
+  .tp > .tp-input::selection { background: rgba(56, 139, 253, .4); -webkit-text-fill-color: transparent; }
+  .tp > .tp-input:focus-visible { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
+  /* A read-only surface has no caret to follow, so the copy is what is left to read. */
+  .tp > .tp-input[readonly] { caret-color: transparent; }
 
   /* Each of the board's three animations repeats a state the text already spells out, so the board
      loses nothing when the reader asks for less motion. Last, because it kills rules from the card
@@ -1522,6 +1561,21 @@
     <div class="sheet-actions">
       <button type="button" class="sheet-btn" id="exConfirmNo">keep them</button>
       <button type="button" class="sheet-btn danger" id="exConfirmYes">delete for good</button>
+    </div>
+  </div>
+</div>
+
+<!-- The text editor a file in the Files drawer opens in: the daemon reads it and writes it back, and the
+     status line at the bottom says which of those last happened. It stands over the board and holds the
+     keyboard while it stands. -->
+<div id="exEditor" hidden role="dialog" aria-modal="true" aria-labelledby="exEditorTitle">
+  <div class="panel">
+    <div class="panel-head"><span class="name" id="exEditorTitle">file</span></div>
+    <div class="ex-editor-body"><div id="exEditorBody"></div></div>
+    <div class="sheet-actions">
+      <span class="ex-editor-status" id="exEditorStatus"></span>
+      <button type="button" class="sheet-btn" id="exEditorSave">save</button>
+      <button type="button" class="sheet-btn" id="exEditorClose">close</button>
     </div>
   </div>
 </div>

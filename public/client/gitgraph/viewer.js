@@ -2,10 +2,11 @@
  * The reader for what the daemon answers instead of opening an editor: a diff, or a file at a revision.
  *
  * The bundle used to ask VS Code for a diff document, which came with a scrollbar, coloured additions
- * and a copy button. This is that, and deliberately no more: no editing, no side-by-side, no syntax
- * colouring beyond the three kinds of line a unified diff has. Keeping it small is the point — it is a
- * reader, and every feature it does not have is one the page does not have to keep working.
+ * and a copy button. This is that, and deliberately no more: no editing, no side-by-side. A diff stays a
+ * table with the three kinds of line it has; a whole file is the board's own text surface, imported so
+ * that the drawer's editor and this reader colour a file the same way.
  */
+import { createTextPreview } from "../text-preview.js";
 const viewer = document.getElementById("ggViewer");
 const titleBar = document.getElementById("ggViewerTitle");
 const flagsBar = document.getElementById("ggViewerFlags");
@@ -70,6 +71,8 @@ function render(view) {
     body.append(empty);
     return;
   }
+  // A file has no hunks, so it is read as text rather than numbered as a diff.
+  if (view.kind === "file") return renderFile(view);
   const table = document.createElement("table");
   table.className = "ggViewerTable";
   const tbody = document.createElement("tbody");
@@ -106,6 +109,18 @@ function render(view) {
   }
   table.append(tbody);
   body.append(table);
+}
+
+/**
+ * A whole file, on the surface the board's editor uses. Read-only, because this page reads history: the
+ * file it shows is a revision, and a revision is not something to type over here.
+ */
+function renderFile(view) {
+  const host = document.createElement("div");
+  host.className = "ggViewerText";
+  const preview = createTextPreview(host, { readOnly: true });
+  preview.setDocument({ path: view.filePath ?? view.title ?? "", content: view.content });
+  body.append(host);
 }
 
 /** Show one view, which the host passes whenever a reply carries text. */

@@ -83,6 +83,7 @@ type ExCore = {
 	selectRange(sel: ExSelection, order: string[], path: string): ExSelection;
 	selectAll(sel: ExSelection, order: string[]): ExSelection;
 	pressOpens(entry: { dir?: boolean } | null, event: { target?: { classList?: { contains(name: string): boolean } }; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean } | null): boolean;
+	editTarget(entry: { dir?: boolean; link?: boolean } | null | undefined): string;
 	pressAgain(held: { path: string; at: number }, path: string, now: number): { repeated: boolean; next: { path: string; at: number } };
 	selectKeep(sel: ExSelection, known: Set<string>): string[];
 	rebasePath(path: string, from: string, to: string): string;
@@ -221,6 +222,9 @@ test("Escape works down one order: a name or a menu, a sheet, the git graph, the
 	// The question about a permanent delete is the last word on a destructive press, so it goes first.
 	assert.equal(core.escapeTarget({ confirm: true, menu: true, rename: true, drawer: true }), "confirm");
 	assert.equal(core.escapeTarget({ confirm: false, drawer: true }), "drawer", "a hidden question holds nothing");
+	// The editor a file opened in stands over all of it, because the text in it is the human's.
+	assert.equal(core.escapeTarget({ editor: true, confirm: true, drawer: true }), "editor");
+	assert.equal(core.escapeTarget({ editor: false, drawer: true }), "drawer", "a closed editor holds nothing");
 });
 
 // ---------------------------------------------------------------- the tree
@@ -629,11 +633,30 @@ test("Git's two letters become the one colour and the one badge a row shows", ()
 	assert.equal(core.gitBadge(""), "");
 });
 
+// ---------------------------------------------------------------- the editor gate
+
+test("a second press on a row asks for an edit, a read, or nothing", () => {
+	assert.equal(core.editTarget(entry("a.py")), "edit");
+	assert.equal(core.editTarget(entry("src/main.ts")), "edit");
+	// A folder has nothing to open this way: a press already opens it.
+	assert.equal(core.editTarget(entry("src", true)), "");
+	// A link is read, because the daemon will not promise to write through one.
+	assert.equal(core.editTarget({ ...entry("link.py"), link: true }), "read");
+	assert.equal(core.editTarget(null), "");
+	assert.equal(core.editTarget(undefined), "");
+});
+
 // ---------------------------------------------------------------- the page
 
 test("the three drawers and the tree exist in the page, and the old picker is gone", () => {
 	const html = readFileSync(HTML, "utf8");
 	for (const id of ["drawerFiles", "drawerActivity", "drawerCards", "exTree", "exFilter", "exMenu", "exConfirm", "pickCount"]) {
+		assert.ok(html.includes(`id="${id}"`), `#${id} is in the page`);
+	}
+	// The editor a file opens in: its frame, the path it names, the surface it draws into, its status
+	// line and the two buttons that are its whole keyboard-free interface.
+	assert.ok(html.includes('id="exEditor" hidden role="dialog" aria-modal="true"'), "#exEditor is a modal dialog");
+	for (const id of ["exEditorTitle", "exEditorBody", "exEditorStatus", "exEditorSave", "exEditorClose"]) {
 		assert.ok(html.includes(`id="${id}"`), `#${id} is in the page`);
 	}
 	for (const gone of ['id="picker"', 'id="pickList"', 'id="pickFilter"', 'id="pickHidden"', 'id="railOpen"']) {
