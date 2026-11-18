@@ -37,6 +37,7 @@ import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill,
 import { onShell } from "./routes/board/shell.ts";
 import { onGitInit, onGitMsg, onGitPage, onGitVendor } from "./routes/gitgraph.ts";
 import { onCommand } from "./routes/board/command.ts";
+import { attachTerminal, stopAllTerminals, terminalSize } from "./terminal.ts";
 import { commandList, forMenu } from "./commands.ts";
 import { workdirOf } from "./worktrees/make.ts";
 import { migrateLegacyGlobalState } from "./state-storage.ts";
@@ -251,6 +252,79 @@ function startLiveStream(req, socket, head) {
 	}
 }
 
+/** Upgrade one terminal request to a WebSocket before it can join its board's shell. */
+function startTerminalStream(req, socket, head) {
+	let url;
+	try {
+		url = requestUrl(req.url);
+	} catch {
+		rejectUpgrade(socket, 400, "bad request target");
+		return;
+	}
+	if (req.method !== "GET" || url.pathname !== "/terminal") {
+		socket.destroy();
+		return;
+	}
+	const caller = callerFor(url.searchParams.get("token"), req.headers.cookie);
+	if (!caller) {
+		rejectUpgrade(socket, 403, "forbidden");
+		return;
+	}
+	// A thread may not use it: `/terminal` names no thread route, so every caller but the human
+	// is refused here, the same way the live stream refuses one.
+	const refusal = threadRefusal(caller, "GET", url.pathname, url.searchParams.get("workspace"));
+	if (refusal) {
+		rejectUpgrade(socket, 403, refusal);
+		return;
+	}
+	if (caller.via === "cookie" && !sameOriginRequest(req.headers)) {
+		rejectUpgrade(socket, 403, "cross-site request");
+		return;
+	}
+	const workspace = workspaceById(url.searchParams.get("workspace") ?? "");
+	if (!workspace) {
+		rejectUpgrade(socket, 409, "no such workspace");
+		return;
+	}
+	// The handle is made by the first message that needs the shell, so the shell is born at the
+	// size the drawer measured rather than the default. `client` is assigned by the upgrade the
+	// messages arrive through, so the emit closes over the one the handler finds.
+	let client;
+	let handle = null;
+	const emit = (event) => {
+		if (!client || client.writableEnded || client.destroyed) return;
+		client.write(JSON.stringify(event));
+	};
+	const attach = () => {
+		if (!handle) handle = attachTerminal(workspace.id, workspace.folder, emit);
+		return handle;
+	};
+	client = upgradeWebSocket(req, socket, head, (payload) => {
+		let message;
+		try {
+			message = JSON.parse(String(payload));
+		} catch {
+			return;
+		}
+		if (message?.type === "resize") attach().resize(terminalSize(message));
+		else if (message?.type === "input" && typeof message.data === "string") attach().write(message.data);
+	});
+	if (!client || client.writableEnded || client.destroyed) {
+		// A message that arrived in the upgrade head may have attached a listener before this
+		// return; a dead tab must not stay attached to the shell.
+		handle?.detach();
+		return;
+	}
+	const keepAlive = setInterval(() => client.ping(), 20_000);
+	if (typeof keepAlive.unref === "function") keepAlive.unref();
+	// A closed tab detaches from the shell; the shell itself outlives it, as a terminal left
+	// open in another window would.
+	client.onClose = () => {
+		clearInterval(keepAlive);
+		handle?.detach();
+	};
+}
+
 export const server = createServer((req, res) => {
 	void (async () => {
 		const url = requestUrl(req.url);
@@ -292,6 +366,10 @@ export const server = createServer((req, res) => {
 			// per file. The shape is checked before the path is joined, so `..` cannot walk out of public/.
 			if (/^\/client\/[a-z0-9/_-]+\.js$/.test(url.pathname)) {
 				serveStatic(res, url.pathname.slice(1), "text/javascript; charset=utf-8");
+				return;
+			}
+			if (/^\/client\/[a-z0-9/_-]+\.css$/.test(url.pathname)) {
+				serveStatic(res, url.pathname.slice(1), "text/css; charset=utf-8");
 				return;
 			}
 			// A workspace's board is the same page for every folder; the id in the path tells it which.
@@ -739,11 +817,21 @@ export const server = createServer((req, res) => {
 
 
 
-server.on("upgrade", startLiveStream);
+server.on("upgrade", (req, socket, head) => {
+	let pathname = "";
+	try {
+		pathname = requestUrl(req.url).pathname;
+	} catch {
+		// The live stream answers a bad target itself.
+	}
+	if (pathname === "/terminal") startTerminalStream(req, socket, head);
+	else startLiveStream(req, socket, head);
+});
 
 export function shutdown() {
 	// What the debounce still holds is the last thing the human did, so it goes to disk first.
 	for (const board of boards.values()) flushBoard(board);
+	stopAllTerminals();
 	for (const board of boards.values()) for (const child of board.children.values()) child.kill("SIGKILL");
 	server.close(() => process.exit(0));
 	// A socket that will not close must not keep a stopped daemon alive.
@@ -857,5 +945,14 @@ export function start() {
 		console.error(`pi-studio: ${error.message}`);
 		process.exit(1);
 	}
+	// A stopped daemon must not leave its shells behind: they are spawned detached, so a
+	// plain exit would orphan them. Stop them and go: the boards' own shutdown flushes
+	// nothing on a signal today, and the tests kill their daemons the same way.
+	const stopTerminals = () => {
+		stopAllTerminals();
+		process.exit(0);
+	};
+	process.on("SIGTERM", stopTerminals);
+	process.on("SIGINT", stopTerminals);
 	startListening(Number(process.env.PI_STUDIO_PORT) || lastPort(), host);
 }

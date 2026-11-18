@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- feat: Press x to roll a terminal drawer up from the bottom of the board: a real shell in the workspace folder, kept alive between rolls, so a few commands can be typed without leaving the board. [t-b31cfa8d]
+
 ## [0.2.6] - 2026-11-18
 
 - fix: Let a test remove its throwaway files even while a stopped daemon's children are still writing in them.

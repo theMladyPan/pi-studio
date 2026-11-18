@@ -3,6 +3,9 @@
 // with this one are a single subject, and this file is long enough already. The daemon serves every
 // `/client/*.js` by one rule, so a new module beside this one loads without a table to edit.
 import { createGitDrawer } from "./git-drawer.js";
+// The terminal drawer is a module of its own beside it: the panel, the socket to the daemon's
+// shell and the vendored terminal screen are a single subject, served by the same one rule.
+import { createTerminalDrawer } from "./terminal-drawer.js";
 // The tokenizer and the text surface are shared with the git graph's reader, so both pages colour a
 // file the same way: one implementation, imported by each.
 import { createTextPreview, escapeHtml, highlight } from "./text-preview.js";
@@ -29,6 +32,10 @@ const auth = workspace ? `workspace=${encodeURIComponent(workspace)}` : "";
 // than copied, so the drawer and the board's letters read a field the same way.
 const gitDrawer = createGitDrawer({ workspace, typingSomewhere });
 document.getElementById("gitBtn").addEventListener("click", () => gitDrawer.toggle());
+// One terminal drawer for the life of the page, beside the git one: the shell and the screen
+// survive between rolls, so a command mid-run is still running when the drawer comes back up.
+const terminalDrawer = createTerminalDrawer({ workspace, typingSomewhere });
+document.getElementById("termBtn").addEventListener("click", () => terminalDrawer.toggle());
 // The path already says what this page is: `/w/<id>` is a board of threads, whose field lives
 // inside a card. Waiting for a frame from the server to decide that left a board looking like a
 // one-session board whenever the stream was slow, stale or dead.
@@ -741,7 +748,7 @@ function exDrawerToggle(state, name) {
  * opens in stands over everything, a name being edited or a menu standing open goes before the drawer,
  * and the drawer goes before the card the board is reading.
  */
-const EX_ESCAPE_ORDER = ["editor", "confirm", "menu", "rename", "create", "sheet", "git", "drawer", "card"];
+const EX_ESCAPE_ORDER = ["editor", "confirm", "menu", "rename", "create", "sheet", "git", "terminal", "drawer", "card"];
 
 function exEscapeTarget(open) {
   for (const one of EX_ESCAPE_ORDER) if (open?.[one]) return one;
@@ -8379,11 +8386,12 @@ const SHORTCUTS = [
       { keys: "n", does: "jump to the next new card or waiting question" },
       { keys: "o", does: "flip the thread order, newest first or oldest first" },
       { keys: "g", does: "roll the git graph down, and press it again to roll it up" },
+      { keys: "x", does: "roll the terminal drawer up from the bottom, and press it again to roll it down" },
       { keys: "t", does: "start a new thread, on a board of threads with no card selected" },
       { keys: "r", does: "reply to the card you are reading" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
       { keys: "q", does: "close the card you are reading" },
-      { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the git graph, then the files drawer, or with nothing open, let go of the selected card" },
+      { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the git graph, then the terminal, then the files drawer, or with nothing open, let go of the selected card" },
       { keys: "ctrl+z", does: "undo a close and put the card back" },
       { keys: "ctrl+m", does: "cycle the mode of the card you are reading: agent, plan, boss, discuss, then back on" },
     ],
@@ -8496,7 +8504,7 @@ function shownKeys(on) {
  * map on screen teaches are not the letters a board key may act on behind it. The git drawer covers it
  * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too.
  */
-const panelUp = () => !keysPanel.hidden || !configPanel.hidden || gitDrawer.isOpen();
+const panelUp = () => !keysPanel.hidden || !configPanel.hidden || gitDrawer.isOpen() || terminalDrawer.isOpen();
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
@@ -12164,6 +12172,7 @@ function exOpenSurfaces() {
     create: Boolean(exState.draft),
     sheet: Boolean(sheet),
     git: gitDrawer.isOpen(),
+    terminal: terminalDrawer.isOpen(),
     drawer: Boolean(drawerState.open),
     card: Boolean(document.querySelector(".card.active")) || selectedIds.size > 0,
   };
@@ -12207,6 +12216,7 @@ document.addEventListener("keydown", (event) => {
   // The drawer covers the board, so Escape rolls it up before it lets go of the card being read. A press
   // inside its page never reaches this handler, and comes back as the page's own `close` message.
   if (target === "git") return gitDrawer.close();
+  if (target === "terminal") return terminalDrawer.close();
   // The files drawer is an overlay of the left column, so Escape rolls it up before it lets go of the
   // card the board is reading.
   if (target === "drawer") return closeDrawers();
@@ -12417,7 +12427,24 @@ document.addEventListener("keydown", (event) => {
   if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
   event.preventDefault();
   closeDrawers();
+  if (terminalDrawer.isOpen()) terminalDrawer.close();
   gitDrawer.toggle();
+});
+
+// `x` rolls the terminal drawer up from the bottom, and the drawer's own handler rolls it down:
+// this one only opens. It waits for the panels and the drawers' own surfaces the way the letters
+// above do, because a terminal over the board would hide what they are showing, and for a field,
+// because `x` is a letter like any other. The two drawers cover the same board, so the git graph
+// rolls up as the terminal comes up. While the terminal is up and the focus is outside it, the
+// drawer's own handler takes the `x` that rolls it down, the way the git drawer's takes `g`;
+// while the focus is in the terminal, `typingSomewhere` says the letter belongs to the shell.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "x" || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (typingSomewhere()) return;
+  if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
+  event.preventDefault();
+  if (gitDrawer.isOpen()) gitDrawer.close();
+  terminalDrawer.toggle();
 });
 
 // ---------- transport ----------------------------------------------------
@@ -12461,6 +12488,7 @@ function applyMeta(meta) {
   const folder = meta.workspace?.name || meta.folder || "session";
   // The drawer's bar names the same workspace, and only falls back to its id while no name is known.
   gitDrawer.setName(meta.workspace?.name);
+  terminalDrawer.setName(meta.workspace?.name);
   const sess = document.getElementById("sess");
   sess.innerHTML = "";
   sess.append("board of ");
