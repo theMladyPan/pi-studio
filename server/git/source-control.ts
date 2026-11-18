@@ -292,11 +292,11 @@ export async function sourceControlCommit(folder: string, message: unknown): Pro
 }
 
 /** One single-answer pi run: no tools, no session, no extensions, and a hard ceiling on time. */
-function runDraft(cli: { command: string; args: string[] }, folder: string, prompt: string): Promise<string> {
+function runDraft(cli: { command: string; args: string[] }, folder: string, prompt: string, model: string): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			cli.command,
-			[...cli.args, "-p", "--no-session", "--no-tools", "--no-extensions", "--no-skills", "--no-context-files", "--model", helperModel(), "--thinking", "off", prompt],
+			[...cli.args, "-p", "--no-session", "--no-tools", "--no-extensions", "--no-skills", "--no-context-files", "--model", model, "--thinking", "off", prompt],
 			{ cwd: folder, stdio: ["ignore", "pipe", "pipe"] },
 		);
 		const out: Buffer[] = [];
@@ -367,7 +367,7 @@ export async function sourceControlMessage(folder: string, deps: ScDraftDeps = {
 	].join("\n");
 	let answer: string;
 	try {
-		answer = await (deps.run ?? runDraft)(piCli(), folder, prompt);
+		answer = await (deps.run ?? runDraft)(piCli(), folder, prompt, helperModel());
 	} catch (error) {
 		return { ok: false, error: `the model could not draft a message: ${(error as Error).message}` };
 	}

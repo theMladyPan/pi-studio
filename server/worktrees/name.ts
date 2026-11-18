@@ -25,7 +25,6 @@ export const TITLE_FROM_REQUEST_CHARS = 48;
  * The model that names a thread once its first request is in hand; the choice on the settings page
  * (`helperModel()`), which is itself the `NAME_MODEL` default until one is made. Empty turns naming off.
  */
-export { NAME_MODEL } from "../models.ts";
 
 
 export const NAME_TIMEOUT_MS = 8000;

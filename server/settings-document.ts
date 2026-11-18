@@ -307,7 +307,12 @@ export function settingsDocument({ scope, values, title, subtitle, foot }: Setti
 						pick: "model",
 						source: "/models",
 						split: "/",
-						value: `${values.helperProvider || nameProvider}/${values.helperModel || nameId}`,
+						// No naming model at all (an empty NAME_MODEL and no choice): an empty control, not a bogus "/".
+						value: (() => {
+							const hp = values.helperProvider || nameProvider;
+							const hm = values.helperModel || nameId;
+							return hp && hm ? `${hp}/${hm}` : "";
+						})(),
 						help: "the model that names a thread and drafts a commit message",
 						write: write("helperModel"),
 					},

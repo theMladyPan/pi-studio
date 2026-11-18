@@ -8374,11 +8374,16 @@ async function chooseRuntime(kind, value) {
   // goes to the crossroads' defaults, not to `/model`, which would change what a new thread starts with.
   if (kind === "model" && pickField && pickField.id !== "model") {
     const field = pickField;
-    await writeLeaf(field, `${value.provider}/${value.model}`);
+    const wrote = await writeLeaf(field, `${value.provider}/${value.model}`);
+    if (!wrote) {
+      closePick();
+      return;
+    }
     hintLine(`helper model: ${shortModel(value.model)}`, false, pickInst);
     closePick();
     return;
   }
+  const body = kind === "model" ? { provider: value.provider, model: value.model } : { level: value };
   // A field's own card is what the daemon resolves to a thread. Editing the board's defaults from the
   // settings panel sends no card, which is what makes it the default.
   const target = pickBoard ? null : cardOf(pickInst);
