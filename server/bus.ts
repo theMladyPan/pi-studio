@@ -6,7 +6,6 @@
 import { send } from "./http.ts";
 import { boardMeta, cardFor, cardsFor, plainCardFor } from "./cards.ts";
 import { homeCard } from "./routes/board/message.ts";
-import { refreshGit } from "./git/graph.ts";
 import { describeWorkspace, welcomeClients, workspaceList } from "./workspaces.ts";
 import { MAX_ACTIVITY, scheduleSave } from "./store.ts";
 
@@ -20,18 +19,14 @@ export function broadcast(board, payload) {
 
 /** Rebuild every open tab from the board as it stands, after something large changed at once. */
 export function resync(board) {
-	// A snapshot is everything a tab draws, and the strip is part of that: a sweep retires worktrees, so
-	// the graph is read again here rather than left as the last tick found it. Without it the strip
-	// vanished on `clean` and `new`, because a snapshot without `git` reads as "no repository".
-	// The closed cards go in for the other half of the reason: a link to a card this pass closed is
-	// stale, and a tab that hears no `closed` would offer to jump to a card that is gone.
+	// A snapshot is everything a tab draws. The closed cards go in for the other half of the reason: a link to a
+	// card this pass closed is stale, and a tab that hears no `closed` would offer to jump to a card that is gone.
 	broadcast(board, {
 		type: "snapshot",
 		cards: cardsFor(board),
 		closed: closedCards(board),
 		activity: board.activity,
 		meta: boardMeta(board),
-		git: refreshGit(board, true),
 	});
 }
 

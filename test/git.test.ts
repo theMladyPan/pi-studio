@@ -4,25 +4,10 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { gitGraph } from "../server/git/graph.ts";
-import { refName } from "../server/git/graph.ts";
 import { repoOf } from "../server/git/repo.ts";
 import { ensureWorktree, slugOf, workType } from "../server/worktrees/make.ts";
 import { retireWorktree, sameFolder } from "../server/worktrees/retire.ts";
 import { git, scratchRepo, childBranch, treeWithChildCommit, commitDev } from "../test-support/git.ts";
-
-test("a ref is shortened to the name a human uses, and told apart by kind", () => {
-	assert.deepEqual(refName("HEAD -> dev", []), { name: "dev", kind: "head" });
-	assert.deepEqual(refName("HEAD", []), { name: "HEAD", kind: "head" });
-	assert.deepEqual(refName("tag: v1", []), { name: "v1", kind: "tag" });
-	assert.deepEqual(refName("origin/main", ["origin"]), { name: "origin/main", kind: "remote" });
-	assert.deepEqual(refName("feature", []), { name: "feature", kind: "branch" });
-});
-
-test("a remote branch is drawn with its remote's name", () => {
-	// The pill is what a human reads, so it says where the branch came from rather than a ref path.
-	assert.deepEqual(refName("origin/dev", ["origin", "fork"]), { name: "origin/dev", kind: "remote" });
-});
 
 test("the repository is found from a folder inside it", () => {
 	const repo = scratchRepo();
@@ -31,29 +16,6 @@ test("the repository is found from a folder inside it", () => {
 		assert.equal(repoOf(join(repo, "deep", "deeper")), repo);
 	} finally {
 		rmSync(repo, { recursive: true, force: true });
-	}
-});
-
-test("the graph is one row per commit, newest first, with the refs as pills", () => {
-	const repo = scratchRepo();
-	try {
-		const graph = gitGraph(repo, []);
-		assert.equal(graph.length, 1);
-		assert.match(graph[0].hash, /^[0-9a-f]{40}$/);
-		assert.equal(graph[0].subject, "first");
-		assert.deepEqual(graph[0].parents, []);
-		assert.deepEqual(graph[0].refs, [{ name: "dev", kind: "head" }]);
-	} finally {
-		rmSync(repo, { recursive: true, force: true });
-	}
-});
-
-test("a folder that is not a repository has no graph to draw", () => {
-	const folder = mkdtempSync(join(tmpdir(), "pi-studio-nograph-"));
-	try {
-		assert.deepEqual(gitGraph(folder, []), []);
-	} finally {
-		rmSync(folder, { recursive: true, force: true });
 	}
 });
 

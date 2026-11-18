@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { settingsDocument } from "../server/settings-document.ts";
 import { PROMPT_FOLDERS, promptFiles } from "../server/child/modes.ts";
-import { THINKING_LEVELS } from "../server/models.ts";
+import { NAME_MODEL, THINKING_LEVELS } from "../server/models.ts";
 
 /**
  * The crossroads' settings document is a view of the defaults object the caller hands in, so it is read
@@ -16,6 +16,8 @@ import { THINKING_LEVELS } from "../server/models.ts";
 const defaults = {
 	provider: "klotilda",
 	model: "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+	helperProvider: "openrouter",
+	helperModel: "deepseek/deepseek-v4.1-flash-1017",
 	thinking: "high",
 	editor: "/usr/bin/code",
 	path: "simple",
@@ -116,11 +118,12 @@ test("the two scopes build one tree, and part only where the prompts belong", ()
 		["STUDIO.md", "AGENTS.md"],
 	);
 	assert.equal(promptGroup(boardDocument).groups, undefined);
-	// Fourteen setting leaves: five for the thread, two for the tools, six for the cards, one for the canvas.
+	// Fifteen setting leaves: six for the thread, two for the tools, six for the cards, one for the canvas.
 	assert.deepEqual(
 		settingLeaves.map((field) => field.id),
 		[
 			"model",
+			"helperModel",
 			"thinking",
 			"editor",
 			"path",
@@ -136,11 +139,12 @@ test("the two scopes build one tree, and part only where the prompts belong", ()
 			"dimOthers",
 		],
 	);
-	assert.equal(settingLeaves.length, 14);
+	assert.equal(settingLeaves.length, 15);
 	assert.deepEqual(
 		settingLeaves.map((field) => field.label),
 		[
 			"model",
+			"helper model",
 			"thinking",
 			"text editor",
 			"boss flow",
@@ -177,6 +181,7 @@ test("every setting leaf of the defaults writes to /defaults, and nothing else",
 	}
 	// A list leaf reads its rows from a route rather than being handed them here.
 	assert.equal(byId.model.source, "/models");
+	assert.equal(byId.helperModel.source, "/models");
 	assert.equal(byId.toolsOff.source, "/tools");
 	assert.equal(byId.extensionsOff.source, "/tools");
 	// The editor opens no picker of the daemon's own: it is typed, and the machine's dialog fills it in.
@@ -192,6 +197,10 @@ test("the model leaf splits at the first slash, and one key carries the value ev
 	assert.equal(head, "klotilda");
 	assert.equal(rest.join("/"), "deepseek-ai/DeepSeek-V4.1-Flash-1017");
 	assert.deepEqual(byId.model.write.body, { provider: "@head", model: "@rest" });
+	assert.deepEqual(byId.helperModel.write.body, { helperProvider: "@head", helperModel: "@rest" });
+	assert.equal(byId.helperModel.split, "/");
+	assert.equal(byId.helperModel.value, "openrouter/deepseek/deepseek-v4.1-flash-1017");
+	assert.equal(byId.helperModel.help, "the model that names a thread and drafts a commit message");
 	// `/defaults` reads `thinking`, which is the key the defaults object holds.
 	assert.deepEqual(byId.thinking.write.body, { thinking: "@value" });
 	for (const field of settingLeaves) {
@@ -199,10 +208,10 @@ test("the model leaf splits at the first slash, and one key carries the value ev
 		if (keys.length !== 1) continue;
 		assert.equal(field.write.body[keys[0]], "@value", `${field.id} sends ${field.write.body[keys[0]]}`);
 	}
-	// The model is the only leaf that writes two keys, so it is the only one that needs the halves.
+	// The two model leaves are the only leaves that write two keys, so they are the only ones that need the halves.
 	assert.deepEqual(
 		settingLeaves.filter((field) => Object.keys(field.write.body).length !== 1).map((field) => field.id),
-		["model"],
+		["model", "helperModel"],
 	);
 });
 
@@ -218,7 +227,10 @@ test("the board's document differs from the defaults' in the route a change goes
 	// has no copy of it, and its own `/config` would answer without the key.
 	assert.equal(boardById.editor.write.route, "/defaults");
 	assert.deepEqual(boardById.editor.write.body, { editor: "@value" });
-	for (const field of settingLeaves.filter((one) => !["model", "thinking", "editor"].includes(one.id))) {
+	// The helper model is studio-wide too, so a board's page writes it where it is kept.
+	assert.equal(boardById.helperModel.write.route, "/defaults");
+	assert.deepEqual(boardById.helperModel.write.body, { helperProvider: "@head", helperModel: "@rest" });
+	for (const field of settingLeaves.filter((one) => !["model", "thinking", "editor", "helperModel"].includes(one.id))) {
 		assert.equal(boardById[field.id].write.route, "/config", `${field.id} writes to ${boardById[field.id].write.route}`);
 		assert.deepEqual(boardById[field.id].write.body, field.write.body, `${field.id} changed its body with its route`);
 	}
@@ -259,6 +271,7 @@ test("the prompts group is one subgroup per folder, one leaf per file, and one r
 test("every leaf carries a value, and the defaults object the caller passed is where they come from", () => {
 	for (const leaf of leavesOf(document.groups)) assert.notEqual(leaf.value, undefined, `${leaf.id} has no value`);
 	assert.equal(byId.model.value, `${defaults.provider}/${defaults.model}`);
+	assert.equal(byId.helperModel.value, `${defaults.helperProvider}/${defaults.helperModel}`);
 	assert.equal(byId.thinking.value, "high");
 	assert.equal(byId.editor.value, "/usr/bin/code");
 	assert.equal(byId.path.value, "simple");
@@ -286,6 +299,9 @@ test("a value nobody chose reads as the default rather than as an empty control"
 	assert.equal(freshById.thinking.value, "off");
 	// Nobody has chosen an editor yet, and an empty control with a placeholder is how that reads.
 	assert.equal(freshById.editor.value, "");
+	// Nobody has chosen a helper model yet, and the daemon's own naming model is what the control shows.
+	const [nameProvider, ...nameRest] = NAME_MODEL.split("/");
+	assert.equal(freshById.helperModel.value, `${nameProvider}/${nameRest.join("/")}`);
 	assert.equal(freshById.path.value, "auto");
 	assert.equal(freshById.childIntegration.value, "merge");
 	assert.equal(freshById.dimOthers.value, true);

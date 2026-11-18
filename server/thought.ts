@@ -16,7 +16,6 @@ import { keptArgs } from "./child/argv.ts";
 import { describeTool, firstLine, headline, rowResult } from "./child/describe.ts";
 import { join } from "node:path";
 import { settleTreeBranch } from "./worktrees/name.ts";
-import { noteGit } from "./git/graph.ts";
 import { finished, compacted, statsArrived } from "./waiters.ts";
 import { COMMAND_PREFIX, settleCommand } from "./child/command.ts";
 import { onExtensionUi } from "./child/dialog.ts";
@@ -490,8 +489,6 @@ export function handleChildLine(board, thread, line) {
 		// A run that edited has either cut its own branch or committed on the detached base, and this is
 		// the moment the board learns which and puts a name on the work.
 		settleTreeBranch(board, thread);
-		// The turn has just finished, and whatever it did to the disk is what the strip must show.
-		noteGit(board);
 		// A turn whose run was stopped, or whose message was redirected, never gets a reply of its own. It
 		// reads as stopped rather than as a message still being worked on, and the caret goes because
 		// nothing is being written any more.

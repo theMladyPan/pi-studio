@@ -33,11 +33,89 @@ const auth = workspace ? `workspace=${encodeURIComponent(workspace)}` : "";
 // commit and the repository the human left in it between rolls. `typingSomewhere` is passed rather
 // than copied, so the drawer and the board's letters read a field the same way.
 const gitDrawer = createGitDrawer({ workspace, typingSomewhere });
-document.getElementById("gitBtn").addEventListener("click", () => gitDrawer.toggle());
+document.getElementById("gitBtn").addEventListener("click", () => {
+  closeHeaderMenus();
+  gitDrawer.toggle();
+});
 // One terminal drawer for the life of the page, beside the git one: the shell and the screen
 // survive between rolls, so a command mid-run is still running when the drawer comes back up.
 const terminalDrawer = createTerminalDrawer({ workspace, typingSomewhere });
-document.getElementById("termBtn").addEventListener("click", () => terminalDrawer.toggle());
+document.getElementById("termBtn").addEventListener("click", () => {
+  closeHeaderMenus();
+  terminalDrawer.toggle();
+});
+// ---------- the header menus ---------------------------------------------
+// Three chips in the header, each opening one menu outside it. A menu that closed while its item held
+// the focus would leave the keyboard on a hidden element, so closing hands the focus to the chip.
+const viewBtn = document.getElementById("viewBtn");
+const viewMenu = document.getElementById("viewMenu");
+const housekeepingBtn = document.getElementById("housekeepingBtn");
+const housekeepingMenu = document.getElementById("housekeepingMenu");
+const toolboxBtn = document.getElementById("toolboxBtn");
+const toolboxMenu = document.getElementById("toolboxMenu");
+const headerMenus = [
+  { btn: viewBtn, menu: viewMenu },
+  { btn: housekeepingBtn, menu: housekeepingMenu },
+  { btn: toolboxBtn, menu: toolboxMenu },
+];
+// The `new` confirmation lives in the housekeeping menu: shutting the menu resets it, so the next
+// opening starts at `new` rather than a lingering `sure?`. Assigned where `armedPress` runs.
+let resetNewBtn = () => {};
+
+function placeHeaderMenu(menu, anchor) {
+  const rect = anchor.getBoundingClientRect();
+  const width = menu.offsetWidth || 170;
+  menu.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`;
+  menu.style.top = `${rect.bottom + 4}px`;
+}
+
+function closeHeaderMenus() {
+  for (const { btn, menu } of headerMenus) {
+    if (menu.hidden) continue;
+    const heldFocus = menu.contains(document.activeElement);
+    menu.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    if (menu === housekeepingMenu) resetNewBtn();
+    if (heldFocus) btn.focus();
+  }
+}
+
+function toggleHeaderMenu(btn, menu) {
+  const opening = menu.hidden;
+  closeHeaderMenus();
+  shownConfig(false);
+  closePick();
+  if (!opening) return;
+  menu.hidden = false;
+  btn.setAttribute("aria-expanded", "true");
+  placeHeaderMenu(menu, btn);
+  menu.querySelector("button")?.focus();
+}
+
+viewBtn.addEventListener("click", () => toggleHeaderMenu(viewBtn, viewMenu));
+housekeepingBtn.addEventListener("click", () => toggleHeaderMenu(housekeepingBtn, housekeepingMenu));
+toolboxBtn.addEventListener("click", () => toggleHeaderMenu(toolboxBtn, toolboxMenu));
+
+for (const { menu } of headerMenus) {
+  menu.addEventListener("keydown", (event) => {
+    const items = [...menu.querySelectorAll("button")];
+    const at = items.indexOf(document.activeElement);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      items[(at + step + items.length) % items.length].focus();
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      items[0].focus();
+    } else if (event.key === "End") {
+      event.preventDefault();
+      items[items.length - 1].focus();
+    } else if (event.key === "Tab") {
+      closeHeaderMenus();
+    }
+  });
+}
+
 // The path already says what this page is: `/w/<id>` is a board of threads, whose field lives
 // inside a card. Waiting for a frame from the server to decide that left a board looking like a
 // one-session board whenever the stream was slow, stale or dead.
@@ -4948,7 +5026,7 @@ const MAP_PAD = 8;
 const MAP_COLOUR = { note: "#7d8590", code: "#d2a8ff", sticky: "#d29922", question: "#db61a2" };
 const mapCanvas = document.getElementById("minimap");
 const mapCtx = mapCanvas.getContext("2d");
-const mapBtn = document.getElementById("mapBtn");
+const mapToggle = document.getElementById("mapToggle");
 let mapOn = true;
 let mapQueued = false;
 /** The projection the last paint used, so a press lands where the eye saw the picture. */
@@ -5093,8 +5171,10 @@ mapCanvas.addEventListener("pointerdown", (event) => {
 });
 
 function paintMapBtn() {
-  mapBtn.setAttribute("aria-pressed", mapOn ? "true" : "false");
-  mapBtn.title = mapOn ? "hide the board overview (m)" : "show the board overview (m)";
+  // The overview map is a checkbox in settings, so it says what the board shows rather than hiding
+  // behind a header button that no longer exists.
+  mapToggle.checked = mapOn;
+  mapToggle.title = mapOn ? "hide the board overview (m)" : "show the board overview (m)";
 }
 
 /**
@@ -5111,14 +5191,23 @@ function setMap(on) {
 
 paintMapBtn();
 document.body.classList.toggle("map-on", mapOn);
-mapBtn.addEventListener("click", () => setMap(!mapOn));
+mapToggle.addEventListener("change", () => setMap(mapToggle.checked));
 // The window rect is measured against the canvas, so the map follows the box it is drawn in:
 // a resized window and a rail that opens, closes or is dragged all land here.
 new ResizeObserver(() => scheduleMap()).observe(viewport);
 
-document.getElementById("fit").addEventListener("click", fitAll);
-document.getElementById("tidy").addEventListener("click", tidy);
-document.getElementById("stack").addEventListener("click", stack);
+document.getElementById("fit").addEventListener("click", () => {
+  closeHeaderMenus();
+  fitAll();
+});
+document.getElementById("tidy").addEventListener("click", () => {
+  closeHeaderMenus();
+  tidy();
+});
+document.getElementById("stack").addEventListener("click", () => {
+  closeHeaderMenus();
+  stack();
+});
 // The thread order is the human's furniture too: the button says what the board does now, and
 // its title says what a click will do.
 const orderBtn = document.getElementById("threadOrder");
@@ -5148,322 +5237,6 @@ window.addEventListener("storage", (event) => {
 });
 document.getElementById("newPill").addEventListener("click", jumpToFresh);
 resetBtn.addEventListener("click", resetZoom);
-
-// ---------- git strip ----------------------------------------------------
-// The workspace's branches, under the minimap: the daemon reads the graph and this draws it. One
-// lane per branch, refs as pills on the dot's own line, the subject under it, an amber ring where
-// work is uncommitted and a breathing halo where a thread is running. It draws what arrives on the
-// stream and nothing else, so it costs the board no requests of its own.
-// Twenty rows are what the column is sized for, and a row is tall enough for a pill above its dot
-// and a caption under it. The first dot sits low enough that its pill is on the canvas.
-const GIT_LANE = 13;
-const GIT_LANE_X = 12;
-const GIT_TEXT_GAP = 12;
-const GIT_PAD_TOP = 16;
-const GIT_TARGET_ROWS = 20;
-const GIT_MIN_STEP = 26;
-const GIT_MAX_STEP = 40;
-const GIT_FONT = '9.5px ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace';
-const TAU = Math.PI * 2;
-// A lane keeps its colour by its index. The order is stable for a repository nobody is rebasing
-// underneath the reader, which is the case that matters: a lane whose colour flickers is a lane
-// the eye has to find again.
-const GIT_COLOURS = ["#58a6ff", "#db61a2", "#3fb950", "#d29922", "#d2a8ff", "#39c5cf", "#f85149", "#e3b341"];
-const GIT_PILL = {
-  head: ["#1f6feb", "#e6edf3"],
-  branch: ["#6e2f5b", "#f0d4e6"],
-  remote: ["#30363d", "#c9d1d9"],
-  tag: ["#4a3a12", "#e3b341"],
-};
-const gitStrip = document.getElementById("gitstrip");
-const gitCanvas = document.getElementById("gitgraph");
-const gitCtx = gitCanvas.getContext("2d");
-let gitShown = null;
-let gitLayout = null;
-let gitStamp = "";
-let gitPulse = 0;
-let gitFrame = 0;
-
-/**
- * Lanes for the rows the graph came in: which column each commit sits in, and which lanes carry a
- * parent through the row, so a line can be drawn where the history is, not where the labels are.
- */
-function layoutGraph(commits) {
-  const lanes = [];
-  const rows = [];
-  let width = 1;
-  for (const commit of commits) {
-    let lane = lanes.indexOf(commit.hash);
-    if (lane === -1) {
-      lane = lanes.indexOf(null);
-      if (lane === -1) {
-        lanes.push(null);
-        lane = lanes.length - 1;
-      }
-      lanes[lane] = commit.hash;
-    }
-    const before = lanes.slice();
-    // Two lanes naming the same commit are one history: the other lane has merged into this one.
-    for (let index = 0; index < lanes.length; index += 1) {
-      if (index !== lane && lanes[index] === commit.hash) lanes[index] = null;
-    }
-    lanes[lane] = commit.parents[0] ?? null;
-    const moves = [];
-    // A merge commit opens a lane for each parent after the first, and takes the nearest free one:
-    // a bend of one column reads as a fork, a bend of five reads as a line across the graph.
-    for (const parent of commit.parents.slice(1)) {
-      const free = lanes.map((held, column) => (held === null ? column : -1)).filter((column) => column !== -1);
-      let into = free.length
-        ? free.reduce((best, column) => (Math.abs(column - lane) < Math.abs(best - lane) ? column : best), free[0])
-        : -1;
-      if (into === -1) {
-        lanes.push(parent);
-        into = lanes.length - 1;
-      } else lanes[into] = parent;
-      if (!moves.includes(into)) moves.push(into);
-    }
-    // The ref that matters is the one the checkout is on: head, then local, then remote, then tag.
-    const rank = { head: 0, branch: 1, remote: 2, tag: 3 };
-    commit.refs.sort((a, b) => (rank[a.kind] ?? 9) - (rank[b.kind] ?? 9));
-    while (lanes.length && lanes[lanes.length - 1] === null) lanes.pop();
-    width = Math.max(width, before.length, lanes.length);
-    rows.push({ commit, lane, before, after: lanes.slice(), moves });
-  }
-  return { rows, width };
-}
-
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-}
-
-/** The most of `text` that fits `max` pixels, ending in an ellipsis when it had to be cut. */
-function fitted(text, max) {
-  if (max <= 8 || !text) return "";
-  if (gitCtx.measureText(text).width <= max) return text;
-  let cut = text;
-  while (cut.length > 1 && gitCtx.measureText(`${cut}\u2026`).width > max) cut = cut.slice(0, -1);
-  return cut.length > 1 ? `${cut}\u2026` : "";
-}
-
-/**
- * A ref name as a pill can carry it. The end of a name is what tells two branches apart — a thread's
- * branch ends with its own id — so a long one keeps its type, an ellipsis and its tail.
- */
-function shortRef(name) {
-  if (name.length <= 18) return name;
-  const [head, ...rest] = name.split("/");
-  const tail = rest.join("/");
-  const id = /([0-9a-f]{8})$/.exec(tail);
-  if (id && head.length + id[1].length + 2 <= 18) return `${head}/\u2026${id[1]}`;
-  return `\u2026${name.slice(-17)}`;
-}
-
-/** One ref as a pill on the commit's own line; `y` is where the row's dot sits. */
-function drawPill(label, x, y, maxWidth, kind) {
-  const [bg, fg] = GIT_PILL[kind] ?? GIT_PILL.branch;
-  const text = fitted(shortRef(label), maxWidth - 9);
-  if (!text) return x;
-  const w = Math.min(maxWidth, gitCtx.measureText(text).width + 9);
-  gitCtx.fillStyle = bg;
-  gitCtx.beginPath();
-  roundRect(gitCtx, x, y - 13, w, 13, 3);
-  gitCtx.fill();
-  gitCtx.fillStyle = fg;
-  gitCtx.fillText(text, x + 4.5, y - 3);
-  return x + w + 3;
-}
-
-/**
- * One segment of the history: straight when the two lanes line up, and a right angle with a 3px
- * corner when they do not. It runs from one commit's dot to the next commit's dot, so it is drawn
- * once and both of its ends are dots that exist.
- */
-function link(x0, y0, x1, y1) {
-  gitCtx.beginPath();
-  gitCtx.moveTo(x0, y0);
-  if (x0 !== x1) {
-    const mid = (y0 + y1) / 2;
-    const radius = Math.min(3, Math.abs(x1 - x0) / 2, (y1 - y0) / 3);
-    const dir = Math.sign(x1 - x0);
-    gitCtx.lineTo(x0, mid - radius);
-    gitCtx.quadraticCurveTo(x0, mid, x0 + dir * radius, mid);
-    gitCtx.lineTo(x1 - dir * radius, mid);
-    gitCtx.quadraticCurveTo(x1, mid, x1, mid + radius);
-  }
-  gitCtx.lineTo(x1, y1);
-  gitCtx.stroke();
-}
-
-function paintGit() {
-  const width = gitStrip.clientWidth;
-  const height = gitStrip.clientHeight;
-  if (!width || !height) return;
-  const dpr = window.devicePixelRatio || 1;
-  if (gitCanvas.width !== Math.round(width * dpr) || gitCanvas.height !== Math.round(height * dpr)) {
-    gitCanvas.width = Math.round(width * dpr);
-    gitCanvas.height = Math.round(height * dpr);
-  }
-  gitCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  gitCtx.clearRect(0, 0, width, height);
-  if (!gitShown || !gitLayout) return;
-  // The row grows with the window, so the column shows about twenty commits at any height rather
-  // than a fixed spacing that leaves a band empty or clips a handful.
-  const step = Math.max(GIT_MIN_STEP, Math.min(GIT_MAX_STEP, Math.floor((height - GIT_PAD_TOP) / GIT_TARGET_ROWS)));
-  const rows = gitLayout.rows;
-  const shown = Math.min(rows.length, Math.max(1, Math.floor((height - GIT_PAD_TOP) / step)));
-  if (shown <= 0) return;
-  // Lanes crowd the left edge as branches pile up, so the spacing gives way before the text does.
-  const lanes = Math.max(1, gitLayout.width);
-  const laneStep = Math.min(GIT_LANE, Math.max(7, Math.floor((70 - GIT_LANE_X) / Math.max(1, lanes - 1))));
-  const laneX = (index) => GIT_LANE_X + index * laneStep;
-  const textX = laneX(lanes - 1) + GIT_TEXT_GAP;
-  const colour = (index) => GIT_COLOURS[index % GIT_COLOURS.length];
-
-  // How much uncommitted work stands on a commit, and how many threads are working there. Two
-  // trees on one base are two indicators, so both are counted instead of one of them winning.
-  const dirty = new Map();
-  const live = new Map();
-  const addDirty = (head, count) => {
-    if (head && count) dirty.set(head, (dirty.get(head) ?? 0) + count);
-  };
-  addDirty(gitShown.root?.head, gitShown.root?.dirty);
-  for (const tree of gitShown.trees ?? []) {
-    addDirty(tree.head, tree.dirty);
-    if (tree.live && tree.head) live.set(tree.head, (live.get(tree.head) ?? 0) + 1);
-  }
-
-  gitCtx.font = GIT_FONT;
-  gitCtx.textBaseline = "alphabetic";
-  gitCtx.lineWidth = 2.2;
-
-  for (let index = 0; index < shown; index += 1) {
-    const row = rows[index];
-    const next = index + 1 < shown ? rows[index + 1] : null;
-    const y = GIT_PAD_TOP + index * step;
-    const nodeX = laneX(row.lane);
-    const commit = row.commit;
-
-    // One segment per lane the commit leaves behind, from this dot to where that lane stands on the
-    // next row: a lane born here starts at the dot, and one the next commit ends stops at that
-    // commit's dot. Both ends come from the layout, so no line can fall short of a dot it belongs to.
-    // Every segment is drawn at the same strength, because a lane that fades where it passes a commit
-    // reads as two different lanes.
-    for (let column = 0; column < row.after.length; column += 1) {
-      const hash = row.after[column];
-      if (!hash) continue;
-      const born = column === row.lane || row.moves.includes(column);
-      const ends = Boolean(next) && next.commit.hash === hash;
-      gitCtx.strokeStyle = colour(column);
-      link(born ? nodeX : laneX(column), y, ends ? laneX(next.lane) : laneX(column), y + step);
-    }
-
-    const merge = commit.parents.length > 1;
-    const radius = merge ? 6.4 : 5.2;
-    // A thread working here breathes, and two threads on one commit breathe as two rings.
-    const running = live.get(commit.hash) ?? 0;
-    gitCtx.fillStyle = colour(row.lane);
-    for (let at = 0; at < running; at += 1) {
-      gitCtx.globalAlpha = 0.12 + 0.26 * gitPulse;
-      gitCtx.beginPath();
-      gitCtx.arc(nodeX, y, radius + 3 + at * 3.4 + 3.5 * gitPulse, 0, TAU);
-      gitCtx.fill();
-    }
-    // A filled dot: hollow read as a gap in the line on a board already covered in dots.
-    gitCtx.globalAlpha = 1;
-    gitCtx.beginPath();
-    gitCtx.arc(nodeX, y, radius, 0, TAU);
-    gitCtx.fill();
-    // The amber ring says work is uncommitted here; the number on the right says how much.
-    const uncommitted = dirty.get(commit.hash) ?? 0;
-    if (uncommitted) {
-      gitCtx.globalAlpha = 0.9;
-      gitCtx.strokeStyle = "#d29922";
-      gitCtx.beginPath();
-      gitCtx.arc(nodeX, y, radius + 3, 0, TAU);
-      gitCtx.stroke();
-      gitCtx.globalAlpha = 1;
-    }
-
-    // The refs on the commit's own line, above; its subject is the caption under the dot.
-    let cursor = textX;
-    for (const ref of commit.refs.slice(0, 2)) {
-      const room = width - 24 - cursor;
-      if (room < 26) break;
-      cursor = drawPill(ref.name, cursor, y, room, ref.kind);
-    }
-    const subject = fitted(commit.subject, width - 6 - textX);
-    if (subject) {
-      gitCtx.fillStyle = "#8b949e";
-      gitCtx.fillText(subject, textX, y + 11);
-    }
-    // Right aligned, so a long pill never pushes the count off the edge of the strip.
-    if (uncommitted) {
-      gitCtx.textAlign = "right";
-      gitCtx.fillStyle = "#d29922";
-      gitCtx.fillText(String(uncommitted), width - 4, y - 3);
-      gitCtx.textAlign = "left";
-    }
-  }
-}
-
-/** The pulse the halo breathes with, running only while some thread is working in a tree. */
-function startPulse() {
-  if (gitFrame) return;
-  if (!gitShown || !(gitShown.trees ?? []).some((tree) => tree.live) || document.hidden) return;
-  const step = () => {
-    gitFrame = 0;
-    if (!gitShown || !(gitShown.trees ?? []).some((tree) => tree.live) || document.hidden) return;
-    gitPulse = (Math.sin(performance.now() / 420) + 1) / 2;
-    paintGit();
-    gitFrame = requestAnimationFrame(step);
-  };
-  gitFrame = requestAnimationFrame(step);
-}
-
-/** What a screen reader is told about the strip, in the words the picture says it in. */
-function gitLabel(picture) {
-  const root = picture.root ?? {};
-  const branches = 1 + (picture.trees?.length ?? 0);
-  const working = (picture.trees ?? []).filter((tree) => tree.live).length;
-  return [
-    `${picture.graph.length} commits on ${branches} branch${branches === 1 ? "" : "es"}`,
-    `${root.branch || "detached"} ${root.dirty ? `${root.dirty} uncommitted` : "clean"}`,
-    working ? `${working} thread${working === 1 ? "" : "s"} working` : "nothing running",
-  ].join(", ");
-}
-
-/** A new picture from the daemon: repaint only when it says something the last one did not. */
-function applyGit(picture) {
-  // The moment it was read is not news; only what it says is.
-  const stamp = picture ? JSON.stringify({ ...picture, at: 0 }) : "";
-  if (stamp === gitStamp) return;
-  gitStamp = stamp;
-  // One line, and the one place that knows a repository changed: an open graph is told to reload its
-  // picture in the background, and a shut one is told when it next rolls down.
-  gitDrawer.notifyChanged();
-  scNotifyChanged();
-  gitShown = picture && picture.graph?.length ? picture : null;
-  gitLayout = gitShown ? layoutGraph(gitShown.graph) : null;
-  document.body.classList.toggle("git-on", Boolean(gitShown));
-  if (!gitShown) return;
-  gitCanvas.setAttribute("aria-label", gitLabel(gitShown));
-  paintGit();
-  startPulse();
-}
-
-// The strip's box is the drawn size, so a resized window, a rail that opens and the map's own
-// toggle all repaint it rather than leave the last picture sitting in the wrong place.
-new ResizeObserver(() => paintGit()).observe(gitStrip);
-document.addEventListener("visibilitychange", startPulse);
 
 // ---------- activity rail ------------------------------------------------
 const railNow = document.getElementById("railNow");
@@ -5510,6 +5283,8 @@ function paintDrawers() {
   for (const [name, door] of Object.entries(doors)) {
     door.setAttribute("aria-expanded", drawerState.open === name ? "true" : "false");
   }
+  // Files and source live in the toolbox menu, so the chip says when one of them is open.
+  toolboxBtn.classList.toggle("has-open", drawerState.open === "files" || drawerState.open === "source");
   try {
     localStorage.setItem("board.railOff", drawerState.open ? "0" : "1");
   } catch {}
@@ -5560,7 +5335,10 @@ function restoreDrawers() {
 restoreDrawers();
 
 for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn })) {
-  door.addEventListener("click", () => toggleDrawer(name));
+  door.addEventListener("click", () => {
+    closeHeaderMenus();
+    toggleDrawer(name);
+  });
 }
 for (const shut of document.querySelectorAll("#drawers .rail-close")) {
   shut.addEventListener("click", () => closeDrawers());
@@ -5570,8 +5348,7 @@ for (const shut of document.querySelectorAll("#drawers .rail-close")) {
 // The fourth left drawer: changed and staged files, the message field, and the commit. It reads
 // `/source-control/status` and posts to the three change routes, and it never pushes or pulls —
 // those stay in the git graph drawer, which already owns them. The lists are read when the drawer
-// opens, after each of its own actions, and on the daemon's git updates while it is open, so a
-// commit made elsewhere lands here without a poll of its own.
+// opens and after each of its own actions; a commit made elsewhere lands here on the next open.
 const scMessage = document.getElementById("scMessage");
 const scDraftBtn = document.getElementById("scDraft");
 const scCommitBtn = document.getElementById("scCommit");
@@ -5736,11 +5513,6 @@ async function scLoad() {
 /** The first read on open: the drawer always opens on the repository as it stands now. */
 function scPrime() {
   void scLoad();
-}
-
-/** A git update while the drawer is open re-reads it; while it is shut, the next open re-reads it. */
-function scNotifyChanged() {
-  if (drawerState.open === "source") void scLoad();
 }
 
 async function scMove(paths, stage) {
@@ -8188,6 +7960,8 @@ let pickAnchor = null;
 let pickBoard = false;
 /** The field whose chip opened the picker, when it was one: the board's settings are nobody's. */
 let pickInst = null;
+/** The settings leaf whose row opened the picker, when it was one: its value is what the list marks as chosen. */
+let pickField = null;
 
 function pickNote(text) {
   const node = el("div", "pick-note");
@@ -8197,6 +7971,13 @@ function pickNote(text) {
 
 /** What the picker is editing: one card's thread, or the board's defaults. */
 function pickRuntime() {
+  // A model leaf other than the board's own model (the helper model) is worth what its own value says:
+  // the list has to mark that one as chosen, not the model a new thread starts with.
+  if (picking === "model" && pickField && pickField.id !== "model") {
+    const text = String(pickField.value ?? "");
+    const at = text.indexOf("/");
+    return at < 0 ? { provider: "", model: text } : { provider: text.slice(0, at), model: text.slice(at + 1) };
+  }
   return pickBoard ? boardConfig : (answeringRuntime(pickInst) ?? boardConfig);
 }
 
@@ -8323,6 +8104,7 @@ function closePick() {
   pickAnchor = null;
   pickBoard = false;
   pickInst = null;
+  pickField = null;
   runtimePick.hidden = true;
   runtimeSearch.value = "";
   // A picker opened from the board's settings has written the daemon's copy by now, through a route of
@@ -8602,8 +8384,8 @@ function drawLevels() {
   runtimeList.replaceChildren(...(rows.length ? rows : [pickNote("no level to choose")]));
 }
 
-async function openPick(which, anchor = null, forBoard = false, inst = null) {
-  if (picking === which && pickBoard === forBoard && pickInst === inst) {
+async function openPick(which, anchor = null, forBoard = false, inst = null, field = null) {
+  if (picking === which && pickBoard === forBoard && pickInst === inst && pickField === field) {
     closePick();
     return;
   }
@@ -8616,6 +8398,7 @@ async function openPick(which, anchor = null, forBoard = false, inst = null) {
   // A list opened from a field edits that field's thread; one opened from the settings panel edits the
   // board's defaults, and belongs to nobody's card.
   pickInst = forBoard ? null : inst;
+  pickField = forBoard ? field : null;
   runtimePick.hidden = false;
   // A mode, a flow, how a child's work comes back and the two card settings are short lists this page
   // already holds, so they open at once and the search box has nothing to search: no request, no waiting.
@@ -8681,6 +8464,19 @@ async function openPick(which, anchor = null, forBoard = false, inst = null) {
 
 /** Hand the choice to the daemon: the thread behind one card, or the default for a new one. */
 async function chooseRuntime(kind, value) {
+  // A settings leaf that is not the board's own model writes through its own template: the helper model
+  // goes to the crossroads' defaults, not to `/model`, which would change what a new thread starts with.
+  if (kind === "model" && pickField && pickField.id !== "model") {
+    const field = pickField;
+    const wrote = await writeLeaf(field, `${value.provider}/${value.model}`);
+    if (!wrote) {
+      closePick();
+      return;
+    }
+    hintLine(`helper model: ${shortModel(value.model)}`, false, pickInst);
+    closePick();
+    return;
+  }
   const body = kind === "model" ? { provider: value.provider, model: value.model } : { level: value };
   // A field's own card is what the daemon resolves to a thread. Editing the board's defaults from the
   // settings panel sends no card, which is what makes it the default.
@@ -8943,8 +8739,6 @@ async function postThreadField(route, body) {
 // serves, so a setting the daemon gains is a setting this panel shows.
 const configBtn = document.getElementById("configBtn");
 const configPanel = document.getElementById("boardConfig");
-const keysBtn = document.getElementById("keysBtn");
-const keysPanel = document.getElementById("shortcutPanel");
 const shortcutList = document.getElementById("shortcutList");
 const cfgTree = document.getElementById("cfgTree");
 // The document the panel is drawn from, and what was drawn from it: every leaf in document order, and
@@ -9135,17 +8929,13 @@ function paintShortcuts() {
   );
 }
 
-function shownKeys(on) {
-  keysPanel.hidden = !on;
-  keysBtn.setAttribute("aria-expanded", on ? "true" : "false");
-}
-
 /**
  * Whether a panel of the header is reading the screen. Both of them cover the board, so the letters the
- * map on screen teaches are not the letters a board key may act on behind it. The git drawer covers it
+ * map on screen teaches are not the letters a board key may act on behind it. An open header menu covers
+ * the board the same way, so its own letters wait behind it too. The git drawer covers it
  * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too.
  */
-const panelUp = () => !keysPanel.hidden || !configPanel.hidden || gitDrawer.isOpen() || terminalDrawer.isOpen();
+const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || gitDrawer.isOpen() || terminalDrawer.isOpen();
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
@@ -9561,7 +9351,7 @@ async function openLeaf(field, row) {
   }
   // Every picker here writes the board's default itself and broadcasts the config that follows, so the
   // choice is never posted twice.
-  if (field.pick) await openPick(field.pick, row, true);
+  if (field.pick) await openPick(field.pick, row, true, null, field);
 }
 
 // ---------- clean and new ------------------------------------------------
@@ -9615,7 +9405,7 @@ const keptHoldsWork = (reason) => !KEPT_NOT_ABOUT_WORK.some((said) => String(rea
  * touch, then the threads and rail rows it forgot. A section with nothing in it is left out, so a clean
  * that took one worktree does not fill the sheet with empty headings.
  */
-function openCleanSheet({ kept, removed, dead, rows, noun = "worktree" }, opener = cleanBtn) {
+function openCleanSheet({ kept, removed, dead, rows, noun = "worktree" }, opener = housekeepingBtn) {
   cleanedOpener = opener;
   cleanPanelName.textContent = [
     removed.length ? `${counted(removed.length, noun)} removed` : "",
@@ -9679,7 +9469,7 @@ function closeCleanSheet() {
   cleanPanelBody.replaceChildren();
   // Cleaning is a click on a clean button, so the focus goes back to the one that was pressed: the rail's
   // own press can have gone with the rows it freed, and then the footer's button is the same press.
-  const back = cleanedOpener && cleanedOpener.offsetParent !== null ? cleanedOpener : cleanBtn;
+  const back = cleanedOpener && cleanedOpener.offsetParent !== null ? cleanedOpener : housekeepingBtn;
   cleanedOpener = null;
   back.focus();
 }
@@ -9709,6 +9499,7 @@ cleanPanel.addEventListener("keydown", (event) => {
 });
 
 cleanBtn.addEventListener("click", async () => {
+  closeHeaderMenus();
   const result = await postBoardAction("clean");
   if (!result) return;
   // A tree the sweep would not touch is the one thing here that needs saying: it holds work, and
@@ -9730,7 +9521,8 @@ cleanBtn.addEventListener("click", async () => {
 
 // The second press of `new` is the confirmation, in the same four seconds and with the same `armed` as
 // every other press that has to be asked twice.
-armedPress(newBtn, "new", async () => {
+resetNewBtn = armedPress(newBtn, "new", async () => {
+  closeHeaderMenus();
   const result = await postBoardAction("new");
   if (!result) return;
   // The board arrives as a fresh snapshot, so there is nothing to clear here.
@@ -10126,7 +9918,8 @@ function closeLeftoversSheet() {
 
 leftBtn.addEventListener("click", (event) => {
   event.stopPropagation();
-  void openLeftoversSheet(leftBtn);
+  closeHeaderMenus();
+  void openLeftoversSheet(housekeepingBtn);
 });
 leftPanelClose.addEventListener("click", closeLeftoversSheet);
 leftPanel.addEventListener("click", (event) => {
@@ -10153,19 +9946,11 @@ leftPanel.addEventListener("keydown", (event) => {
 // The map of every key is drawn at load from the one list above, so opening it is a flip and not a build.
 paintShortcuts();
 
-keysBtn.addEventListener("click", () => {
-  closePick();
-  const on = keysPanel.hidden;
-  shownKeys(on);
-  // Both panels hang in the same corner, so the one being opened is the only one left standing.
-  if (on) shownConfig(false);
-});
-
 configBtn.addEventListener("click", () => {
   closePick();
+  closeHeaderMenus();
   const on = configPanel.hidden;
   shownConfig(on);
-  if (on) shownKeys(false);
   if (!on) return;
   // A document already in hand is drawn at once, so the panel never opens blank; the read that follows
   // is what it settles on.
@@ -10226,6 +10011,7 @@ peSave.addEventListener("click", async () => {
 runtimeSearch.addEventListener("input", () => (picking === "tools" ? drawTools(runtimeSearch.value) : drawModels(runtimeSearch.value)));
 window.addEventListener("resize", () => {
   if (!runtimePick.hidden) placeRuntimePick();
+  for (const { btn, menu } of headerMenus) if (!menu.hidden) placeHeaderMenu(menu, btn);
   if (!flowPeek.hidden) {
     sizeFlowPeek();
     placeFlowPeek();
@@ -10239,10 +10025,10 @@ document.addEventListener(
     if (!cmdPick.hidden && !event.target.closest("#cmdPick")) closeCmdPick();
     // The prompt editor is opened from this panel and is part of it: a press inside it is not a press
     // outside the settings, which would otherwise shut the panel the editor was opened from.
-    if (event.target.closest("#runtimePick, #cmdPick, .composer, #boardConfig, #configBtn, #shortcutPanel, #keysBtn, #promptEditor")) return;
+    if (event.target.closest("#runtimePick, #cmdPick, .composer, #boardConfig, #configBtn, #promptEditor, .header-menu, #viewBtn, #housekeepingBtn, #toolboxBtn")) return;
     if (!runtimePick.hidden) closePick();
     if (!configPanel.hidden) shownConfig(false);
-    if (!keysPanel.hidden) shownKeys(false);
+    closeHeaderMenus();
   },
   true,
 );
@@ -10261,10 +10047,14 @@ document.addEventListener(
       closePick();
       return;
     }
-    if (keysPanel.hidden && configPanel.hidden) return;
+    if (headerMenus.some(({ menu }) => !menu.hidden)) {
+      event.stopPropagation();
+      closeHeaderMenus();
+      return;
+    }
+    if (configPanel.hidden) return;
     event.stopPropagation();
-    if (keysPanel.hidden) shownConfig(false);
-    else shownKeys(false);
+    shownConfig(false);
   },
   true,
 );
@@ -13545,11 +13335,8 @@ function connect() {
     }
     if (payload.type === "meta") {
       applyMeta(payload.meta);
-    } else if (payload.type === "git") {
-      applyGit(payload.git);
     } else if (payload.type === "snapshot") {
       applyMeta(payload.meta);
-      applyGit(payload.git);
       // A reconnect replays what is already on the board, and a draft survives it: every field puts its
       // words aside under its card before the cards go, and the rebuilt card picks them up again.
       clearBoard();

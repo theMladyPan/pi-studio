@@ -8,7 +8,7 @@ import { legacyImportComplete } from "./state-storage.ts";
 import { boards } from "./store.ts";
 import { sessionFacts } from "./session.ts";
 import { basename, join } from "node:path";
-import { BUILTIN_TOOLS, CHILD_EXTENSIONS, MODEL, PROVIDER, THINKING_LEVELS, run } from "./models.ts";
+import { BUILTIN_TOOLS, CHILD_EXTENSIONS, MODEL, NAME_MODEL, PROVIDER, THINKING_LEVELS, run } from "./models.ts";
 import { CARD_AUDIENCE, CARD_LEVELS, CARD_SHOWS, CARD_VERBOSITY, cardSettings } from "./card-settings.ts";
 import { CHILD_INTEGRATION, integrationOf } from "./integration.ts";
 import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
@@ -155,6 +155,9 @@ function loadHomeDefaults() {
 	}
 	if (typeof held.provider === "string" && held.provider) known.provider = held.provider;
 	if (typeof held.model === "string" && held.model) known.model = held.model;
+	// The helper model that names threads and drafts commit messages, as a provider and a model like the main one.
+	if (typeof held.helperProvider === "string" && held.helperProvider) known.helperProvider = held.helperProvider;
+	if (typeof held.helperModel === "string" && held.helperModel) known.helperModel = held.helperModel;
 	if (THINKING_LEVELS.includes(held.thinking)) known.thinking = held.thinking;
 	if (typeof held.dimOthers === "boolean") known.dimOthers = held.dimOthers;
 	// The card settings: two ids checked against the list they belong to, and four levels. A file written
@@ -214,11 +217,23 @@ export function setHomeDefaults(next) {
 
 
 
+/** The helper model as the daemon's default splits it: NAME_MODEL is `provider/model`, split at the first slash. */
+const [NAME_PROVIDER, ...NAME_REST] = NAME_MODEL.split("/");
+const NAME_ID = NAME_REST.join("/");
+
+/** The model that names a thread and drafts a commit message, as `provider/model` for `pi --model`. */
+export function helperModel() {
+	if (homeDefaults.helperProvider && homeDefaults.helperModel) return `${homeDefaults.helperProvider}/${homeDefaults.helperModel}`;
+	return NAME_MODEL;
+}
+
 /** The crossroads' defaults with the daemon's own model filled in, so the page can show them. */
 export function activeHomeDefaults() {
 	return {
 		provider: homeDefaults.provider ?? PROVIDER,
 		model: homeDefaults.model ?? MODEL,
+		helperProvider: homeDefaults.helperProvider ?? NAME_PROVIDER,
+		helperModel: homeDefaults.helperModel ?? NAME_ID,
 		...(homeDefaults.thinking ? { thinking: homeDefaults.thinking } : {}),
 		dimOthers: homeDefaults.dimOthers !== false,
 		// A new board is born with the six card settings, chosen or default: the settings page draws every

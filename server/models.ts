@@ -18,6 +18,15 @@ export const PROVIDER = process.env.PI_STUDIO_PROVIDER ?? "klotilda";
 export const MODEL = process.env.PI_STUDIO_MODEL ?? "deepseek-ai/DeepSeek-V4.1-Flash-1017";
 
 
+/**
+ * The model that names a thread and drafts a commit message, and the default the settings page starts
+ * from. `PI_STUDIO_NAME_MODEL=""` turns naming off until a model is chosen on the settings page, and the
+ * choice there wins over this. `openrouter/inception/mercury-3:nitro` named this until OpenRouter withdrew
+ * it; the flash model replaces it, asked with thinking off, which names in 1.2-1.5s.
+ */
+export const NAME_MODEL = process.env.PI_STUDIO_NAME_MODEL ?? "openrouter/deepseek/deepseek-v4.1-flash-1017";
+
+
 // Pi names seven levels and clamps whatever is chosen to what the model offers.
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 

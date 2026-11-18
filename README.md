@@ -17,10 +17,10 @@
 </p>
 
 <p align="center">
-  <img src="docs/media/board.png" width="100%" alt="A pi-studio board: thirteen cards of a document audit — two thread cards, and eleven note cards with tables and charts that the threads posted beside themselves — with the activity rail on the left and the branch strip on the right.">
+  <img src="docs/media/board.png" width="100%" alt="A pi-studio board: thirteen cards of a document audit — two thread cards, and eleven note cards with tables and charts that the threads posted beside themselves — with the activity rail on the left.">
   <br>
   <sub>Two threads and the eleven cards they posted beside themselves. The rail on the left is every
-       command, edit and thought as it happens; the strip on the right is the branches the threads made.</sub>
+       command, edit and thought as it happens.</sub>
 </p>
 
 Type into a card and the agent answers there. `steer` puts a correction into a run that is still going,
@@ -208,12 +208,10 @@ was put.
 waiting behind it.
 
 **Worktrees** keep the threads out of each other's way. In a repository, each thread works in its own
-worktree on a branch of its own, and the strip in the corner of the board draws the branches and the
-commits on them.
+worktree on a branch of its own.
 
 **The whole graph is a drawer away.** In a repository, `g` on the board rolls that repository down over
-it as the full graph: every branch, every commit, the commit details pane and the diff, where the corner
-strip summarises. What draws it is [Git Graph Libre](https://github.com/PlohnenSoftware/git-graph-libre)
+it as the full graph: every branch, every commit, the commit details pane and the diff. What draws it is [Git Graph Libre](https://github.com/PlohnenSoftware/git-graph-libre)
 (PlohnenSoftware, AGPL-3.0-or-later), the extension's own webview, loaded from the copy already installed
 in your VS Code and never shipped from here. `PI_STUDIO_GITGRAPH_DIR` points the daemon at a copy somewhere
 else. When the drawing is missing the drawer says so in a sentence on the page, rather than staying blank,
@@ -262,7 +260,7 @@ server/           the daemon, one module per subject
   store.ts        the boards in memory, on disk, and the three shapes they load from
   cards.ts        the wire shape of a card; bus.ts the fan-out to every open tab
   child/          the `pi` child: its argv, its prompts, its output, its turns
-  git/            the repository, the strip's picture, the polling that refreshes it
+  git/            the repository
     gitgraph/     the answers the Git Graph page asks for: its dispatch, its reads, its bundle
   worktrees/      making a thread's worktree, naming its branch, retiring it
   paths.ts        every path and the JSON io; types.ts the shapes that cross a boundary

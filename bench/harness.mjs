@@ -196,7 +196,7 @@ if (mode === "resync") {
 	await probe(() => bus.resync(board));
 	phase("resync");
 	const p = await probe(() => bus.resync(board));
-	log("resync(board) with one tab attached (snapshot + refreshGit over every folder)", p.took);
+	log("resync(board) with one tab attached (snapshot over every folder)", p.took);
 	log("  its freeze", p.gap);
 	console.log("snapshot bytes", client.bytes, "frames", client.frames);
 	finish();

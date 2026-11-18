@@ -751,9 +751,45 @@ test("the keys panel says what the keys do, including f as the drawer and shift+
 	assert.ok(board.includes('{ keys: "c", does: "open the cards drawer, and press it again to roll it up" }'));
 	assert.ok(board.includes('{ keys: "shift+f", does: "fit every card on the screen" }'));
 	assert.ok(!board.includes('{ keys: "f", does: "fit every card on the screen" }'), "f no longer claims the fit");
-	// The map button still names its own key, which the project's own rule asks for.
+	// The map toggle still names its own key, which the project's own rule asks for.
 	const html = readFileSync(HTML, "utf8");
-	assert.ok(html.includes('id="mapBtn" aria-pressed="true" title="hide the board overview (m)"'));
+	assert.ok(html.includes('id="mapToggle" checked'));
+	assert.ok(board.includes('mapToggle.title = mapOn ? "hide the board overview (m)"'));
+});
+
+test("the header chips and the settings hold the map and the hotkeys", () => {
+	const html = readFileSync(HTML, "utf8");
+	const header = html.slice(html.indexOf("<header>"), html.indexOf("</header>"));
+	for (const id of ["viewBtn", "housekeepingBtn", "toolboxBtn", "reset", "newPill", "threadOrder", "statCtx", "activityBtn", "cardsBtn", "configBtn"]) {
+		assert.ok(header.includes(`id="${id}"`), `#${id} stays in the header`);
+	}
+	for (const gone of ["mapBtn", "keysBtn", "stack", "tidy", "fit", "cleanBtn", "leftBtn", "newBtn", "filesBtn", "sourceBtn", "gitBtn", "termBtn"]) {
+		assert.ok(!header.includes(`id="${gone}"`), `#${gone} is out of the header`);
+	}
+	for (const [menu, ids] of [
+		["viewMenu", ["stack", "tidy", "fit"]],
+		["housekeepingMenu", ["newBtn", "cleanBtn", "leftBtn"]],
+		["toolboxMenu", ["filesBtn", "sourceBtn", "gitBtn", "termBtn"]],
+	]) {
+		assert.ok(html.includes(`id="${menu}"`), `#${menu} exists`);
+		const slice = html.slice(html.indexOf(`id="${menu}"`), html.indexOf(`id="${menu}"`) + 1200);
+		for (const id of ids) assert.ok(slice.includes(`id="${id}"`), `#${id} is in #${menu}`);
+	}
+	const settings = html.slice(html.indexOf('id="boardConfig"'), html.indexOf('id="promptEditor"'));
+	for (const id of ["cfgLocal", "mapToggle", "cfgShortcuts", "shortcutList"]) {
+		assert.ok(settings.includes(`id="${id}"`), `#${id} lives in settings`);
+	}
+	assert.ok(!html.includes('id="shortcutPanel"'), "the standalone shortcuts panel is gone");
+	const board = readFileSync(BOARD, "utf8");
+	assert.ok(board.includes("const SHORTCUTS = ["), "SHORTCUTS stays the single source of truth");
+	assert.ok(!board.includes('getElementById("mapBtn")'));
+	assert.ok(!board.includes('getElementById("keysBtn")'));
+});
+
+test("board keys wait behind an open header menu", () => {
+	const board = readFileSync(BOARD, "utf8");
+	const panelUp = board.slice(board.indexOf("const panelUp"), board.indexOf("const panelUp") + 220);
+	assert.ok(panelUp.includes("headerMenus.some(({ menu }) => !menu.hidden)"), "an open header menu counts as a panel up");
 });
 
 test("conflict hunks are read with their two sides, and accepting one rewrites only it", () => {
