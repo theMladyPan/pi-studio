@@ -136,6 +136,8 @@ type ExCore = {
 	drawerToggle(state: { open: string }, name: string): { open: string };
 	escapeTarget(open: Record<string, boolean | undefined>): string;
 	boardLetter(key: string, flags?: { shift?: boolean; typing?: boolean; panel?: boolean; surface?: boolean }): string;
+	conflictHunks(text: string): { index: number; start: number; end: number; ours: string[]; theirs: string[]; base: string[] | null }[];
+	conflictAccept(text: string, index: number, choice: string): string;
 	copyText(text: string, ports: ExPorts): Promise<unknown>;
 	icon(theme: unknown, entry: { name: string; dir?: boolean }): ExIcon | null;
 	gitKind(git: string): string;
@@ -752,4 +754,27 @@ test("the keys panel says what the keys do, including f as the drawer and shift+
 	// The map button still names its own key, which the project's own rule asks for.
 	const html = readFileSync(HTML, "utf8");
 	assert.ok(html.includes('id="mapBtn" aria-pressed="true" title="hide the board overview (m)"'));
+});
+
+test("conflict hunks are read with their two sides, and accepting one rewrites only it", () => {
+	const text = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\nafter\n";
+	const hunks = core.conflictHunks(text);
+	assert.equal(hunks.length, 1);
+	assert.deepEqual(hunks[0].ours, ["ours"]);
+	assert.deepEqual(hunks[0].theirs, ["theirs"]);
+	assert.equal(core.conflictAccept(text, 0, "current"), "before\nours\nafter\n");
+	assert.equal(core.conflictAccept(text, 0, "incoming"), "before\ntheirs\nafter\n");
+	assert.equal(core.conflictAccept(text, 0, "both"), "before\nours\ntheirs\nafter\n");
+	// An accepted text has no hunks left, so a second acceptance is a no-op rather than a guess.
+	assert.equal(core.conflictAccept(core.conflictAccept(text, 0, "both"), 0, "current"), "before\nours\ntheirs\nafter\n");
+});
+
+test("a diff3 hunk carries its base, and an unclosed block is not a hunk", () => {
+	const text = "<<<<<<< HEAD\nours\n||||||| base\nancestor\n=======\ntheirs\n>>>>>>> side\n";
+	const hunks = core.conflictHunks(text);
+	assert.equal(hunks.length, 1);
+	assert.deepEqual(hunks[0].base, ["ancestor"]);
+	assert.equal(core.conflictHunks("<<<<<<< HEAD\nnever closed\n").length, 0);
+	// A literal marker example in prose is followed by no closing side, so it is left alone.
+	assert.equal(core.conflictHunks("the markers <<<<<<< and >>>>>>> are examples\n").length, 0);
 });

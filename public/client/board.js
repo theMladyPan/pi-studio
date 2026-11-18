@@ -770,6 +770,71 @@ function exBoardLetter(key, { shift = false, typing = false, panel = false, surf
   return "";
 }
 
+
+// ---------- conflict hunks ------------------------------------------------
+/**
+ * One unresolved hunk in a marked file: where the whole block stands in the text, and the two
+ * sides it holds. The parser reads ordinary markers and the diff3 base section, and refuses a
+ * block that never closes, so an acceptance never replaces the wrong lines.
+ */
+function exConflictHunks(text) {
+  const lines = String(text ?? "").split("\n");
+  const hunks = [];
+  let at = 0;
+  const offsets = lines.map((line) => {
+    const start = at;
+    at += line.length + 1;
+    return start;
+  });
+  let i = 0;
+  while (i < lines.length) {
+    if (!/^<{7}( |$)/.test(lines[i])) {
+      i += 1;
+      continue;
+    }
+    const start = i;
+    const ours = [];
+    let j = i + 1;
+    let base = null;
+    let theirs = [];
+    let closed = false;
+    while (j < lines.length && !/^={7}$/.test(lines[j]) && !/^\|{7}( |$)/.test(lines[j])) {
+      ours.push(lines[j]);
+      j += 1;
+    }
+    if (j < lines.length && /^\|{7}( |$)/.test(lines[j])) {
+      base = [];
+      j += 1;
+      while (j < lines.length && !/^={7}$/.test(lines[j])) {
+        base.push(lines[j]);
+        j += 1;
+      }
+    }
+    if (j < lines.length && /^={7}$/.test(lines[j])) {
+      j += 1;
+      while (j < lines.length && !/^>{7}( |$)/.test(lines[j])) {
+        theirs.push(lines[j]);
+        j += 1;
+      }
+      if (j < lines.length) closed = true;
+    }
+    if (!closed) return hunks;
+    hunks.push({ index: hunks.length, start: offsets[start], end: offsets[j] + lines[j].length + 1, ours, theirs, base });
+    i = j + 1;
+  }
+  return hunks;
+}
+
+/** Accept one hunk: `current`, `incoming`, or `both` (current first, the way git writes it). */
+function exConflictAccept(text, index, choice) {
+  const hunks = exConflictHunks(text);
+  const hunk = hunks[index];
+  if (!hunk) return String(text ?? "");
+  const side = choice === "incoming" ? hunk.theirs : choice === "both" ? [...hunk.ours, ...hunk.theirs] : hunk.ours;
+  const replacement = side.length ? side.join("\n") + "\n" : "";
+  return String(text).slice(0, hunk.start) + replacement + String(text).slice(hunk.end);
+}
+
 // ---------- text onto the clipboard ---------------------------------------
 /**
  * Copying a path goes through the browser's clipboard where there is one. A board reached over the
@@ -901,6 +966,8 @@ const explorerCore = {
   drawerToggle: exDrawerToggle,
   escapeTarget: exEscapeTarget,
   boardLetter: exBoardLetter,
+  conflictHunks: exConflictHunks,
+  conflictAccept: exConflictAccept,
   copyText: exCopyText,
   icon: exIcon,
   gitKind: exGitKind,
@@ -5513,10 +5580,15 @@ const scStagedCount = document.getElementById("scStagedCount");
 const scChangesCount = document.getElementById("scChangesCount");
 const scStaged = document.getElementById("scStaged");
 const scChanges = document.getElementById("scChanges");
+const scMergeHead = document.getElementById("scMergeHead");
+const scMergeCount = document.getElementById("scMergeCount");
+const scMerge = document.getElementById("scMerge");
 const scStageAll = document.getElementById("scStageAll");
 const scUnstageAll = document.getElementById("scUnstageAll");
-let scState = { staged: [], changes: [] };
+let scState = { staged: [], changes: [], conflicts: [], merge: null };
 let scBusy = false;
+/** The merge the message field was prefilled for, so a refresh never overwrites typed text. */
+let scMergeSeen = "";
 
 function scSay(text) {
   scNote.textContent = text || "";
@@ -5557,18 +5629,53 @@ function scRow(file, stage) {
   return row;
 }
 
+// A conflicted file opens in the merge editor; there is no +/− press for it, because staging a
+// file with markers in it would stage the markers.
+function scConflictRow(file) {
+  const row = el("div", "sc-row");
+  const slash = file.path.lastIndexOf("/");
+  const name = el("span", "sc-name");
+  name.textContent = slash >= 0 ? file.path.slice(slash + 1) : file.path;
+  name.title = file.path;
+  row.append(name);
+  if (slash >= 0) {
+    const dir = el("span", "sc-dir");
+    dir.textContent = file.path.slice(0, slash + 1);
+    row.append(dir);
+  }
+  const badge = el("span", "sc-badge");
+  badge.textContent = "!";
+  row.append(badge);
+  const open = el("button");
+  open.type = "button";
+  open.textContent = "open";
+  open.title = `resolve ${file.path} in the merge editor`;
+  open.addEventListener("click", () => void scOpenConflict(file.path));
+  row.append(open);
+  return row;
+}
+
 /** Paint both lists, the counts, and whether Commit may be pressed. */
 function scPaint() {
   scStaged.replaceChildren(...scState.staged.map((file) => scRow(file, false)));
   scChanges.replaceChildren(...scState.changes.map((file) => scRow(file, true)));
+  scMerge.replaceChildren(...scState.conflicts.map((file) => scConflictRow(file)));
   scStagedCount.textContent = scState.staged.length ? String(scState.staged.length) : "";
   scChangesCount.textContent = scState.changes.length ? String(scState.changes.length) : "";
-  scCount.textContent = scState.staged.length + scState.changes.length ? String(scState.staged.length + scState.changes.length) : "";
+  scMergeCount.textContent = scState.conflicts.length ? String(scState.conflicts.length) : "";
+  scCount.textContent = scState.staged.length + scState.changes.length + scState.conflicts.length ? String(scState.staged.length + scState.changes.length + scState.conflicts.length) : "";
+  scMergeHead.hidden = !scState.conflicts.length;
   scStagedHead.hidden = !scState.staged.length;
-  scStageAll.disabled = !scState.changes.length || scBusy;
-  scUnstageAll.disabled = !scState.staged.length || scBusy;
-  scDraftBtn.disabled = !scState.staged.length || scBusy;
-  scCommitBtn.disabled = !scState.staged.length || !scMessage.value.trim() || scBusy;
+  scStageAll.disabled = !scState.changes.length || scBusy || Boolean(scState.merge);
+  scUnstageAll.disabled = !scState.staged.length || scBusy || Boolean(scState.merge);
+  scDraftBtn.disabled = !scState.staged.length || scBusy || Boolean(scState.merge);
+  // During a merge the green press concludes it, and it needs no staged file of its own: the
+  // index as it stands is what Continue commits, once no conflict remains.
+  scCommitBtn.textContent = scState.merge ? "✓ Continue" : "✓ Commit";
+  scCommitBtn.disabled = scBusy || !scMessage.value.trim() || (scState.merge ? scState.conflicts.length > 0 : !scState.staged.length);
+  // The field is locked while a request is in flight, so a draft that lands late cannot
+  // overwrite text typed after the press.
+  scMessage.disabled = scBusy;
 }
 
 async function scLoad() {
@@ -5588,7 +5695,13 @@ async function scLoad() {
     scSay(data.error || "git could not read this folder");
     return;
   }
-  scState = { staged: data.staged ?? [], changes: data.changes ?? [] };
+  scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null };
+  // A new merge brings its own message; a merge already seen keeps whatever the field holds.
+  if (scState.merge && scState.merge.id !== scMergeSeen) {
+    scMergeSeen = scState.merge.id;
+    scMessage.value = scState.merge.message ?? "";
+  }
+  if (!scState.merge) scMergeSeen = "";
   scSay("");
   scPaint();
 }
@@ -5609,7 +5722,7 @@ async function scMove(paths, stage) {
   scPaint();
   try {
     const data = await scPost(stage ? `/source-control/stage?${auth}` : `/source-control/unstage?${auth}`, { paths });
-    scState = { staged: data.staged ?? [], changes: data.changes ?? [] };
+    scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null };
     scSay("");
   } catch (error) {
     scSay(error.message);
@@ -5620,14 +5733,22 @@ async function scMove(paths, stage) {
 
 async function scCommit() {
   const message = scMessage.value.trim();
-  if (scBusy || !message || !scState.staged.length) return;
+  const merging = Boolean(scState.merge);
+  if (scBusy || !message || (merging ? scState.conflicts.length > 0 : !scState.staged.length)) return;
   scBusy = true;
   scPaint();
   try {
-    await scPost(`/source-control/commit?${auth}`, { message });
-    scMessage.value = "";
-    scSay("committed");
-    await scLoad();
+    if (merging) {
+      const data = await scPost(`/source-control/continue?${auth}`, { message });
+      scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null };
+      scMessage.value = "";
+      scSay("merge concluded");
+    } else {
+      await scPost(`/source-control/commit?${auth}`, { message });
+      scMessage.value = "";
+      scSay("committed");
+      await scLoad();
+    }
   } catch (error) {
     scSay(error.message);
   }
@@ -8633,6 +8754,7 @@ const SHORTCUTS = [
       { keys: "!", does: "at the start of a line, run it as a shell command" },
       { keys: "ctrl+v", does: "paste an image and it goes with the message" },
       { keys: "ctrl+enter", does: "save a note" },
+      { keys: "ctrl+enter", does: "in the source control drawer, commit the staged files, or continue a merge" },
       { keys: "enter", does: "save a card name you are changing" },
       { keys: "double-click a message title", does: "rewrite that message" },
     ],
@@ -10814,7 +10936,10 @@ let exEditorDoc = { path: "", text: "", mtime: 0, size: 0, editable: false };
 /** What had the focus before the editor opened, handed back when it closes. */
 let exEditorPrior = null;
 const exEditorPreview = createTextPreview(exEditorBody, {
-  onInput: () => exEditorSay(exEditorDirty() ? "unsaved changes" : "saved", exEditorDirty() ? "dirty" : ""),
+  onInput: () => {
+    exEditorSay(exEditorDirty() ? "unsaved changes" : "saved", exEditorDirty() ? "dirty" : "");
+    if (exConflict) exConflictPaint();
+  },
 });
 
 /** Whether what stands in the editor is still the text that was read from disk. */
@@ -10857,6 +10982,9 @@ async function exGet(path) {
  * selection and the tree under it are exactly as they were.
  */
 async function exEditOpen(path, target = "edit") {
+  exConflict = null;
+  exConflictBar.hidden = true;
+  exEditorSaveBtn.hidden = false;
   if (exEditorEl.hidden) exEditorPrior = document.activeElement;
   exEditorEl.hidden = false;
   exEditorTitle.textContent = path;
@@ -10905,6 +11033,9 @@ async function exEditOpen(path, target = "edit") {
  * often not done reading; the status line is what says it landed. A refusal says why and keeps the text.
  */
 async function exEditSave() {
+  // In conflict mode the save press resolves and stages; the ordinary write would save
+  // without staging and leave the conflict exactly where it was.
+  if (exConflict) return exConflictResolve();
   const path = exEditorDoc.path;
   if (exEditorEl.hidden || !path) return;
   if (!exEditorDoc.editable) return exEditorSay("read only \u2014 there is nothing here to save", "bad");
@@ -10932,6 +11063,9 @@ async function exEditSave() {
 /** Shut the editor and hand the keyboard back: the tree the file came from, when that is still there. */
 function exEditClose() {
   if (exEditorEl.hidden) return;
+  exConflict = null;
+  exConflictBar.hidden = true;
+  exEditorSaveBtn.hidden = false;
   exEditorEl.hidden = true;
   exEditorDoc.path = "";
   const prior = exEditorPrior;
@@ -10968,6 +11102,141 @@ exEditorEl.addEventListener("keydown", (event) => {
 });
 exEditorSaveBtn.addEventListener("click", () => void exEditSave());
 exEditorCloseBtn.addEventListener("click", () => exEditClose());
+
+// ---------- the merge editor -----------------------------------------------
+/**
+ * The editor in conflict mode: the same modal and the same text surface, with a bar above them
+ * that holds one row per conflict hunk. Accepting a hunk rewrites the unsaved text — never the
+ * file — and Resolve & Stage is what saves it and stages exactly this file, so the ordinary
+ * save press is hidden while a conflict is open and cannot stage markers by accident.
+ */
+const exConflictBar = document.getElementById("exConflictBar");
+const exConflictHunksEl = document.getElementById("exConflictHunks");
+const exConflictNote = document.getElementById("exConflictNote");
+const exConflictResolveBtn = document.getElementById("exConflictResolve");
+/** The conflict the editor holds, or null for an ordinary file. Bound with `let` like the doc. */
+let exConflict = null;
+
+function exConflictSay(text, bad = false) {
+  exConflictNote.textContent = text || "";
+  exConflictNote.classList.toggle("bad", bad);
+}
+
+/** The hunk rows, re-read from the text as it stands: after every acceptance and every edit. */
+function exConflictPaint() {
+  if (!exConflict) return;
+  const text = exEditorPreview.getText();
+  const hunks = explorerCore.conflictHunks(text);
+  exConflictHunksEl.replaceChildren(
+    ...hunks.map((hunk) => {
+      const row = el("div", "ex-conflict-hunk");
+      const label = el("span", "hk");
+      label.textContent = `hunk ${hunk.index + 1}`;
+      row.append(label);
+      for (const [choice, word] of [["current", "accept current"], ["incoming", "accept incoming"], ["both", "accept both"]]) {
+        const button = el("button");
+        button.type = "button";
+        button.textContent = word;
+        button.addEventListener("click", () => {
+          exEditorPreview.setDocument({ path: exConflict.path, content: explorerCore.conflictAccept(exEditorPreview.getText(), hunk.index, choice) });
+          exConflictPaint();
+          exEditorPreview.focus();
+        });
+        row.append(button);
+      }
+      const compare = el("button");
+      compare.type = "button";
+      compare.textContent = "compare";
+      compare.addEventListener("click", () => {
+        const shown = row.parentElement.querySelector(".ex-conflict-compare");
+        if (shown) {
+          shown.remove();
+          return;
+        }
+        const view = el("pre", "ex-conflict-compare");
+        view.textContent = `current:\n${hunk.ours.join("\n") || "(empty)"}\n\nincoming:\n${hunk.theirs.join("\n") || "(empty)"}`;
+        row.after(view);
+      });
+      row.append(compare);
+      return row;
+    }),
+  );
+  exConflictSay(hunks.length ? `${hunks.length} conflict${hunks.length === 1 ? "" : "s"} left — accept each one, or edit the text itself` : "no markers left — resolve & stage this file");
+  exConflictResolveBtn.disabled = hunks.length > 0;
+}
+
+/** Open one conflicted file in the editor, with its merge identity and version. */
+async function scOpenConflict(path) {
+  if (exEditorEl.hidden) exEditorPrior = document.activeElement;
+  exEditorEl.hidden = false;
+  exEditorTitle.textContent = path;
+  exConflict = { path, mergeId: "", version: "" };
+  exConflictBar.hidden = false;
+  exEditorSaveBtn.hidden = true;
+  exEditorDoc.path = path;
+  exEditorDoc.text = "";
+  exEditorDoc.editable = false;
+  exEditorPreview.setDocument({ path, content: "" });
+  exEditorPreview.setReadOnly(true);
+  exEditorSay("reading\u2026");
+  exConflictSay("reading\u2026");
+  let answer;
+  try {
+    answer = await exGet(`/source-control/conflict?${auth}&path=${encodeURIComponent(path)}`);
+  } catch {
+    if (!exEditorEl.hidden && exConflict && exConflict.path === path) exConflictSay("could not reach the daemon — nothing was read", true);
+    return;
+  }
+  if (exEditorEl.hidden || !exConflict || exConflict.path !== path) return;
+  const data = answer.data ?? {};
+  if (!answer.ok || !data.ok) {
+    exConflictSay((data && data.error) || `the daemon answered ${answer.status}`, true);
+    return;
+  }
+  exConflict.mergeId = String(data.mergeId ?? "");
+  exConflict.version = String(data.version ?? "");
+  exEditorDoc.text = String(data.content ?? "");
+  exEditorDoc.editable = true;
+  exEditorPreview.setDocument({ path, content: exEditorDoc.text });
+  exEditorPreview.setReadOnly(false);
+  exEditorSay("merge editor — resolving does not save until resolve & stage");
+  exConflictPaint();
+  exEditorPreview.focus();
+}
+
+/** Save the resolved text and stage exactly this file, then shut the editor. */
+async function exConflictResolve() {
+  if (!exConflict) return;
+  const content = exEditorPreview.getText();
+  if (explorerCore.conflictHunks(content).length) return exConflictSay("conflict markers remain", true);
+  exConflictSay("resolving\u2026");
+  exConflictResolveBtn.disabled = true;
+  let answer;
+  try {
+    answer = await exPost(`/source-control/resolve?${auth}`, { path: exConflict.path, mergeId: exConflict.mergeId, version: exConflict.version, content });
+  } catch {
+    exConflictSay("could not reach the daemon — the text is not saved", true);
+    exConflictResolveBtn.disabled = false;
+    return;
+  }
+  const data = answer.data ?? {};
+  if (!answer.ok || !data.ok) {
+    exConflictSay((data && data.error) || `the daemon answered ${answer.status}`, true);
+    exConflictResolveBtn.disabled = false;
+    return;
+  }
+  const path = exConflict.path;
+  exConflict = null;
+  exConflictBar.hidden = true;
+  exEditorSaveBtn.hidden = false;
+  exEditClose();
+  scSay(`${path} resolved and staged`);
+  void scLoad();
+}
+
+exConflictResolveBtn.addEventListener("click", () => void exConflictResolve());
+// A manual edit re-reads the hunks, so the bar and the text never disagree — but the repaint
+// only rebuilds the bar, so the caret stays where the human left it.
 
 /** A path onto the clipboard; the relative one is what a message wants to carry. */
 async function exCopyPath(paths, absolute) {
