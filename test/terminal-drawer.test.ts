@@ -128,3 +128,101 @@ test("a board with no folder says so instead of opening a terminal", async () =>
 	drawer.close();
 	assert.equal(drawer.isOpen(), false);
 });
+
+/** The vendored terminal library and the socket, as the drawer touches them. */
+class FakeTerminal {
+	readonly opts: Record<string, unknown>;
+	cols = 100;
+	rows = 30;
+	focused = false;
+	resetCount = 0;
+	opened = false;
+
+	constructor(opts: Record<string, unknown>) {
+		this.opts = opts;
+	}
+
+	loadAddon(_addon: unknown) {}
+	open(_host: unknown) {
+		this.opened = true;
+	}
+	onData(_fn: (data: string) => void) {}
+	write(_data: string) {}
+	focus() {
+		this.focused = true;
+	}
+	reset() {
+		this.resetCount++;
+	}
+}
+
+class FakeFit {
+	fit() {}
+}
+
+class FakeWebSocket {
+	static OPEN = 1;
+	static instances: FakeWebSocket[] = [];
+	readyState = FakeWebSocket.OPEN;
+	sent: string[] = [];
+	listeners = new Map<string, Array<(event: unknown) => void>>();
+	url: string;
+
+	constructor(url: string) {
+		this.url = url;
+		FakeWebSocket.instances.push(this);
+	}
+
+	addEventListener(type: string, fn: (event: unknown) => void) {
+		const held = this.listeners.get(type) ?? [];
+		held.push(fn);
+		this.listeners.set(type, held);
+	}
+
+	fire(type: string, event: unknown = {}) {
+		for (const fn of this.listeners.get(type) ?? []) fn(event);
+	}
+
+	send(data: string) {
+		this.sent.push(data);
+	}
+
+	close() {
+		this.readyState = 3;
+		this.fire("close");
+	}
+}
+
+test("a shell that ends rolls the drawer down, and the next roll up opens a new socket", async () => {
+	const { elements, body } = standInPage();
+	FakeWebSocket.instances = [];
+	Object.assign(globalThis, {
+		Terminal: FakeTerminal,
+		FitAddon: { FitAddon: FakeFit },
+		WebSocket: FakeWebSocket,
+	});
+	try {
+		const drawer = await drawerFor("b08b6688eaf9");
+		drawer.open();
+		assert.equal(drawer.isOpen(), true);
+		assert.equal(FakeWebSocket.instances.length, 1, "the first roll up connects");
+		const socket = FakeWebSocket.instances[0];
+		socket.fire("open");
+
+		// Ctrl+D ends the shell: the daemon says the shell exited.
+		socket.fire("message", { data: JSON.stringify({ type: "exit", code: 0 }) });
+		assert.equal(drawer.isOpen(), false, "the drawer rolls down on the shell's end");
+		assert.equal(body.classList.contains("term-open"), false);
+		assert.equal(socket.readyState, 3, "the dead socket closes with it");
+
+		// The next roll up connects again — a fresh shell, not the dead one.
+		drawer.open();
+		assert.equal(drawer.isOpen(), true);
+		assert.equal(FakeWebSocket.instances.length, 2, "the second roll up connects anew");
+		assert.notEqual(FakeWebSocket.instances[1], socket);
+	} finally {
+		delete (globalThis as Record<string, unknown>).Terminal;
+		delete (globalThis as Record<string, unknown>).FitAddon;
+		delete (globalThis as Record<string, unknown>).WebSocket;
+	}
+});
