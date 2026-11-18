@@ -1,135 +1,72 @@
 /**
- * One message from the Git Graph page, and every answer it earns.
+ * One message from the Git Graph Libre page, and every answer it earns.
  *
- * The page is a bundle that was written for an extension: it posts one command per click and waits for
- * a reply carrying the same command name, sometimes with a `refreshId` it compares before it will draw
- * the answer at all. So this module is the extension's message switch, minus everything that needed an
- * editor or a child process, and it has three jobs. It re-reads which repositories this board may show
- * on every call, because a tree is cut and swept while a tab stays open, and a command naming a
- * repository it no longer has is answered with that sentence rather than run. It keeps the promise the
- * page depends on: one request in, an array of replies out, and a failure is a reply too, never a
- * rejected promise the route would turn into a dead tab. And it says plainly which commands it cannot
- * run yet, from one table, so the next stage that implements one has one list to edit.
+ * The page is Libre's bundle: it posts one command per click and waits for a
+ * reply carrying the same command name, sometimes with a `requestId` it
+ * compares before it will draw the answer at all. This module is the
+ * extension's message switch, minus everything that needed an editor or a
+ * child process. Every answer is an array, and a failure is a reply too,
+ * never a rejected promise, so the route always answers.
  */
-import { UNCOMMITTED, parseRequest } from "./protocol.ts";
-import type { GitCodeReview, GitCommitDetails, GitGraphRequest, GitRepoState } from "./protocol.ts";
+import { parseLibreRequest, queryError, UNCOMMITTED } from "./libre.ts";
+import type { LibreRequest } from "./libre.ts";
 import { DEFAULT_REPO_STATE, scheduleStateSave, stateFor } from "./state.ts";
-import { getCommitComparison, getCommitDetails, getCommits, getRepoConfig, getRepoInfo, getStashDetails, getTagDetails, getUncommittedDetails, readRepoRoot } from "./read.ts";
-import type { ReadResult } from "./read.ts";
-import { openFile, viewDiff, viewDiffWithWorkingFile, viewFileAtRevision } from "./view.ts";
-import type { ViewAnswer } from "./view.ts";
+import { getCommitComparison, getRepoConfig, libreBranches, libreCommitDetails, libreCommits, librePushDefaults, libreRemoteTags, libreRepoInfo, libreResolveRef, libreSearch, libreTagDetails, libreUncommitted, libreWorktreeChanges, libreWorktreeStatus, readRepoRoot } from "./read.ts";
+import { diffText, openFile, untrackedDiff, viewDiffWithWorkingFile, viewFileAtRevision } from "./view.ts";
 import { reposFor } from "./repos.ts";
 import type { RepoBoardLike, RepoEntry } from "./repos.ts";
-import { runAction } from "./actions.ts";
+import { runLibreAction } from "./actions.ts";
+import { gitText } from "../exec.ts";
 
-// ---------- what a board is, to this module ----------
+// ---------- board ----------
 
-/**
- * The board as this module reads it: the repositories it may show, and the id its state is filed under.
- * It is `reposFor`'s own shape plus an identity, so a test can hand it a plain object.
- */
 export type DispatchBoard = RepoBoardLike & { id: string; name?: string };
-
-/** One thing the page is told, always carrying the command it answers. */
 type Reply = Record<string, unknown> & { command: string };
 
-// ---------- what this tab cannot do yet ----------
-
-/** The one sentence every command this tab cannot run answers. */
 const NOT_YET = "This tab cannot do that yet.";
 
-/**
- * The commands that still need an editor, a terminal or a remote this tab does not have, and are
- * answered without a single git call. The local writes left this table when `actions.ts` gained their
- * handlers; what remains is refused by name, one sentence each, so a human who reaches one — a stale
- * page, a menu this tab has yet to earn — is told the same thing every other refused command says.
- */
-const UNAVAILABLE_COMMANDS = [
-	"addRemote",
+/** Commands that need an editor, a terminal, a remote this tab does not have, or a picker this tab cannot open. */
+export const UNAVAILABLE_COMMANDS = [
+	"addWorktreeToWorkspace",
 	"createArchive",
 	"createPullRequest",
-	"deleteRemote",
-	"deleteRemoteBranch",
 	"deleteUserDetails",
-	"editRemote",
 	"editUserDetails",
+	"exportExtensionSettings",
 	"exportRepoConfig",
-	"fetchAvatar",
-	"fetchIntoLocalBranch",
+	"importExtensionSettings",
+	"importRepoConfig",
+	"loadExtensionSettings",
+	"openDiffTab",
 	"openExternalDirDiff",
-	"openExtensionSettings",
+		"openSourceControl",
 	"openTerminal",
-	"pushTag",
-	"rescanForRepos",
-	"showErrorMessage",
-	"viewScm",
+	"openWorktree",
+	"pickFolder",
+	"revealWorktree",
+	"showOutput",
+	"startHistorySearch",
+	"switchGraphToWorktree",
+	"updateExtensionSetting",
 ] as const;
 
-/** The sentence each of those answers, by command, so a later stage can word one of them differently. */
-export const UNAVAILABLE: Record<string, string> = Object.fromEntries(UNAVAILABLE_COMMANDS.map((command) => [command, NOT_YET]));
+export const UNAVAILABLE: Record<string, string> = Object.fromEntries(UNAVAILABLE_COMMANDS.map((c) => [c, NOT_YET]));
 
-// ---------- small readers ----------
+/** Commands a browser answers for itself: clipboard, new tab. */
+const LOCAL_COMMANDS = new Set(["copyToClipboard", "openExternalUrl", "openFile"]);
 
-/** The code review a commit or a comparison is part of, if the human started one on it. */
-function reviewFor(board: DispatchBoard, repo: string, id: string): GitCodeReview | null {
-	return stateFor(board).codeReviews[repo]?.[id] ?? null;
-}
-
-/** A view's answer, which the page draws when it carries text and shows the reason for when it does not. */
-function viewed(command: string, answer: ViewAnswer): Reply {
-	return "view" in answer ? { command, error: null, view: answer.view } : { command, error: answer.error };
-}
-
-/**
- * The action's run, for the page's commands that show one failure: the first sentence git gave.
- *
- * A command that runs twice — a branch deleted on its remote too, a tag made and then pushed — still
- * answers a single `error` on this half of the page's commands, and a second sentence would be the same
- * cause said twice.
- */
-function firstError(errors: (string | null)[]): string | null {
-	return errors.find((error) => error !== null) ?? null;
-}
-
-/** What the page's commit details pane is handed, including the review and the refresh flag it sent. */
-function detailsReply(
-	board: DispatchBoard,
-	command: string,
-	repo: string,
-	id: string,
-	refresh: boolean,
-	result: ReadResult<GitCommitDetails>,
-): Reply {
-	if (!result.ok) return { command, error: result.error, commitDetails: null, avatar: null, codeReview: null, refresh };
-	return {
-		command,
-		error: null,
-		commitDetails: result.value,
-		// Never an avatar: this daemon makes no request to a third party on a human's behalf.
-		avatar: null,
-		codeReview: reviewFor(board, repo, id),
-		refresh,
-	};
-}
-
-/**
- * The repository states the repository dropdown is drawn from, filled out for one it has never seen.
- *
- * The name falls back to the entry's label exactly as `/git/init` does it, and the two must agree: the
- * page draws the dropdown from the init answer, then re-reads this same list through `loadRepos`, so a
- * name the init route filled and this one left `null` would be wiped back to the last path component.
- */
-function repoStates(board: DispatchBoard, entries: Map<string, RepoEntry>): Record<string, GitRepoState> {
-	const state = stateFor(board);
-	const states: Record<string, GitRepoState> = {};
+/** The repository states the dropdown is drawn from. */
+function repoStates(board: DispatchBoard, entries: Map<string, RepoEntry>): Record<string, import("./libre.ts").GitRepoState> {
+	const stored = stateFor(board).repos;
+	const states: Record<string, import("./libre.ts").GitRepoState> = {};
 	for (const [path, entry] of entries) {
-		const held = state.repos[path];
-		states[path] = held ? { ...held, name: held.name ?? entry.label } : { ...DEFAULT_REPO_STATE, name: entry.label };
+		const held = stored[path];
+		if (held) states[path] = { ...held, displayName: held.displayName ?? entry.label };
+		else states[path] = { ...DEFAULT_REPO_STATE, displayName: entry.label };
 	}
 	return states;
 }
 
-/** The repository the dropdown opens on: the last one the human had open, or the board's own folder. */
 function lastActiveRepo(board: DispatchBoard, paths: Iterable<string>): string | null {
 	const known = [...paths];
 	const stored = stateFor(board).lastActiveRepo;
@@ -137,256 +74,296 @@ function lastActiveRepo(board: DispatchBoard, paths: Iterable<string>): string |
 	return known[0] ?? null;
 }
 
-// ---------- the request ----------
+function str(f: Record<string, unknown>, key: string, fallback = ""): string {
+	const v = f[key];
+	return typeof v === "string" ? v : fallback;
+}
+function bool(f: Record<string, unknown>, key: string, fallback = false): boolean {
+	return typeof f[key] === "boolean" ? f[key] as boolean : fallback;
+}
+function num(f: Record<string, unknown>, key: string, fallback = 0): number {
+	const v = f[key];
+	return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+function arr(f: Record<string, unknown>, key: string): string[] {
+	const v = f[key];
+	return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+function optArr(f: Record<string, unknown>, key: string): string[] | null {
+	const v = f[key];
+	if (v === null || v === undefined) return null;
+	if (!Array.isArray(v)) return null;
+	return v.filter((x): x is string => typeof x === "string");
+}
 
-/**
- * Everything one request earns. Always an array, because the page's protocol allows one command to
- * answer twice — a tag that was made and pushed answers for both — and a single-reply shape would have
- * to be widened the moment that arrives.
- */
+/** The one-line reason a view command gives the browser when git fails. */
+function viewStatus(answer: { ok: true; text: string; truncated: boolean; binary: boolean } | { ok: false; error: string }): { success: boolean } {
+	return { success: answer.ok };
+}
+
+/** Run one Libre request. Always an array; never throws. */
 export async function respond(board: DispatchBoard, raw: unknown): Promise<Reply[]> {
-	const parsed = parseRequest(raw);
-	if (!parsed.ok) return [{ command: parsed.command, error: parsed.error }];
+	const parsed = parseLibreRequest(raw);
+	if (!parsed.ok) {
+		const command = parsed.command || "repositoryStatus";
+		// Query commands need a typed error, action commands a status string.
+		const QUERY = new Set(["loadBranches", "loadCommits", "loadRepoInfo", "commitDetails", "commitComparison", "tagDetails", "uncommittedDetails", "searchCommits", "commitSignatures", "remoteTags", "branchPushDefaults", "worktreeStatus", "worktreeChanges", "resolveRef"]);
+		if (QUERY.has(command)) {
+			const fid = (raw as Record<string, unknown>)?.requestId ?? 0;
+			const frepo = (raw as Record<string, unknown>)?.repo ?? "";
+			const extra: Record<string, unknown> =
+				command === "commitDetails" || command === "commitComparison" ? { commitDetails: null }
+				: command === "tagDetails" ? { tagDetails: null }
+				: command === "uncommittedDetails" ? { changes: null }
+				: command === "searchCommits" ? { results: [] }
+				: command === "commitSignatures" ? { signatures: {} }
+				: command === "remoteTags" ? { tags: {}, unavailableRemotes: [] }
+				: command === "worktreeStatus" ? { statuses: {} }
+				: command === "worktreeChanges" ? { path: "", files: [], truncated: false }
+				: command === "loadBranches" ? { branches: [], head: null, hard: false, isRepo: false, worktrees: [], upstreams: {} }
+				: command === "loadCommits" ? { commits: [], head: null, moreCommitsAvailable: false, hard: false }
+				: command === "loadRepoInfo" ? { repoInfo: null }
+				: command === "resolveRef" ? { hash: null }
+				: command === "branchPushDefaults" ? { upstreamRemote: null, pushRemote: null }
+				: {};
+			return [{ command, requestId: fid, repo: frepo, ...extra, error: queryError(parsed.error) } as Reply];
+		}
+		return [{ command, status: parsed.error }];
+	}
 	const request = parsed.request;
 	try {
 		const repos = await reposFor(board);
 		const paths = [...repos.keys()];
-		const named = "repo" in request ? request.repo : null;
-		if (named !== null && !repos.has(named)) return [{ command: request.command, error: "That repository is no longer open in this tab." }];
-		// What the entry knows about the repository's tree decides whether an action may move it: `live` is the
-		// board's own answer to "is a thread working in there right now".
-		return await answer(board, request, paths, repos, named === null ? undefined : repos.get(named));
+		const named = request.repo;
+		const entry = named !== undefined ? repos.get(named) : undefined;
+		if (named !== undefined && !repos.has(named)) {
+			const QUERY = new Set(["loadCommits", "loadRepoInfo", "commitDetails", "commitComparison", "tagDetails", "uncommittedDetails", "searchCommits", "commitSignatures", "remoteTags", "branchPushDefaults", "worktreeStatus", "worktreeChanges", "resolveRef"]);
+			if (QUERY.has(request.command)) return [{ command: request.command, requestId: request.requestId ?? 0, repo: named, error: queryError("That repository is no longer open in this tab.") }];
+			return [{ command: request.command, status: "That repository is no longer open in this tab." }];
+		}
+		return await answer(board, request, paths, repos, entry);
 	} catch (error) {
-		// A read that escaped its own handling is still a page waiting for a reply, so it is answered
-		// with what went wrong rather than left to the route's catch, which would answer a 500.
-		return [{ command: request.command, error: (error as Error).message }];
+		const message = (error as Error).message;
+		const QUERY = new Set(["loadBranches", "loadCommits", "loadRepoInfo", "commitDetails", "commitComparison", "tagDetails", "uncommittedDetails", "searchCommits", "commitSignatures", "remoteTags", "branchPushDefaults", "worktreeStatus", "worktreeChanges", "resolveRef"]);
+		if (QUERY.has(request.command)) return [{ command: request.command, requestId: request.requestId ?? 0, repo: request.repo ?? "", error: queryError(message) }];
+		return [{ command: request.command, status: message }];
 	}
 }
 
-/** The command itself, once it is known to name a repository this board still has, and that entry. */
-async function answer(board: DispatchBoard, request: GitGraphRequest, paths: string[], repos: Map<string, RepoEntry>, entry?: RepoEntry): Promise<Reply[]> {
-	const unavailable = UNAVAILABLE[request.command];
-	if (unavailable !== undefined) return [{ command: request.command, error: unavailable }];
-	switch (request.command) {
-		case "loadRepos":
-			return [
-				{
-					command: "loadRepos",
-					repos: repoStates(board, repos),
-					lastActiveRepo: lastActiveRepo(board, paths),
-					loadViewTo: null,
-				},
-			];
-		case "loadRepoInfo": {
-			const info = await getRepoInfo(request.repo, {
-				showRemoteBranches: request.showRemoteBranches,
-				showStashes: request.showStashes,
-				hideRemotes: request.hideRemotes,
-			});
-			// The page stops asking for commits as soon as this says the folder is not a repository, so a
-			// failed read is checked against the one thing that makes it true: a repository whose stash
-			// list could not be read is still one, and its graph must load with the reason beside it.
-			let error = info.error;
-			let isRepo = true;
-			if (error !== null && (await readRepoRoot(request.repo)) === null) {
-				isRepo = false;
-				error = null;
-			}
-			// The page drops an answer whose refreshId is not the one it is waiting for, so the id it sent
-			// is echoed on every reply, failures included: a cached answer would draw an old graph.
-			return [{ command: "loadRepoInfo", refreshId: request.refreshId, ...info, error, isRepo }];
+async function answer(board: DispatchBoard, request: LibreRequest, paths: string[], repos: Map<string, RepoEntry>, entry?: RepoEntry): Promise<Reply[]> {
+	const f = request as Record<string, unknown>;
+	const command = request.command;
+	const unavailable = UNAVAILABLE[command];
+	if (unavailable !== undefined) {
+		// Queries still owe a typed shape so the view drops the answer; actions owe a status string.
+		const QUERY = new Set(["loadExtensionSettings"]);
+		if (QUERY.has(command)) return [{ command, requestId: request.requestId ?? 0, settings: [], status: unavailable }];
+		return [{ command, status: unavailable }];
+	}
+	switch (command) {
+		case "selectRepo": {
+			const repo = str(f, "repo");
+			if (repos.has(repo)) { stateFor(board).lastActiveRepo = repo; scheduleStateSave(board); }
+			return [];
 		}
-		case "loadCommits": {
-			const log = await getCommits(request.repo, {
-				maxCommits: request.maxCommits,
-				showTags: request.showTags,
-				showRemoteBranches: request.showRemoteBranches,
-				includeCommitsMentionedByReflogs: request.includeCommitsMentionedByReflogs,
-				onlyFollowFirstParent: request.onlyFollowFirstParent,
-				commitOrdering: request.commitOrdering,
-				branches: request.branches,
-				remotes: request.remotes,
-				hideRemotes: request.hideRemotes,
-				stashes: request.stashes,
-			});
-			if (!log.ok) {
-				return [{ command: "loadCommits", refreshId: request.refreshId, onlyFollowFirstParent: request.onlyFollowFirstParent, commits: [], head: null, tags: [], moreCommitsAvailable: false, error: log.error }];
-			}
-			return [
-				{
-					command: "loadCommits",
-					refreshId: request.refreshId,
-					onlyFollowFirstParent: request.onlyFollowFirstParent,
-					commits: log.value.commits,
-					head: log.value.head,
-					tags: log.value.tags,
-					moreCommitsAvailable: log.value.moreCommitsAvailable,
-					error: null,
-				},
-			];
+		case "loadRepos": {
+			return [{ command: "loadRepos", repos: repoStates(board, repos), lastActiveRepo: lastActiveRepo(board, paths), layout: { worktrees: {}, outside: [] } }];
 		}
-		case "loadConfig": {
-			const config = await getRepoConfig(request.repo, request.remotes);
-			return [{ command: "loadConfig", repo: request.repo, config: config.ok ? config.value : null, error: config.ok ? null : config.error }];
-		}
-		case "commitDetails": {
-			const result = request.stash !== null
-				? await getStashDetails(request.repo, request.stash.selector, request.stash.baseHash)
-				: request.commitHash === UNCOMMITTED
-					? await getUncommittedDetails(request.repo)
-					: await getCommitDetails(request.repo, request.commitHash, request.hasParents);
-			return [detailsReply(board, "commitDetails", request.repo, request.commitHash, request.refresh, result)];
-		}
-		case "compareCommits": {
-			const comparison = await getCommitComparison(request.repo, request.fromHash, request.toHash);
-			const id = `${request.commitHash}-${request.compareWithHash}`;
-			if (!comparison.ok) return [{ command: "compareCommits", error: comparison.error, commitHash: request.commitHash, compareWithHash: request.compareWithHash, fileChanges: [], codeReview: null, refresh: request.refresh }];
-			return [
-				{
-					command: "compareCommits",
-					error: null,
-					commitHash: request.commitHash,
-					compareWithHash: request.compareWithHash,
-					fileChanges: comparison.value,
-					codeReview: reviewFor(board, request.repo, id),
-					refresh: request.refresh,
-				},
-			];
-		}
-		case "tagDetails": {
-			const tag = await getTagDetails(request.repo, request.tagName);
-			if (!tag.ok) return [{ command: "tagDetails", error: tag.error }];
-			return [
-				{
-					command: "tagDetails",
-					error: null,
-					tagName: request.tagName,
-					tagHash: tag.value.tagHash,
-					commitHash: request.commitHash,
-					name: tag.value.name,
-					email: tag.value.email,
-					date: tag.value.date,
-					message: tag.value.message,
-				},
-			];
-		}
-		case "viewDiff":
-			return [
-				viewed(
-					"viewDiff",
-					await viewDiff(request.repo, request.fromHash, request.toHash, request.oldFilePath, request.newFilePath, request.type),
-				),
-			];
-		case "viewDiffWithWorkingFile":
-			return [viewed("viewDiffWithWorkingFile", await viewDiffWithWorkingFile(request.repo, request.hash, request.filePath))];
-		case "viewFileAtRevision":
-			return [viewed("viewFileAtRevision", await viewFileAtRevision(request.repo, request.hash, request.filePath))];
-		case "openFile":
-			return [viewed("openFile", await openFile(request.repo, request.hash, request.filePath))];
-		case "copyToClipboard":
-		case "copyFilePath":
-		case "openExternalUrl":
-			// The page does these itself: the clipboard and a new tab belong to the browser that is
-			// already showing the text, and a daemon has no clipboard to put it on.
-			return [{ command: request.command, error: null }];
-		case "addTag":
-		case "cherrypickCommit":
-		case "createBranch":
-			// The page's commands that report every step they ran, because they run more than one.
-			return [{ command: request.command, errors: (await runAction(request.repo, request, entry)).errors }];
-		case "pushBranch":
-			// The push reports every remote it ran, and echoes the flag the bundle asked with.
-			return [{ command: "pushBranch", willUpdateBranchConfig: request.willUpdateBranchConfig, errors: (await runAction(request.repo, request, entry)).errors }];
-		case "checkoutBranch": {
-			// The page words its own failure report from this field ("… & Pull Changes"), so the pull it asked
-			// for is echoed whether or not the checkout worked.
-			const errors = (await runAction(request.repo, request, entry)).errors;
-			return [{ command: "checkoutBranch", pullAfterwards: request.pullAfterwards, errors }];
-		}
-		case "deleteBranch": {
-			const errors = (await runAction(request.repo, request, entry)).errors;
-			// The bundle asks again with `forceDelete` when it sees git's own "run 'git branch -D'" hint, and
-			// it sends these three fields back with that question, so they are answered exactly as asked.
-			return [{ command: "deleteBranch", repo: request.repo, branchName: request.branchName, deleteOnRemotes: request.deleteOnRemotes ?? [], errors }];
-		}
-		case "merge":
-			return [{ command: "merge", actionOn: request.actionOn, error: firstError((await runAction(request.repo, request, entry)).errors) }];
-		case "rebase":
-			// `interactive` is echoed because the page keeps its "action running" notice up until it reads it.
-			return [{ command: "rebase", actionOn: request.actionOn, interactive: request.interactive, error: firstError((await runAction(request.repo, request, entry)).errors) }];
-		case "applyStash":
-		case "branchFromStash":
-		case "checkoutCommit":
-		case "cleanUntrackedFiles":
-		case "deleteTag":
-		case "dropCommit":
-		case "dropStash":
-		case "fetch":
-		case "popStash":
-		case "pruneRemote":
-		case "pullBranch":
-		case "pushStash":
-		case "renameBranch":
-		case "resetToCommit":
-		case "revertCommit":
-			// The page's commands that report one failure, in one sentence.
-			return [{ command: request.command, error: firstError((await runAction(request.repo, request, entry)).errors) }];
-		case "setRepoState": {
-			const state = stateFor(board);
-			state.repos[request.repo] = request.state;
-			// The page saves a repository's arrangement when it switches away from it, so the repository
-			// it just saved is the one it was looking at.
-			state.lastActiveRepo = request.repo;
-			scheduleStateSave(board);
-			return [{ command: "setRepoState", error: null }];
-		}
-		case "setGlobalViewState": {
-			stateFor(board).globalViewState = request.state;
-			scheduleStateSave(board);
-			return [{ command: "setGlobalViewState", error: null }];
-		}
-		case "setWorkspaceViewState": {
-			stateFor(board).workspaceViewState = request.state;
-			scheduleStateSave(board);
-			return [{ command: "setWorkspaceViewState", error: null }];
-		}
-		case "startCodeReview": {
-			const review: GitCodeReview = {
-				id: request.id,
-				lastActive: Date.now(),
-				lastViewedFile: request.lastViewedFile,
-				remainingFiles: request.files,
-			};
-			const state = stateFor(board);
-			state.codeReviews[request.repo] = { ...state.codeReviews[request.repo], [request.id]: review };
-			scheduleStateSave(board);
-			return [{ command: "startCodeReview", error: null, commitHash: request.commitHash, compareWithHash: request.compareWithHash, codeReview: review }];
-		}
-		case "updateCodeReview": {
-			const held = reviewFor(board, request.repo, request.id);
-			// A review the state file has pruned is one the human is not coming back to: answering that it
-			// is gone is better than writing half of one back.
-			if (held === null) return [{ command: "updateCodeReview", error: "that code review is no longer kept" }];
-			held.remainingFiles = request.remainingFiles;
-			held.lastViewedFile = request.lastViewedFile;
-			held.lastActive = Date.now();
-			scheduleStateSave(board);
-			return [{ command: "updateCodeReview", error: null }];
-		}
-		case "endCodeReview": {
-			const reviews = stateFor(board).codeReviews[request.repo];
-			if (reviews && request.id in reviews) {
-				delete reviews[request.id];
-				// A repository whose last review just ended has nothing left to remember about reviews, and
-				// an empty record in the state file is a file that grows a line per repository ever seen.
-				if (Object.keys(reviews).length === 0) delete stateFor(board).codeReviews[request.repo];
+		case "saveRepoState": {
+			const repo = str(f, "repo");
+			const state = f.state;
+			if (repos.has(repo) && state && typeof state === "object" && !Array.isArray(state)) {
+				stateFor(board).repos[repo] = state as import("./libre.ts").GitRepoState;
+				stateFor(board).lastActiveRepo = repo;
 				scheduleStateSave(board);
 			}
-			return [{ command: "endCodeReview", error: null }];
+			return [];
 		}
-		default:
-			// A command `parseRequest` knows and this switch does not is a wiring mistake, and the page is
-			// told so in the same words as a command this tab has no way to run.
-			return [{ command: (request as { command: string }).command, error: NOT_YET }];
+		case "loadRepoInfo": {
+			const repo = str(f, "repo");
+			const showStashes = bool(f, "showStashes", true);
+			const info = await libreRepoInfo(repo, showStashes);
+			return [{ command: "loadRepoInfo", requestId: request.requestId ?? 0, repoInfo: info, error: null }];
+		}
+		case "loadBranches": {
+			const repo = lastActiveRepo(board, paths) ?? "";
+			// Libre's loadBranches names no repo: it asks about the selected one. Use last active, falling back to first.
+			const active = stateFor(board).lastActiveRepo && repos.has(stateFor(board).lastActiveRepo as string) ? stateFor(board).lastActiveRepo as string : repo;
+			if (!active) return [{ command: "loadBranches", requestId: request.requestId ?? 0, branches: [], head: null, hard: bool(f, "hard"), isRepo: false, error: queryError("no repository"), worktrees: [], upstreams: {} }];
+			const showRemote = bool(f, "showRemoteBranches", true);
+			const hidden = arr(f, "hiddenRemotes");
+			const out = await libreBranches(active, showRemote, hidden);
+			return [{ command: "loadBranches", requestId: request.requestId ?? 0, branches: out.branches, head: out.head, hard: bool(f, "hard"), isRepo: out.isRepo, error: out.isRepo ? null : queryError("not a repository"), worktrees: out.worktrees, upstreams: out.upstreams }];
+		}
+		case "loadCommits": {
+			const repo = str(f, "repo");
+			const branchName = str(f, "branchName");
+			const maxCommits = num(f, "maxCommits", 250);
+			const showRemote = bool(f, "showRemoteBranches", true);
+			const hidden = arr(f, "hiddenRemotes");
+			const showTags = bool(f, "showTags", true);
+			const includeReflog = bool(f, "includeReflog", false);
+			const includeUnreachable = bool(f, "includeUnreachableCommits", false);
+			const onlyFirst = bool(f, "onlyFollowFirstParent", false);
+			const ordering = (f.commitOrdering === "date" || f.commitOrdering === "author-date" || f.commitOrdering === "topo") ? f.commitOrdering : "date";
+			const showStashes = typeof f.showStashes === "boolean" ? f.showStashes as boolean : true;
+			const branches = optArr(f, "branches");
+			const authors = optArr(f, "authors");
+			const tags = optArr(f, "tags");
+			const out = await libreCommits(repo, { maxCommits, branches, branchName, authors, tags, showRemoteBranches: showRemote, hiddenRemotes: hidden, showTags, includeReflog, includeUnreachable, onlyFollowFirstParent: onlyFirst, commitOrdering: ordering, showStashes });
+			if (out.error !== null) return [{ command: "loadCommits", requestId: request.requestId ?? 0, commits: [], head: null, moreCommitsAvailable: false, hard: bool(f, "hard"), error: queryError(out.error) }];
+			return [{ command: "loadCommits", requestId: request.requestId ?? 0, commits: out.commits, head: out.head, moreCommitsAvailable: out.more, hard: bool(f, "hard"), error: null }];
+		}
+		case "commitDetails": {
+			const repo = str(f, "repo");
+			const hash = str(f, "commitHash");
+			const out = await libreCommitDetails(repo, hash);
+			return [{ command: "commitDetails", commitDetails: out.details, error: out.error }];
+		}
+		case "commitComparison": {
+			const repo = str(f, "repo");
+			const baseRef = str(f, "baseRef", "HEAD");
+			const compareRef = str(f, "compareRef", "HEAD");
+			const from = baseRef === "*" ? UNCOMMITTED : baseRef;
+			const to = compareRef === "*" ? UNCOMMITTED : compareRef;
+			const files = await getCommitComparison(repo, from, to);
+			if (!files.ok) return [{ command: "commitComparison", commitDetails: null, error: queryError(files.error) }];
+			// Build a details object like commitDetails but for the comparison diff.
+			const meta = await libreCommitDetails(repo, str(f, "commitHash"));
+			const fileChanges = files.value.map((c) => c.type === "U" ? { oldFilePath: c.oldFilePath, newFilePath: c.newFilePath, type: "A" as const, additions: c.additions, deletions: c.deletions, untracked: true as const } : { oldFilePath: c.oldFilePath, newFilePath: c.newFilePath, type: (c.type === "C" ? "T" : c.type) as "A" | "M" | "D" | "R" | "T", additions: c.additions, deletions: c.deletions });
+			const base = meta.details ?? { hash: to, parents: [], author: "", email: "", authorDate: 0, committer: "", committerEmail: "", committerDate: 0, body: "", fileChanges: [] };
+			return [{ command: "commitComparison", commitDetails: { ...base, fileChanges }, error: null }];
+		}
+		case "tagDetails": {
+			const repo = str(f, "repo");
+			const out = await libreTagDetails(repo, str(f, "tagName"));
+			return [{ command: "tagDetails", tagName: str(f, "tagName"), tagDetails: out.details, error: out.error }];
+		}
+		case "uncommittedDetails": {
+			const repo = str(f, "repo");
+			const out = await libreUncommitted(repo);
+			return [{ command: "uncommittedDetails", changes: out.changes, error: out.error }];
+		}
+		case "searchCommits": {
+			const repo = str(f, "repo");
+			const out = await libreSearch(repo, str(f, "query"), num(f, "maxResults", 50), {
+				showRemoteBranches: bool(f, "showRemoteBranches", true),
+				hiddenRemotes: arr(f, "hiddenRemotes"),
+				showTags: bool(f, "showTags", true),
+				branches: optArr(f, "branches"),
+				authors: optArr(f, "authors"),
+				tags: optArr(f, "tags"),
+			});
+			return [{ command: "searchCommits", requestId: request.requestId ?? 0, results: out.results, error: out.error }];
+		}
+		case "commitSignatures": {
+			const hashes = arr(f, "hashes");
+			const signatures: Record<string, null> = {};
+			for (const h of hashes) signatures[h] = null;
+			return [{ command: "commitSignatures", requestId: request.requestId ?? 0, repo: str(f, "repo"), signatures, error: null }];
+		}
+		case "remoteTags": {
+			const out = await libreRemoteTags(str(f, "repo"));
+			return [{ command: "remoteTags", requestId: request.requestId ?? 0, repo: str(f, "repo"), tags: out.tags, unavailableRemotes: out.unavailable, error: out.error }];
+		}
+		case "branchPushDefaults": {
+			const out = await librePushDefaults(str(f, "repo"), str(f, "branch"));
+			return [{ command: "branchPushDefaults", requestId: request.requestId ?? 0, upstreamRemote: out.upstreamRemote, pushRemote: out.pushRemote, error: out.error }];
+		}
+		case "worktreeStatus": {
+			const out = await libreWorktreeStatus(str(f, "repo"), arr(f, "paths"));
+			return [{ command: "worktreeStatus", requestId: request.requestId ?? 0, repo: str(f, "repo"), statuses: out }];
+		}
+		case "worktreeChanges": {
+			const out = await libreWorktreeChanges(str(f, "repo"), str(f, "path"));
+			return [{ command: "worktreeChanges", requestId: request.requestId ?? 0, path: out.path, files: out.files, truncated: out.truncated, error: out.error }];
+		}
+		case "resolveRef": {
+			const out = await libreResolveRef(str(f, "repo"), str(f, "ref"));
+			return [{ command: "resolveRef", requestId: request.requestId ?? 0, hash: out.hash, error: out.error }];
+		}
+		case "repositoryStatus": {
+			const roots = paths;
+			return [{ command: "repositoryStatus", startup: { searchDepth: 0, roots, repositories: roots.map((p) => ({ path: p, state: "ready" as const, repository: true, detectedBy: "git" as const, detail: null })), components: { git: { state: "ok" as const, path: "git", version: "git" }, engine: { state: "off" as const }, graphLoad: null }, error: null } }];
+		}
+		case "componentStatus": {
+			return [{ command: "componentStatus", components: { git: { state: "ok" as const, path: "git", version: "git" }, engine: { state: "off" as const }, graphLoad: null } }];
+		}
+		case "copyToClipboard":
+		case "openExternalUrl": {
+			return [{ command, success: true }];
+		}
+		case "viewDiff":
+		case "openDiffTab":
+		case "viewFileAtRevision":
+		case "compareFileWithWorkingTree":
+		case "openFile": {
+			// This tab has no second editor: answer success and draw the text via the view reply the host intercepts.
+			// For openDiffTab we draw the same diff as viewDiff.
+			const repo = str(f, "repo");
+			const commitHash = str(f, "commitHash");
+			const filePath = str(f, "filePath", str(f, "newFilePath"));
+			const oldRef = str(f, "oldRef", commitHash);
+			const newRef = str(f, "newRef", commitHash);
+			const type = str(f, "type", "M");
+			let answerView;
+			if (command === "viewFileAtRevision") {
+				answerView = await viewFileAtRevision(repo, commitHash || UNCOMMITTED, filePath);
+			} else if (command === "compareFileWithWorkingTree") {
+				answerView = await viewDiffWithWorkingFile(repo, commitHash || UNCOMMITTED, filePath);
+			} else if (command === "openFile") {
+				answerView = await openFile(repo, UNCOMMITTED, filePath);
+			} else {
+				// viewDiff / openDiffTab
+				const oldPath = str(f, "oldFilePath", filePath);
+				const newPath = str(f, "newFilePath", filePath);
+				// Libre sends oldRef/newRef or falls back to commitHash
+				const from = oldRef === "*" ? UNCOMMITTED : oldRef;
+				const to = newRef === "*" ? UNCOMMITTED : newRef;
+				const { viewDiff } = await import("./view.ts");
+				answerView = await viewDiff(repo, from === to ? commitHash : from, to, oldPath, newPath, type as "A" | "C" | "D" | "M" | "R" | "U");
+			}
+			if ("view" in answerView) {
+				return [{ command, success: true, view: answerView.view } as Reply];
+			}
+			return [{ command, success: false } as Reply];
+		}
+		case "setTemporaryLanguage":
+			return [];
+		case "showTelemetryConsent":
+			return [];
+		case "trustRepository":
+		case "openGitSettings":
+		case "showOutput":
+		case "openLogFile":
+		case "copyDiagnostics":
+		case "copyRecentLog":
+		case "setRepoSearchDepth":
+		case "failureScreenShown":
+			return [];
+		case "exportRepoConfig": {
+			const repo = str(f, "repo");
+			const cfg = await getRepoConfig(repo, []);
+			return [{ command: "exportRepoConfig", status: cfg.ok ? null : cfg.error }];
+		}
+		default: {
+			// Action commands: answer a single status string.
+			const ACTION = new Set([
+				"addRemote", "addTag", "applyStash", "branchFromStash", "checkoutBranch", "checkoutAndFastForward", "checkoutCommit",
+				"cherrypickCommit", "cleanUntrackedFiles", "createBranch", "deleteBranch", "deleteRemote", "deleteRemoteBranch",
+				"deleteTag", "dropCommit", "dropCommitSelection", "dropStash", "editHeadCommitMessage", "editRemote", "fetchIntoLocalBranch",
+				"fetchRemotes", "fetchTags", "mergeBranch", "mergeCommit", "popStash", "pruneRemote", "pullBranch", "pushAllTags", "pushBranch",
+				"pushStash", "pushTag", "renameBranch", "resetFileToRevision", "resetToCommit", "resetUncommittedChanges", "rebaseCurrentBranch",
+				"squashCommitSelection", "stageFiles", "undoLastCommit", "unstageFiles", "updateBranchFromUpstream", "revertCommit",
+				"addWorktree", "lockWorktree", "moveWorktree", "pruneWorktrees", "removeWorktree", "repairWorktree", "unlockWorktree",
+				"createArchive", "createPullRequest",
+			]);
+			if (ACTION.has(command)) {
+				const repo = str(f, "repo");
+				const status = await runLibreAction(repo, request, entry);
+				return [{ command, status }];
+			}
+			return [{ command, status: NOT_YET }];
+		}
 	}
 }

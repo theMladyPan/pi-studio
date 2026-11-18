@@ -45,4 +45,4 @@ export type ThreadCard = {
 };
 
 /** What the Git Graph page is handed before it draws anything, beside the settings it draws itself from. */
-export type { GitGraphInitPayload } from "./git/gitgraph/protocol.ts";
+export type { GitGraphInitPayload } from "./git/gitgraph/libre.ts";

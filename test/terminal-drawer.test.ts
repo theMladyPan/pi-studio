@@ -1,0 +1,228 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+/**
+ * The terminal drawer's bar, without a browser.
+ *
+ * `public/client/terminal-drawer.js` reads six elements of the board's page and one listener on
+ * `window`, so a stand-in carrying exactly that much answers it. The terminal library is absent
+ * here, so opening the drawer stops at "the terminal library did not load" and never touches a
+ * socket — which is what this covers: the bar's name, the roll up and down, and the no-folder
+ * board that says so instead of connecting.
+ */
+
+/** One element as far as the drawer touches it: its text, its classes, its attributes and its listeners. */
+class FakeElement {
+	textContent = "";
+	title = "";
+	hidden = false;
+	disabled = false;
+	inert = true;
+	className = "";
+	children: FakeElement[] = [];
+	attributes = new Map<string, string>();
+	classes = new Set<string>();
+	listeners: Array<{ type: string; fn: () => void }> = [];
+
+	classList = {
+		toggle: (name: string, on: boolean) => (on ? this.classes.add(name) : this.classes.delete(name)),
+		contains: (name: string) => this.classes.has(name),
+	};
+
+	setAttribute(name: string, value: string) {
+		this.attributes.set(name, value);
+	}
+
+	getAttribute(name: string) {
+		return this.attributes.get(name) ?? null;
+	}
+
+	addEventListener(type: string, fn: () => void) {
+		this.listeners.push({ type, fn });
+	}
+
+	append(child: FakeElement) {
+		this.children.push(child);
+	}
+
+	focus() {}
+
+	get parentElement() {
+		return new FakeElement();
+	}
+}
+
+type Page = { elements: Map<string, FakeElement>; body: FakeElement };
+
+/** The board's page, as much of it as the drawer looks at. */
+function standInPage(): Page {
+	const ids = ["termDrawer", "termHost", "termBtn", "tdClose", "tdStatus", "tdWorkspace"];
+	const elements = new Map(ids.map((id) => [id, new FakeElement()]));
+	const body = new FakeElement();
+	Object.assign(globalThis, {
+		document: {
+			body,
+			activeElement: null,
+			getElementById: (id: string) => elements.get(id) ?? null,
+			createElement: () => new FakeElement(),
+		},
+		// The drawer asks whether what had the focus is an `Element`, so the name has to exist.
+		Element: FakeElement,
+		window: { addEventListener: () => {} },
+		location: { protocol: "http:", host: "127.0.0.1" },
+	});
+	return { elements, body };
+}
+
+/** The module, loaded once with the stand-in page already in place. */
+async function drawerFor(workspace: string) {
+	const module = (await import(new URL("../public/client/terminal-drawer.js", import.meta.url).href)) as {
+		createTerminalDrawer: (init: { workspace: string; typingSomewhere: () => boolean }) => {
+			isOpen: () => boolean;
+			toggle: () => void;
+			open: () => void;
+			close: () => void;
+			setName: (name?: string) => void;
+		};
+	};
+	return module.createTerminalDrawer({ workspace, typingSomewhere: () => false });
+}
+
+test("the bar says the workspace id until it is told the name", async () => {
+	const { elements } = standInPage();
+	const label = elements.get("tdWorkspace")!;
+	const drawer = await drawerFor("b08b6688eaf9");
+	assert.equal(label.textContent, "· b08b6688eaf9");
+	drawer.setName("pi-studio");
+	assert.equal(label.textContent, "· pi-studio");
+	// A board that has heard no name yet keeps the id rather than dropping it for an empty bar.
+	drawer.setName();
+	assert.equal(label.textContent, "· b08b6688eaf9");
+});
+
+test("one press rolls the drawer up and the next rolls it down", async () => {
+	const { elements, body } = standInPage();
+	const btn = elements.get("termBtn")!;
+	const drawer = await drawerFor("b08b6688eaf9");
+	assert.equal(drawer.isOpen(), false);
+	drawer.toggle();
+	assert.equal(drawer.isOpen(), true, "one press rolls the drawer up");
+	assert.equal(body.classList.contains("term-open"), true, "the body class is the animation");
+	assert.equal(btn.getAttribute("aria-expanded"), "true");
+	assert.match(btn.title, /\(x\)/, "the button names the key it answers");
+	drawer.toggle();
+	assert.equal(drawer.isOpen(), false, "and the next rolls it down");
+	assert.equal(body.classList.contains("term-open"), false);
+	assert.equal(btn.getAttribute("aria-expanded"), "false");
+});
+
+test("a board with no folder says so instead of opening a terminal", async () => {
+	const { elements } = standInPage();
+	const host = elements.get("termHost")!;
+	const drawer = await drawerFor("");
+	assert.equal(host.children.length, 1, "the note stands where the terminal would");
+	assert.match(host.children[0].textContent, /no folder/);
+	// Opening it still rolls the panel up and down without connecting anywhere.
+	drawer.open();
+	assert.equal(drawer.isOpen(), true);
+	drawer.close();
+	assert.equal(drawer.isOpen(), false);
+});
+
+/** The vendored terminal library and the socket, as the drawer touches them. */
+class FakeTerminal {
+	readonly opts: Record<string, unknown>;
+	cols = 100;
+	rows = 30;
+	focused = false;
+	resetCount = 0;
+	opened = false;
+
+	constructor(opts: Record<string, unknown>) {
+		this.opts = opts;
+	}
+
+	loadAddon(_addon: unknown) {}
+	open(_host: unknown) {
+		this.opened = true;
+	}
+	onData(_fn: (data: string) => void) {}
+	write(_data: string) {}
+	focus() {
+		this.focused = true;
+	}
+	reset() {
+		this.resetCount++;
+	}
+}
+
+class FakeFit {
+	fit() {}
+}
+
+class FakeWebSocket {
+	static OPEN = 1;
+	static instances: FakeWebSocket[] = [];
+	readyState = FakeWebSocket.OPEN;
+	sent: string[] = [];
+	listeners = new Map<string, Array<(event: unknown) => void>>();
+	url: string;
+
+	constructor(url: string) {
+		this.url = url;
+		FakeWebSocket.instances.push(this);
+	}
+
+	addEventListener(type: string, fn: (event: unknown) => void) {
+		const held = this.listeners.get(type) ?? [];
+		held.push(fn);
+		this.listeners.set(type, held);
+	}
+
+	fire(type: string, event: unknown = {}) {
+		for (const fn of this.listeners.get(type) ?? []) fn(event);
+	}
+
+	send(data: string) {
+		this.sent.push(data);
+	}
+
+	close() {
+		this.readyState = 3;
+		this.fire("close");
+	}
+}
+
+test("a shell that ends rolls the drawer down, and the next roll up opens a new socket", async () => {
+	const { elements, body } = standInPage();
+	FakeWebSocket.instances = [];
+	Object.assign(globalThis, {
+		Terminal: FakeTerminal,
+		FitAddon: { FitAddon: FakeFit },
+		WebSocket: FakeWebSocket,
+	});
+	try {
+		const drawer = await drawerFor("b08b6688eaf9");
+		drawer.open();
+		assert.equal(drawer.isOpen(), true);
+		assert.equal(FakeWebSocket.instances.length, 1, "the first roll up connects");
+		const socket = FakeWebSocket.instances[0];
+		socket.fire("open");
+
+		// Ctrl+D ends the shell: the daemon says the shell exited.
+		socket.fire("message", { data: JSON.stringify({ type: "exit", code: 0 }) });
+		assert.equal(drawer.isOpen(), false, "the drawer rolls down on the shell's end");
+		assert.equal(body.classList.contains("term-open"), false);
+		assert.equal(socket.readyState, 3, "the dead socket closes with it");
+
+		// The next roll up connects again — a fresh shell, not the dead one.
+		drawer.open();
+		assert.equal(drawer.isOpen(), true);
+		assert.equal(FakeWebSocket.instances.length, 2, "the second roll up connects anew");
+		assert.notEqual(FakeWebSocket.instances[1], socket);
+	} finally {
+		delete (globalThis as Record<string, unknown>).Terminal;
+		delete (globalThis as Record<string, unknown>).FitAddon;
+		delete (globalThis as Record<string, unknown>).WebSocket;
+	}
+});

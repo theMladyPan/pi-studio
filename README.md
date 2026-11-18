@@ -213,9 +213,15 @@ commits on them.
 
 **The whole graph is a drawer away.** In a repository, `g` on the board rolls that repository down over
 it as the full graph: every branch, every commit, the commit details pane and the diff, where the corner
-strip summarises. What draws it is `mhutchie/vscode-git-graph` 1.30.x, the extension's own webview,
-loaded from the copy already installed in your VS Code, because its licence allows using it and forbids
-shipping it or a derivative. `PI_STUDIO_GITGRAPH_DIR` points the daemon at a copy somewhere else.
+strip summarises. What draws it is [Git Graph Libre](https://github.com/PlohnenSoftware/git-graph-libre)
+(PlohnenSoftware, AGPL-3.0-or-later), the extension's own webview, loaded from the copy already installed
+in your VS Code and never shipped from here. `PI_STUDIO_GITGRAPH_DIR` points the daemon at a copy somewhere
+else. When the drawing is missing the drawer says so in a sentence on the page, rather than staying blank,
+and the rest of the board keeps working.
+
+Git Graph Libre descends from [Git Graph](https://github.com/mhutchie/vscode-git-graph) by Michael
+Hutchison, which pi-studio used earlier. The full provenance, the MIT lineage and the contributors of
+Libre are recorded in their `NOTICE.md` and `LICENSE` files; this paragraph is a thank-you, not a licence.
 
 **A boss thread** spawns children instead of working. It decides what the work needs — on `auto` the
 steps are its own, and a flow a human pinned is a recipe it follows — and gives each child one role;

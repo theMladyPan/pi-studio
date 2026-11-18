@@ -1,14 +1,15 @@
 /**
- * The settings the Git Graph view is opened with, written out here rather than read from a settings
- * file, because this app has one place to look and a human with a broken JSON should still get a view.
+ * The settings the Git Graph Libre view is opened with, written out here rather than read from a
+ * settings file, because this app has one place to look and a human with a broken JSON should still
+ * get a view.
  *
  * Two things in here are deliberately unlike the extension this page came from. An action is offered
- * only once the daemon has the command behind it: the page draws its menus from these flags, and a menu
- * entry that answers "cannot do that yet" is worse than no entry at all. And `fetchAvatars` is false,
- * because an avatar is a request to GitHub or Gravatar made on behalf of a human who only asked to see
- * their own repository.
+ * only once the daemon has the command behind it: the page draws its menus from these flags, and a
+ * menu entry that answers "cannot do that yet" is worse than no entry at all. And `fetchAvatars` is
+ * false, because an avatar is a request to GitHub or Gravatar made on behalf of a human who only
+ * asked to see their own repository.
  */
-import type { ContextMenuActionsVisibility, DialogDefaultsConfig, GitGraphViewConfig } from "./protocol.ts";
+import type { ContextMenuActionsVisibility, GitGraphViewState } from "./libre.ts";
 
 // ---------- reading git ----------
 
@@ -51,9 +52,8 @@ export const DEFAULT_READ_FLAGS: GitReadFlags = {
 
 /**
  * The branch colours, in the order lanes are given them. Twelve hues that stay apart at 16 pixels and
- * that all carry enough contrast to read on the view's `#0d1117`, because a lane nobody can tell from
- * its neighbour is a graph nobody can read. Neighbouring entries differ in hue first and lightness
- * second, so the two lanes a human compares most often are never the two that look alike.
+ * that all carry enough contrast to read on the view's dark background, because a lane nobody can
+ * tell from its neighbour is a graph nobody can read.
  */
 export const BRANCH_COLOURS = [
 	"#58a6ff",
@@ -77,9 +77,12 @@ export const BRANCH_COLOURS = [
  *
  * A false here is a menu entry the page does not draw, and a true is one it draws and sends. So this
  * table and the dispatch's table of refused commands are one decision written twice: a command that
- * `dispatch.ts` still answers with "This tab cannot do that yet." is false here, and a command that has
- * a real handler is true. `test/gitgraph-actions.test.ts` walks both and fails when they disagree, which
- * is what keeps a menu entry from being offered and then refused.
+ * `dispatch.ts` still answers with "This tab cannot do that yet." is false here, and a command that
+ * has a real handler is true. `test/gitgraph-actions.test.ts` walks both and fails when they disagree.
+ *
+ * Worktree, remote-admin and editor-bound actions stay hidden: the drawer has no terminal, no
+ * source-control panel, and no second window to open a worktree in, so offering them would only
+ * strand a click. They remain answerable from a stale page with the same refused sentence.
  */
 export const ENABLED_CONTEXT_ACTIONS: ContextMenuActionsVisibility = {
 	branch: {
@@ -89,37 +92,59 @@ export const ENABLED_CONTEXT_ACTIONS: ContextMenuActionsVisibility = {
 		merge: true,
 		rebase: true,
 		push: true,
+		pull: true,
+		viewIssue: false,
 		createPullRequest: false,
 		createArchive: false,
-		selectInBranchesDropdown: true,
-		unselectInBranchesDropdown: true,
+		createWorktree: false,
+		compareWithHead: true,
+		compareWith: true,
 		copyName: true,
 	},
 	commit: {
 		addTag: true,
 		createBranch: true,
+		createWorktree: false,
+		compareWithHead: true,
+		compareWith: true,
+		compareSelection: true,
+		compareWithWorkingTree: true,
 		checkout: true,
-		cherrypick: true,
+		cherryPick: true,
 		revert: true,
+		undoLastCommit: true,
+		editMessage: false,
 		drop: true,
 		merge: true,
 		rebase: true,
 		reset: true,
 		copyHash: true,
 		copySubject: true,
+		squashSelection: false,
+		dropSelection: false,
+	},
+	commitDetailsViewFile: {
+		viewDiff: true,
+		openDiffTab: false,
+		viewFileAtRevision: true,
+		compareWithWorkingTree: true,
+		openFile: true,
+		resetFileToRevision: true,
+		copyAbsoluteFilePath: true,
+		copyRelativeFilePath: true,
 	},
 	remoteBranch: {
 		checkout: true,
-		// Deleting a remote branch and fetching one into a local branch are remote writes whose commands are
-		// still refused; the menu entry would be a click that goes nowhere.
-		delete: false,
-		fetch: false,
+		delete: true,
 		merge: true,
+		fetchIntoLocalBranch: true,
 		pull: true,
+		viewIssue: false,
 		createPullRequest: false,
 		createArchive: false,
-		selectInBranchesDropdown: true,
-		unselectInBranchesDropdown: true,
+		createWorktree: false,
+		compareWithHead: true,
+		compareWith: true,
 		copyName: true,
 	},
 	stash: {
@@ -133,9 +158,12 @@ export const ENABLED_CONTEXT_ACTIONS: ContextMenuActionsVisibility = {
 	tag: {
 		viewDetails: true,
 		delete: true,
-		// Pushing a tag on its own is a remote write with no handler yet; adding one may push it already.
-		push: false,
+		push: true,
+		fetchTags: true,
 		createArchive: false,
+		createWorktree: false,
+		compareWithHead: true,
+		compareWith: true,
 		copyName: true,
 	},
 	uncommittedChanges: {
@@ -144,92 +172,85 @@ export const ENABLED_CONTEXT_ACTIONS: ContextMenuActionsVisibility = {
 		clean: true,
 		openSourceControlView: false,
 	},
-	fileView: {
-		viewIssue: false,
-		viewDiff: true,
-		viewFileAtThisRevision: true,
-		viewDiffWithWorkingFile: true,
-		openFile: true,
-		markAsReviewed: true,
-		markAsNotReviewed: true,
-		copyAbsoluteFilePath: true,
-		copyRelativeFilePath: true,
-	},
 };
 
 // ---------- the defaults ----------
 
-/** What every dialog opens with, which is what the page's own defaults are. */
-const DIALOG_DEFAULTS: DialogDefaultsConfig = {
-	addTag: { pushToRemote: false, type: 0 },
-	applyStash: { reinstateIndex: false },
-	cherryPick: { noCommit: false, recordOrigin: false },
-	createBranch: { checkout: false },
-	deleteBranch: { forceDelete: false },
-	fetchIntoLocalBranch: { forceFetch: false },
-	fetchRemote: { prune: false, pruneTags: false },
-	general: { referenceInputSpaceSubstitution: null },
-	merge: { noCommit: false, noFastForward: true, squash: false },
-	popStash: { reinstateIndex: false },
-	pullBranch: { noFastForward: false, squash: false },
-	rebase: { ignoreDate: true, interactive: false },
-	resetCommit: { mode: "mixed" },
-	resetUncommitted: { mode: "mixed" },
-	stashUncommittedChanges: { includeUntracked: true },
-};
-
 /**
- * Everything the page is handed when it opens, which is the whole of its settings.
+ * Everything the page is handed when it opens.
  *
- * `initialLoadCommits` is the one number a large repository feels: 300 rows is a graph a human can
+ * `initialLoadCommits` is the one number a large repository feels: 250 rows is a graph a human can
  * scroll to the end of before deciding to load more.
  */
-export const DEFAULT_CONFIG: GitGraphViewConfig = {
-	commitDetailsView: { autoCenter: false, fileTreeCompactFolders: true, fileViewType: 1, location: 0 },
-	commitOrdering: "date",
+export const DEFAULT_VIEW_STATE: Omit<GitGraphViewState, "repos" | "lastActiveRepo" | "repoLayout"> & { repos: GitGraphViewState["repos"]; lastActiveRepo: GitGraphViewState["lastActiveRepo"] } = {
+	repos: {},
+	lastActiveRepo: null,
+	autoCenterCommitDetailsView: true,
+	commitDetailsCompactFolders: false,
+	commitDetailsFileViewMode: "tree",
+	uncommittedFileViewMode: "tree",
 	contextMenuActionsVisibility: ENABLED_CONTEXT_ACTIONS,
-	customBranchGlobPatterns: [],
-	customEmojiShortcodeMappings: [],
-	customPullRequestProviders: [],
-	dateFormat: { type: 0, iso: false },
-	defaultColumnVisibility: { author: true, commit: true, date: true },
-	dialogDefaults: DIALOG_DEFAULTS,
-	enhancedAccessibility: false,
-	fetchAndPrune: false,
-	fetchAndPruneTags: false,
+	dateFormat: "Date & Time",
 	fetchAvatars: false,
-	graph: { colours: BRANCH_COLOURS, style: 0, grid: { x: 16, y: 24, offsetX: 16, offsetY: 12, expandY: 250 }, uncommittedChanges: 0 },
-	includeCommitsMentionedByReflogs: false,
-	initialLoadCommits: 300,
-	keybindings: { find: "f", refresh: "r", scrollToHead: "h", scrollToStash: "s" },
-	loadMoreCommits: 100,
-	loadMoreCommitsAutomatically: true,
-	markdown: true,
-	mute: { commitsNotAncestorsOfHead: false, mergeCommits: true },
+	showSignatureColumn: false,
+	graphColors: BRANCH_COLOURS,
+	graphFontSize: 13,
+	graphRowHeight: 24,
+	graphStyle: "rounded",
+	revealHighlightColor: "oklch(90% 0.25 150 / 0.42)",
+	customBranchGlobPatterns: [],
+	initialLoadCommits: 250,
+	loadMoreCommits: 750,
+	muteCommitsNotAncestorsOfHead: false,
+	muteMergeCommits: false,
+	boldCheckedOutCommit: false,
+	fetchTagsByDefault: true,
+	showTagRemotes: "off",
+	worktreePathTemplate: "",
+	mergeNoFastForward: true,
+	pullBranchNoFastForward: false,
+	createBranchCheckout: true,
 	onlyFollowFirstParent: false,
-	onRepoLoad: { scrollToHead: false, showCheckedOutBranch: false, showSpecificBranches: [] },
-	referenceLabels: { branchLabelsAlignedToGraph: false, combineLocalAndRemoteBranchLabels: true, tagLabelsOnRight: false },
-	repoDropdownOrder: 2,
+	showCurrentBranchByDefault: false,
 	showRemoteBranches: true,
 	showStashes: true,
+	stashDisplay: "both",
 	showTags: true,
+	includeReflog: false,
+	includeUnreachableCommits: false,
+	shortHashLength: 7,
+	language: "en",
+	languages: [{ id: "en", label: "English" }],
 };
 
 /**
  * The settings a view is opened with, given the menus it may offer. Each menu is copied rather than
  * shared, so a later stage that enables one action cannot change the defaults for every other tab.
  */
-export function buildViewConfig(actions: ContextMenuActionsVisibility = ENABLED_CONTEXT_ACTIONS): GitGraphViewConfig {
+export function buildViewState(
+	actions: ContextMenuActionsVisibility = ENABLED_CONTEXT_ACTIONS,
+	overrides: Partial<GitGraphViewState> = {},
+): GitGraphViewState {
 	return {
-		...DEFAULT_CONFIG,
-		contextMenuActionsVisibility: {
+		...DEFAULT_VIEW_STATE,
+		...overrides,
+		lastActiveRepo: overrides.lastActiveRepo ?? null,
+	contextMenuActionsVisibility: {
 			branch: { ...actions.branch },
 			commit: { ...actions.commit },
+			commitDetailsViewFile: { ...actions.commitDetailsViewFile },
 			remoteBranch: { ...actions.remoteBranch },
 			stash: { ...actions.stash },
 			tag: { ...actions.tag },
 			uncommittedChanges: { ...actions.uncommittedChanges },
-			fileView: { ...actions.fileView },
 		},
+		graphColors: [...(overrides.graphColors ?? DEFAULT_VIEW_STATE.graphColors)],
+		languages: [...(overrides.languages ?? DEFAULT_VIEW_STATE.languages)],
 	};
+}
+
+/** Backwards-compatible alias for the older callers that built a config object. */
+export const DEFAULT_CONFIG = DEFAULT_VIEW_STATE;
+export function buildViewConfig(actions?: ContextMenuActionsVisibility) {
+	return buildViewState(actions);
 }

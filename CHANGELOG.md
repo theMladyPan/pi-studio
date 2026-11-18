@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-18
+
+- feat: Press x to roll a terminal drawer up from the bottom of the board: a real shell in the workspace folder, kept alive between rolls, so a few commands can be typed without leaving the board. Ending the shell (Ctrl+D or `exit`) rolls the drawer down, and the next roll up starts a fresh shell.
+- feat: Draw the git drawer with Git Graph Libre instead of the older Git Graph webview, so the rolled-down graph uses the rounded lanes, repo/branches/authors/tags filters and commit details you asked for. The drawing is borrowed from the copy already installed in your VS Code and never shipped from here, and the daemon keeps working when it is missing.
+
 ## [0.2.6] - 2026-11-18
 
 - fix: Let a test remove its throwaway files even while a stopped daemon's children are still writing in them.

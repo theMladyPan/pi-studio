@@ -188,23 +188,23 @@ async function main() {
 	// behind it like every other route that reads this machine.
 	const gitGraph = await get(one, `/git/${opened.board.id}`);
 	said(
-		gitGraph.status === 200 && gitGraph.type.includes("text/html") && gitGraph.body.includes('id="view"'),
+		gitGraph.status === 200 && gitGraph.type.includes("text/html") && gitGraph.body.includes('id="topBar"') && gitGraph.body.includes('id="content"'),
 		"GET /git/<id> serves the Git Graph page",
 		`${gitGraph.status} ${gitGraph.type}`,
 	);
 	const gitInit = await get(one, `/git/init?token=${one.token}&workspace=${opened.board.id}`);
 	const gitInitBody = JSON.parse(gitInit.body || "{}");
 	said(
-		gitInit.status === 200 && typeof gitInitBody.available === "boolean" && (gitInitBody.available ? gitInitBody.initialState !== null : Boolean(gitInitBody.reason)),
+		gitInit.status === 200 && typeof gitInitBody.available === "boolean" && (gitInitBody.available ? gitInitBody.viewState !== null : Boolean(gitInitBody.reason)),
 		"GET /git/init says whether a tab can draw a graph, and why not when it cannot",
 		`${gitInit.status} ${gitInitBody.available ? "available" : String(gitInitBody.reason).slice(0, 70)}`,
 	);
 	// Whatever this machine has installed: a bundle or the sentence that says why there is none. Neither
 	// may be a 500, which is what a route that fails to read the extension folder would answer.
-	const vendor = await get(one, "/gitgraph/vendor/out.min.js");
-	said(vendor.status === 200 || vendor.status === 404, "GET /gitgraph/vendor/out.min.js answers the bundle or says it is missing", `${vendor.status}`);
+	const vendor = await get(one, "/gitgraph/vendor/web.min.js");
+	said(vendor.status === 200 || vendor.status === 404, "GET /gitgraph/vendor/web.min.js answers the bundle or says it is missing", `${vendor.status}`);
 	const notABundle = await get(one, `/gitgraph/vendor/not-a-bundle.js?token=${one.token}`);
-	said(notABundle.status === 404, "and a vendor path that is not one of the two files is refused", `${notABundle.status}`);
+	said(notABundle.status === 404, "and a vendor path that is not one of the bundle files is refused", `${notABundle.status}`);
 	// One message from the page, answered with an array of replies. `loadRepos` needs no repository, so
 	// this passes on a board whose folder is the smoke run's own state folder.
 	const message = await get(one, `/git/msg?token=${one.token}&workspace=${opened.board.id}`, {
