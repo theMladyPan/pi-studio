@@ -88,6 +88,10 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
     socket = new WebSocket(`${scheme}//${location.host}/terminal?workspace=${encodeURIComponent(workspace)}`);
     socket.addEventListener("open", () => {
       said("");
+      // A fresh socket means a fresh shell: the old screen is cleared so the new prompt does
+      // not sit under the dead shell's scrollback. A drawer that was only rolled down never
+      // reconnects, so its scrollback survives untouched.
+      if (term) term.reset();
       sendSize();
     });
     socket.addEventListener("message", (event) => {
@@ -99,7 +103,12 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
       }
       if (message.type === "output" && term) term.write(message.data);
       else if (message.type === "exit") {
-        said("the shell ended — roll the drawer down and up (x) for a new one");
+        // The shell is gone — Ctrl+D, or `exit` typed at the prompt. The drawer rolls
+        // down rather than sitting on a dead prompt, and the socket closes with it,
+        // so the next roll up connects a fresh shell. An exit that arrives while
+        // the drawer is already down still closes the socket.
+        socket.close();
+        close();
       } else if (message.type === "error") said(message.data);
     });
     socket.addEventListener("close", () => {
