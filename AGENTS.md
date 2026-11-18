@@ -28,6 +28,8 @@ title in the same client, which names its own key (`"hide the board overview (m)
 
 ## Versioning
 
+The human step-by-step for cutting and publishing a release lives in `docs/releasing.md`.
+
 - Use ZeroVer: `0.MINOR.PATCH`. The leading zero stays zero. Bump minor for new features or
   breaking changes and reset patch to zero; bump patch for fixes, documentation and maintenance.
   Call out breaking changes and any required migration in their changelog bullets.
