@@ -5607,7 +5607,8 @@ async function scPost(path, body) {
 }
 
 /** One row: the file's name, its folder, its letter, and the button that moves it across. */
-function scRow(file, stage) {
+function scRow(file, scope) {
+  const stage = scope === "changes";
   const row = el("div", "sc-row");
   const slash = file.path.lastIndexOf("/");
   const name = el("span", "sc-name");
@@ -5626,7 +5627,7 @@ function scRow(file, stage) {
   // still only moves the file, because its own press never reaches the row.
   name.style.cursor = "pointer";
   name.title = `${file.path} — view diff`;
-  name.addEventListener("click", () => void scOpenDiff(file, stage ? "staged" : "changes"));
+  name.addEventListener("click", () => void scOpenDiff(file, scope));
   row.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     void scDiscard(file);
@@ -5669,8 +5670,8 @@ function scConflictRow(file) {
 
 /** Paint both lists, the counts, and whether Commit may be pressed. */
 function scPaint() {
-  scStaged.replaceChildren(...scState.staged.map((file) => scRow(file, false)));
-  scChanges.replaceChildren(...scState.changes.map((file) => scRow(file, true)));
+  scStaged.replaceChildren(...scState.staged.map((file) => scRow(file, "staged")));
+  scChanges.replaceChildren(...scState.changes.map((file) => scRow(file, "changes")));
   scMerge.replaceChildren(...scState.conflicts.map((file) => scConflictRow(file)));
   scStagedCount.textContent = scState.staged.length ? String(scState.staged.length) : "";
   scChangesCount.textContent = scState.changes.length ? String(scState.changes.length) : "";
@@ -5779,9 +5780,12 @@ const scDiffCloseBtn = document.getElementById("scDiffClose");
 const scDiffCopyBtn = document.getElementById("scDiffCopy");
 let scDiffPrior = null;
 let scDiffText = "";
+/** Bumped on every open and close, so a slow answer for an earlier file cannot fill a new modal. */
+let scDiffGen = 0;
 
 function scDiffClose() {
   if (scDiffEl.hidden) return;
+  scDiffGen += 1;
   scDiffEl.hidden = true;
   scDiffBody.replaceChildren();
   scDiffText = "";
@@ -5792,11 +5796,15 @@ function scDiffClose() {
 
 async function scOpenDiff(file, scope) {
   if (scDiffEl.hidden) scDiffPrior = document.activeElement;
+  const gen = ++scDiffGen;
   scDiffEl.hidden = false;
   scDiffTitle.textContent = file.path;
   scDiffFlags.textContent = "reading…";
   scDiffBody.replaceChildren();
   scDiffCopyBtn.disabled = true;
+  // The keyboard is the modal's from the first moment, not from the answer: a board letter
+  // behind a loading modal would act on the board the human cannot see.
+  scDiffCloseBtn.focus();
   let data;
   try {
     const res = await fetch(`/source-control/diff?${auth}&path=${encodeURIComponent(file.path)}&scope=${scope}`);
@@ -5805,7 +5813,7 @@ async function scOpenDiff(file, scope) {
     if (!scDiffEl.hidden) scDiffFlags.textContent = "the daemon did not answer";
     return;
   }
-  if (scDiffEl.hidden) return;
+  if (scDiffEl.hidden || gen !== scDiffGen) return;
   if (!data.ok) {
     scDiffFlags.textContent = data.error || "the diff could not be read";
     return;
@@ -5841,6 +5849,15 @@ scDiffCopyBtn.addEventListener("click", async () => {
 });
 scDiffEl.addEventListener("click", (event) => {
   if (event.target === scDiffEl) scDiffClose();
+});
+scDiffEl.addEventListener("keydown", (event) => {
+  if (event.key !== "Tab") return;
+  const stops = [...scDiffEl.querySelectorAll("button:not([disabled])")].filter((one) => one.offsetParent !== null || one === document.activeElement);
+  if (!stops.length) return;
+  event.preventDefault();
+  const at = stops.indexOf(document.activeElement);
+  const step = event.shiftKey ? -1 : 1;
+  stops[(at + step + stops.length) % stops.length].focus();
 });
 // Capture, so Escape shuts this modal before the board's own Escape ladder hears it.
 document.addEventListener(
@@ -12771,6 +12788,7 @@ const openSheet = () => document.querySelector(".sheet:not([hidden])");
  * open. A menu and a name being typed are.
  */
 const drawerSurface = () =>
+  !scDiffEl.hidden ||
   !exEditorEl.hidden ||
   !exConfirmEl.hidden ||
   Boolean(exState.menu) ||

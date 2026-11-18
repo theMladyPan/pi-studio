@@ -662,6 +662,16 @@
     border: 1px solid var(--border-bright); border-radius: 4px; padding: 4px 10px; cursor: pointer; margin-left: auto; }
   #scDiff .sheet-btn + .sheet-btn { margin-left: 0; }
   #scDiff .sheet-btn:hover { color: var(--text); }
+  /* The diff table's rules, shared with the git graph page that draws the same classes. */
+  .ggViewerTable { border-collapse: collapse; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    line-height: 1.5; width: 100%; }
+  .ggViewerTable td { padding: 0 0.6em; white-space: pre; vertical-align: top; }
+  .ggViewerNum { width: 1%; color: var(--muted); text-align: right; user-select: none; background: #010409; }
+  .ggViewerLine_added { color: #3fb950; background: rgba(63, 185, 80, 0.1); }
+  .ggViewerLine_removed { color: #f85149; background: rgba(248, 81, 73, 0.1); }
+  .ggViewerLine_hunk { color: #79c0ff; }
+  .ggViewerLine_meta { color: #8b949e; }
+  .ggViewerEmpty { padding: 1.2em; color: var(--muted); }
   #railNow { padding: 0 8px 6px; display: flex; flex-direction: column; gap: 4px; }
   /* A running row lives in its thread's card, so this strip holds only the runs whose card is closed. */
   #railNow:empty { display: none; }

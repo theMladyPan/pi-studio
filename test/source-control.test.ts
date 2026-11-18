@@ -366,3 +366,48 @@ test("discarding an untracked file removes it", async () => {
 		rmSync(repo, { recursive: true, force: true });
 	}
 });
+
+test("discarding a directory or the repository itself is refused", async () => {
+	const repo = scratchRepo();
+	try {
+		writeFileSync(join(repo, "readme.md"), "changed\n");
+		const { sourceControlDiscard } = await import("../server/git/source-control.ts");
+		for (const path of [".", "docs"]) {
+			const outcome = await sourceControlDiscard(repo, path);
+			assert.equal(outcome.ok, false, path);
+		}
+		const status = await statusOf(repo);
+		assert.deepEqual(status.changes.map((f) => f.path), ["readme.md"], "nothing else was discarded");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("discarding a rename restores the original name too", async () => {
+	const repo = scratchRepo();
+	try {
+		git(repo, "mv", "readme.md", "renamed.md");
+		const { sourceControlDiscard } = await import("../server/git/source-control.ts");
+		const outcome = await sourceControlDiscard(repo, "renamed.md");
+		assert.equal(outcome.ok, true, outcome.ok ? "" : outcome.error);
+		const status = await statusOf(repo);
+		assert.deepEqual(status.staged, [], "no staged deletion of the original is left behind");
+		assert.deepEqual(status.changes, []);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a staged rename's diff draws as a rename", async () => {
+	const repo = scratchRepo();
+	try {
+		git(repo, "mv", "readme.md", "renamed.md");
+		const { sourceControlDiff } = await import("../server/git/source-control.ts");
+		const diff = await sourceControlDiff(repo, "renamed.md", "staged");
+		assert.equal(diff.ok, true, diff.ok ? "" : diff.error);
+		assert.match(diff.ok ? diff.content : "", /rename from readme\.md/);
+		assert.match(diff.ok ? diff.content : "", /rename to renamed\.md/);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});

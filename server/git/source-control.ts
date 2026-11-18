@@ -520,7 +520,8 @@ export async function sourceControlDiff(folder: string, path: unknown, scope: un
 	const listed = scope === "staged" ? status.status.staged : status.status.changes;
 	const entry = listed.find((one) => one.path === file);
 	if (!entry) return { ok: false, error: `that file is not in the ${scope === "staged" ? "staged" : "changed"} list: ${file}` };
-	const diff = await sourceDiff(root, scope, file, entry.kind === "U");
+	// A rename needs both pathspecs to draw as a rename rather than an unrelated add.
+	const diff = await sourceDiff(root, scope, entry.oldPath ? [entry.oldPath, file] : [file], entry.kind === "U");
 	if (!diff.ok) return diff;
 	return {
 		ok: true,
@@ -552,7 +553,11 @@ export async function sourceControlDiscard(folder: string, path: unknown): Promi
 	try {
 		const status = await sourceControlStatus(folder);
 		if (!status.ok) return status;
-		const untracked = [...status.status.changes, ...status.status.staged].some((one) => one.path === file && one.kind === "U");
+		// Only a file the lists actually name may be discarded: a directory or the repository
+		// root itself is not a file, and `git restore -- .` would discard everything at once.
+		const entry = [...status.status.staged, ...status.status.changes].find((one) => one.path === file);
+		if (!entry) return { ok: false, error: `that file has no changes to discard: ${file}` };
+		const untracked = entry.kind === "U";
 		if (untracked) {
 			const safe = safeFile(root, file);
 			if (!safe.ok) return safe;
@@ -562,12 +567,18 @@ export async function sourceControlDiscard(folder: string, path: unknown): Promi
 		const head = await runGit(root, ["rev-parse", "--verify", "--quiet", "HEAD"], { kind: "read" });
 		if (!head.ok) {
 			// No HEAD yet: discarding means the file was never added, so it leaves the index and the disk.
-			await runGit(root, ["--literal-pathspecs", "rm", "--cached", "--ignore-unmatch", "--", file], { kind: "write" });
+			// Forced, because the working file may have moved on since it was staged; checked, so a
+			// failure here never deletes a file that is still staged.
+			const removed = await runGit(root, ["--literal-pathspecs", "rm", "--cached", "--force", "--ignore-unmatch", "--", file], { kind: "write" });
+			if (!removed.ok) return { ok: false, error: removed.stderr || "git could not remove the file from the index" };
 			const safe = safeFile(root, file);
 			if (safe.ok) await rm(safe.abs);
 			return await sourceControlStatus(folder);
 		}
-		const restored = await runGit(root, ["--literal-pathspecs", "restore", "--source=HEAD", "--staged", "--worktree", "--", file], { kind: "write" });
+		// A rename has two names in the index; restoring only the destination would leave the
+		// source staged for deletion, so both go back.
+		const restorePaths = entry.oldPath ? [file, entry.oldPath] : [file];
+		const restored = await runGit(root, ["--literal-pathspecs", "restore", "--source=HEAD", "--staged", "--worktree", "--", ...restorePaths], { kind: "write" });
 		if (!restored.ok) return { ok: false, error: restored.stderr || "git could not discard the changes" };
 		return await sourceControlStatus(folder);
 	} finally {
