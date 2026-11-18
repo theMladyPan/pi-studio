@@ -19,6 +19,9 @@ class FakeElement {
 	className = "";
 	contentWindow: null = null;
 	src = "";
+	offsetParent: unknown = {};
+	isConnected = true;
+	focused = false;
 	children: FakeElement[] = [];
 	attributes = new Map<string, string>();
 	classes = new Set<string>();
@@ -49,7 +52,13 @@ class FakeElement {
 		this.children.push(child);
 	}
 
-	focus() {}
+	focus() {
+		this.focused = true;
+	}
+
+	blur() {
+		this.focused = false;
+	}
 
 	get parentElement() {
 		return new FakeElement();
@@ -110,4 +119,20 @@ test("being told the name keeps the members the board drives", async () => {
 	drawer.toggle();
 	assert.equal(drawer.isOpen(), false, "and the next rolls it up");
 	assert.equal(label.textContent, "· pi-studio", "rolling the drawer changes nothing the bar says");
+});
+
+test("closing does not give the keyboard to a hidden toolbox button", async () => {
+	standInPage();
+	const drawer = await drawerFor("b08b6688eaf9");
+	const doc = (globalThis as { document: { body: FakeElement; activeElement: unknown; getElementById: (id: string) => FakeElement | null } }).document;
+	const btn = doc.getElementById("gitBtn")!;
+	doc.activeElement = doc.body;
+	doc.body.offsetParent = null;
+	drawer.toggle();
+	assert.equal(drawer.isOpen(), true);
+	// The button now lives in the toolbox menu, so it is hidden whenever the menu is shut.
+	btn.offsetParent = null;
+	drawer.toggle();
+	assert.equal(drawer.isOpen(), false);
+	assert.equal(btn.focused, false, "a hidden menu item takes no focus");
 });

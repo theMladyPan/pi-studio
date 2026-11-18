@@ -163,10 +163,13 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
     paint();
     // The screen keeps its scrollback and the shell keeps running: rolling down never reloads
     // either. A remembered `body` is no place to put the keyboard, so the button that owns the
-    // key takes it instead.
-    const target = back && back !== document.body && back.isConnected ? back : btn;
+    // key takes it instead — unless that button now lives in a shut toolbox menu, where a hidden
+    // element takes no focus and the keyboard goes nowhere.
+    const visible = (el) => el instanceof Element && el.isConnected && el.offsetParent !== null;
+    const target = visible(back) ? back : visible(btn) ? btn : null;
     back = null;
-    target.focus();
+    if (target) target.focus();
+    else if (document.activeElement instanceof Element && document.activeElement !== document.body) document.activeElement.blur();
   }
 
   /**

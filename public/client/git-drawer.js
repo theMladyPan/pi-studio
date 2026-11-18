@@ -113,10 +113,13 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
     drawer.inert = true;
     paint();
     // The frame keeps its src and its state: rolling up never reloads the page. A remembered `body` is
-    // no place to put the keyboard, so the button that owns the key takes it instead.
-    const target = back && back !== document.body && back.isConnected ? back : btn;
+    // no place to put the keyboard, so the button that owns the key takes it instead — unless that button
+    // now lives in a shut toolbox menu, where a hidden element takes no focus and the keyboard goes nowhere.
+    const visible = (el) => el instanceof Element && el.isConnected && el.offsetParent !== null;
+    const target = visible(back) ? back : visible(btn) ? btn : null;
     back = null;
-    target.focus();
+    if (target) target.focus();
+    else if (document.activeElement instanceof Element && document.activeElement !== document.body) document.activeElement.blur();
   }
 
   /**
