@@ -83,10 +83,12 @@ jobs:
           for asset in "$tarball" "$checksum" "$installer"; do
             [[ -f "$asset" ]] || { echo "::error::npm run package did not write $asset"; exit 1; }
           done
-          # One top-level folder, no development tree, and a checksum that belongs to this archive.
-          top="$(tar -tzf "$tarball" | cut -d/ -f1 | sort -u)"
+          # List the archive once into a variable; grepping tar's output directly makes `grep -q`
+          # close the pipe early, tar dies of SIGPIPE and pipefail reports a failure that is not one.
+          listing="$(tar -tzf "$tarball")"
+          top="$(printf '%s\n' "$listing" | cut -d/ -f1 | sort -u)"
           [[ -n "$top" && "$(printf '%s\n' "$top" | wc -l)" == "1" ]] || { echo "::error::$tarball does not hold exactly one top-level folder"; exit 1; }
-          if tar -tzf "$tarball" | grep -Eq '^[^/]+/(node_modules|test|test-support)/'; then
+          if grep -Eq '^[^/]+/(node_modules|test|test-support)/' <<< "$listing"; then
             echo "::error::$tarball carries a development tree"; exit 1
           fi
           expected="$(awk 'NR == 1 { print $1 }' "$checksum")"
@@ -94,7 +96,7 @@ jobs:
           [[ "$expected" == "$actual" ]] || { echo "::error::$checksum does not describe $tarball"; exit 1; }
           grep -qF "$VERSION" "$installer" || { echo "::error::$installer does not name version $VERSION"; exit 1; }
           # A clean official build of this tag, which is what `official` in build.json means.
-          tar -tzf "$tarball" | grep -qx "$top/build.json" || { echo "::error::$tarball carries no $top/build.json"; exit 1; }
+          grep -qx "$top/build.json" <<< "$listing" || { echo "::error::$tarball carries no $top/build.json"; exit 1; }
           identity="$(tar -xzOf "$tarball" "$top/build.json")"
           grep -q '"official": true' <<< "$identity" || { echo "::error::the packaged build is not an official build of $VERSION"; exit 1; }
           grep -qF "\"version\": \"$VERSION\"" <<< "$identity" || { echo "::error::the packaged build names another version than $VERSION"; exit 1; }
