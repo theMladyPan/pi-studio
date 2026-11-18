@@ -31,7 +31,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { runGit } from "./exec.ts";
 import { piCli } from "../child/argv.ts";
-import { NAME_MODEL } from "../worktrees/name.ts";
+import { helperModel } from "../workspaces.ts";
 
 /** One file as the panel draws it: its path from the repository root and the letter on its right. */
 export type ScFile = { path: string; kind: string; oldPath?: string };
@@ -296,7 +296,7 @@ function runDraft(cli: { command: string; args: string[] }, folder: string, prom
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			cli.command,
-			[...cli.args, "-p", "--no-session", "--no-tools", "--no-extensions", "--no-skills", "--no-context-files", "--model", NAME_MODEL, "--thinking", "off", prompt],
+			[...cli.args, "-p", "--no-session", "--no-tools", "--no-extensions", "--no-skills", "--no-context-files", "--model", helperModel(), "--thinking", "off", prompt],
 			{ cwd: folder, stdio: ["ignore", "pipe", "pipe"] },
 		);
 		const out: Buffer[] = [];
@@ -351,7 +351,7 @@ export type ScDraftDeps = {
 	run?: typeof runDraft;
 };
 
-/** Draft one commit message for the staged files with the model that names threads. Never commits, and never invents one on failure. */
+/** Draft one commit message for the staged files with the helper model. Never commits, and never invents one on failure. */
 export async function sourceControlMessage(folder: string, deps: ScDraftDeps = {}): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
 	const status = await sourceControlStatus(folder);
 	if (!status.ok) return status;

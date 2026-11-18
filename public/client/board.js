@@ -7866,6 +7866,8 @@ let pickAnchor = null;
 let pickBoard = false;
 /** The field whose chip opened the picker, when it was one: the board's settings are nobody's. */
 let pickInst = null;
+/** The settings leaf whose row opened the picker, when it was one: its value is what the list marks as chosen. */
+let pickField = null;
 
 function pickNote(text) {
   const node = el("div", "pick-note");
@@ -7875,6 +7877,13 @@ function pickNote(text) {
 
 /** What the picker is editing: one card's thread, or the board's defaults. */
 function pickRuntime() {
+  // A model leaf other than the board's own model (the helper model) is worth what its own value says:
+  // the list has to mark that one as chosen, not the model a new thread starts with.
+  if (picking === "model" && pickField && pickField.id !== "model") {
+    const text = String(pickField.value ?? "");
+    const at = text.indexOf("/");
+    return at < 0 ? { provider: "", model: text } : { provider: text.slice(0, at), model: text.slice(at + 1) };
+  }
   return pickBoard ? boardConfig : (answeringRuntime(pickInst) ?? boardConfig);
 }
 
@@ -8001,6 +8010,7 @@ function closePick() {
   pickAnchor = null;
   pickBoard = false;
   pickInst = null;
+  pickField = null;
   runtimePick.hidden = true;
   runtimeSearch.value = "";
   // A picker opened from the board's settings has written the daemon's copy by now, through a route of
@@ -8280,8 +8290,8 @@ function drawLevels() {
   runtimeList.replaceChildren(...(rows.length ? rows : [pickNote("no level to choose")]));
 }
 
-async function openPick(which, anchor = null, forBoard = false, inst = null) {
-  if (picking === which && pickBoard === forBoard && pickInst === inst) {
+async function openPick(which, anchor = null, forBoard = false, inst = null, field = null) {
+  if (picking === which && pickBoard === forBoard && pickInst === inst && pickField === field) {
     closePick();
     return;
   }
@@ -8294,6 +8304,7 @@ async function openPick(which, anchor = null, forBoard = false, inst = null) {
   // A list opened from a field edits that field's thread; one opened from the settings panel edits the
   // board's defaults, and belongs to nobody's card.
   pickInst = forBoard ? null : inst;
+  pickField = forBoard ? field : null;
   runtimePick.hidden = false;
   // A mode, a flow, how a child's work comes back and the two card settings are short lists this page
   // already holds, so they open at once and the search box has nothing to search: no request, no waiting.
@@ -8359,7 +8370,15 @@ async function openPick(which, anchor = null, forBoard = false, inst = null) {
 
 /** Hand the choice to the daemon: the thread behind one card, or the default for a new one. */
 async function chooseRuntime(kind, value) {
-  const body = kind === "model" ? { provider: value.provider, model: value.model } : { level: value };
+  // A settings leaf that is not the board's own model writes through its own template: the helper model
+  // goes to the crossroads' defaults, not to `/model`, which would change what a new thread starts with.
+  if (kind === "model" && pickField && pickField.id !== "model") {
+    const field = pickField;
+    await writeLeaf(field, `${value.provider}/${value.model}`);
+    hintLine(`helper model: ${shortModel(value.model)}`, false, pickInst);
+    closePick();
+    return;
+  }
   // A field's own card is what the daemon resolves to a thread. Editing the board's defaults from the
   // settings panel sends no card, which is what makes it the default.
   const target = pickBoard ? null : cardOf(pickInst);
@@ -9239,7 +9258,7 @@ async function openLeaf(field, row) {
   }
   // Every picker here writes the board's default itself and broadcasts the config that follows, so the
   // choice is never posted twice.
-  if (field.pick) await openPick(field.pick, row, true);
+  if (field.pick) await openPick(field.pick, row, true, null, field);
 }
 
 // ---------- clean and new ------------------------------------------------

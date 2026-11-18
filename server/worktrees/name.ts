@@ -13,6 +13,7 @@ import { scheduleSave } from "../store.ts";
 import { existsSync } from "node:fs";
 import { headBranch, shortId, slugOf, workType } from "./make.ts";
 import { gitIn } from "../git/repo.ts";
+import { helperModel } from "../workspaces.ts";
 
 
 
@@ -21,14 +22,10 @@ export const TITLE_FROM_REQUEST_CHARS = 48;
 
 
 /**
- * The model that names a thread once its first request is in hand. Empty turns naming off.
- * `openrouter/inception/mercury-3:nitro` named this until OpenRouter withdrew the model: a call comes
- * back 404 in 70ms, and every card since has kept the opening words of its own request. The flash model
- * the daemon already routes its other work to replaces it, asked with thinking off, which names in
- * 1.2-1.5s against 2.0s for `z-ai/glm-5.3` and 4.2s for `z-ai/glm-5.3-flash`. Any other model is a
- * `PI_STUDIO_NAME_MODEL` away.
+ * The model that names a thread once its first request is in hand; the choice on the settings page
+ * (`helperModel()`), which is itself the `NAME_MODEL` default until one is made. Empty turns naming off.
  */
-export const NAME_MODEL = process.env.PI_STUDIO_NAME_MODEL ?? "openrouter/deepseek/deepseek-v4.1-flash-1017";
+export { NAME_MODEL } from "../models.ts";
 
 
 export const NAME_TIMEOUT_MS = 8000;
@@ -165,9 +162,10 @@ export function askOnce(argv, timeoutMs) {
 export async function nameThread(board, thread, request) {
 	const asked = request.slice(0, 2000);
 	const cli = piCli();
+	const chosen = helperModel();
 	// Thinking off is part of the name rather than a preference: a naming model that reasons about four
 	// words spends the whole 8s budget on the question, and this one answers in 1.2s with it off.
-	const argv = [cli.command, ...cli.args, "-p", "--no-session", "-ne", "-nt", "-nc", "-ns", "--model", NAME_MODEL, "--thinking", "off"];
+	const argv = [cli.command, ...cli.args, "-p", "--no-session", "-ne", "-nt", "-nc", "-ns", "--model", chosen, "--thinking", "off"];
 	const prompt = namePrompt(asked);
 	// Two samples of four words each: a model that reads a short request as something to answer gives a
 	// reply on the first call and a name on the second, and the second call costs a background turn.
@@ -185,7 +183,7 @@ export async function nameThread(board, thread, request) {
 	// The card may be gone, renamed by the human, or named again while the model was thinking.
 	if (!board.threads.has(thread.id) || thread.namedBy !== "request") return;
 	thread.title = picked.slice(0, MAX_TITLE_CHARS);
-	thread.namedBy = NAME_MODEL;
+	thread.namedBy = chosen;
 	update(board, thread);
 	scheduleSave(board);
 }

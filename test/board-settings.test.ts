@@ -5,7 +5,7 @@ import { boardSettingsValues, settingsDocument } from "../server/settings-docume
 import { PATH_NAMES, PROMPT_FOLDERS } from "../server/child/modes.ts";
 import { CARD_AUDIENCE, CARD_LEVELS, CARD_VERBOSITY } from "../server/card-settings.ts";
 import { CHILD_INTEGRATION } from "../server/integration.ts";
-import { THINKING_LEVELS } from "../server/models.ts";
+import { NAME_MODEL, THINKING_LEVELS } from "../server/models.ts";
 
 /**
  * The board's settings document is a view of what `activeConfig(board)` answers, so it is read here from
@@ -88,12 +88,13 @@ test("the document is five groups in the order the panel draws them", () => {
 	);
 });
 
-test("the tree holds fourteen setting leaves and each one is a control a human can change", () => {
-	// Fourteen: five for the thread, two for the tools, six for the cards, one for the canvas.
+test("the tree holds fifteen setting leaves and each one is a control a human can change", () => {
+	// Fifteen: six for the thread, two for the tools, six for the cards, one for the canvas.
 	assert.deepEqual(
 		settingLeaves.map((field) => field.id),
 		[
 			"model",
+			"helperModel",
 			"thinking",
 			"editor",
 			"path",
@@ -109,10 +110,10 @@ test("the tree holds fourteen setting leaves and each one is a control a human c
 			"dimOthers",
 		],
 	);
-	assert.equal(settingLeaves.length, 14);
+	assert.equal(settingLeaves.length, 15);
 	assert.deepEqual(
 		settingLeaves.map((field) => field.type),
-		["combo", "select", "combo", "select", "select", "list", "list", "select", "select", "select", "select", "select", "select", "toggle"],
+		["combo", "combo", "select", "combo", "select", "select", "list", "list", "select", "select", "select", "select", "select", "select", "toggle"],
 	);
 	// A setting a later build dropped is not quietly back, and neither is a group nobody draws.
 	const whole = JSON.stringify(document);
@@ -138,6 +139,9 @@ test("every setting names its picker and the route a change goes back through", 
 	assert.equal(byId.toolsOff.source, "/tools");
 	assert.equal(byId.extensionsOff.source, "/tools");
 	assert.equal(byId.model.source, "/models");
+	assert.equal(byId.helperModel.source, "/models");
+	assert.deepEqual(byId.helperModel.write.body, { helperProvider: "@head", helperModel: "@rest" });
+	assert.equal(byId.helperModel.write.route, "/defaults", "the helper model is studio-wide, like the editor");
 	// `dim others` sits under the canvas, because the canvas is where it is drawn.
 	const canvas = document.groups.find((group) => group.id === "canvas");
 	assert.deepEqual((canvas?.fields ?? []).map((field) => field.id), ["dimOthers"]);
@@ -158,10 +162,10 @@ test("a one-key body carries the control's value, and the model leaf splits at t
 		if (keys.length !== 1) continue;
 		assert.equal(field.write.body[keys[0]], "@value", `${field.id} sends ${field.write.body[keys[0]]}`);
 	}
-	// The model is the only leaf that writes two keys, so it is the only one that needs the halves.
+	// The two model leaves are the only leaves that write two keys, so they are the only ones that need the halves.
 	assert.deepEqual(
 		settingLeaves.filter((field) => Object.keys(field.write.body).length !== 1).map((field) => field.id),
-		["model"],
+		["model", "helperModel"],
 	);
 });
 
@@ -218,6 +222,7 @@ test("every leaf carries a value, and the board's own choices are the ones the p
 		settingLeaves.map((field) => field.label),
 		[
 			"model",
+			"helper model",
 			"thinking",
 			"text editor",
 			"boss flow",
@@ -249,8 +254,24 @@ test("the text editor leaf reads the studio's value, because a board keeps no co
 				}).groups,
 			).map((field) => [field.id, field]),
 		).editor.value;
-	// The board's own config says nothing about the editor, so the value it draws is the studio's own.
+	/** The same page, read for the helper model's value. */
+	const helperOf = (studio: { helperProvider?: string; helperModel?: string }) =>
+		Object.fromEntries(
+			leavesOf(
+				settingsDocument({
+					scope: "board",
+					values: boardSettingsValues(config, studio),
+					title: "this board",
+					subtitle: "pi-studio · /home/stanke/projekty/pi-studio",
+					foot: "new threads only · a run in flight is untouched",
+				}).groups,
+			).map((field) => [field.id, field]),
+		).helperModel.value;
+	// The board's own config says nothing about the editor or the helper model, so the values it draws are the studio's own.
 	assert.equal(editorOf({ editor: "/usr/bin/code" }), "/usr/bin/code");
 	// Nobody has chosen one yet: an empty control with a placeholder is how that reads, on both pages.
 	assert.equal(editorOf({}), "");
+	const [nameProvider, ...nameRest] = NAME_MODEL.split("/");
+	assert.equal(helperOf({ helperProvider: "github-copilot", helperModel: "gemini-4-argon" }), "github-copilot/gemini-4-argon");
+	assert.equal(helperOf({}), `${nameProvider}/${nameRest.join("/")}`);
 });

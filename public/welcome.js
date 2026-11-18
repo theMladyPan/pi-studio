@@ -774,6 +774,32 @@
   let toolCatalogue = null;
   let toolsTrouble = "";
 
+  /** What `/models` answers, read on the first model field drawn and kept. */
+  let modelCatalogue = null;
+  let modelsTrouble = "";
+
+  async function loadModels() {
+    if (modelCatalogue || modelsTrouble) return modelCatalogue;
+    try {
+      const response = await fetch("/models");
+      if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
+      modelCatalogue = await response.json();
+    } catch (error) {
+      modelsTrouble = error.message || String(error);
+    }
+    return modelCatalogue;
+  }
+
+  /**
+   * The `provider/model` choices a model field offers: pi's scoped models when pi scopes any, otherwise
+   * every model this machine can run — the same list the board's model picker starts from.
+   */
+  function modelChoices() {
+    if (!modelCatalogue) return [];
+    const listed = Array.isArray(modelCatalogue.scoped) && modelCatalogue.scoped.length ? modelCatalogue.scoped : modelCatalogue.models || [];
+    return listed.map((one) => `${one.provider}/${one.model}`);
+  }
+
   async function loadTools() {
     if (toolCatalogue || toolsTrouble) return toolCatalogue;
     try {
@@ -880,7 +906,37 @@
     const disabled = Boolean(field.disabled);
     const line = el("div", "cfg-control-line");
 
-    if (field.type === "combo") {
+    if (field.pick === "model") {
+      // A model is chosen from what this machine can run — the scoped list pi cycles — never typed.
+      const select = el("select", "cfg-select");
+      select.id = `field-${field.id}`;
+      select.disabled = disabled;
+      select.setAttribute("aria-label", field.label);
+      const paint = () => {
+        const current = String(field.value ?? "");
+        const choices = modelChoices();
+        // The current choice stays even when it is not scoped, so the control never lies about it.
+        const offered = current && !choices.includes(current) ? [current, ...choices] : choices;
+        select.replaceChildren(
+          ...offered.map((choice) => {
+            const item = document.createElement("option");
+            item.value = choice;
+            item.textContent = choice;
+            item.selected = choice === current;
+            return item;
+          }),
+        );
+        if (!offered.length) select.replaceChildren(el("option", "", modelsTrouble ? `the model list is unavailable: ${modelsTrouble}` : "asking the daemon for its models…"));
+      };
+      paint();
+      void loadModels().then(paint);
+      select.addEventListener("change", () => void commitWrite(entry, select.value));
+      entry.set = (value) => {
+        field.value = value;
+        paint();
+      };
+      line.append(select);
+    } else if (field.type === "combo") {
       const listId = `options-${field.id}`;
       const input = el("input", "cfg-input");
       input.type = "text";

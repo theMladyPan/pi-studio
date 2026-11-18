@@ -13,7 +13,8 @@ import { port } from "../main.ts";
 import { cardFor, plainCardFor, promptImages, threadError } from "../cards.ts";
 import { StringDecoder } from "node:string_decoder";
 import { lastLine, transientFailure } from "./describe.ts";
-import { NAME_MODEL, nameThread, titleFromRequest } from "../worktrees/name.ts";
+import { nameThread, titleFromRequest } from "../worktrees/name.ts";
+import { helperModel } from "../workspaces.ts";
 import { broadcast, card, update, updateCard } from "../bus.ts";
 import { compacted } from "../waiters.ts";
 import { modeChangeNote } from "./modes.ts";
@@ -159,7 +160,7 @@ export function prompt(board, thread, text, target = null, images = [], said = t
 		thread.title = titleFromRequest(said) || shortId(thread);
 		thread.namedBy = "request";
 		update(board, thread);
-		if (NAME_MODEL) void nameThread(board, thread, said);
+		if (helperModel()) void nameThread(board, thread, said);
 	}
 	const message = wireText(thread, text);
 	// The turn this run answers, named here and not at the moment it is sent: a steer that joins the run
