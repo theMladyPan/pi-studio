@@ -8,6 +8,7 @@ import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { MAX_WORKSPACE_PROMPT_CHARS } from "../server/limits.ts";
+import { removeTree } from "../test-support/temp.ts";
 import { MAX_TEMPLATE_CHARS } from "../server/routes/board/chips.ts";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -234,7 +235,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.ok([200, 400, 404].includes(detail.status), `transcript answered ${detail.status}`);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -292,7 +293,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.match(unknown.body, /no such workspace/);
 		} finally {
 			daemon.child.kill();
-			rmSync(state, { recursive: true, force: true });
+			await removeTree(state);
 		}
 	});
 
@@ -327,7 +328,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.deepEqual(bare, { programs: ["fixture-run"], total: 1, truncated: false }, bare.programs);
 		} finally {
 			daemon.child.kill();
-			rmSync(state, { recursive: true, force: true });
+			await removeTree(state);
 		}
 	});
 
@@ -371,7 +372,7 @@ describe("routes", { concurrency: 8 }, () => {
 				assert.ok(!odd.body.includes("uid="), odd.body);
 			} finally {
 				daemon.child.kill();
-				rmSync(state, { recursive: true, force: true });
+				await removeTree(state);
 			}
 		},
 	);
@@ -396,7 +397,7 @@ describe("routes", { concurrency: 8 }, () => {
 				assert.ok(!JSON.parse((await get(daemon, `/programs?token=${daemon.token}&prefix=fi`)).body).programs.includes("fi"));
 			} finally {
 				daemon.child.kill();
-				rmSync(state, { recursive: true, force: true });
+				await removeTree(state);
 			}
 		},
 	);
@@ -419,7 +420,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(JSON.parse(ran.body).output, "fallback-ok\n");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [state, folder]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [state, folder]) await removeTree(gone);
 		}
 	});
 
@@ -440,7 +441,7 @@ describe("routes", { concurrency: 8 }, () => {
 				}
 			} finally {
 				daemon.child.kill();
-				rmSync(state, { recursive: true, force: true });
+				await removeTree(state);
 			}
 		},
 	);
@@ -462,7 +463,7 @@ describe("routes", { concurrency: 8 }, () => {
 				assert.equal(JSON.parse(ran.body).output, "one two\n", "the line did not run under the resolved shell");
 			} finally {
 				daemon.child.kill();
-				for (const gone of [stateHome, folder]) rmSync(gone, { recursive: true, force: true });
+				for (const gone of [stateHome, folder]) await removeTree(gone);
 			}
 		},
 	);
@@ -527,7 +528,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(above.status, 404, above.body);
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, repoFolder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, repoFolder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -572,7 +573,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(JSON.parse(cleared.body).defaults.editor, "");
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -629,7 +630,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.deepEqual(JSON.parse(launched.body), { opened: true, file: join(realpathSync(folder), "note.ts") });
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -681,7 +682,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal((stripped.child as any).exitCode, null, "the daemon is still running");
 		} finally {
 			stripped.child.kill();
-			for (const gone of [bin, state]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [bin, state]) await removeTree(gone);
 		}
 	});
 
@@ -712,7 +713,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal((await post(daemon, "/defaults", { showCharts: true })).status, 400);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -746,8 +747,8 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(config.path, "simple");
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
-			rmSync(work, { recursive: true, force: true });
+			await removeTree(folder);
+			await removeTree(work);
 		}
 	});
 
@@ -776,8 +777,8 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal((await postTo(daemon, board.id, "/config", {})).status, 400);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
-			rmSync(work, { recursive: true, force: true });
+			await removeTree(folder);
+			await removeTree(work);
 		}
 	});
 
@@ -819,8 +820,8 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(dropped.card.pathChosenBy, undefined);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
-			rmSync(work, { recursive: true, force: true });
+			await removeTree(folder);
+			await removeTree(work);
 		}
 	});
 
@@ -838,8 +839,8 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(JSON.parse(switched.body).card.mode, "discuss");
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
-			rmSync(work, { recursive: true, force: true });
+			await removeTree(folder);
+			await removeTree(work);
 		}
 	});
 
@@ -860,7 +861,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(refused.status, 400);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -888,8 +889,8 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal((await postTo(daemon, board.id, "/config", { childIntegration: "squash" })).status, 400);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
-			rmSync(work, { recursive: true, force: true });
+			await removeTree(folder);
+			await removeTree(work);
 		}
 	});
 
@@ -910,7 +911,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.match(icon.body, /<svg/);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -957,7 +958,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(kept.defaults?.thinking, "low");
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1005,7 +1006,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(again.status, 409);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1026,7 +1027,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(reply.answers, undefined);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1081,7 +1082,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(settled.questions.length, 3);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1113,7 +1114,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(settled.paused, false, "an expired question still says it is being watched");
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1152,7 +1153,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal((await cardState(daemon, board.id, card.id)).paused, false);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1194,7 +1195,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(JSON.parse(read.chunks.join("")).answer, "b");
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1219,7 +1220,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(late.body, "that question is already settled");
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1241,7 +1242,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(peeked.body, "a thread may not use that");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -1286,7 +1287,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(empty.body, "nothing to undo");
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1317,7 +1318,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(cards.length, 200);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1338,7 +1339,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.deepEqual(card.rect, rect);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1357,7 +1358,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.match(report, /not JSON/);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1373,7 +1374,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(Object.hasOwn(answered, "report"), false, `a note with no chart has nothing to report, got ${JSON.stringify(answered)}`);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1398,7 +1399,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(restored.title, "a thread");
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1431,7 +1432,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.ok("git" in payload, "the snapshot carries no git picture");
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1454,7 +1455,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(payload.type, "snapshot");
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1469,7 +1470,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(await rawUpgrade(daemon, `/events?token=${daemon.token}&workspace=${board.id}`, { "Sec-WebSocket-Key": "not-base64" }), 400);
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1503,7 +1504,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(image.body, "hello", "the picture came from the global decoy");
 		} finally {
 			daemon.child.kill();
-			rmSync(state, { recursive: true, force: true });
+			await removeTree(state);
 		}
 	});
 
@@ -1522,8 +1523,8 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(listed.status, 200, listed.body);
 		} finally {
 			daemon.child.kill();
-			rmSync(state, { recursive: true, force: true });
-			rmSync(elsewhere, { recursive: true, force: true });
+			await removeTree(state);
+			await removeTree(elsewhere);
 		}
 	});
 
@@ -1543,7 +1544,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.ok(sawClose, "the invalid close frame did not drop the socket");
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -1786,7 +1787,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(plain.status, 200);
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -1836,7 +1837,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(JSON.parse(reply.body).answer, "right");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -1910,7 +1911,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.ok(after.cards.some((card: any) => card.id === theirPlan), "the other thread's plan was closed");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2023,7 +2024,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(told("the second draft"), true, `the child was told ${JSON.stringify(framesOf(stub).filter((frame) => frame.type === "prompt").map((frame) => frame.message))}`);
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2060,7 +2061,7 @@ describe("routes", { concurrency: 8 }, () => {
 		} finally {
 			tab?.stop();
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2089,7 +2090,7 @@ describe("routes", { concurrency: 8 }, () => {
 		} finally {
 			tab?.stop();
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2141,7 +2142,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(cut.error, undefined);
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2200,7 +2201,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(JSON.parse(throughNote.body).threadId, threadId);
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2226,7 +2227,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.ok(!framesOf(stub).some((frame: any) => frame.type === "compact"), "a compaction reached a busy child");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2244,7 +2245,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.deepEqual(framesOf(stub), [], "a child was started for a thread with no session");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2272,7 +2273,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.ok(Date.now() - started < 20_000, "the press waited on a child that was already gone");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2329,7 +2330,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.match(prompts[1].message, /\n---\n\[user message\]\nwhat does this show\?$/, "the human's words were not told apart from the board's");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2370,7 +2371,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.match(prompts[1].message, /The card says: the artifact/, "the fork was not told which card it is about");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2407,7 +2408,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.deepEqual((await cardState(daemon, board.id, first.cardId))?.turns ?? [], []);
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2432,7 +2433,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(prompts[0].message, prompts[1].message, "the words were not repeated word for word");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2454,7 +2455,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(prompts.length, 1, "a refused request was sent again");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2484,7 +2485,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(prompts.length, 1, "the message was sent again after the human stopped it");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2513,7 +2514,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.deepEqual((await cardState(daemon, board.id, note.cardId))?.turns ?? [], [], "the note kept the queued turn");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2549,7 +2550,7 @@ describe("routes", { concurrency: 8 }, () => {
 		} finally {
 			writeFileSync(path, original);
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -2602,7 +2603,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.ok(!JSON.stringify(document.groups).includes("prompt-roles-"), "the studio's prompt files are on a board's page");
 		} finally {
 			daemon.child.kill();
-			rmSync(folder, { recursive: true, force: true });
+			await removeTree(folder);
 		}
 	});
 
@@ -2658,7 +2659,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.match((await cardState(daemon, board.id, sad.cardId)).markdown, /exit 7/);
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2685,7 +2686,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(empty.body, "empty command");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder]) await removeTree(gone);
 		}
 	});
 
@@ -2712,7 +2713,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.match((await cardState(daemon, board.id, said.cardId)).markdown, /stopped at the/);
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder]) await removeTree(gone);
 		}
 	});
 
@@ -2734,7 +2735,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(existsSync(join(folder, "a-thread-was-here")), false, "a thread ran a command through the board");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -2753,7 +2754,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(list[0].name, "scratch");
 
 			// Deleted by hand, it is made again by the next read: a row whose folder is gone is a row nobody can open.
-			rmSync(scratch, { recursive: true, force: true });
+			await removeTree(scratch);
 			const again = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces;
 			assert.equal(again[0].missing, false, "the scratch row came back missing");
 			assert.ok(existsSync(scratch), "the folder was not made again");
@@ -2785,11 +2786,11 @@ describe("routes", { concurrency: 8 }, () => {
 			const state = JSON.parse((await get(daemon, `/state?token=${daemon.token}&workspace=${board}`)).body);
 			assert.deepEqual(state.cards, [], "a card survived the press");
 			assert.equal(state.meta.config.cardsVerbosity, "verbose", "the press took a setting with the mess");
-			rmSync(project, { recursive: true, force: true });
+			await removeTree(project);
 		} finally {
 			daemon.child.kill();
-			rmSync(stateHome, { recursive: true, force: true });
-			rmSync(scratch, { recursive: true, force: true });
+			await removeTree(stateHome);
+			await removeTree(scratch);
 		}
 	});
 
@@ -2813,7 +2814,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(root.isDirectory(), true);
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, kept]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, kept]) await removeTree(gone);
 		}
 	});
 
@@ -2829,7 +2830,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(lstatSync(join(stateHome, "scratch")).isDirectory(), true);
 		} finally {
 			daemon.child.kill();
-			rmSync(stateHome, { recursive: true, force: true });
+			await removeTree(stateHome);
 		}
 	});
 
@@ -2865,7 +2866,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(kept.cards.length, 1, "the press emptied a board that was not the scratch one");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, project]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, project]) await removeTree(gone);
 		}
 	});
 
@@ -2887,7 +2888,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.deepEqual(state.cards, [], "a killed command put its note back on the emptied board");
 		} finally {
 			daemon.child.kill();
-			rmSync(stateHome, { recursive: true, force: true });
+			await removeTree(stateHome);
 		}
 	});
 
@@ -2939,7 +2940,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(board.headers.get("location"), "/w/abcdef12");
 		} finally {
 			daemon.child.kill();
-			rmSync(state, { recursive: true, force: true });
+			await removeTree(state);
 		}
 	});
 
@@ -2961,7 +2962,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal((await get(daemon, "/workspaces", asCookie(`${name}=${daemon.token}`))).status, 403);
 		} finally {
 			daemon.child.kill();
-			rmSync(state, { recursive: true, force: true });
+			await removeTree(state);
 		}
 	});
 
@@ -2986,7 +2987,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal((await post(daemon, "/defaults")).status, 200);
 		} finally {
 			daemon.child.kill();
-			rmSync(state, { recursive: true, force: true });
+			await removeTree(state);
 		}
 	});
 
@@ -3007,7 +3008,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal((await get(daemon, "/workspaces", asCookie(other))).status, 200);
 		} finally {
 			daemon.child.kill();
-			rmSync(state, { recursive: true, force: true });
+			await removeTree(state);
 		}
 	});
 
@@ -3045,7 +3046,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).sessions, foreign.sessions);
 		} finally {
 			daemon.child.kill();
-			rmSync(state, { recursive: true, force: true });
+			await removeTree(state);
 		}
 	});
 
@@ -3064,7 +3065,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal((await get(daemon, "/workspaces", asCookie(cookies[32]))).status, 200);
 		} finally {
 			daemon.child.kill();
-			rmSync(state, { recursive: true, force: true });
+			await removeTree(state);
 		}
 	});
 
@@ -3086,7 +3087,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(page.headers.get("location"), null);
 		} finally {
 			daemon.child.kill();
-			for (const gone of [state, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [state, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -3102,7 +3103,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal((await get(daemon, "/workspaces", asCookie(cookie))).status, 200);
 		} finally {
 			daemon.child.kill();
-			rmSync(state, { recursive: true, force: true });
+			await removeTree(state);
 		}
 	});
 
@@ -3121,7 +3122,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(new URL(location, daemon.base).origin, daemon.base);
 		} finally {
 			daemon.child.kill();
-			rmSync(state, { recursive: true, force: true });
+			await removeTree(state);
 		}
 	});
 
@@ -3189,7 +3190,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal((await postTo(daemon, board.id, "/command", { name: "ext_cmd" })).status, 400);
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -3240,7 +3241,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(far.body, "no command named /no_such_command");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -3277,7 +3278,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(after.answering, null, "the thread is still answering a run that settled");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -3342,7 +3343,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(settled.turns[0].reply, "the stub answered");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -3393,7 +3394,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(repeated.split("[skill · probe ·").length - 1, 1, `the same skill was carried twice: ${repeated}`);
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -3427,7 +3428,7 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal((await settledThread(daemon, board.id, bareId, 1)).title, "/skill:probe", "a message of chips alone was named by the label");
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 
@@ -3457,7 +3458,7 @@ describe("routes", { concurrency: 8 }, () => {
 			);
 		} finally {
 			daemon.child.kill();
-			for (const gone of [stateHome, folder, stub.root]) rmSync(gone, { recursive: true, force: true });
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 });

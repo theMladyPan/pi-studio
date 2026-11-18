@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { removeTree } from "../test-support/temp.ts";
 
 /**
  * What the picker is told this machine can run.
@@ -85,7 +86,7 @@ test("a failed read of pi's table keeps the models already known, and says why",
 		assert.ok(!healed.trouble, "a good read after a bad one still reported trouble");
 	} finally {
 		delete process.env.PI_MANAGED_INSTALL_ROOT;
-		rmSync(stub.root, { recursive: true, force: true });
+		await removeTree(stub.root);
 	}
 });
 
