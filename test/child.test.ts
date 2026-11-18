@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { childArgv } from "../server/child/argv.ts";
+import { removeTree } from "../test-support/temp.ts";
 import { ensureChild, prompt, wireText } from "../server/child/run.ts";
 import { beginCommand } from "../server/child/command.ts";
 import { handleChildLine } from "../server/thought.ts";
@@ -171,7 +172,7 @@ test("the board's conventions are the file a human edits, whole, and only once",
 	assert.match(plain, /one unbroken word/, "the conventions do not say a label takes no space");
 });
 
-test("a workspace's own instruction file is read where it sits, for the human's thread and not for a child", () => {
+test("a workspace's own instruction file is read where it sits, for the human's thread and not for a child", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-studio-md-"));
 	try {
 		const own = { ...board, folder };
@@ -193,7 +194,7 @@ test("a workspace's own instruction file is read where it sits, for the human's 
 		// A spawned child is given its own frame instead, so the studio's file is not part of what it reads.
 		assert.doesNotMatch(boardPrompt(own, { ...thread, parentThread: "master-1" }), /numbers its builds/);
 	} finally {
-		rmSync(folder, { recursive: true, force: true });
+		await removeTree(folder);
 	}
 });
 
@@ -311,7 +312,7 @@ test("a child with no tree of its own is given one before it starts", async () =
 		started?.kill();
 		if (was === undefined) delete process.env.PI_MANAGED_INSTALL_ROOT;
 		else process.env.PI_MANAGED_INSTALL_ROOT = was;
-		for (const gone of [repo, stub.root]) rmSync(gone, { recursive: true, force: true });
+		for (const gone of [repo, stub.root]) await removeTree(gone);
 	}
 });
 
@@ -345,7 +346,7 @@ test("a thread whose mode changed is not served by the process started under the
 		}
 		if (was === undefined) delete process.env.PI_MANAGED_INSTALL_ROOT;
 		else process.env.PI_MANAGED_INSTALL_ROOT = was;
-		for (const gone of [repo, stub.root]) rmSync(gone, { recursive: true, force: true });
+		for (const gone of [repo, stub.root]) await removeTree(gone);
 	}
 });
 
@@ -401,7 +402,7 @@ test("a message on a thread whose mode changed tells the board the choice has la
 		}
 		if (was === undefined) delete process.env.PI_MANAGED_INSTALL_ROOT;
 		else process.env.PI_MANAGED_INSTALL_ROOT = was;
-		for (const gone of [repo, stub.root]) rmSync(gone, { recursive: true, force: true });
+		for (const gone of [repo, stub.root]) await removeTree(gone);
 	}
 });
 
