@@ -2,8 +2,9 @@
 
 ## [Unreleased]
 
-## [0.2.4] - 2026-11-18
+## [0.2.5] - 2026-11-18
 
+- fix: Let the publishing run name the repository on its own, so it can reach GitHub without a checkout.
 - fix: Let a test wait longer for the browser on a loaded machine, while a card still keeps the shorter product budget.
 - fix: Let a real release archive pass its proof step, which now reads the archive listing once instead of killing the lister with an early match.
 - fix: Keep the install lifecycle tests independent of whether the checkout sits on a clean release tag, so a staged copy the tests install is always their custom copy.
