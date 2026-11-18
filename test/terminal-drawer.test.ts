@@ -129,7 +129,7 @@ test("closing does not give the keyboard to a hidden toolbox button", async () =
 	const { elements, body } = standInPage();
 	const btn = elements.get("termBtn")!;
 	const drawer = await drawerFor("b08b6688eaf9");
-	(globalThis as { document: { activeElement: unknown } }).document.activeElement = body;
+	(globalThis as unknown as { document: { activeElement: unknown } }).document.activeElement = body;
 	body.offsetParent = null;
 	drawer.toggle();
 	assert.equal(drawer.isOpen(), true);

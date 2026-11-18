@@ -85,8 +85,7 @@ commit's own account rather than on a check run now, the section below says so.
   when it settles.
 - **A thread is named by its first request, never by a counter.** `POST /thread` with no title leaves
   the card nameless, and its head shows nothing until there is something to show. The first message
-  names it twice over: `titleFromRequest` takes its opening words at once, and `nameThread` asks
-  `PI_STUDIO_NAME_MODEL` (default `openrouter/deepseek/deepseek-v4.1-flash-1017`, asked with thinking
+  names it twice over: `titleFromRequest` takes its opening words at once, and `nameThread` asks the helper model (the `helper model` row on the settings page; `PI_STUDIO_NAME_MODEL`, default `openrouter/deepseek/deepseek-v4.1-flash-1017`, asked with thinking
   off, naming off when empty) beside the turn for one to five better words, asked twice so a model that
   answers a short request instead of naming it gets a second sample, keeping the answer only
   when `plausibleTitle` accepts its shape

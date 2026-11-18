@@ -171,6 +171,15 @@ export async function onDefaults(req, res) {
 		next.provider = body.provider;
 		next.model = body.model;
 	}
+	// The helper model that names threads and drafts commit messages, checked the same way.
+	if (typeof body.helperProvider === "string" && typeof body.helperModel === "string") {
+		const { models } = await modelCatalog();
+		if (!models.some((one) => one.provider === body.helperProvider && one.model === body.helperModel)) {
+			return void fail(res, 409, "this machine cannot run that model");
+		}
+		next.helperProvider = body.helperProvider;
+		next.helperModel = body.helperModel;
+	}
 	setHomeDefaults(next);
 	answer(res, 200, { defaults: activeHomeDefaults() });
 }

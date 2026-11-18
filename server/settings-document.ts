@@ -15,7 +15,7 @@ import { CARD_AUDIENCE, CARD_DEFAULTS, CARD_LEVELS, CARD_VERBOSITY } from "./car
 import { PATH_NAMES, PROMPT_FOLDERS, promptFiles } from "./child/modes.ts";
 import { AGENTS_FILE, STUDIO_FILE } from "./workspace-prompt.ts";
 import { CHILD_INTEGRATION, INTEGRATION_DEFAULT } from "./integration.ts";
-import { THINKING_LEVELS } from "./models.ts";
+import { NAME_MODEL, THINKING_LEVELS } from "./models.ts";
 import { programOnPath } from "./paths.ts";
 
 /**
@@ -111,6 +111,8 @@ export type SettingsDocument = {
 type SettingsValues = Partial<{
 	provider: string;
 	model: string;
+	helperProvider: string;
+	helperModel: string;
 	thinking: string;
 	editor: string;
 	path: string;
@@ -133,7 +135,8 @@ type SettingsValues = Partial<{
  * changes. `""` is "nobody chose one yet", which is what the control's placeholder is for.
  */
 export function boardSettingsValues(chosen: SettingsValues, studio: SettingsValues): SettingsValues {
-	return { ...chosen, editor: studio.editor ?? "" };
+	// The helper model is studio-wide too, read from the defaults rather than copied into a board's config.
+	return { ...chosen, editor: studio.editor ?? "", helperProvider: studio.helperProvider ?? "", helperModel: studio.helperModel ?? "" };
 }
 
 /** What a caller knows and the document has to say: which scope, which values, and the three lines. */
@@ -167,8 +170,8 @@ const CARD_CONTENT = [
 function routeFor(scope: SettingsInput["scope"], id: string): string {
 	if (scope === "defaults") return "/defaults";
 	// `editor` is one program for the whole studio, so a board's page writes it where it is kept too: a board
-	// has no copy of it in its config, and `/config` would drop the key.
-	if (id === "editor") return "/defaults";
+	// has no copy of it in its config, and `/config` would drop the key. The helper model is the same.
+	if (id === "editor" || id === "helperModel") return "/defaults";
 	if (id === "model") return "/model";
 	if (id === "thinking") return "/thinking";
 	return "/config";
@@ -182,6 +185,7 @@ function routeFor(scope: SettingsInput["scope"], id: string): string {
 function writeFor(scope: SettingsInput["scope"], id: string): { route: string; body: Record<string, string> } {
 	const route = routeFor(scope, id);
 	if (id === "model") return { route, body: { provider: "@head", model: "@rest" } };
+	if (id === "helperModel") return { route, body: { helperProvider: "@head", helperModel: "@rest" } };
 	if (id === "thinking") return { route, body: scope === "board" ? { level: "@value" } : { thinking: "@value" } };
 	return { route, body: { [id]: "@value" } };
 }
@@ -270,6 +274,9 @@ function workspacePromptFields(): SettingsField[] {
  */
 export function settingsDocument({ scope, values, title, subtitle, foot }: SettingsInput): SettingsDocument {
 	const write = (id: string) => writeFor(scope, id);
+	// The helper model's own default, split at the first slash the way a chosen value is.
+	const [nameProvider, ...nameRest] = NAME_MODEL.split("/");
+	const nameId = nameRest.join("/");
 	return {
 		version: 1,
 		scope,
@@ -292,6 +299,22 @@ export function settingsDocument({ scope, values, title, subtitle, foot }: Setti
 						split: "/",
 						value: `${values.provider ?? ""}/${values.model ?? ""}`,
 						write: write("model"),
+					},
+					{
+						id: "helperModel",
+						label: "helper model",
+						type: "combo",
+						pick: "model",
+						source: "/models",
+						split: "/",
+						// No naming model at all (an empty NAME_MODEL and no choice): an empty control, not a bogus "/".
+						value: (() => {
+							const hp = values.helperProvider || nameProvider;
+							const hm = values.helperModel || nameId;
+							return hp && hm ? `${hp}/${hm}` : "";
+						})(),
+						help: "the model that names a thread and drafts a commit message",
+						write: write("helperModel"),
 					},
 					{
 						id: "thinking",
