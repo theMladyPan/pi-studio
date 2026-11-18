@@ -585,3 +585,50 @@ export async function sourceControlDiscard(folder: string, path: unknown): Promi
 		inFlight.delete(root);
 	}
 }
+
+// ---------- file at HEAD and .gitignore ----------
+
+/** One file's text at HEAD, for "Open File (HEAD)". */
+export type ScFileAtHead = { ok: true; content: string; truncated: boolean; binary: boolean } | { ok: false; error: string };
+
+/** A file as HEAD held it, bounded and binary-checked like every view. Nothing is checked out. */
+export async function sourceControlFileAtHead(folder: string, path: unknown): Promise<ScFileAtHead> {
+	const cleaned = cleanPaths([path]);
+	if (!cleaned.ok) return cleaned;
+	const file = cleaned.paths[0];
+	const root = await toplevel(folder);
+	if (!root) return { ok: false, error: "this folder is not a git repository" };
+	const shown = await runGit(root, ["--literal-pathspecs", "show", `HEAD:${file}`], { kind: "read", maxBytes: 2 * 1024 * 1024 + 1 });
+	if (!shown.ok) return { ok: false, error: shown.stderr || "that file is not in HEAD" };
+	const bytes = shown.stdout;
+	if (bytes.subarray(0, 8000).includes(0)) return { ok: true, content: "", truncated: shown.truncated, binary: true };
+	return { ok: true, content: bytes.toString("utf8"), truncated: shown.truncated, binary: false };
+}
+
+/**
+ * Add one untracked file to the repository's .gitignore, so it leaves the changed list for good.
+ * Only an untracked file qualifies: ignoring a tracked one would not untrack it, and the panel
+ * would be promising what git will not do.
+ */
+export async function sourceControlIgnore(folder: string, path: unknown): Promise<ScOutcome> {
+	const cleaned = cleanPaths([path]);
+	if (!cleaned.ok) return cleaned;
+	const file = cleaned.paths[0];
+	const root = await toplevel(folder);
+	if (!root) return { ok: false, error: "this folder is not a git repository" };
+	const status = await sourceControlStatus(folder);
+	if (!status.ok) return status;
+	const entry = status.status.changes.find((one) => one.path === file);
+	if (!entry || entry.kind !== "U") return { ok: false, error: `only an untracked file can be added to .gitignore: ${file}` };
+	const target = join(root, ".gitignore");
+	let existing = "";
+	try {
+		existing = readFileSync(target, "utf8");
+	} catch {
+		existing = "";
+	}
+	if (existing.split("\n").some((line) => line.trim() === file)) return await sourceControlStatus(folder);
+	const prefix = existing && !existing.endsWith("\n") ? "\n" : "";
+	await writeFile(target, existing + prefix + file + "\n", "utf8");
+	return await sourceControlStatus(folder);
+}

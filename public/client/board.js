@@ -5630,7 +5630,7 @@ function scRow(file, scope) {
   name.addEventListener("click", () => void scOpenDiff(file, scope));
   row.addEventListener("contextmenu", (event) => {
     event.preventDefault();
-    void scDiscard(file);
+    scOpenMenu(event, file, scope);
   });
   const move = el("button");
   move.type = "button";
@@ -5665,6 +5665,10 @@ function scConflictRow(file) {
   open.title = `resolve ${file.path} in the merge editor`;
   open.addEventListener("click", () => void scOpenConflict(file.path));
   row.append(open);
+  row.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    scOpenMenu(event, file, "merge");
+  });
   return row;
 }
 
@@ -5767,6 +5771,131 @@ async function scCommit() {
   }
   scBusy = false;
   scPaint();
+}
+
+// ---------- the file menu -------------------------------------------------
+// Right-click a file: open its diff, open the file, stage or unstage it, discard it, ignore it
+// when it is untracked, or find it in the files drawer. Everything here is one of those, and
+// everything destructive still asks first; the graph's own entries (its diff view, history,
+// format, meld) stay in the graph drawer where they belong.
+const scMenuEl = document.getElementById("scMenu");
+
+function scCloseMenu() {
+  scMenuEl.hidden = true;
+  scMenuEl.replaceChildren();
+}
+
+function scMenuItem(label, run, danger = false) {
+  const button = el("button");
+  button.type = "button";
+  button.textContent = label;
+  if (danger) button.className = "danger";
+  button.addEventListener("click", () => {
+    scCloseMenu();
+    void run();
+  });
+  return button;
+}
+
+function scOpenMenu(event, file, scope) {
+  const items = [];
+  if (scope === "staged" || scope === "changes") {
+    items.push(scMenuItem("Open Changes", () => scOpenDiff(file, scope)));
+    items.push(scMenuItem("Open File", () => exEditOpen(file.path)));
+    if (scope === "staged") items.push(scMenuItem("Open File (HEAD)", () => scOpenHead(file)));
+    items.push(scMenuItem(scope === "staged" ? "Unstage Changes" : "Stage Changes", () => scMove([file.path], scope === "changes")));
+    items.push(scMenuItem("Discard Changes", () => scDiscard(file), true));
+    if (scope === "changes" && file.kind === "U") items.push(scMenuItem("Add to .gitignore", () => scIgnore(file)));
+    items.push(scMenuItem("Reveal in Explorer", () => scReveal(file)));
+  } else {
+    items.push(scMenuItem("Open in Merge Editor", () => scOpenConflict(file.path)));
+    items.push(scMenuItem("Reveal in Explorer", () => scReveal(file)));
+  }
+  scMenuEl.replaceChildren(...items);
+  scMenuEl.hidden = false;
+  const x = Math.min(event.clientX, innerWidth - 220);
+  const y = Math.min(event.clientY, innerHeight - items.length * 32 - 16);
+  scMenuEl.style.left = `${Math.max(4, x)}px`;
+  scMenuEl.style.top = `${Math.max(4, y)}px`;
+  items[0].focus();
+}
+
+document.addEventListener("click", (event) => {
+  if (!scMenuEl.hidden && !event.target.closest("#scMenu")) scCloseMenu();
+});
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (scMenuEl.hidden || event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    scCloseMenu();
+  },
+  true,
+);
+
+/** One untracked file into the repository's .gitignore, then the lists re-read. */
+async function scIgnore(file) {
+  try {
+    const data = await scPost(`/source-control/ignore?${auth}`, { path: file.path });
+    scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null };
+    scSay(`${file.path} added to .gitignore`);
+  } catch (error) {
+    scSay(error.message);
+  }
+  scPaint();
+}
+
+/** The files drawer, opened on the folder that holds this file. */
+async function scReveal(file) {
+  toggleDrawer("files");
+  const slash = file.path.lastIndexOf("/");
+  if (slash < 0) return;
+  const dir = file.path.slice(0, slash);
+  exState.expanded.add(dir);
+  await exLoad(dir, { quiet: true });
+  exPaint();
+}
+
+/** A file as HEAD held it, read-only in the diff modal's own frame. */
+async function scOpenHead(file) {
+  if (scDiffEl.hidden) scDiffPrior = document.activeElement;
+  const gen = ++scDiffGen;
+  scDiffEl.hidden = false;
+  scDiffTitle.textContent = `${file.path} (HEAD)`;
+  scDiffFlags.textContent = "reading…";
+  scDiffBody.replaceChildren();
+  scDiffCopyBtn.disabled = true;
+  scDiffCloseBtn.focus();
+  let data;
+  try {
+    const res = await fetch(`/source-control/file?${auth}&path=${encodeURIComponent(file.path)}`);
+    data = await res.json();
+  } catch {
+    if (!scDiffEl.hidden && gen === scDiffGen) scDiffFlags.textContent = "the daemon did not answer";
+    return;
+  }
+  if (scDiffEl.hidden || gen !== scDiffGen) return;
+  if (!data.ok) {
+    scDiffFlags.textContent = data.error || "the file could not be read";
+    return;
+  }
+  const flags = [];
+  if (data.binary) flags.push("binary — this file is not text, so there is nothing to show");
+  if (data.truncated) flags.push("truncated — only the first 2 MB is shown");
+  scDiffFlags.textContent = flags.join(" · ");
+  scDiffText = data.binary ? "" : data.content ?? "";
+  if (!scDiffText) {
+    const empty = el("div", "ggViewerEmpty");
+    empty.textContent = data.binary ? "This file is not text." : "This file is empty.";
+    scDiffBody.append(empty);
+  } else {
+    const host = el("div");
+    const preview = createTextPreview(host, { readOnly: true });
+    preview.setDocument({ path: file.path, content: scDiffText });
+    scDiffBody.append(host);
+  }
+  scDiffCopyBtn.disabled = !scDiffText;
 }
 
 // ---------- diff modal and discard ------------------------------------------
@@ -8917,7 +9046,7 @@ const SHORTCUTS = [
       { keys: "ctrl+s", does: "in the editor, write the file back and keep it open" },
       { keys: "drag a row", does: "move it into a folder, and onto a thread card to reference it there" },
       { keys: "right-click a row", does: "cut, copy, paste, rename, delete, copy a path, or reference it in a thread" },
-      { keys: "right-click a file in source control", does: "discard its changes, after asking first" },
+      { keys: "right-click a file in source control", does: "open its menu: diff, open, stage, discard, ignore or reveal" },
       { keys: "click a file in source control", does: "view its diff before committing" },
       { keys: "esc", does: "close the editor when it has no unsaved changes, then the menu or the name being typed, then the drawer" },
     ],
