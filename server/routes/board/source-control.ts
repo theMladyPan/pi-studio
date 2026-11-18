@@ -10,7 +10,7 @@
  * missing identity is not the same sentence as "the daemon answered 409".
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { sourceControlCommit, sourceControlConflict, sourceControlContinue, sourceControlMessage, sourceControlResolve, sourceControlStage, sourceControlStatus } from "../../git/source-control.ts";
+import { sourceControlCommit, sourceControlConflict, sourceControlContinue, sourceControlDiff, sourceControlDiscard, sourceControlMessage, sourceControlResolve, sourceControlStage, sourceControlStatus } from "../../git/source-control.ts";
 import { answer, readJson } from "../../http.ts";
 
 /** The board's folder is the whole of this surface's world; nothing else is read from a board. */
@@ -55,7 +55,7 @@ export async function onSourceControlCommit(req: IncomingMessage, res: ServerRes
 	answer(res, 200, { ok: true, message: outcome.message });
 }
 
-/** Draft a message for the staged files with the cheapest model the board knows about. */
+/** Draft a message for the staged files with the model that names threads. */
 export async function onSourceControlMessage(_req: IncomingMessage, res: ServerResponse, board: BoardFolder): Promise<void> {
 	const outcome = await sourceControlMessage(board.folder);
 	if (!outcome.ok) return void refuse(res, outcome.error);
@@ -84,6 +84,23 @@ export async function onSourceControlContinue(req: IncomingMessage, res: ServerR
 	const body = await readJson(req, res);
 	if (body === null) return;
 	const outcome = await sourceControlContinue(board.folder, body);
+	if (!outcome.ok) return void refuse(res, outcome.error);
+	answer(res, 200, { ok: true, ...outcome.status });
+}
+
+/** One file's diff, staged or working, for the drawer's diff modal. */
+export async function onSourceControlDiff(req: IncomingMessage, res: ServerResponse, board: BoardFolder): Promise<void> {
+	const url = new URL(req.url ?? "/", "http://127.0.0.1");
+	const outcome = await sourceControlDiff(board.folder, url.searchParams.get("path"), url.searchParams.get("scope"));
+	if (!outcome.ok) return void refuse(res, outcome.error);
+	answer(res, 200, { ok: true, title: outcome.title, content: outcome.content, truncated: outcome.truncated, binary: outcome.binary });
+}
+
+/** Discard one file's changes: back to HEAD, or removed when it was never tracked. */
+export async function onSourceControlDiscard(req: IncomingMessage, res: ServerResponse, board: BoardFolder): Promise<void> {
+	const body = await readJson(req, res);
+	if (body === null) return;
+	const outcome = await sourceControlDiscard(board.folder, body.path);
 	if (!outcome.ok) return void refuse(res, outcome.error);
 	answer(res, 200, { ok: true, ...outcome.status });
 }

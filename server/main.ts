@@ -37,7 +37,7 @@ import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill,
 import { onShell } from "./routes/board/shell.ts";
 import { onGitInit, onGitMsg, onGitPage, onGitVendor } from "./routes/gitgraph.ts";
 import { onCommand } from "./routes/board/command.ts";
-import { onSourceControlCommit, onSourceControlConflict, onSourceControlContinue, onSourceControlMessage, onSourceControlResolve, onSourceControlStage, onSourceControlStatus, onSourceControlUnstage } from "./routes/board/source-control.ts";
+import { onSourceControlCommit, onSourceControlConflict, onSourceControlContinue, onSourceControlDiff, onSourceControlDiscard, onSourceControlMessage, onSourceControlResolve, onSourceControlStage, onSourceControlStatus, onSourceControlUnstage } from "./routes/board/source-control.ts";
 import { attachTerminal, stopAllTerminals, terminalSize } from "./terminal.ts";
 import { commandList, forMenu } from "./commands.ts";
 import { workdirOf } from "./worktrees/make.ts";
@@ -695,6 +695,12 @@ export const server = createServer((req, res) => {
 			await onSourceControlStatus(req, res, board);
 			return;
 		}
+		if (req.method === "GET" && url.pathname === "/source-control/diff") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onSourceControlDiff(req, res, board);
+			return;
+		}
 		if (req.method === "GET" && url.pathname === "/source-control/conflict") {
 			const board = boardFrom(url, res);
 			if (!board) return;
@@ -796,6 +802,7 @@ export const server = createServer((req, res) => {
 				"/source-control/message": onSourceControlMessage,
 				"/source-control/resolve": onSourceControlResolve,
 				"/source-control/continue": onSourceControlContinue,
+				"/source-control/discard": onSourceControlDiscard,
 				// The Explorer's six changes. None is in THREAD_ROUTES: a child may draw a card, and may not
 				// rename, delete or save over the files of the folder a human opened.
 				"/files/new": onFileNew,

@@ -648,6 +648,30 @@
   .ex-conflict-actions { display: flex; gap: 8px; align-items: center; }
   .ex-conflict-note { flex: 1; color: var(--muted); font: 11px var(--mono); }
   .ex-conflict-note.bad { color: #f85149; }
+  /* The diff modal: the graph viewer's table, over the board. */
+  #scDiff { position: fixed; inset: 0; z-index: 2300; padding: 40px 24px; background: rgba(1, 4, 9, .66);
+    display: flex; }
+  #scDiff[hidden] { display: none; }
+  #scDiff .panel { display: flex; flex-direction: column; width: min(980px, 100%); height: 100%;
+    margin: 0 auto; background: #0a0f16; border: 1px solid var(--border-bright); border-radius: 6px; overflow: hidden; }
+  #scDiff .panel-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex: none;
+    border-bottom: 1px solid var(--border); }
+  #scDiff .name { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #scDiff .sc-diff-body { flex: 1; min-height: 0; overflow: auto; }
+  #scDiff .sheet-btn { font: 11px var(--mono); color: var(--muted); background: #161b22;
+    border: 1px solid var(--border-bright); border-radius: 4px; padding: 4px 10px; cursor: pointer; margin-left: auto; }
+  #scDiff .sheet-btn + .sheet-btn { margin-left: 0; }
+  #scDiff .sheet-btn:hover { color: var(--text); }
+  /* The diff table's rules, shared with the git graph page that draws the same classes. */
+  .ggViewerTable { border-collapse: collapse; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    line-height: 1.5; width: 100%; }
+  .ggViewerTable td { padding: 0 0.6em; white-space: pre; vertical-align: top; }
+  .ggViewerNum { width: 1%; color: var(--muted); text-align: right; user-select: none; background: #010409; }
+  .ggViewerLine_added { color: #3fb950; background: rgba(63, 185, 80, 0.1); }
+  .ggViewerLine_removed { color: #f85149; background: rgba(248, 81, 73, 0.1); }
+  .ggViewerLine_hunk { color: #79c0ff; }
+  .ggViewerLine_meta { color: #8b949e; }
+  .ggViewerEmpty { padding: 1.2em; color: var(--muted); }
   #railNow { padding: 0 8px 6px; display: flex; flex-direction: column; gap: 4px; }
   /* A running row lives in its thread's card, so this strip holds only the runs whose card is closed. */
   #railNow:empty { display: none; }
@@ -1696,6 +1720,20 @@
       <button type="button" class="sheet-btn" id="exEditorSave">save</button>
       <button type="button" class="sheet-btn" id="exEditorClose">close</button>
     </div>
+  </div>
+</div>
+
+<!-- One file's diff, opened by clicking its name in source control: the same numbered table the
+     git graph draws, over the board, so a change can be read before it is committed. -->
+<div id="scDiff" hidden role="dialog" aria-modal="true" aria-labelledby="scDiffTitle">
+  <div class="panel">
+    <div class="panel-head">
+      <span class="name" id="scDiffTitle">diff</span>
+      <span class="ex-editor-status" id="scDiffFlags"></span>
+      <button type="button" class="sheet-btn" id="scDiffCopy">copy</button>
+      <button type="button" class="sheet-btn" id="scDiffClose">close</button>
+    </div>
+    <div class="sc-diff-body" id="scDiffBody"></div>
   </div>
 </div>
 

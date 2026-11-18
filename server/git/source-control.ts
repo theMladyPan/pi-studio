@@ -1,7 +1,7 @@
 /**
  * The source control drawer's backend: reading staged, changed and conflicted files, moving a file
- * between the two lists, committing the staged files, drafting a commit message with the cheapest
- * model the board already knows about, and concluding a merge once its conflicts are resolved.
+ * between the two lists, committing the staged files, drafting a commit message with the fast
+ * model that names threads, and concluding a merge once its conflicts are resolved.
  *
  * It is not the Git Graph page. That page keeps its own dispatch and its own verbs (branches, tags,
  * stashes, merges); this file owns only what a source control panel asks of git, and it asks through
@@ -25,12 +25,13 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { chmod, writeFile, rename } from "node:fs/promises";
+import { chmod, rm, writeFile, rename } from "node:fs/promises";
+import { sourceDiff } from "./gitgraph/view.ts";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { runGit } from "./exec.ts";
 import { piCli } from "../child/argv.ts";
-import { modelCatalog } from "../models.ts";
+import { NAME_MODEL } from "../worktrees/name.ts";
 
 /** One file as the panel draws it: its path from the repository root and the letter on its right. */
 export type ScFile = { path: string; kind: string; oldPath?: string };
@@ -69,9 +70,6 @@ const MAX_FILE_BYTES = 512 * 1024;
 /** The empty tree, which un-staging from an unborn HEAD restores from: there is no HEAD to restore from. */
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
-/** Names that are never a message worth drafting, whatever their price tag says. */
-const NOT_DRAFTABLE = ["preview", "research", "robotics", "computer-use", "embedding", "rerank"];
-
 /** Repositories with a git change in flight in this process, keyed by their root. */
 const inFlight = new Set<string>();
 
@@ -80,35 +78,6 @@ function holdWrite(root: string): { ok: true } | { ok: false; error: string } {
 	if (inFlight.has(root)) return { ok: false, error: "another git change is already in flight in this repository" };
 	inFlight.add(root);
 	return { ok: true };
-}
-
-/** What a name says about its price, cheapest first. A name with no cheap word in it is the dear end. */
-function cheapness(model: string): number {
-	// Words, not letters: `gemini` carries `mini` inside it, and a pro model is not a mini one.
-	const words = model.toLowerCase().split(/[^a-z0-9]+/);
-	if (words.some((word) => word === "lite" || word === "mini" || word === "nano")) return 0;
-	if (words.includes("haiku")) return 1;
-	if (words.some((word) => word === "flash" || word === "small")) return 2;
-	return 3;
-}
-
-/**
- * The cheapest model in a list, by name — because the list carries no prices, and a guess written
- * down beats a guess spread across the caller. Deterministic on purpose: the same list always
- * picks the same model, and the tie-break is the shorter name, then the name itself.
- */
-export function cheapestModel(models: readonly { provider: string; model: string }[]): { provider: string; model: string } | null {
-	const usable = (models ?? []).filter(
-		(one) => one && typeof one.provider === "string" && typeof one.model === "string" && one.provider && one.model && !NOT_DRAFTABLE.some((word) => one.model.toLowerCase().includes(word)),
-	);
-	if (!usable.length) return null;
-	return [...usable].sort((a, b) => {
-		const byPrice = cheapness(a.model) - cheapness(b.model);
-		if (byPrice) return byPrice;
-		if (a.model.length !== b.model.length) return a.model.length - b.model.length;
-		const byModel = a.model.localeCompare(b.model);
-		return byModel || a.provider.localeCompare(b.provider);
-	})[0];
 }
 
 /** The repository root for a folder, or null when the folder is not in one. */
@@ -318,11 +287,11 @@ export async function sourceControlCommit(folder: string, message: unknown): Pro
 }
 
 /** One single-answer pi run: no tools, no session, no extensions, and a hard ceiling on time. */
-function runDraft(cli: { command: string; args: string[] }, folder: string, model: { provider: string; model: string }, prompt: string): Promise<string> {
+function runDraft(cli: { command: string; args: string[] }, folder: string, prompt: string): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			cli.command,
-			[...cli.args, "-p", "--no-session", "--no-tools", "--no-extensions", "--no-skills", "--no-context-files", "--provider", model.provider, "--model", model.model, "--thinking", "off", prompt],
+			[...cli.args, "-p", "--no-session", "--no-tools", "--no-extensions", "--no-skills", "--no-context-files", "--model", NAME_MODEL, "--thinking", "off", prompt],
 			{ cwd: folder, stdio: ["ignore", "pipe", "pipe"] },
 		);
 		const out: Buffer[] = [];
@@ -375,19 +344,14 @@ export async function draftSummary(folder: string): Promise<string> {
 
 export type ScDraftDeps = {
 	run?: typeof runDraft;
-	catalog?: () => Promise<{ models: { provider: string; model: string }[] } | null>;
 };
 
-/** Draft one commit message for the staged files. Never commits, and never invents one on failure. */
+/** Draft one commit message for the staged files with the model that names threads. Never commits, and never invents one on failure. */
 export async function sourceControlMessage(folder: string, deps: ScDraftDeps = {}): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
 	const status = await sourceControlStatus(folder);
 	if (!status.ok) return status;
 	if (status.status.operation === "merge") return { ok: false, error: "a merge is in flight: its message is already written" };
 	if (!status.status.staged.length) return { ok: false, error: "nothing is staged: stage a file first" };
-	const readCatalog = deps.catalog ?? (async () => (await modelCatalog()) as { models: { provider: string; model: string }[] } | null);
-	const catalog = await readCatalog();
-	const model = cheapestModel(catalog?.models ?? []);
-	if (!model) return { ok: false, error: "no model is available to draft a message" };
 	const summary = await draftSummary(folder);
 	const prompt = [
 		"Write exactly one line of a git commit message in conventional style: type(scope): summary.",
@@ -398,7 +362,7 @@ export async function sourceControlMessage(folder: string, deps: ScDraftDeps = {
 	].join("\n");
 	let answer: string;
 	try {
-		answer = await (deps.run ?? runDraft)(piCli(), folder, model, prompt);
+		answer = await (deps.run ?? runDraft)(piCli(), folder, prompt);
 	} catch (error) {
 		return { ok: false, error: `the model could not draft a message: ${(error as Error).message}` };
 	}
@@ -524,6 +488,98 @@ export async function sourceControlContinue(folder: string, input: { message?: u
 		if (conflicts.conflicts.length) return { ok: false, error: `conflicts remain: ${conflicts.conflicts.map((one) => one.path).join(", ")}` };
 		const committed = await runGit(root, ["commit", "--cleanup=strip", "-m", text], { kind: "write" });
 		if (!committed.ok) return { ok: false, error: committed.stderr || "git could not conclude the merge" };
+		return await sourceControlStatus(folder);
+	} finally {
+		inFlight.delete(root);
+	}
+}
+
+// ---------- diff and discard ----------
+
+
+/** One file's diff for the drawer: the text, and whether it was cut or binary. */
+export type ScDiff = { ok: true; title: string; content: string; truncated: boolean; binary: boolean } | { ok: false; error: string };
+
+/**
+ * One file's diff, staged or working, for the panel's diff modal. An untracked file is drawn as
+ * the diff that would add it, which `git diff` will not produce on its own. A conflicted file
+ * has no diff to show here: it opens in the merge editor instead.
+ */
+export async function sourceControlDiff(folder: string, path: unknown, scope: unknown): Promise<ScDiff> {
+	const cleaned = cleanPaths([path]);
+	if (!cleaned.ok) return cleaned;
+	const file = cleaned.paths[0];
+	if (scope !== "staged" && scope !== "changes") return { ok: false, error: "a diff scope is needed: staged or changes" };
+	const root = await toplevel(folder);
+	if (!root) return { ok: false, error: "this folder is not a git repository" };
+	const conflicts = await conflictsOf(root);
+	if (!conflicts.ok) return conflicts;
+	if (conflicts.conflicts.some((one) => one.path === file)) return { ok: false, error: "a conflicted file opens in the merge editor, not as a diff" };
+	const status = await sourceControlStatus(folder);
+	if (!status.ok) return status;
+	const listed = scope === "staged" ? status.status.staged : status.status.changes;
+	const entry = listed.find((one) => one.path === file);
+	if (!entry) return { ok: false, error: `that file is not in the ${scope === "staged" ? "staged" : "changed"} list: ${file}` };
+	// A rename needs both pathspecs to draw as a rename rather than an unrelated add.
+	const diff = await sourceDiff(root, scope, entry.oldPath ? [entry.oldPath, file] : [file], entry.kind === "U");
+	if (!diff.ok) return diff;
+	return {
+		ok: true,
+		title: `${file} (${scope === "staged" ? "staged" : "working tree"})`,
+		content: diff.binary ? "" : diff.text,
+		truncated: diff.truncated,
+		binary: diff.binary,
+	};
+}
+
+/**
+ * Discard one file's changes: the file goes back to HEAD, staged and unstaged alike, and an
+ * untracked file is removed. One file per call, because a discard is a decision about one file,
+ * and it refuses a conflicted file, a link, and anything outside the repository.
+ */
+export async function sourceControlDiscard(folder: string, path: unknown): Promise<ScOutcome> {
+	const cleaned = cleanPaths([path]);
+	if (!cleaned.ok) return cleaned;
+	const file = cleaned.paths[0];
+	const root = await toplevel(folder);
+	if (!root) return { ok: false, error: "this folder is not a git repository" };
+	const conflicts = await conflictsOf(root);
+	if (!conflicts.ok) return conflicts;
+	if (conflicts.conflicts.some((one) => one.path === file)) return { ok: false, error: "a conflicted file is resolved in the merge editor, not discarded" };
+	const operation = await operationOf(root);
+	if (operation.operation === "merge") return { ok: false, error: "during a merge a file is resolved, not discarded" };
+	const held = holdWrite(root);
+	if (!held.ok) return held;
+	try {
+		const status = await sourceControlStatus(folder);
+		if (!status.ok) return status;
+		// Only a file the lists actually name may be discarded: a directory or the repository
+		// root itself is not a file, and `git restore -- .` would discard everything at once.
+		const entry = [...status.status.staged, ...status.status.changes].find((one) => one.path === file);
+		if (!entry) return { ok: false, error: `that file has no changes to discard: ${file}` };
+		const untracked = entry.kind === "U";
+		if (untracked) {
+			const safe = safeFile(root, file);
+			if (!safe.ok) return safe;
+			await rm(safe.abs);
+			return await sourceControlStatus(folder);
+		}
+		const head = await runGit(root, ["rev-parse", "--verify", "--quiet", "HEAD"], { kind: "read" });
+		if (!head.ok) {
+			// No HEAD yet: discarding means the file was never added, so it leaves the index and the disk.
+			// Forced, because the working file may have moved on since it was staged; checked, so a
+			// failure here never deletes a file that is still staged.
+			const removed = await runGit(root, ["--literal-pathspecs", "rm", "--cached", "--force", "--ignore-unmatch", "--", file], { kind: "write" });
+			if (!removed.ok) return { ok: false, error: removed.stderr || "git could not remove the file from the index" };
+			const safe = safeFile(root, file);
+			if (safe.ok) await rm(safe.abs);
+			return await sourceControlStatus(folder);
+		}
+		// A rename has two names in the index; restoring only the destination would leave the
+		// source staged for deletion, so both go back.
+		const restorePaths = entry.oldPath ? [file, entry.oldPath] : [file];
+		const restored = await runGit(root, ["--literal-pathspecs", "restore", "--source=HEAD", "--staged", "--worktree", "--", ...restorePaths], { kind: "write" });
+		if (!restored.ok) return { ok: false, error: restored.stderr || "git could not discard the changes" };
 		return await sourceControlStatus(folder);
 	} finally {
 		inFlight.delete(root);
