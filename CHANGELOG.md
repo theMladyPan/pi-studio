@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- docs: Allow a release's back-merge into dev to be a fast-forward when main carries nothing beyond the release merge, so the history drops one empty commit per release. [t-b790eddd]
+
 ## [0.3.0] - 2026-11-18
 
 - feat: Press x to roll a terminal drawer up from the bottom of the board: a real shell in the workspace folder, kept alive between rolls, so a few commands can be typed without leaving the board. Ending the shell (Ctrl+D or `exit`) rolls the drawer down, and the next roll up starts a fresh shell.
