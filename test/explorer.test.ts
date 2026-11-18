@@ -136,6 +136,8 @@ type ExCore = {
 	drawerToggle(state: { open: string }, name: string): { open: string };
 	escapeTarget(open: Record<string, boolean | undefined>): string;
 	boardLetter(key: string, flags?: { shift?: boolean; typing?: boolean; panel?: boolean; surface?: boolean }): string;
+	conflictHunks(text: string): { index: number; start: number; end: number; ours: string[]; theirs: string[]; base: string[] | null }[];
+	conflictAccept(text: string, index: number, choice: string): string;
 	copyText(text: string, ports: ExPorts): Promise<unknown>;
 	icon(theme: unknown, entry: { name: string; dir?: boolean }): ExIcon | null;
 	gitKind(git: string): string;
@@ -205,6 +207,8 @@ test("a plain f is the files drawer, and shift+f is the fit it took from plain f
 	assert.equal(core.boardLetter("F"), "fit", "the capital is the shifted key, whatever the event says");
 	assert.equal(core.boardLetter("a"), "activity");
 	assert.equal(core.boardLetter("c"), "cards");
+	assert.equal(core.boardLetter("d"), "source");
+	assert.equal(core.boardLetter("D"), "", "a shifted d is not the drawer's key");
 	// Nothing else is taken by this list, so the board's other letters reach their own handlers.
 	for (const key of ["0", "m", "n", "o", "t", "g", "q", "p", "r"]) assert.equal(core.boardLetter(key), "", key);
 });
@@ -215,6 +219,7 @@ test("a letter waits while a field is typed in, a panel is open or the drawer's 
 		assert.equal(core.boardLetter("f", { [lock]: true, shift: true }), "", `shift+f waits for ${lock}`);
 		assert.equal(core.boardLetter("a", { [lock]: true }), "", `a waits for ${lock}`);
 		assert.equal(core.boardLetter("c", { [lock]: true }), "", `c waits for ${lock}`);
+		assert.equal(core.boardLetter("d", { [lock]: true }), "", `d waits for ${lock}`);
 	}
 	// And a shifted letter the list does not own does nothing rather than falling through.
 	assert.equal(core.boardLetter("m", { shift: true }), "");
@@ -749,4 +754,34 @@ test("the keys panel says what the keys do, including f as the drawer and shift+
 	// The map button still names its own key, which the project's own rule asks for.
 	const html = readFileSync(HTML, "utf8");
 	assert.ok(html.includes('id="mapBtn" aria-pressed="true" title="hide the board overview (m)"'));
+});
+
+test("conflict hunks are read with their two sides, and accepting one rewrites only it", () => {
+	const text = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\nafter\n";
+	const hunks = core.conflictHunks(text);
+	assert.equal(hunks.length, 1);
+	assert.deepEqual(hunks[0].ours, ["ours"]);
+	assert.deepEqual(hunks[0].theirs, ["theirs"]);
+	assert.equal(core.conflictAccept(text, 0, "current"), "before\nours\nafter\n");
+	assert.equal(core.conflictAccept(text, 0, "incoming"), "before\ntheirs\nafter\n");
+	assert.equal(core.conflictAccept(text, 0, "both"), "before\nours\ntheirs\nafter\n");
+	// An accepted text has no hunks left, so a second acceptance is a no-op rather than a guess.
+	assert.equal(core.conflictAccept(core.conflictAccept(text, 0, "both"), 0, "current"), "before\nours\ntheirs\nafter\n");
+});
+
+test("a diff3 hunk carries its base, and an unclosed block is not a hunk", () => {
+	const text = "<<<<<<< HEAD\nours\n||||||| base\nancestor\n=======\ntheirs\n>>>>>>> side\n";
+	const hunks = core.conflictHunks(text);
+	assert.equal(hunks.length, 1);
+	assert.deepEqual(hunks[0].base, ["ancestor"]);
+	assert.equal(core.conflictHunks("<<<<<<< HEAD\nnever closed\n").length, 0);
+	// A literal marker example in prose is followed by no closing side, so it is left alone.
+	assert.equal(core.conflictHunks("the markers <<<<<<< and >>>>>>> are examples\n").length, 0);
+});
+
+test("wide conflict markers are hunks too, ten of them", () => {
+	const wide = "<".repeat(10) + " HEAD\nours\n" + "=".repeat(10) + "\ntheirs\n" + ">".repeat(10) + " side\n";
+	const hunks = core.conflictHunks(wide);
+	assert.equal(hunks.length, 1);
+	assert.equal(core.conflictAccept(wide, 0, "both"), "ours\ntheirs\n");
 });

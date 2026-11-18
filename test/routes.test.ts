@@ -3461,4 +3461,45 @@ describe("routes", { concurrency: 8 }, () => {
 			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
+	/**
+	 * The source control drawer's routes answer over a real workspace: the status names the two
+	 * lists, staging moves a file across, and committing the staged files clears them. A commit
+	 * with nothing staged is a JSON refusal with a reason, not a bare status code.
+	 */
+	test("the source control routes list, stage and commit over a workspace", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-source-routes-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-source-work-"));
+		execFileSync("git", ["init", "-q", "-b", "dev", folder]);
+		execFileSync("git", ["-C", folder, "config", "user.email", "test@example.invalid"]);
+		execFileSync("git", ["-C", folder, "config", "user.name", "test"]);
+		writeFileSync(join(folder, "readme.md"), "hello\n");
+		execFileSync("git", ["-C", folder, "add", "."]);
+		execFileSync("git", ["-C", folder, "commit", "-qm", "first"]);
+		writeFileSync(join(folder, "readme.md"), "changed\n");
+		const daemon = await boot(stateHome);
+		try {
+			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+			const status = JSON.parse((await get(daemon, `/source-control/status?token=${daemon.token}&workspace=${board.id}`)).body);
+			assert.equal(status.ok, true, status.error ?? "");
+			assert.deepEqual(status.changes.map((one: { path: string }) => one.path), ["readme.md"]);
+
+			const staged = JSON.parse((await postTo(daemon, board.id, "/source-control/stage", { paths: ["readme.md"] })).body);
+			assert.equal(staged.ok, true, staged.error ?? "");
+			assert.deepEqual(staged.staged.map((one: { path: string }) => one.path), ["readme.md"]);
+
+			const committed = JSON.parse((await postTo(daemon, board.id, "/source-control/commit", { message: "docs: change the readme" })).body);
+			assert.equal(committed.ok, true, committed.error ?? "");
+			const after = JSON.parse((await get(daemon, `/source-control/status?token=${daemon.token}&workspace=${board.id}`)).body);
+			assert.deepEqual(after.staged, []);
+			assert.deepEqual(after.changes, []);
+
+			const refused = await postTo(daemon, board.id, "/source-control/commit", { message: "feat: nothing staged" });
+			assert.equal(refused.status, 409);
+			assert.match(JSON.parse(refused.body).error, /nothing is staged/);
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder]) await removeTree(gone);
+		}
+	});
+
 });

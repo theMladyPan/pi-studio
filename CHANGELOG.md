@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - docs: Allow a release's back-merge into dev to be a fast-forward when main carries nothing beyond the release merge, so the history drops one empty commit per release. [t-b790eddd]
+- feat: Press d to open a source control drawer on the left: changed and staged files in their own lists, a file moved between them with +/−, a commit message typed by hand or drafted by the cheapest model the board knows about, and a Commit that commits only the staged files. During a merge the drawer lists conflicted files, opens them in a merge editor that accepts the current, incoming or both sides of each hunk, stages the resolved file, and concludes the merge with Continue. Publishing and pulling stay in the git graph drawer. [t-b99b9f59]
 
 ## [0.3.0] - 2026-11-18
 
