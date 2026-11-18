@@ -786,6 +786,12 @@ test("the header chips and the settings hold the map and the hotkeys", () => {
 	assert.ok(!board.includes('getElementById("keysBtn")'));
 });
 
+test("board keys wait behind an open header menu", () => {
+	const board = readFileSync(BOARD, "utf8");
+	const panelUp = board.slice(board.indexOf("const panelUp"), board.indexOf("const panelUp") + 220);
+	assert.ok(panelUp.includes("headerMenus.some(({ menu }) => !menu.hidden)"), "an open header menu counts as a panel up");
+});
+
 test("conflict hunks are read with their two sides, and accepting one rewrites only it", () => {
 	const text = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\nafter\n";
 	const hunks = core.conflictHunks(text);

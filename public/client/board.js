@@ -8931,10 +8931,11 @@ function paintShortcuts() {
 
 /**
  * Whether a panel of the header is reading the screen. Both of them cover the board, so the letters the
- * map on screen teaches are not the letters a board key may act on behind it. The git drawer covers it
+ * map on screen teaches are not the letters a board key may act on behind it. An open header menu covers
+ * the board the same way, so its own letters wait behind it too. The git drawer covers it
  * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too.
  */
-const panelUp = () => !configPanel.hidden || gitDrawer.isOpen() || terminalDrawer.isOpen();
+const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || gitDrawer.isOpen() || terminalDrawer.isOpen();
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it

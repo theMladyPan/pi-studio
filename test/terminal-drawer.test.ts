@@ -19,6 +19,9 @@ class FakeElement {
 	disabled = false;
 	inert = true;
 	className = "";
+	offsetParent: unknown = {};
+	isConnected = true;
+	focused = false;
 	children: FakeElement[] = [];
 	attributes = new Map<string, string>();
 	classes = new Set<string>();
@@ -45,7 +48,13 @@ class FakeElement {
 		this.children.push(child);
 	}
 
-	focus() {}
+	focus() {
+		this.focused = true;
+	}
+
+	blur() {
+		this.focused = false;
+	}
 
 	get parentElement() {
 		return new FakeElement();
@@ -114,6 +123,21 @@ test("one press rolls the drawer up and the next rolls it down", async () => {
 	assert.equal(drawer.isOpen(), false, "and the next rolls it down");
 	assert.equal(body.classList.contains("term-open"), false);
 	assert.equal(btn.getAttribute("aria-expanded"), "false");
+});
+
+test("closing does not give the keyboard to a hidden toolbox button", async () => {
+	const { elements, body } = standInPage();
+	const btn = elements.get("termBtn")!;
+	const drawer = await drawerFor("b08b6688eaf9");
+	(globalThis as { document: { activeElement: unknown } }).document.activeElement = body;
+	body.offsetParent = null;
+	drawer.toggle();
+	assert.equal(drawer.isOpen(), true);
+	// The button now lives in the toolbox menu, so it is hidden whenever the menu is shut.
+	btn.offsetParent = null;
+	drawer.toggle();
+	assert.equal(drawer.isOpen(), false);
+	assert.equal(btn.focused, false, "a hidden menu item takes no focus");
 });
 
 test("a board with no folder says so instead of opening a terminal", async () => {
