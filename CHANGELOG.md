@@ -5,6 +5,7 @@
 - fix: Remove the right-hand git tree strip from the board, so the daemon no longer polls the repository every few seconds for a picture nobody could click. The full graph on g, source control on d and the terminal remain; an open source control drawer no longer re-reads on commits made elsewhere, it reads again on the next open. [t-40e70185]
 - fix: Choose the default model on the crossroads settings page from a dropdown of the scoped models pi cycles, instead of typing it, so the list matches what the board's model picker offers. [t-39485919]
 - feat: Add a helper model setting, chosen from the same scoped list, for the model that names a thread and drafts a commit message, replacing the hardcoded naming model. [t-39485919]
+- feat: Consolidate the top bar into `view`, `housekeeping` and `toolbox` menu chips, and move the overview map toggle and the hotkeys list into board settings, so the header keeps only the doors and actions used most. [t-e07b713a]
 
 ## [0.4.0] - 2026-11-18
 

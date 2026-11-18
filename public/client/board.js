@@ -33,11 +33,89 @@ const auth = workspace ? `workspace=${encodeURIComponent(workspace)}` : "";
 // commit and the repository the human left in it between rolls. `typingSomewhere` is passed rather
 // than copied, so the drawer and the board's letters read a field the same way.
 const gitDrawer = createGitDrawer({ workspace, typingSomewhere });
-document.getElementById("gitBtn").addEventListener("click", () => gitDrawer.toggle());
+document.getElementById("gitBtn").addEventListener("click", () => {
+  closeHeaderMenus();
+  gitDrawer.toggle();
+});
 // One terminal drawer for the life of the page, beside the git one: the shell and the screen
 // survive between rolls, so a command mid-run is still running when the drawer comes back up.
 const terminalDrawer = createTerminalDrawer({ workspace, typingSomewhere });
-document.getElementById("termBtn").addEventListener("click", () => terminalDrawer.toggle());
+document.getElementById("termBtn").addEventListener("click", () => {
+  closeHeaderMenus();
+  terminalDrawer.toggle();
+});
+// ---------- the header menus ---------------------------------------------
+// Three chips in the header, each opening one menu outside it. A menu that closed while its item held
+// the focus would leave the keyboard on a hidden element, so closing hands the focus to the chip.
+const viewBtn = document.getElementById("viewBtn");
+const viewMenu = document.getElementById("viewMenu");
+const housekeepingBtn = document.getElementById("housekeepingBtn");
+const housekeepingMenu = document.getElementById("housekeepingMenu");
+const toolboxBtn = document.getElementById("toolboxBtn");
+const toolboxMenu = document.getElementById("toolboxMenu");
+const headerMenus = [
+  { btn: viewBtn, menu: viewMenu },
+  { btn: housekeepingBtn, menu: housekeepingMenu },
+  { btn: toolboxBtn, menu: toolboxMenu },
+];
+// The `new` confirmation lives in the housekeeping menu: shutting the menu resets it, so the next
+// opening starts at `new` rather than a lingering `sure?`. Assigned where `armedPress` runs.
+let resetNewBtn = () => {};
+
+function placeHeaderMenu(menu, anchor) {
+  const rect = anchor.getBoundingClientRect();
+  const width = menu.offsetWidth || 170;
+  menu.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`;
+  menu.style.top = `${rect.bottom + 4}px`;
+}
+
+function closeHeaderMenus() {
+  for (const { btn, menu } of headerMenus) {
+    if (menu.hidden) continue;
+    const heldFocus = menu.contains(document.activeElement);
+    menu.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    if (menu === housekeepingMenu) resetNewBtn();
+    if (heldFocus) btn.focus();
+  }
+}
+
+function toggleHeaderMenu(btn, menu) {
+  const opening = menu.hidden;
+  closeHeaderMenus();
+  shownConfig(false);
+  closePick();
+  if (!opening) return;
+  menu.hidden = false;
+  btn.setAttribute("aria-expanded", "true");
+  placeHeaderMenu(menu, btn);
+  menu.querySelector("button")?.focus();
+}
+
+viewBtn.addEventListener("click", () => toggleHeaderMenu(viewBtn, viewMenu));
+housekeepingBtn.addEventListener("click", () => toggleHeaderMenu(housekeepingBtn, housekeepingMenu));
+toolboxBtn.addEventListener("click", () => toggleHeaderMenu(toolboxBtn, toolboxMenu));
+
+for (const { menu } of headerMenus) {
+  menu.addEventListener("keydown", (event) => {
+    const items = [...menu.querySelectorAll("button")];
+    const at = items.indexOf(document.activeElement);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      items[(at + step + items.length) % items.length].focus();
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      items[0].focus();
+    } else if (event.key === "End") {
+      event.preventDefault();
+      items[items.length - 1].focus();
+    } else if (event.key === "Tab") {
+      closeHeaderMenus();
+    }
+  });
+}
+
 // The path already says what this page is: `/w/<id>` is a board of threads, whose field lives
 // inside a card. Waiting for a frame from the server to decide that left a board looking like a
 // one-session board whenever the stream was slow, stale or dead.
@@ -4948,7 +5026,7 @@ const MAP_PAD = 8;
 const MAP_COLOUR = { note: "#7d8590", code: "#d2a8ff", sticky: "#d29922", question: "#db61a2" };
 const mapCanvas = document.getElementById("minimap");
 const mapCtx = mapCanvas.getContext("2d");
-const mapBtn = document.getElementById("mapBtn");
+const mapToggle = document.getElementById("mapToggle");
 let mapOn = true;
 let mapQueued = false;
 /** The projection the last paint used, so a press lands where the eye saw the picture. */
@@ -5093,8 +5171,10 @@ mapCanvas.addEventListener("pointerdown", (event) => {
 });
 
 function paintMapBtn() {
-  mapBtn.setAttribute("aria-pressed", mapOn ? "true" : "false");
-  mapBtn.title = mapOn ? "hide the board overview (m)" : "show the board overview (m)";
+  // The overview map is a checkbox in settings, so it says what the board shows rather than hiding
+  // behind a header button that no longer exists.
+  mapToggle.checked = mapOn;
+  mapToggle.title = mapOn ? "hide the board overview (m)" : "show the board overview (m)";
 }
 
 /**
@@ -5111,14 +5191,23 @@ function setMap(on) {
 
 paintMapBtn();
 document.body.classList.toggle("map-on", mapOn);
-mapBtn.addEventListener("click", () => setMap(!mapOn));
+mapToggle.addEventListener("change", () => setMap(mapToggle.checked));
 // The window rect is measured against the canvas, so the map follows the box it is drawn in:
 // a resized window and a rail that opens, closes or is dragged all land here.
 new ResizeObserver(() => scheduleMap()).observe(viewport);
 
-document.getElementById("fit").addEventListener("click", fitAll);
-document.getElementById("tidy").addEventListener("click", tidy);
-document.getElementById("stack").addEventListener("click", stack);
+document.getElementById("fit").addEventListener("click", () => {
+  closeHeaderMenus();
+  fitAll();
+});
+document.getElementById("tidy").addEventListener("click", () => {
+  closeHeaderMenus();
+  tidy();
+});
+document.getElementById("stack").addEventListener("click", () => {
+  closeHeaderMenus();
+  stack();
+});
 // The thread order is the human's furniture too: the button says what the board does now, and
 // its title says what a click will do.
 const orderBtn = document.getElementById("threadOrder");
@@ -5194,6 +5283,8 @@ function paintDrawers() {
   for (const [name, door] of Object.entries(doors)) {
     door.setAttribute("aria-expanded", drawerState.open === name ? "true" : "false");
   }
+  // Files and source live in the toolbox menu, so the chip says when one of them is open.
+  toolboxBtn.classList.toggle("has-open", drawerState.open === "files" || drawerState.open === "source");
   try {
     localStorage.setItem("board.railOff", drawerState.open ? "0" : "1");
   } catch {}
@@ -5244,7 +5335,10 @@ function restoreDrawers() {
 restoreDrawers();
 
 for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn })) {
-  door.addEventListener("click", () => toggleDrawer(name));
+  door.addEventListener("click", () => {
+    closeHeaderMenus();
+    toggleDrawer(name);
+  });
 }
 for (const shut of document.querySelectorAll("#drawers .rail-close")) {
   shut.addEventListener("click", () => closeDrawers());
@@ -8645,8 +8739,6 @@ async function postThreadField(route, body) {
 // serves, so a setting the daemon gains is a setting this panel shows.
 const configBtn = document.getElementById("configBtn");
 const configPanel = document.getElementById("boardConfig");
-const keysBtn = document.getElementById("keysBtn");
-const keysPanel = document.getElementById("shortcutPanel");
 const shortcutList = document.getElementById("shortcutList");
 const cfgTree = document.getElementById("cfgTree");
 // The document the panel is drawn from, and what was drawn from it: every leaf in document order, and
@@ -8837,17 +8929,13 @@ function paintShortcuts() {
   );
 }
 
-function shownKeys(on) {
-  keysPanel.hidden = !on;
-  keysBtn.setAttribute("aria-expanded", on ? "true" : "false");
-}
-
 /**
  * Whether a panel of the header is reading the screen. Both of them cover the board, so the letters the
- * map on screen teaches are not the letters a board key may act on behind it. The git drawer covers it
+ * map on screen teaches are not the letters a board key may act on behind it. An open header menu covers
+ * the board the same way, so its own letters wait behind it too. The git drawer covers it
  * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too.
  */
-const panelUp = () => !keysPanel.hidden || !configPanel.hidden || gitDrawer.isOpen() || terminalDrawer.isOpen();
+const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || gitDrawer.isOpen() || terminalDrawer.isOpen();
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
@@ -9317,7 +9405,7 @@ const keptHoldsWork = (reason) => !KEPT_NOT_ABOUT_WORK.some((said) => String(rea
  * touch, then the threads and rail rows it forgot. A section with nothing in it is left out, so a clean
  * that took one worktree does not fill the sheet with empty headings.
  */
-function openCleanSheet({ kept, removed, dead, rows, noun = "worktree" }, opener = cleanBtn) {
+function openCleanSheet({ kept, removed, dead, rows, noun = "worktree" }, opener = housekeepingBtn) {
   cleanedOpener = opener;
   cleanPanelName.textContent = [
     removed.length ? `${counted(removed.length, noun)} removed` : "",
@@ -9381,7 +9469,7 @@ function closeCleanSheet() {
   cleanPanelBody.replaceChildren();
   // Cleaning is a click on a clean button, so the focus goes back to the one that was pressed: the rail's
   // own press can have gone with the rows it freed, and then the footer's button is the same press.
-  const back = cleanedOpener && cleanedOpener.offsetParent !== null ? cleanedOpener : cleanBtn;
+  const back = cleanedOpener && cleanedOpener.offsetParent !== null ? cleanedOpener : housekeepingBtn;
   cleanedOpener = null;
   back.focus();
 }
@@ -9411,6 +9499,7 @@ cleanPanel.addEventListener("keydown", (event) => {
 });
 
 cleanBtn.addEventListener("click", async () => {
+  closeHeaderMenus();
   const result = await postBoardAction("clean");
   if (!result) return;
   // A tree the sweep would not touch is the one thing here that needs saying: it holds work, and
@@ -9432,7 +9521,8 @@ cleanBtn.addEventListener("click", async () => {
 
 // The second press of `new` is the confirmation, in the same four seconds and with the same `armed` as
 // every other press that has to be asked twice.
-armedPress(newBtn, "new", async () => {
+resetNewBtn = armedPress(newBtn, "new", async () => {
+  closeHeaderMenus();
   const result = await postBoardAction("new");
   if (!result) return;
   // The board arrives as a fresh snapshot, so there is nothing to clear here.
@@ -9828,7 +9918,8 @@ function closeLeftoversSheet() {
 
 leftBtn.addEventListener("click", (event) => {
   event.stopPropagation();
-  void openLeftoversSheet(leftBtn);
+  closeHeaderMenus();
+  void openLeftoversSheet(housekeepingBtn);
 });
 leftPanelClose.addEventListener("click", closeLeftoversSheet);
 leftPanel.addEventListener("click", (event) => {
@@ -9855,19 +9946,11 @@ leftPanel.addEventListener("keydown", (event) => {
 // The map of every key is drawn at load from the one list above, so opening it is a flip and not a build.
 paintShortcuts();
 
-keysBtn.addEventListener("click", () => {
-  closePick();
-  const on = keysPanel.hidden;
-  shownKeys(on);
-  // Both panels hang in the same corner, so the one being opened is the only one left standing.
-  if (on) shownConfig(false);
-});
-
 configBtn.addEventListener("click", () => {
   closePick();
+  closeHeaderMenus();
   const on = configPanel.hidden;
   shownConfig(on);
-  if (on) shownKeys(false);
   if (!on) return;
   // A document already in hand is drawn at once, so the panel never opens blank; the read that follows
   // is what it settles on.
@@ -9928,6 +10011,7 @@ peSave.addEventListener("click", async () => {
 runtimeSearch.addEventListener("input", () => (picking === "tools" ? drawTools(runtimeSearch.value) : drawModels(runtimeSearch.value)));
 window.addEventListener("resize", () => {
   if (!runtimePick.hidden) placeRuntimePick();
+  for (const { btn, menu } of headerMenus) if (!menu.hidden) placeHeaderMenu(menu, btn);
   if (!flowPeek.hidden) {
     sizeFlowPeek();
     placeFlowPeek();
@@ -9941,10 +10025,10 @@ document.addEventListener(
     if (!cmdPick.hidden && !event.target.closest("#cmdPick")) closeCmdPick();
     // The prompt editor is opened from this panel and is part of it: a press inside it is not a press
     // outside the settings, which would otherwise shut the panel the editor was opened from.
-    if (event.target.closest("#runtimePick, #cmdPick, .composer, #boardConfig, #configBtn, #shortcutPanel, #keysBtn, #promptEditor")) return;
+    if (event.target.closest("#runtimePick, #cmdPick, .composer, #boardConfig, #configBtn, #promptEditor, .header-menu, #viewBtn, #housekeepingBtn, #toolboxBtn")) return;
     if (!runtimePick.hidden) closePick();
     if (!configPanel.hidden) shownConfig(false);
-    if (!keysPanel.hidden) shownKeys(false);
+    closeHeaderMenus();
   },
   true,
 );
@@ -9963,10 +10047,14 @@ document.addEventListener(
       closePick();
       return;
     }
-    if (keysPanel.hidden && configPanel.hidden) return;
+    if (headerMenus.some(({ menu }) => !menu.hidden)) {
+      event.stopPropagation();
+      closeHeaderMenus();
+      return;
+    }
+    if (configPanel.hidden) return;
     event.stopPropagation();
-    if (keysPanel.hidden) shownConfig(false);
-    else shownKeys(false);
+    shownConfig(false);
   },
   true,
 );
