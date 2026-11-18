@@ -108,7 +108,26 @@ export async function respond(board: DispatchBoard, raw: unknown): Promise<Reply
 		const command = parsed.command || "repositoryStatus";
 		// Query commands need a typed error, action commands a status string.
 		const QUERY = new Set(["loadBranches", "loadCommits", "loadRepoInfo", "commitDetails", "commitComparison", "tagDetails", "uncommittedDetails", "searchCommits", "commitSignatures", "remoteTags", "branchPushDefaults", "worktreeStatus", "worktreeChanges", "resolveRef"]);
-		if (QUERY.has(command)) return [{ command, requestId: (raw as Record<string, unknown>)?.requestId ?? 0, repo: (raw as Record<string, unknown>)?.repo ?? "", error: queryError(parsed.error) }];
+		if (QUERY.has(command)) {
+			const fid = (raw as Record<string, unknown>)?.requestId ?? 0;
+			const frepo = (raw as Record<string, unknown>)?.repo ?? "";
+			const extra: Record<string, unknown> =
+				command === "commitDetails" || command === "commitComparison" ? { commitDetails: null }
+				: command === "tagDetails" ? { tagDetails: null }
+				: command === "uncommittedDetails" ? { changes: null }
+				: command === "searchCommits" ? { results: [] }
+				: command === "commitSignatures" ? { signatures: {} }
+				: command === "remoteTags" ? { tags: {}, unavailableRemotes: [] }
+				: command === "worktreeStatus" ? { statuses: {} }
+				: command === "worktreeChanges" ? { path: "", files: [], truncated: false }
+				: command === "loadBranches" ? { branches: [], head: null, hard: false, isRepo: false, worktrees: [], upstreams: {} }
+				: command === "loadCommits" ? { commits: [], head: null, moreCommitsAvailable: false, hard: false }
+				: command === "loadRepoInfo" ? { repoInfo: null }
+				: command === "resolveRef" ? { hash: null }
+				: command === "branchPushDefaults" ? { upstreamRemote: null, pushRemote: null }
+				: {};
+			return [{ command, requestId: fid, repo: frepo, ...extra, error: queryError(parsed.error) } as Reply];
+		}
 		return [{ command, status: parsed.error }];
 	}
 	const request = parsed.request;

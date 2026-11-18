@@ -321,6 +321,11 @@ function str(fields: Record<string, unknown>, key: string): string {
 function bool(fields: Record<string, unknown>, key: string): boolean {
 	return fields[key] === true;
 }
+function pushFlag(fields: Record<string, unknown>): string[] {
+	const mode = typeof fields.mode === "string" ? fields.mode : "normal";
+	if (mode !== "normal" && mode !== "force-with-lease" && mode !== "force") return [];
+	return mode === "normal" ? [] : [`--${mode}`];
+}
 function libreMoves(command: string, fields: Record<string, unknown>): boolean {
 	switch (command) {
 		case "checkoutBranch": case "checkoutAndFastForward": case "checkoutCommit": case "mergeBranch": case "mergeCommit":
@@ -430,7 +435,7 @@ async function librePerform(repo: string, command: string, f: Record<string, unk
 			return libreGitWrite(repo, args);
 		}
 		case "revertCommit": {
-			const args = ["revert", "--no-edit"];
+			const args = ["revert", "--no-edit", ...(bool(f, "noCommit") ? ["--no-commit"] : [])];
 			const p = typeof f.parentIndex === "number" ? f.parentIndex : 0;
 			if (p > 0) args.push("-m", String(p));
 			args.push("--end-of-options", str(f, "commitHash"));
@@ -492,10 +497,10 @@ async function librePerform(repo: string, command: string, f: Record<string, unk
 		case "cleanUntrackedFiles": return libreGitWrite(repo, ["clean", bool(f, "includeDirectories") ? "-fd" : "-f"]);
 		case "fetchRemotes": {
 			const r = typeof f.remote === "string" && f.remote ? f.remote : null;
-			const args = ["fetch", ...(r ? ["--end-of-options", r] : ["--all"]), ...(bool(f, "prune") ? ["--prune"] : []), ...(bool(f, "pruneTags") ? ["--prune-tags"] : [])];
-			// --end-of-options placement: if no remote, no end marker needed
-			const fixed = r ? args : ["fetch", "--all", ...(bool(f, "prune") ? ["--prune"] : []), ...(bool(f, "pruneTags") ? ["--prune-tags"] : [])];
-			return libreGitWrite(repo, fixed, "network");
+			const flags = ["fetch", ...(bool(f, "prune") ? ["--prune"] : []), ...(bool(f, "pruneTags") ? ["--prune-tags"] : [])];
+			if (r) flags.push("--end-of-options", r);
+			else flags.push("--all");
+			return libreGitWrite(repo, flags, "network");
 		}
 		case "fetchTags": {
 			const remotes = Array.isArray(f.remotes) ? (f.remotes as string[]) : [];
@@ -505,27 +510,27 @@ async function librePerform(repo: string, command: string, f: Record<string, unk
 		case "pruneRemote": return libreGitWrite(repo, ["remote", "prune", "--end-of-options", str(f, "name")], "network");
 		case "pushBranch": {
 			const remotes = Array.isArray(f.remotes) ? (f.remotes as string[]) : ["origin"];
-			const mode = typeof f.mode === "string" && f.mode !== "normal" ? f.mode : "";
+			const _mode = typeof f.mode === "string" ? f.mode : "normal";
 			for (const r of remotes) {
-				const e = await libreGitWrite(repo, ["push", ...(bool(f, "setUpstream") ? ["--set-upstream"] : []), ...(mode ? [`--${mode}`] : []), ...(bool(f, "noVerify") ? ["--no-verify"] : []), "--end-of-options", r, str(f, "branchName")], "network");
+				const e = await libreGitWrite(repo, ["push", ...(bool(f, "setUpstream") ? ["--set-upstream"] : []), ...pushFlag(f), ...(bool(f, "noVerify") ? ["--no-verify"] : []), "--end-of-options", r, str(f, "branchName")], "network");
 				if (e !== null) return e;
 			}
 			return null;
 		}
 		case "pushAllTags": {
 			const remotes = Array.isArray(f.remotes) ? (f.remotes as string[]) : ["origin"];
-			const mode = typeof f.mode === "string" && f.mode !== "normal" ? f.mode : "";
-			for (const r of remotes) { const e = await libreGitWrite(repo, ["push", ...(mode ? [`--${mode}`] : []), ...(bool(f, "noVerify") ? ["--no-verify"] : []), "--end-of-options", r, "--tags"], "network"); if (e !== null) return e; }
+			const _mode = typeof f.mode === "string" ? f.mode : "normal";
+			for (const r of remotes) { const e = await libreGitWrite(repo, ["push", ...pushFlag(f), ...(bool(f, "noVerify") ? ["--no-verify"] : []), "--end-of-options", r, "--tags"], "network"); if (e !== null) return e; }
 			return null;
 		}
 		case "pushTag": {
 			const remotes = Array.isArray(f.remotes) ? (f.remotes as string[]) : ["origin"];
-			const mode = typeof f.mode === "string" && f.mode !== "normal" ? f.mode : "";
-			for (const r of remotes) { const e = await libreGitWrite(repo, ["push", ...(mode ? [`--${mode}`] : []), ...(bool(f, "noVerify") ? ["--no-verify"] : []), "--end-of-options", r, str(f, "tagName")], "network"); if (e !== null) return e; }
+			const _mode = typeof f.mode === "string" ? f.mode : "normal";
+			for (const r of remotes) { const e = await libreGitWrite(repo, ["push", ...pushFlag(f), ...(bool(f, "noVerify") ? ["--no-verify"] : []), "--end-of-options", r, str(f, "tagName")], "network"); if (e !== null) return e; }
 			return null;
 		}
 		case "pullBranch": {
-			const args = ["pull", ...(bool(f, "squash") ? ["--squash"] : bool(f, "createNewCommit") ? ["--no-ff"] : []), ...(bool(f, "noVerify") ? ["--no-verify"] : []), "--end-of-options", str(f, "remote"), str(f, "branchName")];
+			const args = ["pull", ...(bool(f, "squash") ? ["--squash"] : bool(f, "createNewCommit") ? ["--no-ff"] : []), ...(bool(f, "noCommit") ? ["--no-commit"] : []), ...(bool(f, "noVerify") ? ["--no-verify"] : []), "--end-of-options", str(f, "remote"), str(f, "branchName")];
 			return libreGitWrite(repo, args, "network");
 		}
 		case "updateBranchFromUpstream": {
@@ -535,7 +540,7 @@ async function librePerform(repo: string, command: string, f: Record<string, unk
 		}
 		case "deleteRemoteBranch": return libreGitWrite(repo, ["push", "--delete", "--end-of-options", str(f, "remote"), str(f, "branchName")], "network");
 		case "fetchIntoLocalBranch": {
-			const args = ["fetch", ...(bool(f, "force") ? ["--force"] : []), "--end-of-options", str(f, "remote"), str(f, "remoteBranch"), str(f, "localBranch")];
+			const args = ["fetch", ...(bool(f, "force") ? ["--force"] : []), "--end-of-options", str(f, "remote"), `${str(f, "remoteBranch")}:${str(f, "localBranch")}`];
 			return libreGitWrite(repo, args, "network");
 		}
 		case "addRemote": {
@@ -570,7 +575,7 @@ async function librePerform(repo: string, command: string, f: Record<string, unk
 			const files = Array.isArray(f.filePaths) ? (f.filePaths as string[]) : [];
 			if (!files.length) return null;
 			for (const p of files) { const c = repoPath(p); if (!c.ok) return c.error; }
-			return libreGitWrite(repo, ["reset", "--end-of-options", ...files]);
+			return libreGitWrite(repo, ["restore", "--staged", "--", ...files]);
 		}
 		case "addWorktree": {
 			const p = str(f, "path");

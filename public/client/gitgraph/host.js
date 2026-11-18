@@ -53,7 +53,7 @@ function buildL10n(raw) {
   const out = {};
   const camel = (key) => {
     const parts = key.split(".");
-    if (parts[0] === "ui" || parts[0] === "error") parts.shift();
+    if (parts[0] === "ui" || parts[0] === "error" || parts[0] === "action") parts.shift();
     if (parts.length === 0) return key;
     return parts[0] + parts.slice(1).map((p) => p ? p[0].toUpperCase() + p.slice(1) : "").join("");
   };

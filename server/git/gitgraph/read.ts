@@ -881,10 +881,12 @@ export async function libreRepoInfo(repo: string, showStashes: boolean): Promise
 	} catch {}
 	const tags = refs.ok ? refs.value.tags.map((t) => t.name).sort() : [];
 	const remotes: GitRemote[] = [];
-	if (refs.ok) {
-		const remoteNames = new Set<string>();
-		for (const r of refs.value.remotes) remoteNames.add(r.remote);
-		for (const name of remoteNames) {
+	{
+		const remoteList = await gitText(repo, ["remote"]);
+		const configured = remoteList.ok ? remoteList.text.split("\n").map((s) => s.trim()).filter(Boolean) : [];
+		// Fall back to tracking refs for a remote git has not fetched yet.
+		if (configured.length === 0 && refs.ok) for (const r of refs.value.remotes) configured.push(r.remote);
+		for (const name of [...new Set(configured)]) {
 			const fetch = await gitText(repo, ["remote", "get-url", name]);
 			const pushRes = await gitText(repo, ["remote", "get-url", "--push", name]);
 			remotes.push({
@@ -931,7 +933,7 @@ export async function libreCommits(repo: string, opts: { maxCommits: number; bra
 		onlyFollowFirstParent: opts.onlyFollowFirstParent,
 		commitOrdering: opts.commitOrdering,
 		branches: opts.branches !== null && opts.branches.length > 0 ? opts.branches : (opts.branchName ? [opts.branchName] : null),
-		remotes: [...new Set([...refs.value.heads.flatMap((h) => [])])],
+		remotes: [...new Set(refs.value.remotes.map((r) => r.remote))],
 		hideRemotes: [...opts.hiddenRemotes],
 		stashes: [],
 	});
@@ -956,6 +958,8 @@ export async function libreCommits(repo: string, opts: { maxCommits: number; bra
 		const tagNames = new Set(opts.tags);
 		real = real.filter((c) => c.tags.some((t) => tagNames.has(t.name)));
 	}
+	// Libre compares this field to commit hashes, not branch names.
+	const headHash = (await gitText(repo, ["rev-parse", "--verify", "HEAD"])).ok ? (await gitText(repo, ["rev-parse", "--verify", "HEAD"])).text.trim() : null;
 	// Build nodes
 	const nodes: GitCommitNode[] = [];
 	if (uncommitted) {
@@ -987,7 +991,7 @@ export async function libreCommits(repo: string, opts: { maxCommits: number; bra
 			signature: sig,
 		});
 	}
-	return { commits: nodes, head: old.value.head, more: old.value.moreCommitsAvailable, error: null };
+	return { commits: nodes, head: headHash, more: old.value.moreCommitsAvailable, error: null };
 }
 
 export async function libreCommitDetails(repo: string, hash: string): Promise<{ details: import("./libre.ts").GitCommitDetails | null; error: GitQueryError | null }> {
@@ -1084,7 +1088,9 @@ export async function libreUncommitted(repo: string): Promise<{ changes: import(
 				p = entries[i + 1];
 				i += 1;
 			}
-			map.set(p, { stagedKind: x === " " ? null : x, unstagedKind: y === " " ? null : y, oldPath });
+			const sx = x === " " || x === "?" ? null : x;
+			const sy = y === " " ? null : y;
+			map.set(p, { stagedKind: sx, unstagedKind: y === "?" ? "?" : sy, oldPath });
 		}
 	}
 	const outStaged: import("./libre.ts").GitUncommittedFile[] = [];
@@ -1103,14 +1109,10 @@ export async function libreUncommitted(repo: string): Promise<{ changes: import(
 export async function libreSearch(repo: string, query: string, maxResults: number, opts: { showRemoteBranches: boolean; hiddenRemotes: readonly string[]; showTags: boolean; branches: readonly string[] | null; authors: readonly string[] | null; tags: readonly string[] | null }): Promise<{ results: GitCommitSearchResult[]; error: GitQueryError | null }> {
 	const q = query.trim();
 	if (!q) return { results: [], error: null };
-	// Use git log --grep or --all --grep with -i
-	const result = await gitText(repo, ["log", "--all", "--no-walk=unsorted", "--format=%H|%P|%an|%ae|%at|%s", `--max-count=${Math.max(1, Math.min(maxResults, 200))}`, "--grep", q, "-i"]);
-	if (!result.ok) {
-		// Fallback: log grep without --no-walk
-		const fb = await gitText(repo, ["log", "--all", `--format=%H|%P|%an|%ae|%at|%s`, "--grep", q, "-i", `--max-count=${Math.max(1, Math.min(maxResults, 200))}`]);
-		if (!fb.ok) return { results: [], error: libreError(reasonOf(fb)) };
-		return { results: parseSearch(fb.text, q), error: null };
-	}
+	// Full history, newest first; extra rows are dropped so the webview can load more.
+	const want = Math.max(1, Math.min(maxResults, 500));
+	const result = await gitText(repo, ["log", "--all", "--format=%H|%P|%an|%ae|%at|%s", "--grep", q, "-i", `--max-count=${want}`]);
+	if (!result.ok) return { results: [], error: libreError(reasonOf(result)) };
 	return { results: parseSearch(result.text, q), error: null };
 }
 function parseSearch(text: string, q: string): GitCommitSearchResult[] {
@@ -1118,7 +1120,7 @@ function parseSearch(text: string, q: string): GitCommitSearchResult[] {
 	for (const line of text.split("\n")) {
 		if (!line.trim()) continue;
 		const [hash, parents, author, email, date, msg] = line.split("|");
-		out.push({ hash, parentHashes: parents ? parents.split(" ").filter(Boolean) : [], author, email, date: Number(date) || 0, message: msg, loadCount: 0 });
+		out.push({ hash, parentHashes: parents ? parents.split(" ").filter(Boolean) : [], author, email, date: Number(date) || 0, message: msg, loadCount: out.length });
 	}
 	return out;
 }
@@ -1128,7 +1130,9 @@ export async function libreRemoteTags(repo: string): Promise<{ tags: Record<stri
 	if (!refs.ok) return { tags: {}, unavailable: [], error: libreError(refs.error) };
 	const tags: Record<string, { hash: string; remotes: string[] }> = {};
 	for (const t of refs.value.tags) tags[t.name] = { hash: t.hash, remotes: [] };
-	return { tags, unavailable: [], error: null };
+	const remotes = await gitText(repo, ["remote"]);
+	const names = remotes.ok ? remotes.text.split("\n").map((s) => s.trim()).filter(Boolean) : [];
+	return { tags, unavailable: names, error: null };
 }
 
 export async function librePushDefaults(repo: string, branch: string): Promise<{ upstreamRemote: string | null; pushRemote: string | null; error: GitQueryError | null }> {
