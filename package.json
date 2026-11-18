@@ -1,6 +1,6 @@
 {
   "name": "pi-studio",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "A local daemon that owns pi agents: a workspace is a folder, a thread on its board is an agent.",
   "type": "module",
