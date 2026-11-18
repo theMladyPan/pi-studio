@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Remove the right-hand git tree strip from the board, so the daemon no longer polls the repository every few seconds for a picture nobody could click. The full graph on g, source control on d and the terminal remain; an open source control drawer no longer re-reads on commits made elsewhere, it reads again on the next open. [t-40e70185]
+
 ## [0.4.0] - 2026-11-18
 
 - docs: Allow a release's back-merge into dev to be a fast-forward when main carries nothing beyond the release merge, so the history drops one empty commit per release.

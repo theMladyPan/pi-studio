@@ -83,7 +83,6 @@ async function drawerFor(workspace: string) {
 			toggle: () => void;
 			open: () => void;
 			close: () => void;
-			notifyChanged: () => void;
 			setName: (name?: string) => void;
 		};
 	};
@@ -101,7 +100,7 @@ test("the bar says the workspace id until it is told the name", async () => {
 	assert.equal(label.textContent, "· b08b6688eaf9");
 });
 
-test("being told the name keeps the five members the board drives", async () => {
+test("being told the name keeps the members the board drives", async () => {
 	const label = standInPage();
 	const drawer = await drawerFor("b08b6688eaf9");
 	drawer.setName("pi-studio");
@@ -110,6 +109,5 @@ test("being told the name keeps the five members the board drives", async () => 
 	assert.equal(drawer.isOpen(), true, "one press rolls the drawer down");
 	drawer.toggle();
 	assert.equal(drawer.isOpen(), false, "and the next rolls it up");
-	assert.equal(typeof drawer.notifyChanged, "function");
 	assert.equal(label.textContent, "· pi-studio", "rolling the drawer changes nothing the bar says");
 });

@@ -14,9 +14,6 @@
  * the expanded commit and the scroll position.
  */
 
-/** The shortest gap between two refreshes: a thread committing in bursts restarts the graph once. */
-const REFRESH_GAP = 1500;
-
 /**
  * One drawer, for the whole life of the page. `typingSomewhere` comes from the board rather than a
  * second copy of the selector here, so the drawer and the board's letters agree on what a field is.
@@ -46,12 +43,8 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
   let loaded = false;
   /** Has the page announced itself. Nothing may be posted before it does. */
   let ready = false;
-  /** Did the repository change while the page could not hear about it. */
-  let stale = false;
   /** What had the focus before the drawer took it, so rolling up puts it back. */
   let back = null;
-  let lastRefresh = 0;
-  let trailing = 0;
 
   // A board with no folder of its own has no repository to draw, and `/git/` with no id is a page that
   // cannot answer. The drawer says so in the space the graph would have used.
@@ -81,8 +74,6 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
   }
 
   function refreshNow() {
-    lastRefresh = Date.now();
-    stale = false;
     post({ command: "refresh" });
   }
 
@@ -112,9 +103,8 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
     // The page takes the keyboard once it is alive. Before its first `ready` the board keeps it, so a
     // quick `g` or Escape still reaches the handlers that roll the drawer back up.
     if (ready) takeKeyboard();
-    // Commits that landed while the drawer was shut are in the picture the page still holds, so the
-    // one refresh it was owed is spent now.
-    if (stale && ready) refreshNow();
+    // The page still holds what it last drew, so every roll down asks it for the repository as it stands now.
+    if (ready) refreshNow();
   }
 
   function close() {
@@ -141,7 +131,7 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
       ready = true;
       if (!shown) return;
       takeKeyboard();
-      if (stale) refreshNow();
+      refreshNow();
     } else if (data.type === "close") {
       // A key pressed inside the page never reaches this window, so its `close` is the way back.
       close();
@@ -171,30 +161,5 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
   });
   closeBtn.addEventListener("click", () => close());
 
-  /**
-   * The repository changed. An open page is told, at most once per `REFRESH_GAP` with one trailing
-   * call; a shut one is told on the next roll down, in one refresh rather than one per commit.
-   */
-  function notifyChanged() {
-    // A page that was never loaded has nothing to update: it reads the repository as it starts.
-    if (!loaded) return;
-    // No listener exists yet, so the news waits for the page to say `ready` or for the next open.
-    if (!shown || !ready) {
-      stale = true;
-      return;
-    }
-    const wait = REFRESH_GAP - (Date.now() - lastRefresh);
-    if (wait <= 0) {
-      refreshNow();
-      return;
-    }
-    if (trailing) return;
-    trailing = setTimeout(() => {
-      trailing = 0;
-      if (shown && ready) refreshNow();
-      else stale = true;
-    }, wait);
-  }
-
-  return { isOpen: () => shown, toggle: () => (shown ? close() : open()), open, close, notifyChanged, setName };
+  return { isOpen: () => shown, toggle: () => (shown ? close() : open()), open, close, setName };
 }
