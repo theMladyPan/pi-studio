@@ -1790,6 +1790,40 @@ describe("routes", { concurrency: 8 }, () => {
 		}
 	});
 
+	test("the helper model for naming and drafting is saved on the crossroads and read back", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-helper-model-"));
+		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+		const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+		try {
+			// A pair the catalogue names is saved, and the settings document reads it back.
+			const saved = await post(daemon, "/defaults", { helperProvider: "github-copilot", helperModel: "gemini-4-argon" });
+			assert.equal(saved.status, 200, saved.body.slice(0, 200));
+			const answered = JSON.parse(saved.body).defaults;
+			assert.equal(answered.helperProvider, "github-copilot");
+			assert.equal(answered.helperModel, "gemini-4-argon");
+			const after = JSON.parse((await get(daemon, `/defaults?token=${daemon.token}`)).body).defaults;
+			assert.equal(after.helperProvider, "github-copilot");
+			assert.equal(after.helperModel, "gemini-4-argon");
+			const written = JSON.parse(readFileSync(join(stateHome, "workspaces.json"), "utf8"));
+			assert.equal(written.defaults.helperProvider, "github-copilot");
+			assert.equal(written.defaults.helperModel, "gemini-4-argon");
+			const doc = JSON.parse((await get(daemon, `/settings/defaults?token=${daemon.token}`)).body);
+			const leaves: any[] = [];
+			const walk = (groups: any[]) => { for (const g of groups) { leaves.push(...(g.fields ?? [])); walk(g.groups ?? []); } };
+			walk(doc.groups);
+			const helper = leaves.find((f: any) => f.id === "helperModel");
+			assert.ok(helper, "no helperModel leaf in the settings document");
+			assert.equal(helper.value, "github-copilot/gemini-4-argon");
+			assert.equal(helper.source, "/models");
+			// A pair this machine cannot run is refused, and the saved choice stands.
+			const refused = await post(daemon, "/defaults", { helperProvider: "no-such", helperModel: "no-such-model" });
+			assert.equal(refused.status, 409);
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, stub.root]) await removeTree(gone);
+		}
+	});
+
 	test("a thread's own token reaches /card/ask over http and is refused the human's routes", async () => {
 		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-thread-token-"));
 		// A plain temp folder: a thread there works in place, so the run leaves no worktree behind.
