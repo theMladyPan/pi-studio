@@ -252,6 +252,12 @@ function officialArchive(version: string, buildOverrides: Record<string, unknown
 	return { version, commit, archiveName, bytes, sha, checksum: `${sha}  ${archiveName}\n` };
 }
 
+/** The version after the packaged one: the "next release" these lifecycle tests install or refuse. */
+function nextVersion(): string {
+	const [major, minor, patch] = packaged.version.split(".").map(Number);
+	return `${major}.${minor + 1}.${patch}`;
+}
+
 /** The published installer for a version: the template with its version token filled in. */
 function installerFor(version: string): string {
 	const dir = mkdtempSync(join(tmpdir(), `pi-studio-pinned-${version}-`));
@@ -351,13 +357,13 @@ test("the official copy updates to the next official release, then uninstalls an
 	const installed = await runInstaller(roots, fixture);
 	assert.equal(installed.status, 0, installed.stderr || installed.stdout);
 
-	const next = officialArchive("0.2.0");
+	const next = officialArchive(nextVersion());
 	// The update path reads the release from the GitHub API root and its assets from the URLs the
 	// release names, so both are answered by the one loopback fixture.
 	fixture.serve({
 		assets: { [next.archiveName]: next.bytes, [`${next.archiveName}.sha256`]: Buffer.from(next.checksum) },
 		release: {
-			tag_name: "v0.2.0",
+			tag_name: `v${nextVersion()}`,
 			draft: false,
 			prerelease: false,
 			assets: [
@@ -373,10 +379,10 @@ test("the official copy updates to the next official release, then uninstalls an
 		env: envFor(roots, fixture, { PI_STUDIO_GITHUB_API: fixture.apiUrl }),
 	});
 	assert.equal(updated.status, 0, updated.stderr || updated.stdout);
-	assert.equal(installedVersion(roots), "0.2.0");
+	assert.equal(installedVersion(roots), nextVersion());
 
 	const versionOut = await run(process.execPath, [join(roots.binDir, "pi-studio"), "--version"]);
-	assert.ok(versionOut.stdout.includes("0.2.0"), versionOut.stdout);
+	assert.ok(versionOut.stdout.includes(nextVersion()), versionOut.stdout);
 
 	const removed = await run(process.execPath, [join(roots.binDir, "pi-studio"), "uninstall"], { env: envFor(roots, fixture) });
 	assert.equal(removed.status, 0, removed.stderr || removed.stdout);
@@ -439,14 +445,14 @@ test("an archive holding a link, a special file or an escaping path is refused e
 test("a release asset of another version is refused rather than installed in place of the pinned one", async (t) => {
 	const roots = tempRoots(t);
 	const fixture = await startFixture(t);
-	const other = officialArchive("0.2.0");
+	const other = officialArchive(nextVersion());
 	fixture.serve({
 		archive: other.bytes,
 		checksum: `${other.sha}  ${packaged.archiveName}\n`,
 	});
 	const refused = await runInstaller(roots, fixture);
 	assert.notEqual(refused.status, 0);
-	assert.match(refused.stderr, /holds 0\.2\.0, and this installer names/);
+	assert.match(refused.stderr, new RegExp(`holds ${nextVersion().replaceAll(".", "\\.")}, and this installer names`));
 	assert.ok(!existsSync(roots.installRoot), "nothing was installed");
 });
 
