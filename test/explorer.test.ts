@@ -205,6 +205,8 @@ test("a plain f is the files drawer, and shift+f is the fit it took from plain f
 	assert.equal(core.boardLetter("F"), "fit", "the capital is the shifted key, whatever the event says");
 	assert.equal(core.boardLetter("a"), "activity");
 	assert.equal(core.boardLetter("c"), "cards");
+	assert.equal(core.boardLetter("d"), "source");
+	assert.equal(core.boardLetter("D"), "", "a shifted d is not the drawer's key");
 	// Nothing else is taken by this list, so the board's other letters reach their own handlers.
 	for (const key of ["0", "m", "n", "o", "t", "g", "q", "p", "r"]) assert.equal(core.boardLetter(key), "", key);
 });
@@ -215,6 +217,7 @@ test("a letter waits while a field is typed in, a panel is open or the drawer's 
 		assert.equal(core.boardLetter("f", { [lock]: true, shift: true }), "", `shift+f waits for ${lock}`);
 		assert.equal(core.boardLetter("a", { [lock]: true }), "", `a waits for ${lock}`);
 		assert.equal(core.boardLetter("c", { [lock]: true }), "", `c waits for ${lock}`);
+		assert.equal(core.boardLetter("d", { [lock]: true }), "", `d waits for ${lock}`);
 	}
 	// And a shifted letter the list does not own does nothing rather than falling through.
 	assert.equal(core.boardLetter("m", { shift: true }), "");

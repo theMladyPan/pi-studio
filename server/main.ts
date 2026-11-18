@@ -37,6 +37,7 @@ import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill,
 import { onShell } from "./routes/board/shell.ts";
 import { onGitInit, onGitMsg, onGitPage, onGitVendor } from "./routes/gitgraph.ts";
 import { onCommand } from "./routes/board/command.ts";
+import { onSourceControlCommit, onSourceControlMessage, onSourceControlStage, onSourceControlStatus, onSourceControlUnstage } from "./routes/board/source-control.ts";
 import { attachTerminal, stopAllTerminals, terminalSize } from "./terminal.ts";
 import { commandList, forMenu } from "./commands.ts";
 import { workdirOf } from "./worktrees/make.ts";
@@ -687,6 +688,13 @@ export const server = createServer((req, res) => {
 			await onGitInit(res, board);
 			return;
 		}
+		// The source control drawer's two lists and branch, read per call: git's answer, not the board's.
+		if (req.method === "GET" && url.pathname === "/source-control/status") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onSourceControlStatus(req, res, board);
+			return;
+		}
 		// What earlier trash actions left behind: a worktree, a folder or a branch no thread answers for. Read
 		// per call, because it is git's answer and not the board's.
 		if (req.method === "GET" && url.pathname === "/fragments") {
@@ -774,6 +782,12 @@ export const server = createServer((req, res) => {
 				// One message from the Git Graph page, answered with the replies it earned. Not in THREAD_ROUTES:
 				// this route runs git in the human's checkouts, and a child reports in its last message instead.
 				"/git/msg": onGitMsg,
+				// The source control drawer's four changes. None is in THREAD_ROUTES: a child reports in
+				// its last message instead of staging or committing in the human's checkout.
+				"/source-control/stage": onSourceControlStage,
+				"/source-control/unstage": onSourceControlUnstage,
+				"/source-control/commit": onSourceControlCommit,
+				"/source-control/message": onSourceControlMessage,
 				// The Explorer's six changes. None is in THREAD_ROUTES: a child may draw a card, and may not
 				// rename, delete or save over the files of the folder a human opened.
 				"/files/new": onFileNew,

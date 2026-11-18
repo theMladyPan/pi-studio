@@ -764,6 +764,7 @@ function exBoardLetter(key, { shift = false, typing = false, panel = false, surf
   const lower = raw.toLowerCase();
   if (lower === "f") return shifted ? "fit" : "files";
   if (shifted) return "";
+  if (lower === "d") return "source";
   if (lower === "a") return "activity";
   if (lower === "c") return "cards";
   return "";
@@ -5380,6 +5381,7 @@ function applyGit(picture) {
   // One line, and the one place that knows a repository changed: an open graph is told to reload its
   // picture in the background, and a shut one is told when it next rolls down.
   gitDrawer.notifyChanged();
+  scNotifyChanged();
   gitShown = picture && picture.graph?.length ? picture : null;
   gitLayout = gitShown ? layoutGraph(gitShown.graph) : null;
   document.body.classList.toggle("git-on", Boolean(gitShown));
@@ -5406,12 +5408,13 @@ const THOUGHT_STALL_MS = 3000;
 // Three drawers share the rail's column: the workspace's files, what the agents are doing, and the
 // board's cards. One is open at a time, and the width and the hidden choice a human left on the old
 // rail are the ones these open with, because this is that rail with doors on it.
-const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards" };
+const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards", source: "drawerSource" };
 const drawerState = explorerCore.drawers();
 // The three doors in the header, read before anything paints them.
 const filesBtn = document.getElementById("filesBtn");
 const activityBtn = document.getElementById("activityBtn");
 const cardsBtn = document.getElementById("cardsBtn");
+const sourceBtn = document.getElementById("sourceBtn");
 
 // The rail is the user's furniture: its width survives a reload, and so does whether a drawer is up.
 const RAIL_MIN = 160;
@@ -5434,7 +5437,7 @@ function paintDrawers() {
     const pane = document.getElementById(id);
     pane.classList.toggle("on", drawerState.open === name);
   }
-  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn };
+  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn };
   for (const [name, door] of Object.entries(doors)) {
     door.setAttribute("aria-expanded", drawerState.open === name ? "true" : "false");
   }
@@ -5448,6 +5451,7 @@ function showDrawer(name) {
   // The git graph covers the whole board, so it cannot stand over a drawer and be alive at both ends.
   if (gitDrawer.isOpen()) gitDrawer.close();
   if (name === "files") exPrime();
+  if (name === "source") scPrime();
   explorerCore.drawerOpen(drawerState, name);
   paintDrawers();
 }
@@ -5457,6 +5461,7 @@ function toggleDrawer(name) {
   if (gitDrawer.isOpen()) gitDrawer.close();
   explorerCore.drawerToggle(drawerState, name);
   if (!open && name === "files") exPrime();
+  if (!open && name === "source") scPrime();
   paintDrawers();
 }
 
@@ -5485,12 +5490,182 @@ function restoreDrawers() {
 }
 restoreDrawers();
 
-for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn })) {
+for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn })) {
   door.addEventListener("click", () => toggleDrawer(name));
 }
 for (const shut of document.querySelectorAll("#drawers .rail-close")) {
   shut.addEventListener("click", () => closeDrawers());
 }
+
+// ---------- source control drawer ------------------------------------------
+// The fourth left drawer: changed and staged files, the message field, and the commit. It reads
+// `/source-control/status` and posts to the three change routes, and it never pushes or pulls —
+// those stay in the git graph drawer, which already owns them. The lists are read when the drawer
+// opens, after each of its own actions, and on the daemon's git updates while it is open, so a
+// commit made elsewhere lands here without a poll of its own.
+const scMessage = document.getElementById("scMessage");
+const scDraftBtn = document.getElementById("scDraft");
+const scCommitBtn = document.getElementById("scCommit");
+const scNote = document.getElementById("scNote");
+const scCount = document.getElementById("scCount");
+const scStagedHead = document.getElementById("scStagedHead");
+const scStagedCount = document.getElementById("scStagedCount");
+const scChangesCount = document.getElementById("scChangesCount");
+const scStaged = document.getElementById("scStaged");
+const scChanges = document.getElementById("scChanges");
+const scStageAll = document.getElementById("scStageAll");
+const scUnstageAll = document.getElementById("scUnstageAll");
+let scState = { staged: [], changes: [] };
+let scBusy = false;
+
+function scSay(text) {
+  scNote.textContent = text || "";
+}
+
+async function scPost(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {}
+  if (!res.ok || !data || !data.ok) throw new Error((data && data.error) || `the daemon answered ${res.status}`);
+  return data;
+}
+
+/** One row: the file's name, its folder, its letter, and the button that moves it across. */
+function scRow(file, stage) {
+  const row = el("div", "sc-row");
+  const slash = file.path.lastIndexOf("/");
+  const name = el("span", "sc-name");
+  name.textContent = slash >= 0 ? file.path.slice(slash + 1) : file.path;
+  name.title = file.path;
+  row.append(name);
+  if (slash >= 0) {
+    const dir = el("span", "sc-dir");
+    dir.textContent = file.path.slice(0, slash + 1);
+    row.append(dir);
+  }
+  const badge = el("span", "sc-badge");
+  badge.textContent = file.kind || "M";
+  row.append(badge);
+  const move = el("button");
+  move.type = "button";
+  move.textContent = stage ? "+" : "−";
+  move.title = stage ? `stage ${file.path}` : `unstage ${file.path}`;
+  move.addEventListener("click", () => void scMove([file.path], stage));
+  row.append(move);
+  return row;
+}
+
+/** Paint both lists, the counts, and whether Commit may be pressed. */
+function scPaint() {
+  scStaged.replaceChildren(...scState.staged.map((file) => scRow(file, false)));
+  scChanges.replaceChildren(...scState.changes.map((file) => scRow(file, true)));
+  scStagedCount.textContent = scState.staged.length ? String(scState.staged.length) : "";
+  scChangesCount.textContent = scState.changes.length ? String(scState.changes.length) : "";
+  scCount.textContent = scState.staged.length + scState.changes.length ? String(scState.staged.length + scState.changes.length) : "";
+  scStagedHead.hidden = !scState.staged.length;
+  scStageAll.disabled = !scState.changes.length || scBusy;
+  scUnstageAll.disabled = !scState.staged.length || scBusy;
+  scDraftBtn.disabled = !scState.staged.length || scBusy;
+  scCommitBtn.disabled = !scState.staged.length || !scMessage.value.trim() || scBusy;
+}
+
+async function scLoad() {
+  if (!workspace) {
+    scSay("this board has no folder of its own, so there is nothing to commit");
+    return;
+  }
+  let data;
+  try {
+    const res = await fetch(`/source-control/status?${auth}`);
+    data = await res.json();
+  } catch {
+    scSay("the daemon did not answer");
+    return;
+  }
+  if (!data.ok) {
+    scSay(data.error || "git could not read this folder");
+    return;
+  }
+  scState = { staged: data.staged ?? [], changes: data.changes ?? [] };
+  scSay("");
+  scPaint();
+}
+
+/** The first read on open: the drawer always opens on the repository as it stands now. */
+function scPrime() {
+  void scLoad();
+}
+
+/** A git update while the drawer is open re-reads it; while it is shut, the next open re-reads it. */
+function scNotifyChanged() {
+  if (drawerState.open === "source") void scLoad();
+}
+
+async function scMove(paths, stage) {
+  if (scBusy || !paths.length) return;
+  scBusy = true;
+  scPaint();
+  try {
+    const data = await scPost(stage ? `/source-control/stage?${auth}` : `/source-control/unstage?${auth}`, { paths });
+    scState = { staged: data.staged ?? [], changes: data.changes ?? [] };
+    scSay("");
+  } catch (error) {
+    scSay(error.message);
+  }
+  scBusy = false;
+  scPaint();
+}
+
+async function scCommit() {
+  const message = scMessage.value.trim();
+  if (scBusy || !message || !scState.staged.length) return;
+  scBusy = true;
+  scPaint();
+  try {
+    await scPost(`/source-control/commit?${auth}`, { message });
+    scMessage.value = "";
+    scSay("committed");
+    await scLoad();
+  } catch (error) {
+    scSay(error.message);
+  }
+  scBusy = false;
+  scPaint();
+}
+
+async function scDraft() {
+  if (scBusy || !scState.staged.length) return;
+  scBusy = true;
+  scPaint();
+  scSay("drafting…");
+  try {
+    const data = await scPost(`/source-control/message?${auth}`, {});
+    scMessage.value = data.message ?? "";
+    scSay("");
+  } catch (error) {
+    scSay(error.message);
+  }
+  scBusy = false;
+  scPaint();
+}
+
+scStageAll.addEventListener("click", () => void scMove(scState.changes.map((file) => file.path), true));
+scUnstageAll.addEventListener("click", () => void scMove(scState.staged.map((file) => file.path), false));
+scCommitBtn.addEventListener("click", () => void scCommit());
+scDraftBtn.addEventListener("click", () => void scDraft());
+// The message field is a field: while it holds the keyboard a `d` is a letter in it, not the
+// drawer's key, because `typingSomewhere` already reads it that way. Ctrl+Enter commits, the way
+// the placeholder promises and the way VS Code's panel does.
+scMessage.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    void scCommit();
+  }
+});
+scMessage.addEventListener("input", () => scPaint());
+scPaint();
 
 // ---------- the conversation behind a thread ------------------------------
 //
@@ -8380,6 +8555,7 @@ const SHORTCUTS = [
       { keys: "f", does: "open the files drawer, and press it again to roll it up" },
       { keys: "a", does: "open the activity drawer, and press it again to roll it up" },
       { keys: "c", does: "open the cards drawer, and press it again to roll it up" },
+      { keys: "d", does: "open the source control drawer, and press it again to roll it up" },
       { keys: "shift+f", does: "fit every card on the screen" },
       { keys: "0", does: "back to real size, 100%" },
       { keys: "m", does: "hide or show the small overview map" },
