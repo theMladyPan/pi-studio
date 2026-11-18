@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - fix: Remove the right-hand git tree strip from the board, so the daemon no longer polls the repository every few seconds for a picture nobody could click. The full graph on g, source control on d and the terminal remain; an open source control drawer no longer re-reads on commits made elsewhere, it reads again on the next open. [t-40e70185]
+- feat: Consolidate the top bar into `view`, `housekeeping` and `toolbox` menu chips, and move the overview map toggle and the hotkeys list into board settings, so the header keeps only the doors and actions used most. [t-e07b713a]
 
 ## [0.4.0] - 2026-11-18
 
