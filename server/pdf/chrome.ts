@@ -23,7 +23,7 @@ const BROWSERS = ["google-chrome", "google-chrome-stable", "chromium", "chromium
 export const SCALE = 2;
 
 /** How long a fence may take before the description is kept instead: a card cannot wait on a browser for long. */
-const DEADLINE = 12_000;
+export const DEADLINE = 12_000;
 
 let found: string | undefined;
 
@@ -170,7 +170,7 @@ function run(program: string, args: string[], deadline: number): Promise<number>
  * A page of html as pixels. The page is written into a folder of its own and both are thrown away after:
  * what comes back is the drawing alone, at twice the size it was laid out in.
  */
-export async function drawPage(html: string, viewport: { width: number; height: number }, chrome = chromeOnPath()): Promise<Picture> {
+export async function drawPage(html: string, viewport: { width: number; height: number }, chrome = chromeOnPath(), deadline: number = DEADLINE): Promise<Picture> {
 	if (!chrome) throw new Error("this machine has no browser to draw with");
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-draw-"));
 	try {
@@ -199,7 +199,7 @@ export async function drawPage(html: string, viewport: { width: number; height: 
 		];
 		// A browser started by root refuses to sandbox itself, which is the one case worth saying so.
 		if (typeof process.getuid === "function" && process.getuid() === 0) args.unshift("--no-sandbox");
-		const code = await run(chrome, args, DEADLINE);
+		const code = await run(chrome, args, deadline);
 		if (code !== 0) throw new Error(`the browser exited with ${code}`);
 		return cropToInk(decodePng(readFileSync(shot)));
 	} finally {
