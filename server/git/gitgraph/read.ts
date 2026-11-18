@@ -247,6 +247,7 @@ export type CommitOptions = {
 	showTags: boolean;
 	showRemoteBranches: boolean;
 	includeCommitsMentionedByReflogs: boolean;
+	includeUnreachableCommits?: boolean;
 	onlyFollowFirstParent: boolean;
 	commitOrdering: "default" | "date" | "author-date" | "topo";
 	/** The branches the dropdown has selected, or `null` for all of them. */
@@ -311,20 +312,45 @@ function revisionArgs(options: CommitOptions, stashCommits: readonly string[]): 
 }
 
 /** The row the graph draws above the checked out commit; it is not a commit and has no id. */
-function uncommittedRow(headHash: string | null): GitCommit {
+function uncommittedRow(headHash: string | null, count = 0): GitCommit {
 	return {
 		hash: UNCOMMITTED,
 		parents: headHash ? [headHash] : [],
 		author: "",
 		email: "",
 		date: Math.floor(Date.now() / 1000),
-		message: "Uncommitted Changes",
+		// The page reads the count out of the message's tail (`/(\d+)$/`); without it the
+		// row shows its count as "?".
+		message: count > 0 ? `Uncommitted Changes (${count})` : "Uncommitted Changes",
 		heads: [],
 		tags: [],
 		remotes: [],
 		stash: null,
 		signature: null,
 	};
+}
+
+/**
+ * How many paths the working tree has uncommitted, staged, unstaged and untracked together.
+ * The uncommitted row is drawn only when this is more than nothing: a clean tree used to get
+ * a phantom "*" row dated now, with no author, that sorted above the real commits and broke
+ * the Date/Author columns. A read that fails counts as changes, so the stash/reset target
+ * is never hidden by a git error. `libreUncommitted` is declared below; it is a hoisted
+ * function declaration, so calling it here is safe once the module has loaded.
+ */
+async function uncommittedPathCount(repo: string): Promise<number> {
+	const found = await libreUncommitted(repo);
+	if (!found.changes) return 1;
+	const paths = new Set<string>();
+	for (const file of [...found.changes.staged, ...found.changes.unstaged]) paths.add(file.path);
+	return paths.size;
+}
+
+/** The uncommitted row for `headHash`, or nothing when the tree is clean. */
+async function uncommittedRowIfDirty(repo: string, headHash: string | null): Promise<GitCommit[]> {
+	if (!DEFAULT_READ_FLAGS.showUncommittedChanges) return [];
+	const count = await uncommittedPathCount(repo);
+	return count > 0 ? [uncommittedRow(headHash, count)] : [];
 }
 
 /**
@@ -356,7 +382,7 @@ export async function getCommits(repo: string, options: CommitOptions): Promise<
 		format,
 		...orderArgs(options.commitOrdering),
 		...(options.onlyFollowFirstParent ? ["--first-parent"] : []),
-		...(options.includeCommitsMentionedByReflogs ? ["--reflog"] : []),
+		...(options.includeCommitsMentionedByReflogs || options.includeUnreachableCommits ? ["--reflog"] : []),
 		...revisionArgs(options, stashCommits),
 	]);
 	if (!result.ok) {
@@ -365,7 +391,7 @@ export async function getCommits(repo: string, options: CommitOptions): Promise<
 		// uncommitted row is still drawn, because that is where a human with files and no commit yet can
 		// see them and where the page offers to do something about it.
 		if (/bad revision 'HEAD'|does not have any commits yet|unknown revision/.test(result.stderr)) {
-			const rows = DEFAULT_READ_FLAGS.showUncommittedChanges ? [uncommittedRow(null)] : [];
+			const rows = await uncommittedRowIfDirty(repo, null);
 			return { ok: true, value: { commits: rows, head, tags, moreCommitsAvailable: false } };
 		}
 		return { ok: false, error: reasonOf(result) };
@@ -403,10 +429,10 @@ export async function getCommits(repo: string, options: CommitOptions): Promise<
 	const moreCommitsAvailable = commits.length > options.maxCommits;
 	const kept = moreCommitsAvailable ? commits.slice(0, options.maxCommits) : commits;
 	const headHash = head ? refs.value.heads.find((entry) => entry.name === head)?.hash ?? null : null;
-	// The uncommitted row is drawn whether or not anything actually changed, because it is where the
-	// page offers to stash or reset what is there: a row that appeared and vanished by itself would be a
-	// target the human cannot aim at.
-	const rows = DEFAULT_READ_FLAGS.showUncommittedChanges ? [uncommittedRow(headHash), ...kept] : kept;
+	// The uncommitted row is drawn only when the tree actually holds changes: it is where the
+	// page offers to stash or reset them. Present, it carries the count in its message, so
+	// the page's count regex finds a number instead of "?".
+	const rows = [...(await uncommittedRowIfDirty(repo, headHash)), ...kept];
 	return { ok: true, value: { commits: rows, head, tags, moreCommitsAvailable } };
 }
 
@@ -879,6 +905,9 @@ export async function libreRepoInfo(repo: string, showStashes: boolean): Promise
 			}
 		}
 	} catch {}
+	// The tag dropdown lists every tag, unconditionally, because libreCommits always draws
+	// the pills too (see there): gating one without the other is what made a picked tag
+	// filter the graph to nothing.
 	const tags = refs.ok ? refs.value.tags.map((t) => t.name).sort() : [];
 	const remotes: GitRemote[] = [];
 	{
@@ -924,12 +953,17 @@ export async function libreCommits(repo: string, opts: { maxCommits: number; bra
 	const refs = await readRefs(repo);
 	if (!refs.ok) return { commits: [], head: null, more: false, error: refs.error };
 	const head = await readHead(repo);
-	// Map Libre filters to old CommitOptions: branches null => all
+	// Map Libre filters to old CommitOptions: branches null => all.
+	// Tags are always shown, whatever the page sent: `showTags: false` used to strip the
+	// pills while the tag dropdown (libreRepoInfo) still listed them, so picking a tag
+	// filtered the graph to nothing. Showing them always keeps dropdown, pills and the
+	// tag filter below in agreement.
 	const old = await getCommits(repo, {
 		maxCommits: opts.maxCommits,
-		showTags: opts.showTags,
+		showTags: true,
 		showRemoteBranches: opts.showRemoteBranches,
 		includeCommitsMentionedByReflogs: opts.includeReflog,
+		includeUnreachableCommits: opts.includeUnreachable,
 		onlyFollowFirstParent: opts.onlyFollowFirstParent,
 		commitOrdering: opts.commitOrdering,
 		branches: opts.branches !== null && opts.branches.length > 0 ? opts.branches : (opts.branchName ? [opts.branchName] : null),
@@ -942,7 +976,7 @@ export async function libreCommits(repo: string, opts: { maxCommits: number; bra
 	const refsByHash = new Map<string, GitRef[]>();
 	const pushRef = (hash: string, r: GitRef) => { const a = refsByHash.get(hash) ?? []; a.push(r); refsByHash.set(hash, a); };
 	for (const h of refs.value.heads) pushRef(h.hash, { hash: h.hash, name: h.name, type: "head" });
-	if (opts.showTags) for (const t of refs.value.tags) pushRef(t.hash, { hash: t.hash, name: t.name, type: "tag", signed: false });
+	for (const t of refs.value.tags) pushRef(t.hash, { hash: t.hash, name: t.name, type: "tag", signed: false });
 	for (const r of refs.value.remotes) {
 		if (!opts.showRemoteBranches) continue;
 		if (opts.hiddenRemotes.includes(r.remote)) continue;
@@ -960,9 +994,11 @@ export async function libreCommits(repo: string, opts: { maxCommits: number; bra
 	}
 	// Libre compares this field to commit hashes, not branch names.
 	const headHash = (await gitText(repo, ["rev-parse", "--verify", "HEAD"])).ok ? (await gitText(repo, ["rev-parse", "--verify", "HEAD"])).text.trim() : null;
-	// Build nodes
+	// Build nodes. The uncommitted row carries no author and no tags, so a pick that
+	// filters on either of those filters it out too.
+	const filtered = (opts.authors && opts.authors.length > 0) || (opts.tags && opts.tags.length > 0);
 	const nodes: GitCommitNode[] = [];
-	if (uncommitted) {
+	if (uncommitted && !filtered) {
 		nodes.push({ hash: uncommitted.hash, parentHashes: uncommitted.parents, author: uncommitted.author, email: uncommitted.email, date: uncommitted.date, message: uncommitted.message, refs: [] });
 	}
 	// stash injection map
@@ -1045,12 +1081,19 @@ export async function libreTagDetails(repo: string, tagName: string): Promise<{ 
 	const isAnnotated = t.ok && t.text.trim() === "tag";
 	const targetType = "commit";
 	const subject = v.message.split("\n")[0] ?? "";
+	// `targetHash` is the commit the tag names, peeled: an annotated tag's own object is
+	// not a commit, so handing back `tagHash` here pointed the page at an object it
+	// cannot draw as a commit. `^{commit}` peels it; a lightweight tag already names
+	// its commit, and the peel is then a no-op. Falls back to `tagHash` when git will
+	// not peel, rather than reporting nothing.
+	const peeled = await gitText(repo, ["rev-parse", "--verify", `refs/tags/${tagName}^{commit}`]);
+	const targetHash = peeled.ok && peeled.text.trim() ? peeled.text.trim() : v.tagHash;
 	return {
 		details: {
 			tagName,
 			type: isAnnotated ? "annotated" : "lightweight",
 			objectHash: v.tagHash,
-			targetHash: v.tagHash,
+			targetHash,
 			targetType,
 			taggerName: v.name || null,
 			taggerEmail: v.email || null,
@@ -1110,10 +1153,21 @@ export async function libreSearch(repo: string, query: string, maxResults: numbe
 	const q = query.trim();
 	if (!q) return { results: [], error: null };
 	// Full history, newest first; extra rows are dropped so the webview can load more.
+	// The graph filters the page sends ride along instead of being dropped: the picked
+	// branches are the revisions walked, an author/tag pick narrows the matches, and
+	// with tags switched off the walk no longer starts from tag-only commits.
 	const want = Math.max(1, Math.min(maxResults, 500));
-	const result = await gitText(repo, ["log", "--all", "--format=%H|%P|%an|%ae|%at|%s", "--grep", q, "-i", `--max-count=${want}`]);
+	const revisions = opts.branches && opts.branches.length > 0 ? [...opts.branches] : opts.showTags ? ["--all"] : ["--branches"];
+	const result = await gitText(repo, ["log", ...revisions, "--format=%H|%P|%an|%ae|%at|%s", "--grep", q, "-i", `--max-count=${want}`]);
 	if (!result.ok) return { results: [], error: libreError(reasonOf(result)) };
-	return { results: parseSearch(result.text, q), error: null };
+	let results = parseSearch(result.text, q);
+	if (opts.authors && opts.authors.length > 0) results = results.filter((entry) => opts.authors!.includes(entry.author));
+	if (opts.tags && opts.tags.length > 0) {
+		const refs = await readRefs(repo);
+		const tagged = new Set(refs.ok ? refs.value.tags.filter((tag) => opts.tags!.includes(tag.name)).map((tag) => tag.hash) : []);
+		results = results.filter((entry) => tagged.has(entry.hash));
+	}
+	return { results, error: null };
 }
 function parseSearch(text: string, q: string): GitCommitSearchResult[] {
 	const out: GitCommitSearchResult[] = [];
