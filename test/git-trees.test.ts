@@ -4,8 +4,6 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { gitGraph } from "../server/git/graph.ts";
-import { refName } from "../server/git/graph.ts";
 import { repoOf } from "../server/git/repo.ts";
 import { ensureWorktree, slugOf, workType } from "../server/worktrees/make.ts";
 import { retireWorktree, sameFolder } from "../server/worktrees/retire.ts";

@@ -15,7 +15,6 @@ import { boardFor, boardFrom, boards, flushBoard } from "./store.ts";
 import { boardSettingsValues, settingsDocument } from "./settings-document.ts";
 import { boardMeta, cardsFor } from "./cards.ts";
 import { closedCards } from "./bus.ts";
-import { gitPicture, refreshGit, unwatchGit, watchGit } from "./git/graph.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
 import { onDefaults, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
@@ -234,7 +233,6 @@ function startLiveStream(req, socket, head) {
 	const forget = () => {
 		clearInterval(keepAlive);
 		board.clients.delete(client);
-		unwatchGit(board);
 	};
 	client.onClose = forget;
 	send(new Set([client]), {
@@ -243,13 +241,9 @@ function startLiveStream(req, socket, head) {
 		closed: closedCards(board),
 		activity: board.activity,
 		meta: boardMeta(board),
-		// Read before the snapshot goes out, so a tab that has just opened draws the strip at once
-		// instead of waiting a tick for its first git event.
-		git: refreshGit(board, true),
 	});
 	if (!client.writableEnded && !client.destroyed) {
 		board.clients.add(client);
-		watchGit(board);
 	}
 }
 
@@ -449,15 +443,12 @@ export const server = createServer((req, res) => {
 				closed: closedCards(board),
 				activity: board.activity,
 				meta: boardMeta(board),
-				git: refreshGit(board, true),
 			});
 			board.clients.add(res);
-			watchGit(board);
 			const keepAlive = setInterval(() => res.write(": ping\n\n"), 20_000);
 			const forget = () => {
 				clearInterval(keepAlive);
 				board.clients.delete(res);
-				unwatchGit(board);
 			};
 			req.on("close", forget);
 			res.on("error", forget);
@@ -674,8 +665,6 @@ export const server = createServer((req, res) => {
 				closed: closedCards(board),
 				activity: board.activity,
 				meta: boardMeta(board),
-				// What the strip draws, read now rather than cached: a script asking gets the disk's answer.
-				git: gitPicture(board),
 			});
 			return;
 		}

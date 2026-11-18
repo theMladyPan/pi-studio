@@ -4,12 +4,12 @@ The one list of what is open. `STATE.md` says what works; this says what does no
 says what it is, what it would touch, and what has to be settled before it can start. Line numbers are
 `dev` at `c723fc3`.
 
-Fifteen entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
+Thirteen entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
 something the board cannot do yet, **chore** is work on the code itself.
 
-Three decisions have to be answered by you before some of these can start, and each is named in the
-entry it blocks: how the git strip should notice the pointer, where a screenshot's bytes live once the
-daemon has restarted, and whether the microphone stays in the daemon or moves into the page.
+Two decisions have to be answered by you before some of these can start, and each is named in the
+entry it blocks: where a screenshot's bytes live once the daemon has restarted, and whether the
+microphone stays in the daemon or moves into the page.
 
 ## fix
 
@@ -48,27 +48,6 @@ child says.
 (`public/client/board.js:5524`) and nothing about what the call cost. The numbers exist per thread
 (`thread.stats`) and not per call. To settle: what a single tool call can honestly claim, since pi
 reports cost per session.
-
-**One remembered setting for the minimap, and a switch for the graph.** The two disagree. The map is on
-at every load (`let mapOn = true`, `public/client/board.js:4186`), toggled by `#mapBtn`
-(`public/index.html:1235`) and stored nowhere. The graph is a side effect: the strip appears whenever
-the daemon sends commits (`git-on`, `public/client/board.js:4686`), with no key and no button. Touches
-the client only. To settle: whether both become rows in the settings dialog `#boardConfig`
-(`public/index.html:1258`), which is now a tree the daemon describes, rather than header buttons.
-
-**A git strip with no plate behind it.** The strip has no panel and the paint draws solid
-(`public/client/board.js:4540`, `4600`), so the board reads through it. Lowering the alpha puts the
-cards behind it into the picture. Wants one look in a browser before the values are kept, and it is
-blocked on the strip's width: see the entry below.
-
-**Git strip: dots at rest, branches and messages on hover.** As specified, the strip shows lanes and
-dots only, and hovering opens it wide enough for branch and tag pills and commit subjects. Today it is
-the other way round: a fixed 208px column (`public/index.html:97`) that always draws up to two pills
-(`public/client/board.js:4632`) and a fitted subject (`4637`). Two ways to get the hover, and they are
-not equivalent: a plain hover on the strip (`pointer-events: auto`) swallows drags and clicks over
-208px of board, which the stylesheet states it must not (`public/index.html:99`); a pointer position
-test keeps the board usable and costs a short delay. Hover is also not a modality everyone has, so the
-accessible read (the strip's own summary label, or a strip that can take focus) has to be kept.
 
 **The Git Graph drawer still cannot reach a remote, and there are a few commands with no home here.**
 The local writes all answer now — branches, tags, checkout, merge, rebase, cherry-pick, revert, reset,

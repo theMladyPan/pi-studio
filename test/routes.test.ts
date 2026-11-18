@@ -1423,13 +1423,12 @@ describe("routes", { concurrency: 8 }, () => {
 			});
 			socket.close();
 			// The whole client renders from this one message: the cards, what was closed, the rail's rows,
-			// the board's meta and the git strip.
+			// the board's meta.
 			assert.equal(payload.type, "snapshot");
 			assert.ok(Array.isArray(payload.cards));
 			assert.ok(Array.isArray(payload.closed));
 			assert.ok(Array.isArray(payload.activity));
 			assert.ok(payload.meta, "the snapshot carries no meta");
-			assert.ok("git" in payload, "the snapshot carries no git picture");
 		} finally {
 			daemon.child.kill();
 			await removeTree(folder);

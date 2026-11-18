@@ -2,8 +2,8 @@
  * One git process, run once, with the three failures an editor cannot afford left out: a prompt nobody
  * can answer, output nobody bounded, and a hang nobody timed out.
  *
- * Everything git-graph asks git goes through here, because besides the two modules that already read a
- * repository (`server/git/repo.ts`, `server/git/graph.ts`) there is now a whole webview whose every
+ * Everything git-graph asks git goes through here, because besides the module that already reads a
+ * repository (`server/git/repo.ts`) there is now a whole webview whose every
  * click is a git command. A command that waits for a password holds its caller for as long as the human
  * leaves the tab open; one that prints a gigabyte fills the daemon's heap; a rebase on a folder that is
  * not a repository must answer "no" rather than throw. So the three are answered in the one place that
