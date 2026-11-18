@@ -12,7 +12,7 @@ import { pathToFileURL } from "node:url";
 import { PUBLIC_DIR } from "../paths.ts";
 import { figuresOf } from "./card-pdf.ts";
 import type { Figure } from "./card-pdf.ts";
-import { SCALE, chromeOnPath, drawPage } from "./chrome.ts";
+import { DEADLINE, SCALE, chromeOnPath, drawPage } from "./chrome.ts";
 import type { Picture } from "./write.ts";
 
 /** How many fences one note may have drawn: past this the wait is longer than the page is worth. */
@@ -208,14 +208,14 @@ function drawingOf(figure: Figure): { html: string; viewport: { width: number; h
  * all: a broken diagram is one missing picture, not a missing document. A note with more fences than one press
  * should wait for keeps descriptions past the eighth, which is still a page worth having.
  */
-export async function drawFigures(markdown: string, chrome = chromeOnPath()): Promise<Map<number, Picture>> {
+export async function drawFigures(markdown: string, chrome = chromeOnPath(), deadline: number = DEADLINE): Promise<Map<number, Picture>> {
 	const drawn = new Map<number, Picture>();
 	const figures = figuresOf(markdown).slice(0, MOST);
 	if (!figures.length || !chrome) return drawn;
 	for (const [index, figure] of figures.entries()) {
 		try {
 			const { html, viewport } = drawingOf(figure);
-			drawn.set(index, await drawPage(html, viewport, chrome));
+			drawn.set(index, await drawPage(html, viewport, chrome, deadline));
 		} catch {
 			// The description stands in, which is the whole point of asking the browser rather than depending on it.
 		}

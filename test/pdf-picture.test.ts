@@ -151,8 +151,13 @@ test("a machine with no browser asks for no pictures and draws none", async () =
 const chrome = chromeOnPath();
 
 test("a browser on this machine draws a chart and a diagram into pictures", { skip: chrome ? false : "no browser installed" }, async () => {
+	// The browser runs inside a suite of hundreds of tests in parallel, so on a loaded machine
+	// starting one up can eat a whole product budget. The product default (one fence, twelve
+	// seconds) stands; the test waits longer, as it can, because it has nothing else to do.
 	const drawn = await drawFigures(
 		['```chart\n{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}\n```', "```mermaid\nflowchart TD\n  A --> B\n```"].join("\n\n"),
+		undefined,
+		30_000,
 	);
 	assert.equal(drawn.size, 2, "both fences became pictures");
 	for (const picture of drawn.values()) {
