@@ -788,7 +788,7 @@ function exConflictHunks(text) {
   });
   let i = 0;
   while (i < lines.length) {
-    if (!/^<{7}( |$)/.test(lines[i])) {
+    if (!/^<{7,}( |$)/.test(lines[i])) {
       i += 1;
       continue;
     }
@@ -798,21 +798,21 @@ function exConflictHunks(text) {
     let base = null;
     let theirs = [];
     let closed = false;
-    while (j < lines.length && !/^={7}$/.test(lines[j]) && !/^\|{7}( |$)/.test(lines[j])) {
+    while (j < lines.length && !/^={7,}$/.test(lines[j]) && !/^\|{7,}( |$)/.test(lines[j])) {
       ours.push(lines[j]);
       j += 1;
     }
-    if (j < lines.length && /^\|{7}( |$)/.test(lines[j])) {
+    if (j < lines.length && /^\|{7,}( |$)/.test(lines[j])) {
       base = [];
       j += 1;
-      while (j < lines.length && !/^={7}$/.test(lines[j])) {
+      while (j < lines.length && !/^={7,}$/.test(lines[j])) {
         base.push(lines[j]);
         j += 1;
       }
     }
-    if (j < lines.length && /^={7}$/.test(lines[j])) {
+    if (j < lines.length && /^={7,}$/.test(lines[j])) {
       j += 1;
-      while (j < lines.length && !/^>{7}( |$)/.test(lines[j])) {
+      while (j < lines.length && !/^>{7,}( |$)/.test(lines[j])) {
         theirs.push(lines[j]);
         j += 1;
       }
@@ -5622,6 +5622,7 @@ function scRow(file, stage) {
   row.append(badge);
   const move = el("button");
   move.type = "button";
+  move.disabled = Boolean(scState.merge);
   move.textContent = stage ? "+" : "−";
   move.title = stage ? `stage ${file.path}` : `unstage ${file.path}`;
   move.addEventListener("click", () => void scMove([file.path], stage));
@@ -5739,7 +5740,7 @@ async function scCommit() {
   scPaint();
   try {
     if (merging) {
-      const data = await scPost(`/source-control/continue?${auth}`, { message });
+      const data = await scPost(`/source-control/continue?${auth}`, { message, mergeId: scState.merge.id });
       scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null };
       scMessage.value = "";
       scSay("merge concluded");
@@ -11086,7 +11087,8 @@ function exEditEscape() {
 // One listener for the modal's own keys: Tab stays inside it, and ctrl or command with s writes it back.
 exEditorEl.addEventListener("keydown", (event) => {
   if (event.key === "Tab") {
-    const stops = [...exEditorEl.querySelectorAll("textarea, button:not([disabled])")];
+    // Visible only: a hidden bar's buttons take no focus, and a Tab that lands on one strands.
+    const stops = [...exEditorEl.querySelectorAll("textarea, button:not([disabled])")].filter((one) => one.offsetParent !== null || one === document.activeElement);
     if (!stops.length) return;
     event.preventDefault();
     const at = stops.indexOf(document.activeElement);
@@ -11206,26 +11208,35 @@ async function scOpenConflict(path) {
 
 /** Save the resolved text and stage exactly this file, then shut the editor. */
 async function exConflictResolve() {
-  if (!exConflict) return;
+  const mine = exConflict;
+  if (!mine) return;
   const content = exEditorPreview.getText();
   if (explorerCore.conflictHunks(content).length) return exConflictSay("conflict markers remain", true);
   exConflictSay("resolving\u2026");
   exConflictResolveBtn.disabled = true;
+  // Locked while the save is in flight: text typed after the press cannot be discarded by it.
+  exEditorPreview.setReadOnly(true);
   let answer;
   try {
-    answer = await exPost(`/source-control/resolve?${auth}`, { path: exConflict.path, mergeId: exConflict.mergeId, version: exConflict.version, content });
+    answer = await exPost("/source-control/resolve", { path: exConflict.path, mergeId: exConflict.mergeId, version: exConflict.version, content });
   } catch {
+    if (exConflict !== mine) return;
+    exEditorPreview.setReadOnly(false);
     exConflictSay("could not reach the daemon — the text is not saved", true);
     exConflictResolveBtn.disabled = false;
     return;
   }
+  // The editor may have moved on to another file while the save was in flight; that file is
+  // not this save's to close.
+  if (exConflict !== mine) return;
   const data = answer.data ?? {};
   if (!answer.ok || !data.ok) {
+    exEditorPreview.setReadOnly(false);
     exConflictSay((data && data.error) || `the daemon answered ${answer.status}`, true);
     exConflictResolveBtn.disabled = false;
     return;
   }
-  const path = exConflict.path;
+  const path = mine.path;
   exConflict = null;
   exConflictBar.hidden = true;
   exEditorSaveBtn.hidden = false;

@@ -778,3 +778,10 @@ test("a diff3 hunk carries its base, and an unclosed block is not a hunk", () =>
 	// A literal marker example in prose is followed by no closing side, so it is left alone.
 	assert.equal(core.conflictHunks("the markers <<<<<<< and >>>>>>> are examples\n").length, 0);
 });
+
+test("wide conflict markers are hunks too, ten of them", () => {
+	const wide = "<".repeat(10) + " HEAD\nours\n" + "=".repeat(10) + "\ntheirs\n" + ">".repeat(10) + " side\n";
+	const hunks = core.conflictHunks(wide);
+	assert.equal(hunks.length, 1);
+	assert.equal(core.conflictAccept(wide, 0, "both"), "ours\ntheirs\n");
+});

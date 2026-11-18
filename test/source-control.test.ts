@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { cheapestModel, cleanPaths, sourceControlCommit, sourceControlConflict, sourceControlContinue, sourceControlMessage, sourceControlResolve, sourceControlStage, sourceControlStatus } from "../server/git/source-control.ts";
+import { cheapestModel, cleanPaths, hasConflictMarkers, sourceControlCommit, sourceControlConflict, sourceControlContinue, sourceControlMessage, sourceControlResolve, sourceControlStage, sourceControlStatus } from "../server/git/source-control.ts";
 import { git, scratchRepo } from "../test-support/git.ts";
 
 /**
@@ -254,7 +254,7 @@ test("resolving a conflict stages exactly it, and Continue makes a two-parent co
 		assert.deepEqual(status.conflicts, []);
 		assert.deepEqual(status.staged.map((f) => f.path), ["readme.md"]);
 
-		const continued = await sourceControlContinue(repo, { message: "Merge branch 'side' into dev" });
+		const continued = await sourceControlContinue(repo, { message: "Merge branch 'side' into dev", mergeId: status.merge?.id });
 		assert.equal(continued.ok, true, continued.ok ? "" : continued.error);
 		assert.equal(git(repo, "log", "--format=%s", "-1"), "Merge branch 'side' into dev");
 		const parents = git(repo, "rev-list", "--parents", "-n", "1", "HEAD").split(" ").length - 1;
@@ -269,7 +269,8 @@ test("resolving a conflict stages exactly it, and Continue makes a two-parent co
 test("Continue refuses while a conflict remains, and a stale editor cannot overwrite", async () => {
 	const { repo, cleanup } = await conflictedRepo();
 	try {
-		const early = await sourceControlContinue(repo, { message: "Merge branch 'side' into dev" });
+		const before = await statusOf(repo);
+		const early = await sourceControlContinue(repo, { message: "Merge branch 'side' into dev", mergeId: before.merge?.id });
 		assert.equal(early.ok, false);
 		assert.match(!early.ok ? early.error : "", /conflicts remain/);
 
@@ -282,4 +283,37 @@ test("Continue refuses while a conflict remains, and a stale editor cannot overw
 	} finally {
 		cleanup();
 	}
+});
+
+test("unstaging a rename undoes both halves", async () => {
+	const repo = scratchRepo();
+	try {
+		git(repo, "mv", "readme.md", "renamed.md");
+		const unstaged = await sourceControlStage(repo, ["renamed.md"], false);
+		assert.equal(unstaged.ok, true, unstaged.ok ? "" : unstaged.error);
+		const status = await statusOf(repo);
+		assert.deepEqual(status.staged, [], "no staged deletion is left behind");
+		// The rename undone means HEAD's readme.md is back in the index and missing from disk,
+		// and renamed.md is an untracked file: both are changes, neither is staged.
+		assert.deepEqual(status.changes.map((f) => f.path).sort(), ["readme.md", "renamed.md"]);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("ordinary staging is refused for the whole merge, not just conflicted names", async () => {
+	const { repo, cleanup } = await conflictedRepo();
+	try {
+		writeFileSync(join(repo, "other.txt"), "other\n");
+		const staged = await sourceControlStage(repo, ["other.txt"], true);
+		assert.equal(staged.ok, false);
+		assert.match(!staged.ok ? staged.error : "", /during a merge/);
+	} finally {
+		cleanup();
+	}
+});
+
+test("wide conflict markers are still markers, with ten of them", async () => {
+	assert.equal(hasConflictMarkers("<".repeat(10) + " HEAD\nours\n" + "=".repeat(10) + "\ntheirs\n" + ">".repeat(10) + " side\n"), true);
+	assert.equal(hasConflictMarkers("no markers here\n"), false);
 });

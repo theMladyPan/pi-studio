@@ -24,8 +24,8 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { writeFile, rename } from "node:fs/promises";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { chmod, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { runGit } from "./exec.ts";
@@ -33,7 +33,7 @@ import { piCli } from "../child/argv.ts";
 import { modelCatalog } from "../models.ts";
 
 /** One file as the panel draws it: its path from the repository root and the letter on its right. */
-export type ScFile = { path: string; kind: string };
+export type ScFile = { path: string; kind: string; oldPath?: string };
 
 /** One unmerged path, with the three index stages git holds for it (base, ours, theirs). */
 export type ScConflict = { path: string; stages: { base: string | null; ours: string | null; theirs: string | null } };
@@ -231,13 +231,15 @@ export async function sourceControlStatus(folder: string): Promise<ScOutcome> {
 		const x = row[0] ?? " ";
 		const y = row[1] ?? " ";
 		let path = row.slice(3);
+		let oldPath: string | undefined;
 		if ((x === "R" || x === "C" || y === "R" || y === "C") && rows[i + 1]) {
 			// Porcelain -z names the destination first and the source second; the panel lists the
-			// file by the name it has now, and the source is consumed so it is not listed twice.
+			// file by the name it has now, and the source is kept so unstaging can undo both halves.
+			oldPath = rows[i + 1];
 			i += 1;
 		}
 		if (unmergedOf(x, y) || conflicted.has(path)) continue;
-		if (x !== " " && x !== "?") staged.push({ path, kind: kindOf(x, y) });
+		if (x !== " " && x !== "?") staged.push({ path, kind: kindOf(x, y), ...(oldPath ? { oldPath } : {}) });
 		if (y !== " " || x === "?") changes.push({ path, kind: kindOf(x, y) });
 	}
 	const head = branch.ok ? branch.stdout.toString().trim() : "";
@@ -265,6 +267,8 @@ export async function sourceControlStage(folder: string, input: unknown, stage: 
 	if (!conflicts.ok) return conflicts;
 	const blocked = cleaned.paths.find((path) => conflicts.conflicts.some((one) => one.path === path));
 	if (blocked) return { ok: false, error: `a conflicted file is resolved in the merge editor, not staged: ${blocked}` };
+	const operation = await operationOf(root);
+	if (operation.operation === "merge") return { ok: false, error: "during a merge the index changes in the merge editor: resolve a file or press Continue" };
 	const held = holdWrite(root);
 	if (!held.ok) return held;
 	try {
@@ -272,11 +276,15 @@ export async function sourceControlStage(folder: string, input: unknown, stage: 
 		if (stage) {
 			args = ["--literal-pathspecs", "add", "--", ...cleaned.paths];
 		} else {
+			// Unstaging a rename must undo both halves: the destination and the source it came from.
+			const standing = await sourceControlStatus(folder);
+			const sources = standing.ok ? standing.status.staged.filter((one) => one.oldPath && cleaned.paths.includes(one.path)).map((one) => one.oldPath as string) : [];
+			const writePaths = [...cleaned.paths, ...sources];
 			const head = await runGit(root, ["rev-parse", "--verify", "--quiet", "HEAD"], { kind: "read" });
 			// An unborn HEAD has nothing to restore from; the empty tree is the index as it began.
 			args = head.ok
-				? ["--literal-pathspecs", "restore", "--staged", "--", ...cleaned.paths]
-				: ["--literal-pathspecs", "restore", "--staged", `--source=${EMPTY_TREE}`, "--", ...cleaned.paths];
+				? ["--literal-pathspecs", "restore", "--staged", "--", ...writePaths]
+				: ["--literal-pathspecs", "restore", "--staged", `--source=${EMPTY_TREE}`, "--", ...writePaths];
 		}
 		const written = await runGit(root, args, { kind: "write" });
 		if (!written.ok) return { ok: false, error: written.stderr || "git could not change the staged files" };
@@ -406,13 +414,36 @@ export async function sourceControlMessage(folder: string, deps: ScDraftDeps = {
 
 /** Whether text still carries an unresolved conflict marker, in any of the shapes git writes. */
 export function hasConflictMarkers(text: string): boolean {
-	return /^<{7}( |$)|^\|{7}( |$)|^={7}$|^>{7}( |$)/m.test(text);
+	// Seven or more: a repository may widen its markers, and a wider marker is still a marker.
+	return /^<{7,}( |$)|^\|{7,}( |$)|^={7,}$|^>{7,}( |$)/m.test(text);
 }
 
 /** The merge identity a resolve or continue must still match, so a stale editor cannot win a race. */
 async function mergeIdOf(root: string): Promise<string | null> {
 	const operation = await operationOf(root);
 	return operation.merge ? operation.merge.id : null;
+}
+
+/** A conflicted path as a real file inside the repository, or the reason it is not one. */
+function safeFile(root: string, path: string): { ok: true; abs: string } | { ok: false; error: string } {
+	let leaf;
+	try {
+		leaf = lstatSync(join(root, path));
+	} catch {
+		return { ok: false, error: `that file could not be read: ${path}` };
+	}
+	if (leaf.isSymbolicLink()) return { ok: false, error: `that file is a link, and a link is not resolved here: ${path}` };
+	if (!leaf.isFile()) return { ok: false, error: `that is not a file: ${path}` };
+	let realRoot: string;
+	let realAbs: string;
+	try {
+		realRoot = realpathSync(root);
+		realAbs = realpathSync(join(root, path));
+	} catch {
+		return { ok: false, error: `that file could not be read: ${path}` };
+	}
+	if (realAbs !== realRoot && !realAbs.startsWith(realRoot + "/")) return { ok: false, error: `that file lives outside the repository: ${path}` };
+	return { ok: true, abs: realAbs };
 }
 
 /** A conflicted file's text, if it is a plain text file small enough to edit. */
@@ -427,9 +458,11 @@ export async function sourceControlConflict(folder: string, path: unknown): Prom
 	const conflicts = await conflictsOf(root);
 	if (!conflicts.ok) return conflicts;
 	if (!conflicts.conflicts.some((one) => one.path === path)) return { ok: false, error: `that file has no conflict: ${path}` };
+	const safe = safeFile(root, path);
+	if (!safe.ok) return safe;
 	let bytes: Buffer;
 	try {
-		bytes = readFileSync(join(root, path));
+		bytes = readFileSync(safe.abs);
 	} catch {
 		return { ok: false, error: `that file could not be read: ${path}` };
 	}
@@ -456,9 +489,13 @@ export async function sourceControlResolve(folder: string, input: { path?: unkno
 		const current = await sourceControlConflict(folder, path);
 		if (!current.ok) return current;
 		if (current.version !== input.version) return { ok: false, error: "the file changed on disk since it was opened: reopen it" };
-		const target = join(root, path);
+		const safe = safeFile(root, path);
+		if (!safe.ok) return safe;
+		const target = safe.abs;
+		const mode = statSync(target).mode;
 		const temp = join(root, `.pi-studio-resolve-${randomUUID()}`);
 		await writeFile(temp, input.content, "utf8");
+		await chmod(temp, mode);
 		await rename(temp, target);
 		const staged = await runGit(root, ["--literal-pathspecs", "add", "--", path], { kind: "write" });
 		if (!staged.ok) return { ok: false, error: `the text was saved but not staged: ${staged.stderr || "git could not stage it"}` };
@@ -469,7 +506,7 @@ export async function sourceControlResolve(folder: string, input: { path?: unkno
 }
 
 /** Conclude the merge: commit the index as it stands, with the message the field holds. */
-export async function sourceControlContinue(folder: string, input: { message?: unknown }): Promise<ScOutcome> {
+export async function sourceControlContinue(folder: string, input: { message?: unknown; mergeId?: unknown }): Promise<ScOutcome> {
 	const text = typeof input?.message === "string" ? input.message.trim() : "";
 	if (!text) return { ok: false, error: "a merge message is needed" };
 	if (text.length > 4096) return { ok: false, error: "that message is too long for one commit" };
@@ -479,7 +516,9 @@ export async function sourceControlContinue(folder: string, input: { message?: u
 	if (!held.ok) return held;
 	try {
 		const operation = await operationOf(root);
-		if (operation.operation !== "merge") return { ok: false, error: "no merge is in flight in this repository" };
+		if (operation.operation !== "merge" || !operation.merge) return { ok: false, error: "no merge is in flight in this repository" };
+		if (typeof input?.mergeId !== "string" || input.mergeId !== operation.merge.id)
+			return { ok: false, error: "the merge changed while the drawer was open: read it again before continuing" };
 		const conflicts = await conflictsOf(root);
 		if (!conflicts.ok) return conflicts;
 		if (conflicts.conflicts.length) return { ok: false, error: `conflicts remain: ${conflicts.conflicts.map((one) => one.path).join(", ")}` };
