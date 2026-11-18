@@ -33,7 +33,7 @@ export function worktreePrompt(board, thread) {
 			`Before your first edit, cut your own branch with \`git checkout -b <type>/<slug>-${short}\`: <type> is fix, feat, refactor, docs, test or chore, and <slug> says what the work turned out to be, in kebab-case. Commit there. A request that only asks a question leaves the tree detached and writes no branch.`,
 			`That tree is yours alone. Stay on your branch while you edit and commit: it is your playground, and the human reads it as your work. You may check out ${tree.base} or another branch to read and compare, as long as nothing is left uncommitted when you switch back.`,
 			`If the work turns out to be something other than the branch name says, rename it with \`git branch -m <type>/<slug>-${short}\` and report the new name.`,
-			`If files changed, name the branch and the path in one clause; nothing more. Nobody merges for you: cutting a branch and merging one are the human's decisions.`,
+			`If files changed, name the branch and changed paths alongside the outcome, checks, and any remaining limits. Nobody merges for you: cutting a branch and merging one are the human's decisions.`,
 			// The tree is a playground that goes away: a child that leaves work uncommitted has done work
 			// nobody can read back, so the rule is said here, next to the tree it is about.
 			`When this thread is retired its worktree is wiped clean, so anything left uncommitted in it is lost: commit what you want to keep before your last message, and never leave work in that tree as an uncommitted change.`,
@@ -69,24 +69,22 @@ export function worktreePrompt(board, thread) {
  * second copy here is the copy a human's edit would not reach.
  */
 const NO_CONVENTIONS =
-	"The board's conventions file is missing (prompts/board/conventions.md), so nothing here says how a card is written: put the work on cards anyway, give each one a key, and say in the chat what you put there.";
+	"The board's conventions file is missing (prompts/board/conventions.md): answer in the thread by default; reserve cards for artifacts worth revisiting or keeping visible, and give each a key and enough context to stand alone.";
 
 
 
 /**
  * The thread's own card, and the board around it, said plainly enough that an agent uses it.
  *
- * The board is the product, and the chat is only the wire under it: when the work is on a card the answer
- * is a pointer to it, so a thread that writes its findings in prose has done the work where nobody reads
- * it. When nothing is on a card the answer itself belongs in the chat, which is what keeps a quiet board
- * usable: a prompt that made every sentence a card is why cards were never asked for.
+ * Replies belong in the thread; cards hold useful artifacts beside the conversation. The editable
+ * conventions decide when content earns a card, while this frame identifies both places.
  *
  * A spawned child is told none of this. It draws nothing — the bridge is not loaded for it and every card
  * route refuses it — so the instruction and the tools agree, and `childPrompt` is what it gets.
  *
  * What stays here is the fact of where the thread works and the two mechanics the board enforces: a
  * `[[key]]` resolves to the card whose key is that same string, and the card rules are the last thing a
- * thread reads. The taste — pointer style, one kind of thing per card, mermaid before svg — is
+ * thread reads. The advice — when to use a card, one kind of thing per card, mermaid before svg — is
  * `prompts/board/conventions.md`, because a human may want it in their own words.
  *
  * A workspace adds one file of its own to that, `STUDIO.md` in its folder: the studio's own instructions
@@ -101,7 +99,7 @@ export function boardPrompt(board, thread) {
 	return [
 		`You are thread "${thread.title}" on a board, working in the folder ${workdir}.`,
 		`The workspace this board opened is ${board.folder}, which is where the rest of the board reads files from.`,
-		"The human reads cards on that board, not a chat log or a terminal.",
+		"The human reads your replies in the thread window and keeps useful artifacts on the board.",
 		// A board whose conventions file was deleted still has every mechanic below, so it still gets told
 		// what to do with a card rather than being left with the identity lines and nothing else.
 		promptText("board", "conventions") || NO_CONVENTIONS,
@@ -123,14 +121,14 @@ export function boardPrompt(board, thread) {
 /**
  * What a spawned child is told on the same board. It draws nothing: the bridge is not loaded for it and
  * every card route refuses it, so the report in its last message is the whole of what the thread that
- * spawned it reads. That thread decides which card the finding is worth.
+ * spawned it reads. That thread decides what belongs in its reply or on a card.
  */
 export function childPrompt(board, thread) {
 	const workdir = workdirOf(board, thread);
 	return [
 		`You are thread "${thread.title}" on a board, working in the folder ${workdir}.`,
 		`The workspace this board opened is ${board.folder}, which is where the rest of the board reads files from.`,
-		"You draw nothing on that board: no note, no source card, no question to the human. The thread that spawned you reads your last message and writes the cards, so that message is the whole report.",
+		"You draw nothing on that board: no note, no source card, no question to the human. The thread that spawned you reads your last message and decides what belongs in its reply or on a card, so that message is the whole report.",
 		"Say what you found, where it is, what you changed, and what you would do next, in short prose or bullets, with paths and line numbers where they matter. Quote the exact text when the exact text is the finding.",
 		worktreePrompt(board, thread),
 	].join("\n");

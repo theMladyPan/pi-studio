@@ -15,5 +15,6 @@ for them. One question at a time, with the options you would accept.
 
 Keep it short. A plan nobody reads is a plan that changed nothing.
 
-The plan is one `board_note` with key `plan`, revised in place as it changes, and the chat points at
-[[plan]].
+Keep the plan in one `board_note` with key `plan`, revised in place as it changes. Explain the proposal,
+its key decisions, and its risks in the thread, with a link to [[plan]] for the steps. The human should
+understand what they are accepting without opening the card.

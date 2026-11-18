@@ -139,7 +139,7 @@ export function cardsBlock(config) {
 		"What a card may contain:",
 		...CARD_SHOWS.map((key) => `- ${LABELS[key].name}: ${cards[key]} — ${SHOW_TEXT[key][cards[key]]}`),
 		"Mermaid is the structural drawing: a fenced mermaid block is fine at every level, and a chart with numbers is a ```chart block, documented by board_skill.",
-		`A level is a default, not a refusal: when the human asks for the thing by name — ${CARD_SHOWS.map((key) => LABELS[key].asked).join(", ")} — that card carries it at full strength, whatever level the switch holds.`,
+		`A level is a default, not a refusal: when content belongs on a card and the human asks for the thing by name — ${CARD_SHOWS.map((key) => LABELS[key].asked).join(", ")} — that card carries it at full strength, whatever level the switch holds.`,
 		"This thread's own flow, or the human asking for a card in so many words, wins over every level above.",
 	].join("\n");
 }

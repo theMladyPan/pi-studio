@@ -3,11 +3,10 @@
 Spawning a thread gives it a role, and a role is a file here. A thread the human started gets a mode
 instead, and a boss among those also gets a flow. Two of the board's card settings pick a file here too.
 
-- `board/conventions.md` is what every thread the human starts is told about the board itself: that the
-  chat is a pointer to the cards, one card holds one kind of thing, mermaid before svg, detail on
-  request. It is the general usage prompt, and the one file to edit when a board's threads write the
-  wrong shape of card. A spawned child reads none of it, and neither does a missing file: the prompt
-  then says the file is missing and leaves it there.
+- `board/conventions.md` tells every thread the human starts to answer in the thread window and keep
+  useful artifacts on the board. It covers when a card earns its space, its title and context, updates
+  to existing cards, and the form its content takes. It is the general usage prompt. A spawned child
+  reads none of it. If the file is missing, a short fallback keeps thread replies as the default.
 - The facts stay in code: `boardPrompt` in `server/child/prompts.ts` writes the thread's title, its
   folder, the `[[key]]`-to-`board_note key` rule, and the cards block at the end. A count of cards, a
   chart's format or the mermaid rule belong in the file, because no route enforces them.

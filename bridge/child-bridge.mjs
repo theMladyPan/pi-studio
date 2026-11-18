@@ -33,7 +33,7 @@ const OFF_WORDS = {
 /** How often this board wants a card, one line, or nothing when the board is on the board's default. */
 const WHEN = {
 	quiet: "This board is on quiet: write a card only when the human asked for one in so many words.",
-	normal: "This board is on normal: a card for something that has to be seen, none for narration.",
+	normal: "This board is on normal: use cards for artifacts worth revisiting or keeping visible; answer in the thread.",
 };
 
 /** The two sentences a card tool carries under this board's settings. */
@@ -74,7 +74,7 @@ const noteTool = defineTool({
 	name: "board_note",
 	label: "Board note",
 	description:
-		"Put a note on the user's board. Use it for a diagram, a table, a file tree, a todo list that will be updated, or a finding worth keeping beside the conversation instead of buried in it. One card holds one kind of thing: a chart and the todo for it are two notes. Markdown is rendered; a fenced mermaid block draws a diagram, so a flow, a state machine, a sequence or a tree is mermaid, and a chart with numbers on an axis is a ```chart block, never a hand-written svg. Pass the same key again to revise that note in place, which is how a checklist grows." +
+		"Put a note on the user's board. Use it for artifacts worth revisiting or keeping visible: a chart, a note, reusable commands, a todo list, a flowchart, a reminder, or instructions. One-shot answers belong in the thread. Give the card a meaningful title and enough context to stand alone or a clear relation to the conversation or another card. Write the artifact itself, without wording about your reply. One card holds one kind of thing: a chart and the todo for it are two notes. Markdown is rendered; a fenced mermaid block draws a diagram, so a flow, a state machine, a sequence or a tree is mermaid, and a chart with numbers on an axis is a ```chart block, never a hand-written svg. Pass the same key again to revise that note in place, which is how a checklist grows." +
 		(RULES ? ` ${RULES}` : ""),
 	parameters: Type.Object({
 		markdown: Type.String({ description: "Note body in markdown." }),
@@ -88,7 +88,7 @@ const noteTool = defineTool({
 		size: Type.Optional(
 			Type.Union(["compact", "normal", "wide", "tall"].map((size) => Type.Literal(size)), {
 				description:
-					"Card size for the form, not for emphasis: 'wide' for a chart or table with more than ten columns or points, 'compact' for a three-line answer, 'tall' for a long checklist or trace. Leave it out on almost every card.",
+					"Card size for the form, not for emphasis: 'wide' for a chart or table with more than ten columns or points, 'compact' for a three-line note, 'tall' for a long checklist or trace. Leave it out on almost every card.",
 			}),
 		),
 		after: Type.Optional(
@@ -125,7 +125,7 @@ const sourceTool = defineTool({
 	name: "board_source",
 	label: "Board source",
 	description:
-		"Open a file from the workspace on the user's board, scrolled to a line, so they read the real text rather than a description of it. For a file the human asked to see: it is not how you show evidence, which is a reference at the foot of a card. Passing the same path again refreshes that card after the file changes." +
+		"Open a file from the workspace on the user's board, scrolled to a line, so they read the real text rather than a description of it. Use it when the human asks to see a file on the board or needs to keep it open during the work. A path and line number in the thread are enough when only citing evidence. Passing the same path again refreshes that card after the file changes." +
 		(RULES ? ` ${RULES}` : ""),
 	parameters: Type.Object({
 		path: Type.String({ description: "File path, relative to the workspace folder." }),
@@ -135,7 +135,7 @@ const sourceTool = defineTool({
 		size: Type.Optional(
 			Type.Union(["compact", "normal", "wide", "tall"].map((size) => Type.Literal(size)), {
 				description:
-					"Card size for the form, not for emphasis: 'wide' for a chart or table with more than ten columns or points, 'compact' for a three-line answer, 'tall' for a long checklist or trace. Leave it out on almost every card.",
+					"Card size for the form, not for emphasis: 'wide' for a chart or table with more than ten columns or points, 'compact' for a three-line note, 'tall' for a long checklist or trace. Leave it out on almost every card.",
 			}),
 		),
 	}),
