@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { cheapestModel, cleanPaths, hasConflictMarkers, sourceControlCommit, sourceControlConflict, sourceControlContinue, sourceControlMessage, sourceControlResolve, sourceControlStage, sourceControlStatus } from "../server/git/source-control.ts";
+import { cleanPaths, hasConflictMarkers, sourceControlCommit, sourceControlConflict, sourceControlContinue, sourceControlMessage, sourceControlResolve, sourceControlStage, sourceControlStatus } from "../server/git/source-control.ts";
 import { git, scratchRepo } from "../test-support/git.ts";
 
 /**
@@ -98,20 +98,6 @@ test("a folder that is not a repository says so", async () => {
 	}
 });
 
-test("the cheapest model is the lite one, whatever order the list arrives in", () => {
-	const models = [
-		{ provider: "google", model: "gemini-2.5-pro" },
-		{ provider: "github-copilot", model: "gpt-6.1-sol" },
-		{ provider: "deepseek", model: "deepseek-v4-pro" },
-		{ provider: "google", model: "gemini-2.5-flash-lite" },
-		{ provider: "huggingface", model: "MiniMaxAI/MiniMax-M3.1-Flash" },
-	];
-	assert.deepEqual(cheapestModel(models), { provider: "google", model: "gemini-2.5-flash-lite" });
-	assert.deepEqual(cheapestModel([...models].reverse()), { provider: "google", model: "gemini-2.5-flash-lite" });
-	assert.equal(cheapestModel([]), null);
-	assert.equal(cheapestModel([{ provider: "google", model: "gemini-3-pro-preview" }]), null, "a preview is never the draft model");
-});
-
 test("a draft is one line, and a model that answers nothing is a refusal, not a message", async () => {
 	const repo = scratchRepo();
 	try {
@@ -119,10 +105,8 @@ test("a draft is one line, and a model that answers nothing is a refusal, not a 
 		await sourceControlStage(repo, ["readme.md"], true);
 
 		let asked = "";
-		const catalog = async () => ({ models: [{ provider: "google", model: "gemini-2.5-flash-lite" }] });
 		const drafted = await sourceControlMessage(repo, {
-			catalog,
-			run: async (_cli: unknown, _folder: string, _model: unknown, prompt: string) => {
+			run: async (_cli: unknown, _folder: string, prompt: string) => {
 				asked = prompt;
 				return "```\ndocs(readme): refresh the hello line\nsecond thoughts\n```\n";
 			},
@@ -131,7 +115,7 @@ test("a draft is one line, and a model that answers nothing is a refusal, not a 
 		assert.equal(drafted.ok && drafted.message, "docs(readme): refresh the hello line");
 		assert.match(asked, /readme\.md/);
 
-		const silent = await sourceControlMessage(repo, { catalog, run: async () => "   \n" });
+		const silent = await sourceControlMessage(repo, { run: async () => "   \n" });
 		assert.equal(silent.ok, false);
 		assert.match(!silent.ok ? silent.error : "", /no message/);
 	} finally {
@@ -144,7 +128,6 @@ test("a draft with nothing staged asks nobody", async () => {
 	try {
 		let called = false;
 		const outcome = await sourceControlMessage(repo, {
-			catalog: async () => ({ models: [{ provider: "google", model: "gemini-2.5-flash-lite" }] }),
 			run: async () => {
 				called = true;
 				return "feat: never asked";
@@ -316,4 +299,70 @@ test("ordinary staging is refused for the whole merge, not just conflicted names
 test("wide conflict markers are still markers, with ten of them", async () => {
 	assert.equal(hasConflictMarkers("<".repeat(10) + " HEAD\nours\n" + "=".repeat(10) + "\ntheirs\n" + ">".repeat(10) + " side\n"), true);
 	assert.equal(hasConflictMarkers("no markers here\n"), false);
+});
+
+test("a staged file's diff is what the commit would carry, and the working diff is the rest", async () => {
+	const repo = scratchRepo();
+	try {
+		writeFileSync(join(repo, "readme.md"), "staged line\n");
+		await sourceControlStage(repo, ["readme.md"], true);
+		writeFileSync(join(repo, "readme.md"), "staged line\nworking line\n");
+		const { sourceControlDiff } = await import("../server/git/source-control.ts");
+		const staged = await sourceControlDiff(repo, "readme.md", "staged");
+		assert.equal(staged.ok, true, staged.ok ? "" : staged.error);
+		assert.match(staged.ok ? staged.content : "", /\+staged line/);
+		assert.doesNotMatch(staged.ok ? staged.content : "", /working line/);
+		const working = await sourceControlDiff(repo, "readme.md", "changes");
+		assert.equal(working.ok, true, working.ok ? "" : working.error);
+		assert.match(working.ok ? working.content : "", /\+working line/);
+		const wrong = await sourceControlDiff(repo, "readme.md", "nope");
+		assert.equal(wrong.ok, false);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("an untracked file's diff is the diff that would add it", async () => {
+	const repo = scratchRepo();
+	try {
+		writeFileSync(join(repo, "new.txt"), "brand new\n");
+		const { sourceControlDiff } = await import("../server/git/source-control.ts");
+		const diff = await sourceControlDiff(repo, "new.txt", "changes");
+		assert.equal(diff.ok, true, diff.ok ? "" : diff.error);
+		assert.match(diff.ok ? diff.content : "", /new file mode/);
+		assert.match(diff.ok ? diff.content : "", /\+brand new/);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("discarding a tracked file returns it to HEAD, staged and unstaged alike", async () => {
+	const repo = scratchRepo();
+	try {
+		writeFileSync(join(repo, "readme.md"), "staged\n");
+		await sourceControlStage(repo, ["readme.md"], true);
+		writeFileSync(join(repo, "readme.md"), "working\n");
+		const { sourceControlDiscard } = await import("../server/git/source-control.ts");
+		const outcome = await sourceControlDiscard(repo, "readme.md");
+		assert.equal(outcome.ok, true, outcome.ok ? "" : outcome.error);
+		const status = await statusOf(repo);
+		assert.deepEqual(status.staged, []);
+		assert.deepEqual(status.changes, []);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("discarding an untracked file removes it", async () => {
+	const repo = scratchRepo();
+	try {
+		writeFileSync(join(repo, "scratch.txt"), "scratch\n");
+		const { sourceControlDiscard } = await import("../server/git/source-control.ts");
+		const outcome = await sourceControlDiscard(repo, "scratch.txt");
+		assert.equal(outcome.ok, true, outcome.ok ? "" : outcome.error);
+		const status = await statusOf(repo);
+		assert.deepEqual(status.changes, []);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
 });

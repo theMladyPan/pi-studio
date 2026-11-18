@@ -9,6 +9,8 @@ import { createTerminalDrawer } from "./terminal-drawer.js";
 // The tokenizer and the text surface are shared with the git graph's reader, so both pages colour a
 // file the same way: one implementation, imported by each.
 import { createTextPreview, escapeHtml, highlight } from "./text-preview.js";
+// The diff table is the git graph viewer's, shared so both pages number and colour a diff the same way.
+import { createDiffTable } from "./diff-table.js";
 const world = document.getElementById("world");
 const viewport = document.getElementById("viewport");
 // `overflow: clip` keeps the viewport out of the scroll containers, but an engine that ignores
@@ -5620,6 +5622,15 @@ function scRow(file, stage) {
   const badge = el("span", "sc-badge");
   badge.textContent = file.kind || "M";
   row.append(badge);
+  // Clicking the name reads the diff before anything is committed; the +/− button beside it
+  // still only moves the file, because its own press never reaches the row.
+  name.style.cursor = "pointer";
+  name.title = `${file.path} — view diff`;
+  name.addEventListener("click", () => void scOpenDiff(file, stage ? "staged" : "changes"));
+  row.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    void scDiscard(file);
+  });
   const move = el("button");
   move.type = "button";
   move.disabled = Boolean(scState.merge);
@@ -5756,6 +5767,153 @@ async function scCommit() {
   scBusy = false;
   scPaint();
 }
+
+// ---------- diff modal and discard ------------------------------------------
+// One file's diff over the board, drawn by the table the git graph shares. It reads, never
+// writes: a click on a name here cannot stage, discard or commit anything.
+const scDiffEl = document.getElementById("scDiff");
+const scDiffTitle = document.getElementById("scDiffTitle");
+const scDiffFlags = document.getElementById("scDiffFlags");
+const scDiffBody = document.getElementById("scDiffBody");
+const scDiffCloseBtn = document.getElementById("scDiffClose");
+const scDiffCopyBtn = document.getElementById("scDiffCopy");
+let scDiffPrior = null;
+let scDiffText = "";
+
+function scDiffClose() {
+  if (scDiffEl.hidden) return;
+  scDiffEl.hidden = true;
+  scDiffBody.replaceChildren();
+  scDiffText = "";
+  const prior = scDiffPrior;
+  scDiffPrior = null;
+  if (prior instanceof HTMLElement && document.contains(prior)) prior.focus();
+}
+
+async function scOpenDiff(file, scope) {
+  if (scDiffEl.hidden) scDiffPrior = document.activeElement;
+  scDiffEl.hidden = false;
+  scDiffTitle.textContent = file.path;
+  scDiffFlags.textContent = "reading…";
+  scDiffBody.replaceChildren();
+  scDiffCopyBtn.disabled = true;
+  let data;
+  try {
+    const res = await fetch(`/source-control/diff?${auth}&path=${encodeURIComponent(file.path)}&scope=${scope}`);
+    data = await res.json();
+  } catch {
+    if (!scDiffEl.hidden) scDiffFlags.textContent = "the daemon did not answer";
+    return;
+  }
+  if (scDiffEl.hidden) return;
+  if (!data.ok) {
+    scDiffFlags.textContent = data.error || "the diff could not be read";
+    return;
+  }
+  scDiffTitle.textContent = data.title || file.path;
+  const flags = [];
+  if (data.binary) flags.push("binary — this file is not text, so there is nothing to show");
+  if (data.truncated) flags.push("truncated — only the first 2 MB is shown");
+  scDiffFlags.textContent = flags.join(" · ");
+  scDiffText = data.binary ? "" : data.content ?? "";
+  if (!scDiffText) {
+    const empty = el("div", "ggViewerEmpty");
+    empty.textContent = data.binary ? "This file is not text." : "This file is empty.";
+    scDiffBody.append(empty);
+  } else {
+    scDiffBody.append(createDiffTable(scDiffText));
+  }
+  scDiffCopyBtn.disabled = !scDiffText;
+  scDiffCloseBtn.focus();
+}
+
+scDiffCloseBtn.addEventListener("click", () => scDiffClose());
+scDiffCopyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(scDiffText);
+    scDiffCopyBtn.textContent = "Copied";
+  } catch {
+    scDiffCopyBtn.textContent = "Copy failed";
+  }
+  setTimeout(() => {
+    scDiffCopyBtn.textContent = "Copy";
+  }, 1500);
+});
+scDiffEl.addEventListener("click", (event) => {
+  if (event.target === scDiffEl) scDiffClose();
+});
+// Capture, so Escape shuts this modal before the board's own Escape ladder hears it.
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (scDiffEl.hidden || event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    scDiffClose();
+  },
+  true,
+);
+
+/** The discard question, on the confirm modal the permanent delete uses. */
+function scAskDiscard(file) {
+  return new Promise((resolve) => {
+    const prior = document.activeElement;
+    const yesLabel = exConfirmYes.textContent;
+    const noLabel = exConfirmNo.textContent;
+    exConfirmTitle.textContent = "discard changes";
+    const note = el("p", "act-note");
+    note.textContent = file.kind === "U"
+      ? "this file is not tracked, so discarding removes it. Anything in it may not be recoverable."
+      : "the file goes back to its committed state, staged and unstaged alike. The changes may not be recoverable.";
+    const list = el("div", "cut");
+    list.textContent = file.path;
+    exConfirmBody.replaceChildren(note, list);
+    exConfirmYes.textContent = "discard";
+    exConfirmNo.textContent = "keep changes";
+    exConfirmEl.hidden = false;
+    exConfirmYes.focus();
+    const trap = (event) => {
+      if (event.key !== "Tab") return;
+      const stops = [...exConfirmEl.querySelectorAll("button:not([disabled])")];
+      if (!stops.length) return;
+      event.preventDefault();
+      const at = stops.indexOf(document.activeElement);
+      const step = event.shiftKey ? -1 : 1;
+      stops[(at + step + stops.length) % stops.length].focus();
+    };
+    exConfirmEl.addEventListener("keydown", trap);
+    const done = (answer) => {
+      exConfirmEl.removeEventListener("keydown", trap);
+      exConfirmEl.hidden = true;
+      exConfirmYes.onclick = null;
+      exConfirmNo.onclick = null;
+      exConfirmYes.textContent = yesLabel;
+      exConfirmNo.textContent = noLabel;
+      if (prior instanceof HTMLElement && document.contains(prior)) prior.focus();
+      resolve(answer);
+    };
+    exConfirmYes.onclick = () => done(true);
+    exConfirmNo.onclick = () => done(false);
+  });
+}
+
+/** Right-click a file: ask, then discard exactly it and re-read the lists. */
+async function scDiscard(file) {
+  if (scBusy) return;
+  if (!(await scAskDiscard(file))) return;
+  scBusy = true;
+  scPaint();
+  try {
+    const data = await scPost(`/source-control/discard?${auth}`, { path: file.path });
+    scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null };
+    scSay(`${file.path} discarded`);
+  } catch (error) {
+    scSay(error.message);
+  }
+  scBusy = false;
+  scPaint();
+}
+
 
 async function scDraft() {
   if (scBusy || !scState.staged.length) return;
@@ -8742,6 +8900,8 @@ const SHORTCUTS = [
       { keys: "ctrl+s", does: "in the editor, write the file back and keep it open" },
       { keys: "drag a row", does: "move it into a folder, and onto a thread card to reference it there" },
       { keys: "right-click a row", does: "cut, copy, paste, rename, delete, copy a path, or reference it in a thread" },
+      { keys: "right-click a file in source control", does: "discard its changes, after asking first" },
+      { keys: "click a file in source control", does: "view its diff before committing" },
       { keys: "esc", does: "close the editor when it has no unsaved changes, then the menu or the name being typed, then the drawer" },
     ],
   },

@@ -190,6 +190,27 @@ async function fileView(repo: string, hash: string, filePath: string): Promise<V
 	};
 }
 
+/** The staged diff for one file: what the index holds against HEAD, which is what a commit would carry. */
+export async function cachedDiff(repo: string, filePath: string): Promise<{ ok: true; text: string; truncated: boolean; binary: boolean } | { ok: false; error: string }> {
+	return gitTextBounded(repo, ["diff", "--cached", "--no-color", "--find-renames", "--", filePath]);
+}
+
+/** The working-tree diff for one tracked file: what the disk holds against the index. */
+export async function workingDiff(repo: string, filePath: string): Promise<{ ok: true; text: string; truncated: boolean; binary: boolean } | { ok: false; error: string }> {
+	return gitTextBounded(repo, ["diff", "--no-color", "--find-renames", "--", filePath]);
+}
+
+/**
+ * What the source control drawer shows for one file: the staged diff, the working diff, or an
+ * untracked file drawn as the diff that would add it. Bounded and binary-checked like every view.
+ */
+export async function sourceDiff(repo: string, scope: "staged" | "changes", filePath: string, untracked: boolean): Promise<{ ok: true; text: string; truncated: boolean; binary: boolean } | { ok: false; error: string }> {
+	if (scope === "staged") return cachedDiff(repo, filePath);
+	if (untracked) return untrackedDiff(repo, filePath);
+	return workingDiff(repo, filePath);
+}
+
+
 /**
  * The diff behind the page's "view diff" menu entry, for one changed file.
  *
