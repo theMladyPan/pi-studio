@@ -22,7 +22,6 @@
     /* Lines a running activity row gives to what it is working on, under its own name. */
     --act-detail: 3;
   }
-  body.rail-off { --rail: 0px; }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); }
   /* Thin dark scrollbars, so the rail and a long card look like part of the board. */
@@ -50,7 +49,7 @@
   #viewport {
     /* The bottom inset is the height of the bar a board with a single session keeps under it, published by
        the script as `--composer-h`: the field there grows with its words, and no card may end up under it. */
-    position: fixed; inset: 44px 0 var(--composer-h, 96px) var(--rail); overflow: hidden; overflow: clip;
+    position: fixed; inset: 44px 0 var(--composer-h, 96px) 0; overflow: hidden; overflow: clip;
     background-color: var(--bg);
     background-image: radial-gradient(circle at 1px 1px, #21262d 1px, transparent 0);
     background-size: 24px 24px;
@@ -219,8 +218,11 @@
   .thread[hidden] { display: none; }
   /* What the thread is doing right now, in the same rows the log keeps: the live step is read where
      its answer will appear, and it leaves for the log the moment it settles. It sits below the
-     answer, pinned, so a long note cannot hide it; the column above keeps its scroll and its place. */
-  .card-live { flex: 0 1 auto; min-height: 0; max-height: 50%; overflow-y: auto;
+     answer, pinned, so a long note cannot hide it; the column above keeps its scroll and its place.
+     It never shrinks: a shrinkable strip is the thing a tall card crushes to a sliver once the
+     conversation above it reaches the card's maximum height, leaving the row inside it unreadable.
+     The column above gives up the room instead. */
+  .card-live { flex: 0 0 auto; max-height: 50%; overflow-y: auto;
     border-top: 1px solid var(--border); background: #0b1017;
     padding: 6px 12px 8px; display: flex; flex-direction: column; gap: 4px; }
   .card-live:empty { display: none; }
@@ -532,7 +534,7 @@
     border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; white-space: nowrap; }
   header .stat:empty { display: none; }
   /* The footer is a quiet strip: the same figures as a console session, out of the way of the cards. */
-  #footer { position: fixed; left: var(--rail, 0); right: 0; bottom: 0; z-index: 40; display: flex;
+  #footer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; display: flex;
     align-items: center; gap: 14px; height: 24px; padding: 0 12px; background: #0d1117;
     border-top: 1px solid var(--border); }
   /* The strip is one line tall, so nothing on it wraps: a figure too wide for its share is cut with an
@@ -549,7 +551,6 @@
   #footer #footHint { flex: 0 0 auto; max-width: 100%; white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; }
   #footer .grow { flex: 1; }
-  body.rail-off #footer { left: 0; }
   header .stat em { color: var(--text); font-style: normal; }
   /* The chip is also the compact button: the same box as its neighbours, so it has to keep their
      metrics. `appearance` strips the button chrome, and the width is pinned to the seven
@@ -572,13 +573,20 @@
 
   /* The left drawers: files, activity and cards share one column, and one of them is open at a time.
      The width is the rail's, so the drag handle and the remembered width outlive the rail they came
-     from. `rail-off` is the shut column, which is what a human who hid the rail chose. */
+     from. A drawer stands over the board instead of pushing it aside: opening one moves no card, so a
+     file can still be dragged onto a card the drawer partly covers. It slides the way the git drawer
+     does, by `transform` and never by width, because a width that moves is a width the board reflows
+     against. `rail-off` is the shut column, still in the document, off the left edge. Nothing sits on
+     top of it: its z-index clears the footer and the composer bar, which now run under it. */
   #drawers {
-    position: fixed; top: 44px; left: 0; bottom: 0; width: var(--rail); z-index: 8;
+    position: fixed; top: 44px; left: 0; bottom: 0; width: var(--rail); z-index: 45;
     background: #0a0f16; border-right: 1px solid var(--border);
     display: flex; flex-direction: column; font: 12px var(--mono); overflow: hidden;
+    transform: translateX(-100%); visibility: hidden;
+    transition: transform 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms;
   }
-  body.rail-off #drawers { display: none; }
+  body:not(.rail-off) #drawers { transform: none; visibility: visible;
+    transition: transform 170ms cubic-bezier(.2,.9,.25,1); }
   #drawers > .drawer { display: none; flex: 1; min-height: 0; flex-direction: column; }
   #drawers > .drawer.on { display: flex; }
   /* Drag handle. Six invisible pixels that turn into a line under the cursor. */
@@ -747,12 +755,12 @@
   /* A board of threads has no single session to message, so its field lives inside a card and the
      bottom bar is gone. The same client serves a one-session board, which keeps both. */
   #composerHome {
-    position: fixed; left: var(--rail); right: 0; bottom: 0; z-index: 9;
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 9;
     background: rgba(10,15,22,.96); border-top: 1px solid var(--border); backdrop-filter: blur(8px);
   }
   #composerHome .composer { background: none; border-top: 0; padding: 10px 14px; gap: 10px; }
   body.threads #composerHome { display: none; }
-  body.threads #viewport { inset: 44px 0 0 var(--rail); }
+  body.threads #viewport { inset: 44px 0 0 0; }
   body.threads #newThread { display: grid; }
   /* The corner grip sits where the field's send button does, so it steps aside while the field has
      the keyboard and comes back when it does not. */
@@ -1380,7 +1388,7 @@
   @media (prefers-reduced-motion: reduce) {
     .card.fresh, .card.flash, header .live.working b, .act.running .dot, .composer .ctx-btn.hot::after { animation: none; }
     /* A roll down with no motion: the class still decides what is visible, it just arrives at once. */
-    #gitDrawer, #gitScrim { transition: none; }
+    #gitDrawer, #gitScrim, #drawers { transition: none; }
   }
 </style>
 </head>

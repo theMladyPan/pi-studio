@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -7,7 +7,10 @@ import {
 	BRIDGE,
 	PUBLIC_DIR,
 	REPO_DIR,
+	boardFile,
 	buildHash,
+	gitgraphStateFile,
+	projectStateDir,
 	randomToken,
 	readJsonFile,
 	workspaceId,
@@ -47,6 +50,31 @@ test("a JSON file written whole reads back identical", () => {
 	} finally {
 		rmSync(folder, { recursive: true, force: true });
 	}
+});
+
+test("a planted temporary path beside a JSON file is never written through", () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-paths-temp-"));
+	try {
+		const file = join(folder, "board.json");
+		const outside = join(folder, "outside.json");
+		writeFileSync(outside, "outside\n");
+		// Both names a temporary beside a JSON file has carried, planted by someone else beforehand.
+		const planted = [`${file}.${process.pid}.tmp`, `${file}.tmp-${process.pid}`];
+		for (const one of planted) symlinkSync(outside, one);
+		assert.equal(writeJsonFile(file, { ok: true }), true);
+		assert.equal(readFileSync(outside, "utf8"), "outside\n", "a planted link's target was written through");
+		assert.deepEqual(readJsonFile(file, null), { ok: true });
+		assert.equal(lstatSync(file).isFile(), true, "the JSON file is a plain file of its own");
+		for (const one of planted) assert.equal(lstatSync(one).isSymbolicLink(), true, "a link this call did not create is left alone");
+	} finally {
+		rmSync(folder, { recursive: true, force: true });
+	}
+});
+
+test("one opened folder holds one plain .pi-studio directory", () => {
+	assert.equal(projectStateDir("/a/folder"), join("/a/folder", ".pi-studio"));
+	assert.equal(boardFile({ id: "w1", folder: "/a/folder" }), join("/a/folder", ".pi-studio", "board.json"));
+	assert.equal(gitgraphStateFile({ id: "w1", folder: "/a/folder" }), join("/a/folder", ".pi-studio", "gitgraph.json"));
 });
 
 test("a folder keeps one id, and a token is 32 hex", () => {

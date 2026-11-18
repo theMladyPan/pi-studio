@@ -4,25 +4,24 @@
  * files are plain markdown in `prompts/`, read by the daemon when a thread starts, so an edit here takes
  * effect on the next run and never rewrites one already going.
  */
-import { existsSync, lstatSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { answer, fail, readJson } from "../../http.ts";
+import { writeFileThroughTemp } from "../../paths.ts";
 import { PROMPT_DIR, promptFiles } from "../../child/modes.ts";
+import { effectivePromptText, isPromptName, readPromptOverride, savePromptOverride } from "../../prompt-overrides.ts";
 import { AGENTS_FILE, agentsOverride, workspacePromptName, workspacePromptText } from "../../workspace-prompt.ts";
 import { MAX_WORKSPACE_PROMPT_CHARS } from "../../limits.ts";
 
-/** The names a prompt may have: lowercase, one file each, in one of the folders the daemon reads. */
-const NAME = /^(board|roles|modes|flows|verbosity|audiences|skills)\/[a-z][a-z-]*\.md$/;
-
 /**
- * A name that came from a request, on the way to a path. The pattern is the whole guard: it has no
- * `..`, no absolute path and no folder of its own invention, so a write can only land in the folders
- * this page offers.
+ * A name that came from a request, on the way to a path. The shared prompt-name guard is the whole
+ * guard: it has no `..`, no absolute path and no folder of its own invention, so a write can only
+ * land in the folders this page offers.
  */
 function promptName(given: string): string {
 	const name = String(given ?? "").trim();
-	return NAME.test(name) && existsSync(PROMPT_DIR) ? name : "";
+	return isPromptName(name) && existsSync(PROMPT_DIR) ? name : "";
 }
 
 /** The files there are, with the first line of each, which is what tells a human what it is. */
@@ -36,49 +35,53 @@ export function onPrompts(res: ServerResponse) {
 	answer(res, 200, { prompts });
 }
 
-/** One file, whole: the editor shows exactly what the daemon will read. */
+/** One file, whole: the editor shows exactly what the daemon will read, override first. */
 export function onPrompt(url: URL, res: ServerResponse) {
 	const name = promptName(url.searchParams.get("name") ?? "");
 	if (!name) return void fail(res, 400, "no such prompt");
+	let shipped = "";
+	let held = false;
 	try {
-		answer(res, 200, { name, text: readFileSync(join(PROMPT_DIR, name), "utf8") });
+		shipped = readFileSync(join(PROMPT_DIR, name), "utf8");
+		held = true;
 	} catch {
-		fail(res, 404, "no such prompt");
+		held = false;
 	}
+	const override = readPromptOverride(name);
+	if (!held && override === null) return void fail(res, 404, "no such prompt");
+	answer(res, 200, { name, text: effectivePromptText(name, shipped) });
 }
 
 /**
  * A file a thread reads while it starts is replaced in one move, so no run ever reads half of one. A
  * symlink is refused rather than followed: the name is what guards where a write lands, and a link would
- * step outside it.
+ * step outside it. The temporary is the shared writer's own, so a name someone planted beforehand is
+ * never written through.
  */
 function replaceFile(path: string, text: string): { ok: true } | { ok: false; status: number; reason: string } {
 	if (existsSync(path) && !lstatSync(path).isFile()) {
 		return { ok: false, status: 409, reason: "that is not a plain file" };
 	}
-	const temporary = `${path}.tmp-${process.pid}`;
 	try {
-		writeFileSync(temporary, text);
-		renameSync(temporary, path);
+		writeFileThroughTemp(path, text);
 		return { ok: true };
 	} catch (error) {
-		try {
-			unlinkSync(temporary);
-		} catch {
-			// Nothing was left behind, which is the usual case for a failed write.
-		}
 		return { ok: false, status: 500, reason: (error as Error).message };
 	}
 }
 
-/** Saving one. The next thread that starts reads it; nothing already running changes under it. */
+/**
+ * Saving one. The save lands as an override under the state folder, never in the shipped copy, so an
+ * update cannot silently discard it. The next thread that starts reads it; nothing already running
+ * changes under it.
+ */
 export async function onPromptWrite(req: IncomingMessage, res: ServerResponse) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	const name = promptName(body.name);
 	if (!name) return void fail(res, 400, "no such prompt");
 	if (typeof body.text !== "string") return void fail(res, 400, "a prompt is text");
-	const written = replaceFile(join(PROMPT_DIR, name), body.text);
+	const written = savePromptOverride(name, body.text);
 	if (!written.ok) return void fail(res, written.status, `could not save that prompt: ${written.reason}`);
 	answer(res, 200, { name, saved: true });
 }

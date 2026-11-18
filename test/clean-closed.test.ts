@@ -79,11 +79,16 @@ function hasBranch(repo: string, name: string) {
 		.includes(name);
 }
 
-/** The transcript pi would have written for a thread, so a clean has one to delete. */
+/** The transcript pi would have written for a thread, so a clean has one to delete. It lives in the
+ * project's own `.pi-studio`, where a folder-carrying lookup finds it; a same-named decoy in the global
+ * sessions folder proves the clean never looks there. */
 function transcript(board: any, thread: any) {
-	const dir = join(process.env.PI_STUDIO_STATE as string, "sessions", board.id);
+	const dir = join(board.folder, ".pi-studio", "sessions");
 	mkdirSync(dir, { recursive: true });
 	writeFileSync(join(dir, `1700000000000_${thread.sessionId}.jsonl`), `${JSON.stringify({ type: "message" })}\n`);
+	const decoyDir = join(process.env.PI_STUDIO_STATE as string, "sessions", board.id);
+	mkdirSync(decoyDir, { recursive: true });
+	writeFileSync(join(decoyDir, `1700000000000_${thread.sessionId}.jsonl`), `${JSON.stringify({ type: "message", decoy: true })}\n`);
 }
 
 /** A thread in a tree of its own on a branch of its own, with one commit on it. */
@@ -115,7 +120,8 @@ test("a closed thread whose work is in dev goes with its folder, its branch, its
 	try {
 		const board = scratchBoard(repo);
 		const { thread, tree } = closedThread(board, "aaaa1111", "feat/aaaa-work-aaaa1111");
-		const file = sessionFile({ id: board.id }, thread.sessionId);
+		const file = sessionFile({ id: board.id, folder: board.folder }, thread.sessionId);
+		assert.equal(file, join(board.folder, ".pi-studio", "sessions", `1700000000000_${thread.sessionId}.jsonl`));
 		assert.ok(file && existsSync(file), "the transcript was never written");
 		// An undo entry and a row are what a removal of this kind leaves behind if it is not careful.
 		board.trash.push({ kind: "thread", thread });
@@ -139,6 +145,8 @@ test("a closed thread whose work is in dev goes with its folder, its branch, its
 		assert.equal(board.activity.length, 0, "the clean left the row of a thread that is gone");
 		assert.equal(existsSync(tree.path), false, "the folder is still on disk");
 		assert.equal(existsSync(file), false, "the transcript outlived the thread");
+		assert.equal(sessionFile({ id: board.id, folder: board.folder }, thread.sessionId), "", "the transcript was read from the global folder");
+		assert.ok(existsSync(join(process.env.PI_STUDIO_STATE as string, "sessions", board.id, `1700000000000_${thread.sessionId}.jsonl`)), "the clean deleted the global decoy instead of the project transcript");
 		assert.equal(hasBranch(repo, "feat/aaaa-work-aaaa1111"), false, "the branch outlived the folder");
 	} finally {
 		rmSync(repo, { recursive: true, force: true });
