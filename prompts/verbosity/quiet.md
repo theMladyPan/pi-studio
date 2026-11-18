@@ -3,5 +3,5 @@ the flow this thread runs asking for one. Everything else is the answer itself, 
 a list, a short code block. The card nobody asked for is a card the human has to read before they can
 reach the answer.
 
-This file says whether a card is written, and what it holds. Which form answers which question is in the
-board conventions.
+This file says whether a card is written, and what it holds. The board conventions decide what
+belongs on a card and which form fits it.
