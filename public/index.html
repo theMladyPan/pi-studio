@@ -602,6 +602,86 @@
   .rail-head .rail-close { margin-left: auto; background: none; border: none; color: var(--muted);
     cursor: pointer; font: 12px var(--mono); padding: 0 2px; line-height: 1; }
   .rail-head .rail-close:hover { color: var(--text); }
+  /* Source control drawer: the message field rides at the top, then the staged list, then the rest.
+     A row is a name, its folder, its letter and one button that moves it across. */
+  .sc-msg { padding: 8px 10px 4px; display: flex; flex-direction: column; gap: 6px; }
+  .sc-msg textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 52px;
+    background: #11161f; color: var(--text); border: 1px solid var(--border-bright);
+    border-radius: 4px; padding: 6px 8px; font: 12px var(--mono); }
+  .sc-actions { display: flex; gap: 6px; }
+  .sc-actions button { font: 12px var(--mono); color: var(--text); background: #161b22;
+    border: 1px solid var(--border-bright); border-radius: 4px; padding: 5px 10px; cursor: pointer; }
+  .sc-actions button:hover { border-color: var(--accent); }
+  .sc-actions button:disabled { cursor: default; opacity: .45; }
+  .sc-actions .sc-commit { flex: 1; background: #1f6f3b; border-color: #1f6f3b; color: #fff; }
+  .sc-note { margin: 0; color: var(--muted); font: 11px var(--mono); min-height: 14px; }
+  .sc-note:empty { display: none; }
+  .sc-group { padding: 6px 10px 2px; color: var(--muted); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .6px; display: flex; gap: 6px; align-items: center; }
+  .sc-group[hidden] { display: none; }
+  .sc-group b { color: var(--accent); font-weight: 600; }
+  .sc-group button { margin-left: auto; background: none; border: 1px solid var(--border-bright);
+    border-radius: 4px; color: var(--muted); cursor: pointer; font: 11px var(--mono); padding: 1px 6px; }
+  .sc-group button:hover { color: var(--text); }
+  .sc-list { padding: 2px 6px 10px; display: flex; flex-direction: column; }
+  .sc-list:empty { display: none; }
+  .sc-row { display: flex; gap: 6px; align-items: baseline; padding: 2px 4px; border-radius: 3px; }
+  .sc-row:hover { background: #131a24; }
+  .sc-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sc-dir { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sc-badge { margin-left: auto; color: #e3b341; font-weight: 600; }
+  .sc-row button { background: none; border: none; color: var(--muted); cursor: pointer;
+    font: 13px var(--mono); padding: 0 2px; line-height: 1; }
+  .sc-row button:hover { color: var(--text); }
+  /* The merge editor's bar: one row per conflict hunk, then the resolve press. */
+  #exConflictBar[hidden] { display: none; }
+  #exConflictBar { flex: none; padding: 6px 10px; border-bottom: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 6px; background: #0d1420; }
+  .ex-conflict-hunks { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; }
+  .ex-conflict-hunk { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .ex-conflict-hunk .hk { color: var(--muted); font: 11px var(--mono); }
+  .ex-conflict-hunk button { font: 11px var(--mono); color: var(--text); background: #161b22;
+    border: 1px solid var(--border-bright); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+  .ex-conflict-hunk button:hover { border-color: var(--accent); }
+  .ex-conflict-compare { margin: 0; padding: 6px 8px; background: #11161f; border-radius: 4px;
+    color: var(--text); font: 11px var(--mono); white-space: pre-wrap; max-height: 120px; overflow-y: auto; }
+  .ex-conflict-actions { display: flex; gap: 8px; align-items: center; }
+  .ex-conflict-note { flex: 1; color: var(--muted); font: 11px var(--mono); }
+  .ex-conflict-note.bad { color: #f85149; }
+  /* The diff modal: the graph viewer's table, over the board. */
+  #scDiff { position: fixed; inset: 0; z-index: 2300; padding: 40px 24px; background: rgba(1, 4, 9, .66);
+    display: flex; }
+  #scDiff[hidden] { display: none; }
+  #scDiff .panel { display: flex; flex-direction: column; width: min(980px, 100%); height: 100%;
+    margin: 0 auto; background: #0a0f16; border: 1px solid var(--border-bright); border-radius: 6px; overflow: hidden; }
+  #scDiff .panel-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex: none;
+    border-bottom: 1px solid var(--border); }
+  #scDiff .name { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #scDiff .sc-diff-body { flex: 1; min-height: 0; overflow: auto; }
+  .sc-head-host, .sc-head-host .tp { height: 100%; }
+  #scDiff .sheet-btn { font: 11px var(--mono); color: var(--muted); background: #161b22;
+    border: 1px solid var(--border-bright); border-radius: 4px; padding: 4px 10px; cursor: pointer; margin-left: auto; }
+  #scDiff .sheet-btn + .sheet-btn { margin-left: 0; }
+  #scDiff .sheet-btn:hover { color: var(--text); }
+  /* The diff table's rules, shared with the git graph page that draws the same classes. */
+  .ggViewerTable { border-collapse: collapse; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    line-height: 1.5; width: 100%; }
+  .ggViewerTable td { padding: 0 0.6em; white-space: pre; vertical-align: top; }
+  .ggViewerNum { width: 1%; color: var(--muted); text-align: right; user-select: none; background: #010409; }
+  .ggViewerLine_added { color: #3fb950; background: rgba(63, 185, 80, 0.1); }
+  .ggViewerLine_removed { color: #f85149; background: rgba(248, 81, 73, 0.1); }
+  .ggViewerLine_hunk { color: #79c0ff; }
+  .ggViewerLine_meta { color: #8b949e; }
+  .ggViewerEmpty { padding: 1.2em; color: var(--muted); }
+  /* The source control menu: one column, the board's own colours. */
+  #scMenu { position: fixed; z-index: 2400; min-width: 200px; padding: 4px;
+    background: #0d1420; border: 1px solid var(--border-bright); border-radius: 6px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, .55); display: flex; flex-direction: column; }
+  #scMenu[hidden] { display: none; }
+  #scMenu button { font: 12px var(--mono); color: var(--text); background: none; border: none;
+    border-radius: 4px; padding: 6px 10px; text-align: left; cursor: pointer; }
+  #scMenu button:hover, #scMenu button:focus-visible { background: #1a2230; }
+  #scMenu button.danger { color: #f85149; }
   #railNow { padding: 0 8px 6px; display: flex; flex-direction: column; gap: 4px; }
   /* A running row lives in its thread's card, so this strip holds only the runs whose card is closed. */
   #railNow:empty { display: none; }
@@ -1447,6 +1527,7 @@
   <button id="filesBtn" type="button" aria-controls="drawerFiles" aria-expanded="false" title="show the files drawer (f)">files</button>
   <button id="activityBtn" type="button" aria-controls="drawerActivity" aria-expanded="false" title="show the activity drawer (a)">activity</button>
   <button id="cardsBtn" type="button" aria-controls="drawerCards" aria-expanded="false" title="show the cards drawer (c)">cards</button>
+  <button id="sourceBtn" type="button" aria-controls="drawerSource" aria-expanded="false" title="show the source control drawer (d)">source</button>
   <button id="gitBtn" type="button" aria-expanded="false" aria-controls="gitDrawer" title="roll the git graph down (g)">git</button>
   <button id="termBtn" type="button" aria-expanded="false" aria-controls="termDrawer" title="roll the terminal drawer up from the bottom (x)">terminal</button>
   <button id="keysBtn" title="every keyboard shortcut" aria-haspopup="dialog" aria-expanded="false">keys</button>
@@ -1489,8 +1570,9 @@
 </div>
 
 <!-- The left drawers. One column, one width, one open at a time: `f` for the workspace's files, `a` for
-     what the agents are doing, `c` for the board's cards. The rail's remembered width and its hidden
-     choice carry over, because this is the rail with doors on it rather than a second place. -->
+     what the agents are doing, `c` for the board's cards, `d` for source control. The rail's remembered
+     width and its hidden choice carry over, because this is the rail with doors on it rather than a
+     second place. -->
 <div id="drawers">
   <section class="drawer" id="drawerFiles" aria-label="files" tabindex="-1">
     <div id="filesPane">
@@ -1524,6 +1606,23 @@
     <div id="railCards"></div>
     <div class="rail-head" id="railClosedHead" hidden>closed <b id="railClosedCount"></b><button type="button" id="railClosedClean" title="delete the closed threads whose work is saved somewhere else, with their folders, branches and conversations">clean</button></div>
     <div id="railClosed"></div>
+  </section>
+  <section class="drawer" id="drawerSource" aria-label="source control">
+    <div class="rail-head">source control <b id="scCount"></b><button type="button" class="rail-close" title="hide the drawer (esc)">«</button></div>
+    <div class="sc-msg">
+      <textarea id="scMessage" rows="3" spellcheck="false" autocomplete="off" placeholder="Message (Ctrl+Enter to commit on …)" aria-label="commit message"></textarea>
+      <div class="sc-actions">
+        <button type="button" id="scDraft" title="draft a message from the staged changes">✦ draft</button>
+        <button type="button" id="scCommit" class="sc-commit">✓ Commit</button>
+      </div>
+      <p class="sc-note" id="scNote" role="status"></p>
+    </div>
+    <div class="sc-group" id="scMergeHead" hidden><span>Merge Changes</span><b id="scMergeCount"></b></div>
+    <div class="sc-list" id="scMerge"></div>
+    <div class="sc-group" id="scStagedHead"><span>Staged Changes</span><b id="scStagedCount"></b><button type="button" id="scUnstageAll" title="unstage every staged file">− all</button></div>
+    <div class="sc-list" id="scStaged"></div>
+    <div class="sc-group"><span>Changes</span><b id="scChangesCount"></b><button type="button" id="scStageAll" title="stage every changed file">+ all</button></div>
+    <div class="sc-list" id="scChanges"></div>
   </section>
   <div id="railGrip" title="drag to resize"></div>
 </div>
@@ -1618,6 +1717,13 @@
 <div id="exEditor" hidden role="dialog" aria-modal="true" aria-labelledby="exEditorTitle">
   <div class="panel">
     <div class="panel-head"><span class="name" id="exEditorTitle">file</span></div>
+    <div id="exConflictBar" hidden>
+      <div class="ex-conflict-hunks" id="exConflictHunks"></div>
+      <div class="ex-conflict-actions">
+        <span class="ex-conflict-note" id="exConflictNote"></span>
+        <button type="button" class="sheet-btn" id="exConflictResolve">resolve &amp; stage</button>
+      </div>
+    </div>
     <div class="ex-editor-body"><div id="exEditorBody"></div></div>
     <div class="sheet-actions">
       <span class="ex-editor-status" id="exEditorStatus"></span>
@@ -1626,6 +1732,23 @@
     </div>
   </div>
 </div>
+
+<!-- One file's diff, opened by clicking its name in source control: the same numbered table the
+     git graph draws, over the board, so a change can be read before it is committed. -->
+<div id="scDiff" hidden role="dialog" aria-modal="true" aria-labelledby="scDiffTitle">
+  <div class="panel">
+    <div class="panel-head">
+      <span class="name" id="scDiffTitle">diff</span>
+      <span class="ex-editor-status" id="scDiffFlags"></span>
+      <button type="button" class="sheet-btn" id="scDiffCopy">copy</button>
+      <button type="button" class="sheet-btn" id="scDiffClose">close</button>
+    </div>
+    <div class="sc-diff-body" id="scDiffBody"></div>
+  </div>
+</div>
+
+<!-- The source control drawer's right-click menu: what is worth offering for one file. -->
+<div id="scMenu" hidden role="menu" aria-label="file actions"></div>
 
 <div id="viewport">
   <div id="world"></div>

@@ -47,6 +47,8 @@ from a branch: pushing an annotated version tag to GitHub is what publishes.
 
 10. Merge `main` back into `dev` so subsequent work includes the release history,
     and push it: `git checkout dev && git merge --no-ff main && git push origin dev`
+    If `main` carries nothing beyond the release merge, carrying it back may be a
+    fast-forward instead of a merge commit.
 
 ## What to watch
 

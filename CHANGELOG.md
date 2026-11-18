@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-18
+
+- docs: Allow a release's back-merge into dev to be a fast-forward when main carries nothing beyond the release merge, so the history drops one empty commit per release.
+- feat: Press d to open a source control drawer on the left: changed and staged files in their own lists, a file moved between them with +/−, a commit message typed by hand or drafted by the fast model that names threads, and a Commit that commits only the staged files. During a merge the drawer lists conflicted files, opens them in a merge editor that accepts the current, incoming or both sides of each hunk, stages the resolved file, and concludes the merge with Continue. Clicking a file's name shows its diff in a modal before committing, and right-clicking opens a menu: open the diff or the file, stage or unstage, discard after asking, add an untracked file to .gitignore, or reveal it in the files drawer. Publishing and pulling stay in the git graph drawer.
+- fix: Answer questions in the thread by default and reserve board cards for artifacts worth revisiting or keeping visible. Cards carry useful context and meaningful titles, while modes and workflows keep routine answers and reports in the conversation.
+
 ## [0.3.0] - 2026-11-18
 
 - feat: Press x to roll a terminal drawer up from the bottom of the board: a real shell in the workspace folder, kept alive between rolls, so a few commands can be typed without leaving the board. Ending the shell (Ctrl+D or `exit`) rolls the drawer down, and the next roll up starts a fresh shell.

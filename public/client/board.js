@@ -9,6 +9,8 @@ import { createTerminalDrawer } from "./terminal-drawer.js";
 // The tokenizer and the text surface are shared with the git graph's reader, so both pages colour a
 // file the same way: one implementation, imported by each.
 import { createTextPreview, escapeHtml, highlight } from "./text-preview.js";
+// The diff table is the git graph viewer's, shared so both pages number and colour a diff the same way.
+import { createDiffTable } from "./diff-table.js";
 const world = document.getElementById("world");
 const viewport = document.getElementById("viewport");
 // `overflow: clip` keeps the viewport out of the scroll containers, but an engine that ignores
@@ -764,9 +766,75 @@ function exBoardLetter(key, { shift = false, typing = false, panel = false, surf
   const lower = raw.toLowerCase();
   if (lower === "f") return shifted ? "fit" : "files";
   if (shifted) return "";
+  if (lower === "d") return "source";
   if (lower === "a") return "activity";
   if (lower === "c") return "cards";
   return "";
+}
+
+
+// ---------- conflict hunks ------------------------------------------------
+/**
+ * One unresolved hunk in a marked file: where the whole block stands in the text, and the two
+ * sides it holds. The parser reads ordinary markers and the diff3 base section, and refuses a
+ * block that never closes, so an acceptance never replaces the wrong lines.
+ */
+function exConflictHunks(text) {
+  const lines = String(text ?? "").split("\n");
+  const hunks = [];
+  let at = 0;
+  const offsets = lines.map((line) => {
+    const start = at;
+    at += line.length + 1;
+    return start;
+  });
+  let i = 0;
+  while (i < lines.length) {
+    if (!/^<{7,}( |$)/.test(lines[i])) {
+      i += 1;
+      continue;
+    }
+    const start = i;
+    const ours = [];
+    let j = i + 1;
+    let base = null;
+    let theirs = [];
+    let closed = false;
+    while (j < lines.length && !/^={7,}$/.test(lines[j]) && !/^\|{7,}( |$)/.test(lines[j])) {
+      ours.push(lines[j]);
+      j += 1;
+    }
+    if (j < lines.length && /^\|{7,}( |$)/.test(lines[j])) {
+      base = [];
+      j += 1;
+      while (j < lines.length && !/^={7,}$/.test(lines[j])) {
+        base.push(lines[j]);
+        j += 1;
+      }
+    }
+    if (j < lines.length && /^={7,}$/.test(lines[j])) {
+      j += 1;
+      while (j < lines.length && !/^>{7,}( |$)/.test(lines[j])) {
+        theirs.push(lines[j]);
+        j += 1;
+      }
+      if (j < lines.length) closed = true;
+    }
+    if (!closed) return hunks;
+    hunks.push({ index: hunks.length, start: offsets[start], end: offsets[j] + lines[j].length + 1, ours, theirs, base });
+    i = j + 1;
+  }
+  return hunks;
+}
+
+/** Accept one hunk: `current`, `incoming`, or `both` (current first, the way git writes it). */
+function exConflictAccept(text, index, choice) {
+  const hunks = exConflictHunks(text);
+  const hunk = hunks[index];
+  if (!hunk) return String(text ?? "");
+  const side = choice === "incoming" ? hunk.theirs : choice === "both" ? [...hunk.ours, ...hunk.theirs] : hunk.ours;
+  const replacement = side.length ? side.join("\n") + "\n" : "";
+  return String(text).slice(0, hunk.start) + replacement + String(text).slice(hunk.end);
 }
 
 // ---------- text onto the clipboard ---------------------------------------
@@ -900,6 +968,8 @@ const explorerCore = {
   drawerToggle: exDrawerToggle,
   escapeTarget: exEscapeTarget,
   boardLetter: exBoardLetter,
+  conflictHunks: exConflictHunks,
+  conflictAccept: exConflictAccept,
   copyText: exCopyText,
   icon: exIcon,
   gitKind: exGitKind,
@@ -5380,6 +5450,7 @@ function applyGit(picture) {
   // One line, and the one place that knows a repository changed: an open graph is told to reload its
   // picture in the background, and a shut one is told when it next rolls down.
   gitDrawer.notifyChanged();
+  scNotifyChanged();
   gitShown = picture && picture.graph?.length ? picture : null;
   gitLayout = gitShown ? layoutGraph(gitShown.graph) : null;
   document.body.classList.toggle("git-on", Boolean(gitShown));
@@ -5406,12 +5477,13 @@ const THOUGHT_STALL_MS = 3000;
 // Three drawers share the rail's column: the workspace's files, what the agents are doing, and the
 // board's cards. One is open at a time, and the width and the hidden choice a human left on the old
 // rail are the ones these open with, because this is that rail with doors on it.
-const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards" };
+const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards", source: "drawerSource" };
 const drawerState = explorerCore.drawers();
 // The three doors in the header, read before anything paints them.
 const filesBtn = document.getElementById("filesBtn");
 const activityBtn = document.getElementById("activityBtn");
 const cardsBtn = document.getElementById("cardsBtn");
+const sourceBtn = document.getElementById("sourceBtn");
 
 // The rail is the user's furniture: its width survives a reload, and so does whether a drawer is up.
 const RAIL_MIN = 160;
@@ -5434,7 +5506,7 @@ function paintDrawers() {
     const pane = document.getElementById(id);
     pane.classList.toggle("on", drawerState.open === name);
   }
-  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn };
+  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn };
   for (const [name, door] of Object.entries(doors)) {
     door.setAttribute("aria-expanded", drawerState.open === name ? "true" : "false");
   }
@@ -5448,6 +5520,7 @@ function showDrawer(name) {
   // The git graph covers the whole board, so it cannot stand over a drawer and be alive at both ends.
   if (gitDrawer.isOpen()) gitDrawer.close();
   if (name === "files") exPrime();
+  if (name === "source") scPrime();
   explorerCore.drawerOpen(drawerState, name);
   paintDrawers();
 }
@@ -5457,6 +5530,7 @@ function toggleDrawer(name) {
   if (gitDrawer.isOpen()) gitDrawer.close();
   explorerCore.drawerToggle(drawerState, name);
   if (!open && name === "files") exPrime();
+  if (!open && name === "source") scPrime();
   paintDrawers();
 }
 
@@ -5485,12 +5559,575 @@ function restoreDrawers() {
 }
 restoreDrawers();
 
-for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn })) {
+for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn })) {
   door.addEventListener("click", () => toggleDrawer(name));
 }
 for (const shut of document.querySelectorAll("#drawers .rail-close")) {
   shut.addEventListener("click", () => closeDrawers());
 }
+
+// ---------- source control drawer ------------------------------------------
+// The fourth left drawer: changed and staged files, the message field, and the commit. It reads
+// `/source-control/status` and posts to the three change routes, and it never pushes or pulls —
+// those stay in the git graph drawer, which already owns them. The lists are read when the drawer
+// opens, after each of its own actions, and on the daemon's git updates while it is open, so a
+// commit made elsewhere lands here without a poll of its own.
+const scMessage = document.getElementById("scMessage");
+const scDraftBtn = document.getElementById("scDraft");
+const scCommitBtn = document.getElementById("scCommit");
+const scNote = document.getElementById("scNote");
+const scCount = document.getElementById("scCount");
+const scStagedHead = document.getElementById("scStagedHead");
+const scStagedCount = document.getElementById("scStagedCount");
+const scChangesCount = document.getElementById("scChangesCount");
+const scStaged = document.getElementById("scStaged");
+const scChanges = document.getElementById("scChanges");
+const scMergeHead = document.getElementById("scMergeHead");
+const scMergeCount = document.getElementById("scMergeCount");
+const scMerge = document.getElementById("scMerge");
+const scStageAll = document.getElementById("scStageAll");
+const scUnstageAll = document.getElementById("scUnstageAll");
+let scState = { staged: [], changes: [], conflicts: [], merge: null, prefix: "" };
+let scBusy = false;
+/** The merge the message field was prefilled for, so a refresh never overwrites typed text. */
+let scMergeSeen = "";
+
+function scSay(text) {
+  scNote.textContent = text || "";
+}
+
+async function scPost(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {}
+  if (!res.ok || !data || !data.ok) throw new Error((data && data.error) || `the daemon answered ${res.status}`);
+  return data;
+}
+
+/** One row: the file's name, its folder, its letter, and the button that moves it across. */
+function scRow(file, scope) {
+  const stage = scope === "changes";
+  const row = el("div", "sc-row");
+  const slash = file.path.lastIndexOf("/");
+  const name = el("span", "sc-name");
+  name.textContent = slash >= 0 ? file.path.slice(slash + 1) : file.path;
+  name.title = file.path;
+  row.append(name);
+  if (slash >= 0) {
+    const dir = el("span", "sc-dir");
+    dir.textContent = file.path.slice(0, slash + 1);
+    row.append(dir);
+  }
+  const badge = el("span", "sc-badge");
+  badge.textContent = file.kind || "M";
+  row.append(badge);
+  // Clicking the name reads the diff before anything is committed; the +/− button beside it
+  // still only moves the file, because its own press never reaches the row.
+  name.style.cursor = "pointer";
+  name.title = `${file.path} — view diff`;
+  name.addEventListener("click", () => void scOpenDiff(file, scope));
+  row.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    scOpenMenu(event, file, scope);
+  });
+  const move = el("button");
+  move.type = "button";
+  move.disabled = Boolean(scState.merge);
+  move.textContent = stage ? "+" : "−";
+  move.title = stage ? `stage ${file.path}` : `unstage ${file.path}`;
+  move.addEventListener("click", () => void scMove([file.path], stage));
+  row.append(move);
+  return row;
+}
+
+// A conflicted file opens in the merge editor; there is no +/− press for it, because staging a
+// file with markers in it would stage the markers.
+function scConflictRow(file) {
+  const row = el("div", "sc-row");
+  const slash = file.path.lastIndexOf("/");
+  const name = el("span", "sc-name");
+  name.textContent = slash >= 0 ? file.path.slice(slash + 1) : file.path;
+  name.title = file.path;
+  row.append(name);
+  if (slash >= 0) {
+    const dir = el("span", "sc-dir");
+    dir.textContent = file.path.slice(0, slash + 1);
+    row.append(dir);
+  }
+  const badge = el("span", "sc-badge");
+  badge.textContent = "!";
+  row.append(badge);
+  const open = el("button");
+  open.type = "button";
+  open.textContent = "open";
+  open.title = `resolve ${file.path} in the merge editor`;
+  open.addEventListener("click", () => void scOpenConflict(file.path));
+  row.append(open);
+  row.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    scOpenMenu(event, file, "merge");
+  });
+  return row;
+}
+
+/** Paint both lists, the counts, and whether Commit may be pressed. */
+function scPaint() {
+  scStaged.replaceChildren(...scState.staged.map((file) => scRow(file, "staged")));
+  scChanges.replaceChildren(...scState.changes.map((file) => scRow(file, "changes")));
+  scMerge.replaceChildren(...scState.conflicts.map((file) => scConflictRow(file)));
+  scStagedCount.textContent = scState.staged.length ? String(scState.staged.length) : "";
+  scChangesCount.textContent = scState.changes.length ? String(scState.changes.length) : "";
+  scMergeCount.textContent = scState.conflicts.length ? String(scState.conflicts.length) : "";
+  scCount.textContent = scState.staged.length + scState.changes.length + scState.conflicts.length ? String(scState.staged.length + scState.changes.length + scState.conflicts.length) : "";
+  scMergeHead.hidden = !scState.conflicts.length;
+  scStagedHead.hidden = !scState.staged.length;
+  scStageAll.disabled = !scState.changes.length || scBusy || Boolean(scState.merge);
+  scUnstageAll.disabled = !scState.staged.length || scBusy || Boolean(scState.merge);
+  scDraftBtn.disabled = !scState.staged.length || scBusy || Boolean(scState.merge);
+  // During a merge the green press concludes it, and it needs no staged file of its own: the
+  // index as it stands is what Continue commits, once no conflict remains.
+  scCommitBtn.textContent = scState.merge ? "✓ Continue" : "✓ Commit";
+  scCommitBtn.disabled = scBusy || !scMessage.value.trim() || (scState.merge ? scState.conflicts.length > 0 : !scState.staged.length);
+  // The field is locked while a request is in flight, so a draft that lands late cannot
+  // overwrite text typed after the press.
+  scMessage.disabled = scBusy;
+}
+
+/**
+ * A repository path as the workspace drawer knows it, or null when the file sits outside the
+ * workspace folder: the explorer and its editor only speak workspace-relative names.
+ */
+function scRel(path) {
+  if (!scState.prefix) return path;
+  const head = `${scState.prefix}/`;
+  return path.startsWith(head) ? path.slice(head.length) : null;
+}
+
+async function scLoad() {
+  if (!workspace) {
+    scSay("this board has no folder of its own, so there is nothing to commit");
+    return;
+  }
+  let data;
+  try {
+    const res = await fetch(`/source-control/status?${auth}`);
+    data = await res.json();
+  } catch {
+    scSay("the daemon did not answer");
+    return;
+  }
+  if (!data.ok) {
+    scSay(data.error || "git could not read this folder");
+    return;
+  }
+  scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null, prefix: data.prefix ?? "" };
+  // A new merge brings its own message; a merge already seen keeps whatever the field holds.
+  if (scState.merge && scState.merge.id !== scMergeSeen) {
+    scMergeSeen = scState.merge.id;
+    scMessage.value = scState.merge.message ?? "";
+  }
+  if (!scState.merge) scMergeSeen = "";
+  scSay("");
+  scPaint();
+}
+
+/** The first read on open: the drawer always opens on the repository as it stands now. */
+function scPrime() {
+  void scLoad();
+}
+
+/** A git update while the drawer is open re-reads it; while it is shut, the next open re-reads it. */
+function scNotifyChanged() {
+  if (drawerState.open === "source") void scLoad();
+}
+
+async function scMove(paths, stage) {
+  if (scBusy || !paths.length) return;
+  scBusy = true;
+  scPaint();
+  try {
+    const data = await scPost(stage ? `/source-control/stage?${auth}` : `/source-control/unstage?${auth}`, { paths });
+    scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null, prefix: data.prefix ?? "" };
+    scSay("");
+  } catch (error) {
+    scSay(error.message);
+  }
+  scBusy = false;
+  scPaint();
+}
+
+async function scCommit() {
+  const message = scMessage.value.trim();
+  const merging = Boolean(scState.merge);
+  if (scBusy || !message || (merging ? scState.conflicts.length > 0 : !scState.staged.length)) return;
+  scBusy = true;
+  scPaint();
+  try {
+    if (merging) {
+      const data = await scPost(`/source-control/continue?${auth}`, { message, mergeId: scState.merge.id });
+      scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null, prefix: data.prefix ?? "" };
+      scMessage.value = "";
+      scSay("merge concluded");
+    } else {
+      await scPost(`/source-control/commit?${auth}`, { message });
+      scMessage.value = "";
+      scSay("committed");
+      await scLoad();
+    }
+  } catch (error) {
+    scSay(error.message);
+  }
+  scBusy = false;
+  scPaint();
+}
+
+// ---------- the file menu -------------------------------------------------
+// Right-click a file: open its diff, open the file, stage or unstage it, discard it, ignore it
+// when it is untracked, or find it in the files drawer. Everything here is one of those, and
+// everything destructive still asks first; the graph's own entries (its diff view, history,
+// format, meld) stay in the graph drawer where they belong.
+const scMenuEl = document.getElementById("scMenu");
+
+let scMenuPrior = null;
+
+function scCloseMenu() {
+  if (scMenuEl.hidden) return;
+  scMenuEl.hidden = true;
+  scMenuEl.replaceChildren();
+  const prior = scMenuPrior;
+  scMenuPrior = null;
+  if (prior instanceof HTMLElement && document.contains(prior)) prior.focus();
+}
+
+function scMenuItem(label, run, danger = false) {
+  const button = el("button");
+  button.type = "button";
+  button.textContent = label;
+  if (danger) button.className = "danger";
+  button.addEventListener("click", () => {
+    scCloseMenu();
+    void run();
+  });
+  return button;
+}
+
+function scOpenMenu(event, file, scope) {
+  const items = [];
+  const rel = scRel(file.path);
+  if (scope === "staged" || scope === "changes") {
+    items.push(scMenuItem("Open Changes", () => scOpenDiff(file, scope)));
+    // A deleted file has nothing to open, and a file outside the workspace has no explorer name.
+    if (rel && file.kind !== "D") items.push(scMenuItem("Open File", () => exEditOpen(rel)));
+    // An addition has no HEAD to read; a rename reads at the name it had there.
+    if (scope === "staged" && file.kind !== "A") items.push(scMenuItem("Open File (HEAD)", () => scOpenHead(file)));
+    items.push(scMenuItem(scope === "staged" ? "Unstage Changes" : "Stage Changes", () => scMove([file.path], scope === "changes")));
+    items.push(scMenuItem("Discard Changes", () => scDiscard(file), true));
+    if (scope === "changes" && file.kind === "U") items.push(scMenuItem("Add to .gitignore", () => scIgnore(file)));
+    if (rel) items.push(scMenuItem("Reveal in Explorer", () => scReveal(file)));
+  } else {
+    items.push(scMenuItem("Open in Merge Editor", () => scOpenConflict(file.path)));
+    if (rel) items.push(scMenuItem("Reveal in Explorer", () => scReveal(file)));
+  }
+  scMenuEl.replaceChildren(...items);
+  scMenuEl.hidden = false;
+  const x = Math.min(event.clientX, innerWidth - 220);
+  const y = Math.min(event.clientY, innerHeight - items.length * 32 - 16);
+  scMenuEl.style.left = `${Math.max(4, x)}px`;
+  scMenuEl.style.top = `${Math.max(4, y)}px`;
+  scMenuPrior = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  items[0].focus();
+}
+scMenuEl.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const buttons = [...scMenuEl.querySelectorAll("button")];
+  const at = buttons.indexOf(document.activeElement);
+  const step = event.key === "ArrowDown" ? 1 : -1;
+  buttons[(at + step + buttons.length) % buttons.length].focus();
+});
+
+document.addEventListener("click", (event) => {
+  if (!scMenuEl.hidden && !event.target.closest("#scMenu")) scCloseMenu();
+});
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (scMenuEl.hidden || event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    scCloseMenu();
+  },
+  true,
+);
+
+/** One untracked file into the repository's .gitignore, then the lists re-read. */
+async function scIgnore(file) {
+  try {
+    const data = await scPost(`/source-control/ignore?${auth}`, { path: file.path });
+    scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null, prefix: data.prefix ?? "" };
+    scSay(`${file.path} added to .gitignore`);
+  } catch (error) {
+    scSay(error.message);
+  }
+  scPaint();
+}
+
+/** The files drawer, opened on the folder that holds this file, every folder above it open. */
+async function scReveal(file) {
+  const rel = scRel(file.path);
+  if (!rel) return;
+  showDrawer("files");
+  exState.filter = "";
+  exFilterEl.value = "";
+  const parts = rel.split("/").slice(0, -1);
+  let dir = "";
+  for (const part of parts) {
+    dir = dir ? `${dir}/${part}` : part;
+    exState.expanded.add(dir);
+    await exLoad(dir, { quiet: true });
+  }
+  explorerCore.select(exState.sel, rel);
+  exPaint();
+  exTreeEl.querySelector(`.ex-row[data-path="${CSS.escape(rel)}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+/** A file as HEAD held it, read-only in the diff modal's own frame. */
+async function scOpenHead(file) {
+  if (scDiffEl.hidden) scDiffPrior = document.activeElement;
+  const gen = ++scDiffGen;
+  scDiffEl.hidden = false;
+  scDiffTitle.textContent = `${file.path} (HEAD)`;
+  scDiffFlags.textContent = "reading…";
+  scDiffBody.replaceChildren();
+  scDiffCopyBtn.disabled = true;
+  scDiffCloseBtn.focus();
+  let data;
+  try {
+    const res = await fetch(`/source-control/file?${auth}&path=${encodeURIComponent(file.oldPath || file.path)}`);
+    data = await res.json();
+  } catch {
+    if (!scDiffEl.hidden && gen === scDiffGen) scDiffFlags.textContent = "the daemon did not answer";
+    return;
+  }
+  if (scDiffEl.hidden || gen !== scDiffGen) return;
+  if (!data.ok) {
+    scDiffFlags.textContent = data.error || "the file could not be read";
+    return;
+  }
+  const flags = [];
+  if (data.binary) flags.push("binary — this file is not text, so there is nothing to show");
+  if (data.truncated) flags.push("truncated — only the first 2 MB is shown");
+  scDiffFlags.textContent = flags.join(" · ");
+  scDiffText = data.binary ? "" : data.content ?? "";
+  if (!scDiffText) {
+    const empty = el("div", "ggViewerEmpty");
+    empty.textContent = data.binary ? "This file is not text." : "This file is empty.";
+    scDiffBody.append(empty);
+  } else {
+    const host = el("div", "sc-head-host");
+    const preview = createTextPreview(host, { readOnly: true });
+    preview.setDocument({ path: file.path, content: scDiffText });
+    scDiffBody.append(host);
+  }
+  scDiffCopyBtn.disabled = !scDiffText;
+}
+
+// ---------- diff modal and discard ------------------------------------------
+// One file's diff over the board, drawn by the table the git graph shares. It reads, never
+// writes: a click on a name here cannot stage, discard or commit anything.
+const scDiffEl = document.getElementById("scDiff");
+const scDiffTitle = document.getElementById("scDiffTitle");
+const scDiffFlags = document.getElementById("scDiffFlags");
+const scDiffBody = document.getElementById("scDiffBody");
+const scDiffCloseBtn = document.getElementById("scDiffClose");
+const scDiffCopyBtn = document.getElementById("scDiffCopy");
+let scDiffPrior = null;
+let scDiffText = "";
+/** Bumped on every open and close, so a slow answer for an earlier file cannot fill a new modal. */
+let scDiffGen = 0;
+
+function scDiffClose() {
+  if (scDiffEl.hidden) return;
+  scDiffGen += 1;
+  scDiffEl.hidden = true;
+  scDiffBody.replaceChildren();
+  scDiffText = "";
+  const prior = scDiffPrior;
+  scDiffPrior = null;
+  if (prior instanceof HTMLElement && document.contains(prior)) prior.focus();
+}
+
+async function scOpenDiff(file, scope) {
+  if (scDiffEl.hidden) scDiffPrior = document.activeElement;
+  const gen = ++scDiffGen;
+  scDiffEl.hidden = false;
+  scDiffTitle.textContent = file.path;
+  scDiffFlags.textContent = "reading…";
+  scDiffBody.replaceChildren();
+  scDiffCopyBtn.disabled = true;
+  // The keyboard is the modal's from the first moment, not from the answer: a board letter
+  // behind a loading modal would act on the board the human cannot see.
+  scDiffCloseBtn.focus();
+  let data;
+  try {
+    const res = await fetch(`/source-control/diff?${auth}&path=${encodeURIComponent(file.path)}&scope=${scope}`);
+    data = await res.json();
+  } catch {
+    if (!scDiffEl.hidden) scDiffFlags.textContent = "the daemon did not answer";
+    return;
+  }
+  if (scDiffEl.hidden || gen !== scDiffGen) return;
+  if (!data.ok) {
+    scDiffFlags.textContent = data.error || "the diff could not be read";
+    return;
+  }
+  scDiffTitle.textContent = data.title || file.path;
+  const flags = [];
+  if (data.binary) flags.push("binary — this file is not text, so there is nothing to show");
+  if (data.truncated) flags.push("truncated — only the first 2 MB is shown");
+  scDiffFlags.textContent = flags.join(" · ");
+  scDiffText = data.binary ? "" : data.content ?? "";
+  if (!scDiffText) {
+    const empty = el("div", "ggViewerEmpty");
+    empty.textContent = data.binary ? "This file is not text." : "This file is empty.";
+    scDiffBody.append(empty);
+  } else {
+    scDiffBody.append(createDiffTable(scDiffText));
+  }
+  scDiffCopyBtn.disabled = !scDiffText;
+  scDiffCloseBtn.focus();
+}
+
+scDiffCloseBtn.addEventListener("click", () => scDiffClose());
+scDiffCopyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(scDiffText);
+    scDiffCopyBtn.textContent = "Copied";
+  } catch {
+    scDiffCopyBtn.textContent = "Copy failed";
+  }
+  setTimeout(() => {
+    scDiffCopyBtn.textContent = "Copy";
+  }, 1500);
+});
+scDiffEl.addEventListener("click", (event) => {
+  if (event.target === scDiffEl) scDiffClose();
+});
+scDiffEl.addEventListener("keydown", (event) => {
+  if (event.key !== "Tab") return;
+  const stops = [...scDiffEl.querySelectorAll("button:not([disabled])")].filter((one) => one.offsetParent !== null || one === document.activeElement);
+  if (!stops.length) return;
+  event.preventDefault();
+  const at = stops.indexOf(document.activeElement);
+  const step = event.shiftKey ? -1 : 1;
+  stops[(at + step + stops.length) % stops.length].focus();
+});
+// Capture, so Escape shuts this modal before the board's own Escape ladder hears it.
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (scDiffEl.hidden || event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    scDiffClose();
+  },
+  true,
+);
+
+/** The discard question, on the confirm modal the permanent delete uses. */
+function scAskDiscard(file) {
+  return new Promise((resolve) => {
+    const prior = document.activeElement;
+    const yesLabel = exConfirmYes.textContent;
+    const noLabel = exConfirmNo.textContent;
+    exConfirmTitle.textContent = "discard changes";
+    const note = el("p", "act-note");
+    note.textContent = file.kind === "U"
+      ? "this file is not tracked, so discarding removes it. Anything in it may not be recoverable."
+      : "the file goes back to its committed state, staged and unstaged alike. The changes may not be recoverable.";
+    const list = el("div", "cut");
+    list.textContent = file.path;
+    exConfirmBody.replaceChildren(note, list);
+    exConfirmYes.textContent = "discard";
+    exConfirmNo.textContent = "keep changes";
+    exConfirmEl.hidden = false;
+    exConfirmYes.focus();
+    const trap = (event) => {
+      if (event.key !== "Tab") return;
+      const stops = [...exConfirmEl.querySelectorAll("button:not([disabled])")];
+      if (!stops.length) return;
+      event.preventDefault();
+      const at = stops.indexOf(document.activeElement);
+      const step = event.shiftKey ? -1 : 1;
+      stops[(at + step + stops.length) % stops.length].focus();
+    };
+    exConfirmEl.addEventListener("keydown", trap);
+    const done = (answer) => {
+      exConfirmEl.removeEventListener("keydown", trap);
+      exConfirmEl.hidden = true;
+      exConfirmYes.onclick = null;
+      exConfirmNo.onclick = null;
+      exConfirmYes.textContent = yesLabel;
+      exConfirmNo.textContent = noLabel;
+      if (prior instanceof HTMLElement && document.contains(prior)) prior.focus();
+      resolve(answer);
+    };
+    exConfirmYes.onclick = () => done(true);
+    exConfirmNo.onclick = () => done(false);
+  });
+}
+
+/** Right-click a file: ask, then discard exactly it and re-read the lists. */
+async function scDiscard(file) {
+  if (scBusy) return;
+  if (!(await scAskDiscard(file))) return;
+  scBusy = true;
+  scPaint();
+  try {
+    const data = await scPost(`/source-control/discard?${auth}`, { path: file.path });
+    scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null, prefix: data.prefix ?? "" };
+    scSay(`${file.path} discarded`);
+  } catch (error) {
+    scSay(error.message);
+  }
+  scBusy = false;
+  scPaint();
+}
+
+
+async function scDraft() {
+  if (scBusy || !scState.staged.length) return;
+  scBusy = true;
+  scPaint();
+  scSay("drafting…");
+  try {
+    const data = await scPost(`/source-control/message?${auth}`, {});
+    scMessage.value = data.message ?? "";
+    scSay("");
+  } catch (error) {
+    scSay(error.message);
+  }
+  scBusy = false;
+  scPaint();
+}
+
+scStageAll.addEventListener("click", () => void scMove(scState.changes.map((file) => file.path), true));
+scUnstageAll.addEventListener("click", () => void scMove(scState.staged.map((file) => file.path), false));
+scCommitBtn.addEventListener("click", () => void scCommit());
+scDraftBtn.addEventListener("click", () => void scDraft());
+// The message field is a field: while it holds the keyboard a `d` is a letter in it, not the
+// drawer's key, because `typingSomewhere` already reads it that way. Ctrl+Enter commits, the way
+// the placeholder promises and the way VS Code's panel does.
+scMessage.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    void scCommit();
+  }
+});
+scMessage.addEventListener("input", () => scPaint());
+scPaint();
 
 // ---------- the conversation behind a thread ------------------------------
 //
@@ -8380,6 +9017,7 @@ const SHORTCUTS = [
       { keys: "f", does: "open the files drawer, and press it again to roll it up" },
       { keys: "a", does: "open the activity drawer, and press it again to roll it up" },
       { keys: "c", does: "open the cards drawer, and press it again to roll it up" },
+      { keys: "d", does: "open the source control drawer, and press it again to roll it up" },
       { keys: "shift+f", does: "fit every card on the screen" },
       { keys: "0", does: "back to real size, 100%" },
       { keys: "m", does: "hide or show the small overview map" },
@@ -8444,6 +9082,8 @@ const SHORTCUTS = [
       { keys: "ctrl+s", does: "in the editor, write the file back and keep it open" },
       { keys: "drag a row", does: "move it into a folder, and onto a thread card to reference it there" },
       { keys: "right-click a row", does: "cut, copy, paste, rename, delete, copy a path, or reference it in a thread" },
+      { keys: "right-click a file in source control", does: "open its menu: diff, open, stage, discard, ignore or reveal" },
+      { keys: "click a file in source control", does: "view its diff before committing" },
       { keys: "esc", does: "close the editor when it has no unsaved changes, then the menu or the name being typed, then the drawer" },
     ],
   },
@@ -8457,6 +9097,7 @@ const SHORTCUTS = [
       { keys: "!", does: "at the start of a line, run it as a shell command" },
       { keys: "ctrl+v", does: "paste an image and it goes with the message" },
       { keys: "ctrl+enter", does: "save a note" },
+      { keys: "ctrl+enter", does: "in the source control drawer, commit the staged files, or continue a merge" },
       { keys: "enter", does: "save a card name you are changing" },
       { keys: "double-click a message title", does: "rewrite that message" },
     ],
@@ -10638,7 +11279,10 @@ let exEditorDoc = { path: "", text: "", mtime: 0, size: 0, editable: false };
 /** What had the focus before the editor opened, handed back when it closes. */
 let exEditorPrior = null;
 const exEditorPreview = createTextPreview(exEditorBody, {
-  onInput: () => exEditorSay(exEditorDirty() ? "unsaved changes" : "saved", exEditorDirty() ? "dirty" : ""),
+  onInput: () => {
+    exEditorSay(exEditorDirty() ? "unsaved changes" : "saved", exEditorDirty() ? "dirty" : "");
+    if (exConflict) exConflictPaint();
+  },
 });
 
 /** Whether what stands in the editor is still the text that was read from disk. */
@@ -10681,6 +11325,9 @@ async function exGet(path) {
  * selection and the tree under it are exactly as they were.
  */
 async function exEditOpen(path, target = "edit") {
+  exConflict = null;
+  exConflictBar.hidden = true;
+  exEditorSaveBtn.hidden = false;
   if (exEditorEl.hidden) exEditorPrior = document.activeElement;
   exEditorEl.hidden = false;
   exEditorTitle.textContent = path;
@@ -10729,6 +11376,9 @@ async function exEditOpen(path, target = "edit") {
  * often not done reading; the status line is what says it landed. A refusal says why and keeps the text.
  */
 async function exEditSave() {
+  // In conflict mode the save press resolves and stages; the ordinary write would save
+  // without staging and leave the conflict exactly where it was.
+  if (exConflict) return exConflictResolve();
   const path = exEditorDoc.path;
   if (exEditorEl.hidden || !path) return;
   if (!exEditorDoc.editable) return exEditorSay("read only \u2014 there is nothing here to save", "bad");
@@ -10756,6 +11406,9 @@ async function exEditSave() {
 /** Shut the editor and hand the keyboard back: the tree the file came from, when that is still there. */
 function exEditClose() {
   if (exEditorEl.hidden) return;
+  exConflict = null;
+  exConflictBar.hidden = true;
+  exEditorSaveBtn.hidden = false;
   exEditorEl.hidden = true;
   exEditorDoc.path = "";
   const prior = exEditorPrior;
@@ -10776,7 +11429,8 @@ function exEditEscape() {
 // One listener for the modal's own keys: Tab stays inside it, and ctrl or command with s writes it back.
 exEditorEl.addEventListener("keydown", (event) => {
   if (event.key === "Tab") {
-    const stops = [...exEditorEl.querySelectorAll("textarea, button:not([disabled])")];
+    // Visible only: a hidden bar's buttons take no focus, and a Tab that lands on one strands.
+    const stops = [...exEditorEl.querySelectorAll("textarea, button:not([disabled])")].filter((one) => one.offsetParent !== null || one === document.activeElement);
     if (!stops.length) return;
     event.preventDefault();
     const at = stops.indexOf(document.activeElement);
@@ -10792,6 +11446,150 @@ exEditorEl.addEventListener("keydown", (event) => {
 });
 exEditorSaveBtn.addEventListener("click", () => void exEditSave());
 exEditorCloseBtn.addEventListener("click", () => exEditClose());
+
+// ---------- the merge editor -----------------------------------------------
+/**
+ * The editor in conflict mode: the same modal and the same text surface, with a bar above them
+ * that holds one row per conflict hunk. Accepting a hunk rewrites the unsaved text — never the
+ * file — and Resolve & Stage is what saves it and stages exactly this file, so the ordinary
+ * save press is hidden while a conflict is open and cannot stage markers by accident.
+ */
+const exConflictBar = document.getElementById("exConflictBar");
+const exConflictHunksEl = document.getElementById("exConflictHunks");
+const exConflictNote = document.getElementById("exConflictNote");
+const exConflictResolveBtn = document.getElementById("exConflictResolve");
+/** The conflict the editor holds, or null for an ordinary file. Bound with `let` like the doc. */
+let exConflict = null;
+
+function exConflictSay(text, bad = false) {
+  exConflictNote.textContent = text || "";
+  exConflictNote.classList.toggle("bad", bad);
+}
+
+/** The hunk rows, re-read from the text as it stands: after every acceptance and every edit. */
+function exConflictPaint() {
+  if (!exConflict) return;
+  const text = exEditorPreview.getText();
+  const hunks = explorerCore.conflictHunks(text);
+  exConflictHunksEl.replaceChildren(
+    ...hunks.map((hunk) => {
+      const row = el("div", "ex-conflict-hunk");
+      const label = el("span", "hk");
+      label.textContent = `hunk ${hunk.index + 1}`;
+      row.append(label);
+      for (const [choice, word] of [["current", "accept current"], ["incoming", "accept incoming"], ["both", "accept both"]]) {
+        const button = el("button");
+        button.type = "button";
+        button.textContent = word;
+        button.addEventListener("click", () => {
+          exEditorPreview.setDocument({ path: exConflict.path, content: explorerCore.conflictAccept(exEditorPreview.getText(), hunk.index, choice) });
+          exConflictPaint();
+          exEditorPreview.focus();
+        });
+        row.append(button);
+      }
+      const compare = el("button");
+      compare.type = "button";
+      compare.textContent = "compare";
+      compare.addEventListener("click", () => {
+        const shown = row.parentElement.querySelector(".ex-conflict-compare");
+        if (shown) {
+          shown.remove();
+          return;
+        }
+        const view = el("pre", "ex-conflict-compare");
+        view.textContent = `current:\n${hunk.ours.join("\n") || "(empty)"}\n\nincoming:\n${hunk.theirs.join("\n") || "(empty)"}`;
+        row.after(view);
+      });
+      row.append(compare);
+      return row;
+    }),
+  );
+  exConflictSay(hunks.length ? `${hunks.length} conflict${hunks.length === 1 ? "" : "s"} left — accept each one, or edit the text itself` : "no markers left — resolve & stage this file");
+  exConflictResolveBtn.disabled = hunks.length > 0;
+}
+
+/** Open one conflicted file in the editor, with its merge identity and version. */
+async function scOpenConflict(path) {
+  if (exEditorEl.hidden) exEditorPrior = document.activeElement;
+  exEditorEl.hidden = false;
+  exEditorTitle.textContent = path;
+  exConflict = { path, mergeId: "", version: "" };
+  exConflictBar.hidden = false;
+  exEditorSaveBtn.hidden = true;
+  exEditorDoc.path = path;
+  exEditorDoc.text = "";
+  exEditorDoc.editable = false;
+  exEditorPreview.setDocument({ path, content: "" });
+  exEditorPreview.setReadOnly(true);
+  exEditorSay("reading\u2026");
+  exConflictSay("reading\u2026");
+  let answer;
+  try {
+    answer = await exGet(`/source-control/conflict?${auth}&path=${encodeURIComponent(path)}`);
+  } catch {
+    if (!exEditorEl.hidden && exConflict && exConflict.path === path) exConflictSay("could not reach the daemon — nothing was read", true);
+    return;
+  }
+  if (exEditorEl.hidden || !exConflict || exConflict.path !== path) return;
+  const data = answer.data ?? {};
+  if (!answer.ok || !data.ok) {
+    exConflictSay((data && data.error) || `the daemon answered ${answer.status}`, true);
+    return;
+  }
+  exConflict.mergeId = String(data.mergeId ?? "");
+  exConflict.version = String(data.version ?? "");
+  exEditorDoc.text = String(data.content ?? "");
+  exEditorDoc.editable = true;
+  exEditorPreview.setDocument({ path, content: exEditorDoc.text });
+  exEditorPreview.setReadOnly(false);
+  exEditorSay("merge editor — resolving does not save until resolve & stage");
+  exConflictPaint();
+  exEditorPreview.focus();
+}
+
+/** Save the resolved text and stage exactly this file, then shut the editor. */
+async function exConflictResolve() {
+  const mine = exConflict;
+  if (!mine) return;
+  const content = exEditorPreview.getText();
+  if (explorerCore.conflictHunks(content).length) return exConflictSay("conflict markers remain", true);
+  exConflictSay("resolving\u2026");
+  exConflictResolveBtn.disabled = true;
+  // Locked while the save is in flight: text typed after the press cannot be discarded by it.
+  exEditorPreview.setReadOnly(true);
+  let answer;
+  try {
+    answer = await exPost("/source-control/resolve", { path: exConflict.path, mergeId: exConflict.mergeId, version: exConflict.version, content });
+  } catch {
+    if (exConflict !== mine) return;
+    exEditorPreview.setReadOnly(false);
+    exConflictSay("could not reach the daemon — the text is not saved", true);
+    exConflictResolveBtn.disabled = false;
+    return;
+  }
+  // The editor may have moved on to another file while the save was in flight; that file is
+  // not this save's to close.
+  if (exConflict !== mine) return;
+  const data = answer.data ?? {};
+  if (!answer.ok || !data.ok) {
+    exEditorPreview.setReadOnly(false);
+    exConflictSay((data && data.error) || `the daemon answered ${answer.status}`, true);
+    exConflictResolveBtn.disabled = false;
+    return;
+  }
+  const path = mine.path;
+  exConflict = null;
+  exConflictBar.hidden = true;
+  exEditorSaveBtn.hidden = false;
+  exEditClose();
+  scSay(`${path} resolved and staged`);
+  void scLoad();
+}
+
+exConflictResolveBtn.addEventListener("click", () => void exConflictResolve());
+// A manual edit re-reads the hunks, so the bar and the text never disagree — but the repaint
+// only rebuilds the bar, so the caret stays where the human left it.
 
 /** A path onto the clipboard; the relative one is what a message wants to carry. */
 async function exCopyPath(paths, absolute) {
@@ -12155,6 +12953,8 @@ const openSheet = () => document.querySelector(".sheet:not([hidden])");
  * open. A menu and a name being typed are.
  */
 const drawerSurface = () =>
+  !scMenuEl.hidden ||
+  !scDiffEl.hidden ||
   !exEditorEl.hidden ||
   !exConfirmEl.hidden ||
   Boolean(exState.menu) ||
