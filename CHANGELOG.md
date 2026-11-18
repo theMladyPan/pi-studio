@@ -2,8 +2,9 @@
 
 ## [Unreleased]
 
-## [0.2.2] - 2026-11-18
+## [0.2.3] - 2026-11-18
 
+- fix: Let a real release archive pass its proof step, which now reads the archive listing once instead of killing the lister with an early match.
 - fix: Keep the install lifecycle tests independent of whether the checkout sits on a clean release tag, so a staged copy the tests install is always their custom copy.
 - fix: Accept an annotated release tag on the publishing run by checking the remote tag, so the run no longer mistakes a real annotated tag for a plain one after the checkout step rewrites its local copy.
 - fix: Keep a running thread's thinking/tool strip readable on long cards and keep its newest message in view when the board zoom changes.
