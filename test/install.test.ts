@@ -110,6 +110,12 @@ function currentVersion(roots: ReturnType<typeof tempRoots>): string {
 	return meta.versions.find((v: { dir: string }) => v.dir === meta.currentVersionDir).version;
 }
 
+/** A version newer than `version`, so these update fixtures stay an upgrade whatever version is packaged. */
+function newerThan(version: string): string {
+	const [major, minor, patch] = version.split(".").map(Number);
+	return `${major}.${minor}.${patch + 1}`;
+}
+
 function makeOfficialTree(version: string, promptText: string | null, buildOverrides: Record<string, unknown> = {}) {
 	const dir = mkdtempSync(join(tmpdir(), `pi-studio-official-${version}-`));
 	cpSync(staged, dir, { recursive: true });
@@ -294,11 +300,12 @@ test("update refuses to replace a custom copy without --replace-custom, then upd
 	const roots = tempRoots(t);
 	await installStaged(roots);
 	const customVersion = currentVersion(roots);
+	const next = newerThan(customVersion);
 
 	const fixture = await startFixture(t);
-	const official = makeOfficialTree("0.2.0", "new shipped boss\n");
+	const official = makeOfficialTree(next, "new shipped boss\n");
 	t.after(() => rmSync(official.dir, { recursive: true, force: true }));
-	releaseFor(fixture, "0.2.0", official);
+	releaseFor(fixture, next, official);
 
 	const refused = await runLauncher(["update"], roots, { PI_STUDIO_GITHUB_API: fixture.baseUrl });
 	assert.notEqual(refused.status, 0);
@@ -314,9 +321,9 @@ test("update refuses to replace a custom copy without --replace-custom, then upd
 
 	const updated = await runLauncher(["update", "--replace-custom"], roots, { PI_STUDIO_GITHUB_API: fixture.baseUrl });
 	assert.equal(updated.status, 0, updated.stderr);
-	assert.equal(currentVersion(roots), "0.2.0");
+	assert.equal(currentVersion(roots), next);
 	assert.equal(readFileSync(join(roots.stateDir, "prompt-overrides", "modes", "boss.md"), "utf8"), "my boss\n", "the override is preserved, never merged");
-	const reports = [join(roots.stateDir, "prompt-update-reports", `prompt-update-${customVersion}-to-0.2.0.md`)];
+	const reports = [join(roots.stateDir, "prompt-update-reports", `prompt-update-${customVersion}-to-${next}.md`)];
 	assert.ok(reports.some((path) => existsSync(path)), `prompt report written; stdout was: ${updated.stdout}`);
 	assert.match(updated.stdout, /prompt update report/, updated.stdout);
 
@@ -326,18 +333,19 @@ test("update refuses to replace a custom copy without --replace-custom, then upd
 	const noop = await runLauncher(["update"], roots, { PI_STUDIO_GITHUB_API: fixture.baseUrl });
 	assert.equal(noop.status, 0, noop.stderr);
 	assert.match(noop.stdout, /already up to date/);
-	assert.equal(currentVersion(roots), "0.2.0");
+	assert.equal(currentVersion(roots), next);
 });
 
 test("update refuses a corrupt checksum and a downgrade, leaving the current copy alone", async (t) => {
 	const roots = tempRoots(t);
 	await installStaged(roots);
 	const customVersion = currentVersion(roots);
+	const next = newerThan(customVersion);
 	const fixture = await startFixture(t);
 
-	const official = makeOfficialTree("0.2.0", null);
+	const official = makeOfficialTree(next, null);
 	t.after(() => rmSync(official.dir, { recursive: true, force: true }));
-	releaseFor(fixture, "0.2.0", official, "0".repeat(64));
+	releaseFor(fixture, next, official, "0".repeat(64));
 	const corrupt = await runLauncher(["update", "--replace-custom"], roots, { PI_STUDIO_GITHUB_API: fixture.baseUrl });
 	assert.notEqual(corrupt.status, 0);
 	assert.match(corrupt.stderr, /checksum mismatch/);
@@ -356,31 +364,32 @@ test("update refuses a draft, a prerelease, a tag that is not v<version>, and an
 	const roots = tempRoots(t);
 	await installStaged(roots);
 	const customVersion = currentVersion(roots);
+	const next = newerThan(customVersion);
 	const fixture = await startFixture(t);
 
-	const official = makeOfficialTree("0.2.0", null);
+	const official = makeOfficialTree(next, null);
 	t.after(() => rmSync(official.dir, { recursive: true, force: true }));
 
-	releaseFor(fixture, "0.2.0", official, null, { draft: true });
+	releaseFor(fixture, next, official, null, { draft: true });
 	const draft = await runLauncher(["update", "--replace-custom"], roots, { PI_STUDIO_GITHUB_API: fixture.baseUrl });
 	assert.notEqual(draft.status, 0);
 	assert.match(draft.stderr, /draft/);
 
-	releaseFor(fixture, "0.2.0", official, null, { prerelease: true });
+	releaseFor(fixture, next, official, null, { prerelease: true });
 	const prerelease = await runLauncher(["update", "--replace-custom"], roots, { PI_STUDIO_GITHUB_API: fixture.baseUrl });
 	assert.notEqual(prerelease.status, 0);
 	assert.match(prerelease.stderr, /prerelease/);
 
-	releaseFor(fixture, "0.2.0", official, null, { tag_name: "0.2.0" });
+	releaseFor(fixture, next, official, null, { tag_name: next });
 	const untagged = await runLauncher(["update", "--replace-custom"], roots, { PI_STUDIO_GITHUB_API: fixture.baseUrl });
 	assert.notEqual(untagged.status, 0);
 	assert.match(untagged.stderr, /invalid release tag/);
 
 	// The checksum matches this archive, and the tag and asset names are right: only its own build.json
 	// still has to prove it is the official build, so a repacked custom copy cannot pass as a release.
-	const repacked = makeOfficialTree("0.2.0", null, { official: false, custom: true });
+	const repacked = makeOfficialTree(next, null, { official: false, custom: true });
 	t.after(() => rmSync(repacked.dir, { recursive: true, force: true }));
-	releaseFor(fixture, "0.2.0", repacked);
+	releaseFor(fixture, next, repacked);
 	const unofficial = await runLauncher(["update", "--replace-custom"], roots, { PI_STUDIO_GITHUB_API: fixture.baseUrl });
 	assert.notEqual(unofficial.status, 0);
 	assert.match(unofficial.stderr, /not an official build/);

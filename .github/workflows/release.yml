@@ -56,8 +56,11 @@ jobs:
           [[ "$TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]] || { echo "::error::$TAG is not a v0.MINOR.PATCH version"; exit 1; }
           [[ "$TAG" == "v$version" ]] || { echo "::error::$TAG does not match package.json version $version"; exit 1; }
           [[ "$lockVersion" == "$version" && "$lockRoot" == "$version" ]] || { echo "::error::package-lock.json carries $lockVersion / $lockRoot, not $version"; exit 1; }
-          [[ "$(git cat-file -t "$TAG")" == "tag" ]] || { echo "::error::$TAG is not an annotated tag"; exit 1; }
           commit="$(git rev-list -n 1 "$TAG")"
+          # The checkout step fetched the new tag and then refetched its commit into the local
+          # tag ref, so locally the tag looks like a plain commit. The annotated tag object only
+          # shows on the remote ref: an annotated tag has a `${TAG}^{}` dereference to the commit.
+          [[ "$(git ls-remote origin "refs/tags/${TAG}^{}" | cut -f1)" == "$commit" ]] || { echo "::error::$TAG is not an annotated tag on the tagged commit"; exit 1; }
           git merge-base --is-ancestor "$commit" origin/main || { echo "::error::$TAG does not sit on main"; exit 1; }
           dirty="$(git status --porcelain)"
           [[ -z "$dirty" ]] || { echo "::error::the tagged tree is not clean: $dirty"; exit 1; }
