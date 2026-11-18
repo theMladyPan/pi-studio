@@ -26,7 +26,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { chmod, rm, writeFile, rename } from "node:fs/promises";
-import { sourceDiff } from "./gitgraph/view.ts";
+import { fileAtHead, sourceDiff } from "./gitgraph/view.ts";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { runGit } from "./exec.ts";
@@ -41,6 +41,9 @@ export type ScConflict = { path: string; stages: { base: string | null; ours: st
 
 /** What the panel is handed: the branch, the two lists, the conflicts, and any merge in flight. */
 export type ScStatus = {
+	/** The workspace folder's path inside the repository, "" at its root: how a repository path
+	 * becomes the workspace-relative path the files drawer and editor speak. */
+	prefix: string;
 	branch: string;
 	detached: boolean;
 	staged: ScFile[];
@@ -212,9 +215,11 @@ export async function sourceControlStatus(folder: string): Promise<ScOutcome> {
 		if (y !== " " || x === "?") changes.push({ path, kind: kindOf(x, y) });
 	}
 	const head = branch.ok ? branch.stdout.toString().trim() : "";
+	const prefix = folder === root ? "" : folder.startsWith(root + "/") ? folder.slice(root.length + 1) : "";
 	return {
 		ok: true,
 		status: {
+			prefix,
 			branch: head,
 			detached: head === "HEAD",
 			staged,
@@ -580,6 +585,67 @@ export async function sourceControlDiscard(folder: string, path: unknown): Promi
 		const restorePaths = entry.oldPath ? [file, entry.oldPath] : [file];
 		const restored = await runGit(root, ["--literal-pathspecs", "restore", "--source=HEAD", "--staged", "--worktree", "--", ...restorePaths], { kind: "write" });
 		if (!restored.ok) return { ok: false, error: restored.stderr || "git could not discard the changes" };
+		return await sourceControlStatus(folder);
+	} finally {
+		inFlight.delete(root);
+	}
+}
+
+// ---------- file at HEAD and .gitignore ----------
+
+/** One file's text at HEAD, for "Open File (HEAD)". */
+export type ScFileAtHead = { ok: true; content: string; truncated: boolean; binary: boolean } | { ok: false; error: string };
+
+/** A file as HEAD held it, bounded and binary-checked like every view. Nothing is checked out. */
+export async function sourceControlFileAtHead(folder: string, path: unknown): Promise<ScFileAtHead> {
+	const cleaned = cleanPaths([path]);
+	if (!cleaned.ok) return cleaned;
+	const file = cleaned.paths[0];
+	const root = await toplevel(folder);
+	if (!root) return { ok: false, error: "this folder is not a git repository" };
+	const shown = await fileAtHead(root, file);
+	if (!shown.ok) return { ok: false, error: shown.error || "that file is not in HEAD" };
+	return { ok: true, content: shown.binary ? "" : shown.text, truncated: shown.truncated, binary: shown.binary };
+}
+
+/** A root-anchored literal .gitignore pattern for one path: a `#` starts a comment and `*`
+ * matches everything in gitignore syntax, so the name is escaped and pinned to the root. */
+function gitignorePattern(path: string): string {
+	const escaped = path.replace(/\\/g, "\\\\").replace(/([*?#[!]|[ \t])/g, "\\$1");
+	return `/${escaped}`;
+}
+
+/**
+ * Add one untracked file to the repository's .gitignore, so it leaves the changed list for good.
+ * Only an untracked file qualifies: ignoring a tracked one would not untrack it, and the panel
+ * would be promising what git will not do.
+ */
+export async function sourceControlIgnore(folder: string, path: unknown): Promise<ScOutcome> {
+	const cleaned = cleanPaths([path]);
+	if (!cleaned.ok) return cleaned;
+	const file = cleaned.paths[0];
+	const root = await toplevel(folder);
+	if (!root) return { ok: false, error: "this folder is not a git repository" };
+	const status = await sourceControlStatus(folder);
+	if (!status.ok) return status;
+	const entry = status.status.changes.find((one) => one.path === file);
+	if (!entry || entry.kind !== "U") return { ok: false, error: `only an untracked file can be added to .gitignore: ${file}` };
+	const held = holdWrite(root);
+	if (!held.ok) return held;
+	try {
+		const target = join(root, ".gitignore");
+		let existing = "";
+		try {
+			const leaf = lstatSync(target);
+			// A link or a non-file at this name is not this repository's ignore file to rewrite.
+			if (leaf.isSymbolicLink() || !leaf.isFile()) return { ok: false, error: ".gitignore is a link or not a file, so it was not edited" };
+			existing = readFileSync(target, "utf8");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { ok: false, error: ".gitignore could not be read" };
+		}
+		if (existing.split("\n").some((line) => line.trim() === file)) return await sourceControlStatus(folder);
+		const prefix = existing && !existing.endsWith("\n") ? "\n" : "";
+		await writeFile(target, existing + prefix + gitignorePattern(file) + "\n", "utf8");
 		return await sourceControlStatus(folder);
 	} finally {
 		inFlight.delete(root);

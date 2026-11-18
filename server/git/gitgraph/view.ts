@@ -174,6 +174,11 @@ function diffView(from: string, to: string, filePath: string, type: string, text
 	};
 }
 
+/** One file at HEAD, bounded like every view: a large file comes back truncated, not refused. */
+export async function fileAtHead(repo: string, filePath: string): Promise<{ ok: true; text: string; truncated: boolean; binary: boolean } | { ok: false; error: string }> {
+	return gitTextBounded(repo, ["show", "--format=", `HEAD:${filePath}`]);
+}
+
 /** One file as it is at one revision, which is what `viewFileAtRevision` and `openFile` both show. */
 async function fileView(repo: string, hash: string, filePath: string): Promise<ViewAnswer> {
 	const read = hash === UNCOMMITTED ? workingFileText(repo, filePath) : await gitTextBounded(repo, ["show", `--format=`, `${hash}:${filePath}`]);

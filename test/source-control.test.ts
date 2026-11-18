@@ -13,7 +13,7 @@ import { git, scratchRepo } from "../test-support/git.ts";
  * shape of the question and the reading of the answer without spending a model call on it.
  */
 
-type Status = { branch: string; detached: boolean; staged: { path: string; kind: string }[]; changes: { path: string; kind: string }[]; conflicts: { path: string; stages: { base: string | null; ours: string | null; theirs: string | null } }[]; operation: string | null; merge: { id: string; message: string } | null };
+type Status = { prefix: string; branch: string; detached: boolean; staged: { path: string; kind: string }[]; changes: { path: string; kind: string }[]; conflicts: { path: string; stages: { base: string | null; ours: string | null; theirs: string | null } }[]; operation: string | null; merge: { id: string; message: string } | null };
 
 async function statusOf(folder: string): Promise<Status> {
 	const outcome = await sourceControlStatus(folder);
@@ -407,6 +407,28 @@ test("a staged rename's diff draws as a rename", async () => {
 		assert.equal(diff.ok, true, diff.ok ? "" : diff.error);
 		assert.match(diff.ok ? diff.content : "", /rename from readme\.md/);
 		assert.match(diff.ok ? diff.content : "", /rename to renamed\.md/);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a file at HEAD is read as HEAD held it, and an untracked file can be ignored", async () => {
+	const repo = scratchRepo();
+	try {
+		writeFileSync(join(repo, "readme.md"), "working\n");
+		const { sourceControlFileAtHead, sourceControlIgnore } = await import("../server/git/source-control.ts");
+		const head = await sourceControlFileAtHead(repo, "readme.md");
+		assert.equal(head.ok, true, head.ok ? "" : head.error);
+		assert.equal(head.ok ? head.content : "", "hello\n");
+
+		writeFileSync(join(repo, "scratch.txt"), "scratch\n");
+		const ignored = await sourceControlIgnore(repo, "scratch.txt");
+		assert.equal(ignored.ok, true, ignored.ok ? "" : ignored.error);
+		const status = await statusOf(repo);
+		assert.deepEqual(status.changes.map((f) => f.path), ["readme.md", ".gitignore"]);
+
+		const tracked = await sourceControlIgnore(repo, "readme.md");
+		assert.equal(tracked.ok, false);
 	} finally {
 		rmSync(repo, { recursive: true, force: true });
 	}

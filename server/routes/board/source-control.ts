@@ -10,7 +10,7 @@
  * missing identity is not the same sentence as "the daemon answered 409".
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { sourceControlCommit, sourceControlConflict, sourceControlContinue, sourceControlDiff, sourceControlDiscard, sourceControlMessage, sourceControlResolve, sourceControlStage, sourceControlStatus } from "../../git/source-control.ts";
+import { sourceControlCommit, sourceControlConflict, sourceControlContinue, sourceControlDiff, sourceControlDiscard, sourceControlFileAtHead, sourceControlIgnore, sourceControlMessage, sourceControlResolve, sourceControlStage, sourceControlStatus } from "../../git/source-control.ts";
 import { answer, readJson } from "../../http.ts";
 
 /** The board's folder is the whole of this surface's world; nothing else is read from a board. */
@@ -101,6 +101,23 @@ export async function onSourceControlDiscard(req: IncomingMessage, res: ServerRe
 	const body = await readJson(req, res);
 	if (body === null) return;
 	const outcome = await sourceControlDiscard(board.folder, body.path);
+	if (!outcome.ok) return void refuse(res, outcome.error);
+	answer(res, 200, { ok: true, ...outcome.status });
+}
+
+/** One file as HEAD held it, read-only, for the menu's Open File (HEAD). */
+export async function onSourceControlFileAtHead(req: IncomingMessage, res: ServerResponse, board: BoardFolder): Promise<void> {
+	const url = new URL(req.url ?? "/", "http://127.0.0.1");
+	const outcome = await sourceControlFileAtHead(board.folder, url.searchParams.get("path"));
+	if (!outcome.ok) return void refuse(res, outcome.error);
+	answer(res, 200, { ok: true, content: outcome.content, truncated: outcome.truncated, binary: outcome.binary });
+}
+
+/** Add one untracked file to the repository's .gitignore. */
+export async function onSourceControlIgnore(req: IncomingMessage, res: ServerResponse, board: BoardFolder): Promise<void> {
+	const body = await readJson(req, res);
+	if (body === null) return;
+	const outcome = await sourceControlIgnore(board.folder, body.path);
 	if (!outcome.ok) return void refuse(res, outcome.error);
 	answer(res, 200, { ok: true, ...outcome.status });
 }
