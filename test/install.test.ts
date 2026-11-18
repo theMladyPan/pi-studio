@@ -61,6 +61,15 @@ before(async () => {
 	staged = mkdtempSync(join(tmpdir(), "pi-studio-install-staged-"));
 	const built = await run(process.execPath, [join(root, "bin", "build-release.mjs"), "--out", staged]);
 	assert.equal(built.status, 0, built.stderr || built.stdout);
+	// These lifecycle tests install the staged tree as a custom copy: an update replaces a custom
+	// copy only with `--replace-custom`, which is the behavior under test. A checkout sitting
+	// exactly on a clean release tag (the publishing CI checkout itself) would stage an official
+	// build and silently drop that premise, so stamp it custom like a dirty tagged build.
+	const buildPath = join(staged, "build.json");
+	const build = JSON.parse(readFileSync(buildPath, "utf8"));
+	build.official = false;
+	build.custom = true;
+	writeFileSync(buildPath, `${JSON.stringify(build, null, 2)}\n`);
 });
 
 after(() => {
