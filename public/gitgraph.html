@@ -1,64 +1,41 @@
 <!doctype html>
 <!--
-	A Git Graph page that runs in a browser tab instead of an editor panel.
+	A Git Graph Libre page that runs in a browser tab instead of an editor panel.
 
-	Everything inside #view is the contract mhutchie's `out.min.js` expects, and nothing else is: the
-	bundle builds every control it draws, so the ids below are the ones it looks up and the order it
-	looks them up in. The panel that the bundle would ask an editor to open — a diff, a file at a
-	revision — is drawn by this page instead, in #ggViewer.
+	Everything inside #topBar and #content is the contract Libre's `web.min.js`
+	expects, and nothing else is: the bundle builds every row it draws, so the
+	ids below are the ones it looks up. The panel that the bundle would ask an
+	editor to open — a diff, a file at a revision — is drawn by this page
+	instead, in #ggViewer.
 
-	The bundle is not served from here. It is the human's own copy of the mhutchie.git-graph extension,
-	read out of their VS Code install by the daemon, because its licence allows using it and forbids
-	shipping it. This page supplies the two things an editor would have supplied: the `--vscode-*`
-	colours, as variables on <html> where the bundle reads them, and `acquireVsCodeApi`, which
+	The bundle is not served from here. It is the human's own copy of the
+	git-graph-libre extension, read out of their VS Code install by the daemon,
+	AGPL-3.0-or-later, borrowed never shipped. This page supplies the two
+	things an editor would have supplied: the graph colours, as variables on
+	<body> where the bundle reads them, and `acquireVsCodeApi`, which
 	/client/gitgraph/host.js installs before the bundle is parsed.
 -->
-<html lang="en" style="
-	--vscode-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
-	--vscode-editor-font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-	--vscode-editor-background: #0d1117;
-	--vscode-editor-foreground: #c9d1d9;
-	--vscode-editorWidget-background: #161b22;
-	--vscode-editorSuggestWidget-foreground: #c9d1d9;
-	--vscode-editor-findMatchHighlightBackground: #d2992233;
-	--vscode-editor-findMatchHighlightBorder: #1f6feb;
-	--vscode-textLink-foreground: #58a6ff;
-	--vscode-textLink-activeForeground: #79c0ff;
-	--vscode-focusBorder: #1f6feb;
-	--vscode-selection-background: #1f6feb66;
-	--vscode-menu-background: #161b22;
-	--vscode-menu-foreground: #c9d1d9;
-	--vscode-menu-border: #30363d;
-	--vscode-menu-selectionBackground: #1f6feb;
-	--vscode-menu-selectionForeground: #ffffff;
-	--vscode-menu-selectionBorder: #1f6feb;
-	--vscode-menu-separatorBackground: #30363d;
-	--vscode-input-background: #0d1117;
-	--vscode-input-foreground: #c9d1d9;
-	--vscode-input-placeholderForeground: #8b949e;
-	--vscode-inputOption-activeBackground: #1f6feb66;
-	--vscode-inputOption-activeBorder: #1f6feb;
-	--vscode-inputValidation-errorBackground: #4b1113;
-	--vscode-inputValidation-errorBorder: #f85149;
-	--vscode-scrollbar-shadow: rgba(0, 0, 0, 0.4);
-	--vscode-widget-shadow: rgba(0, 0, 0, 0.5);
-	--vscode-gitDecoration-addedResourceForeground: #3fb950;
-	--vscode-gitDecoration-deletedResourceForeground: #f85149;
-	--vscode-gitDecoration-modifiedResourceForeground: #d29922;
-">
+<html lang="en">
 	<head>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1">
-		<title>Git Graph</title>
+		<title>Git Graph Libre</title>
 		<link rel="icon" href="/favicon.svg">
-		<link rel="stylesheet" href="/gitgraph/vendor/out.min.css">
+		<link rel="stylesheet" href="/gitgraph/vendor/tokens.css">
+		<link rel="stylesheet" href="/gitgraph/vendor/base.css">
+		<link rel="stylesheet" href="/gitgraph/vendor/checkbox.css">
+		<link rel="stylesheet" href="/gitgraph/vendor/table.css">
+		<link rel="stylesheet" href="/gitgraph/vendor/commit-details.css">
+		<link rel="stylesheet" href="/gitgraph/vendor/refs.css">
+		<link rel="stylesheet" href="/gitgraph/vendor/toolbar.css">
+		<link rel="stylesheet" href="/gitgraph/vendor/settings.css">
+		<link rel="stylesheet" href="/gitgraph/vendor/dialogs.css">
+		<link rel="stylesheet" href="/gitgraph/vendor/dropdown.css">
 		<style>
-			/*
-				The twelve graph colours, in the order lanes are given them. They are the same dozen
-				server/git/gitgraph/config.ts hands the page, repeated here because the graph paints before
-				any script has run and a lane with no colour is a lane that is not drawn at all.
-			*/
 			body {
+				--git-graph-font-size: 13px;
+				--git-graph-row-height: 24px;
+				--ngg-reveal-highlight: oklch(90% 0.25 150 / 0.42);
 				--git-graph-color0: #58a6ff;
 				--git-graph-color1: #f778ba;
 				--git-graph-color2: #3fb950;
@@ -84,126 +61,37 @@
 			[data-color="9"] { --git-graph-color: var(--git-graph-color9); }
 			[data-color="10"] { --git-graph-color: var(--git-graph-color10); }
 			[data-color="11"] { --git-graph-color: var(--git-graph-color11); }
-
-			/* The little page chrome this view owns, as opposed to the bundle's own stylesheet. */
 			html, body { height: 100%; margin: 0; }
-			body {
-				background: var(--vscode-editor-background);
-				color: var(--vscode-editor-foreground);
-				font-family: var(--vscode-font-family);
-			}
-			/* There is no terminal behind this page, so the bundle's button for one stays out of the row. */
-			#terminalBtn { display: none; }
-
-			/* What a page with nothing to draw says instead: no bundle, no repository, or no session. */
-			#ggNotice {
-				position: fixed;
-				inset: 0;
-				display: flex;
-				flex-direction: column;
-				align-items: center;
-				justify-content: center;
-				gap: 0.6em;
-				padding: 2em;
-				text-align: center;
-			}
+			body { background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif; }
+			#ggNotice { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.6em; padding: 2em; text-align: center; }
 			#ggNotice[hidden] { display: none; }
 			#ggNoticeTitle { margin: 0; font-size: 1.2em; font-weight: 600; }
 			#ggNoticeDetail { margin: 0; max-width: 46em; color: #8b949e; line-height: 1.5; }
-
-			/* The text viewer, which stands in for the editor panel a diff used to open in. */
 			#ggViewer { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; }
 			#ggViewer[hidden] { display: none; }
 			.ggViewerBackdrop { position: absolute; inset: 0; background: rgba(1, 4, 9, 0.72); }
-			.ggViewerPanel {
-				position: relative;
-				display: flex;
-				flex-direction: column;
-				min-height: 0;
-				margin: 3vh 4vw;
-				flex: 1;
-				border: 1px solid #30363d;
-				border-radius: 6px;
-				background: #0d1117;
-				box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
-				overflow: hidden;
-			}
-			.ggViewerBar {
-				display: flex;
-				align-items: center;
-				gap: 0.8em;
-				padding: 0.5em 0.8em;
-				border-bottom: 1px solid #30363d;
-				background: #161b22;
-			}
+			.ggViewerPanel { position: relative; display: flex; flex-direction: column; min-height: 0; margin: 3vh 4vw; flex: 1; border: 1px solid #30363d; border-radius: 6px; background: #0d1117; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55); overflow: hidden; }
+			.ggViewerBar { display: flex; align-items: center; gap: 0.8em; padding: 0.5em 0.8em; border-bottom: 1px solid #30363d; background: #161b22; }
 			.ggViewerTitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 			.ggViewerFlags { color: #d29922; font-size: 0.9em; }
-			.ggViewerBar button {
-				font: inherit;
-				color: #c9d1d9;
-				background: #21262d;
-				border: 1px solid #30363d;
-				border-radius: 4px;
-				padding: 0.15em 0.7em;
-				cursor: pointer;
-			}
+			.ggViewerBar button { font: inherit; color: #c9d1d9; background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 0.15em 0.7em; cursor: pointer; }
 			.ggViewerBar button:hover { border-color: #1f6feb; }
 			.ggViewerBar button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 1px; }
 			.ggViewerBody { flex: 1; min-height: 0; overflow: auto; }
-			.ggViewerTable {
-				border-collapse: collapse;
-				font-family: var(--vscode-editor-font-family);
-				font-size: 12px;
-				line-height: 1.5;
-				width: 100%;
-			}
+			.ggViewerTable { border-collapse: collapse; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 12px; line-height: 1.5; width: 100%; }
 			.ggViewerTable td { padding: 0 0.6em; white-space: pre; vertical-align: top; }
-			.ggViewerNum {
-				width: 1%;
-				color: #484f58;
-				text-align: right;
-				user-select: none;
-				background: #010409;
-			}
+			.ggViewerNum { width: 1%; color: #484f58; text-align: right; user-select: none; background: #010409; }
 			.ggViewerLine_added { color: #3fb950; background: rgba(63, 185, 80, 0.1); }
 			.ggViewerLine_removed { color: #f85149; background: rgba(248, 81, 73, 0.1); }
 			.ggViewerLine_hunk { color: #79c0ff; }
 			.ggViewerLine_meta { color: #8b949e; }
 			.ggViewerEmpty { padding: 1.2em; color: #8b949e; }
-			/* A whole file is read on the surface the board's drawer uses, imported with its colour: a
-			   coloured <pre> under a textarea that is transparent and only carries the caret and the
-			   selection. The token classes are the board's own five. */
 			.ggViewerText { display: flex; height: 100%; min-height: 0; }
 			.tp { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: #0d1117; }
-			/* A textarea is a replaced element, so `inset` alone leaves it at its own rows and columns. Both
-			   layers take the whole box, and every metric that moves a glyph is stated once for the two of them,
-			   because the colour and the caret have to land on the same cells. */
-			.tp > .tp-code, .tp > .tp-input {
-				position: absolute;
-				inset: 0;
-				box-sizing: border-box;
-				width: 100%;
-				height: 100%;
-				margin: 0;
-				border: 0;
-				padding: 0.6em 0.8em;
-				font-family: var(--vscode-editor-font-family);
-				font-size: 12px;
-				line-height: 1.5;
-				tab-size: 4;
-				white-space: pre;
-				overflow: auto;
-				scrollbar-gutter: stable;
-			}
+			.tp > .tp-code, .tp > .tp-input { position: absolute; inset: 0; box-sizing: border-box; width: 100%; height: 100%; margin: 0; border: 0; padding: 0.6em 0.8em; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 12px; line-height: 1.5; tab-size: 4; white-space: pre; overflow: auto; scrollbar-gutter: stable; }
 			.tp > .tp-code { overflow: hidden; color: #c9d1d9; pointer-events: none; }
 			.tp > .tp-code code { font: inherit; }
-			.tp > .tp-input {
-				color: transparent;
-				background: transparent;
-				resize: none;
-				outline: none;
-				-webkit-text-fill-color: transparent;
-			}
+			.tp > .tp-input { color: transparent; background: transparent; resize: none; outline: none; -webkit-text-fill-color: transparent; }
 			.tp > .tp-input[readonly] { caret-color: transparent; }
 			.tp > .tp-input::selection { background: rgba(56, 139, 253, 0.4); }
 			.tp .k { color: #ff7b72; }
@@ -214,24 +102,67 @@
 		</style>
 	</head>
 	<body>
-		<div id="view" tabindex="-1">
-			<div id="controls">
-				<span id="repoControl"><span class="unselectable">Repo: </span><div id="repoDropdown" class="dropdown"></div></span>
-				<span id="branchControl"><span class="unselectable">Branches: </span><div id="branchDropdown" class="dropdown"></div></span>
-				<label id="showRemoteBranchesControl"><input type="checkbox" id="showRemoteBranchesCheckbox" tabindex="-1"><span class="customCheckbox"></span>Show Remote Branches</label>
-				<div id="findBtn" title="Find"></div>
-				<div id="terminalBtn" title="Open a Terminal for this Repository"></div>
-				<div id="settingsBtn" title="Repository Settings"></div>
-				<div id="fetchBtn"></div>
-				<div id="refreshBtn"></div>
-			</div>
-			<div id="content">
-				<div id="commitGraph"></div>
-				<div id="commitTable"></div>
-			</div>
-			<div id="footer"></div>
+		<div id="topBar" hidden>
+			<section id="statusStrip" class="statusStrip" role="status" aria-label="Git Graph status" aria-live="polite" aria-atomic="true" aria-busy="false" data-state="ready" data-engine="off">
+				<span id="statusSummary" class="statusSummary" tabindex="0">
+					<span id="statusIndicator" class="statusIndicator" aria-hidden="true"></span>
+					<span id="statusText">Ready</span>
+					<span id="statusEngineNote" class="statusEngineNote"></span>
+					<span id="statusEngineOffNote" class="statusEngineNote"></span>
+				</span>
+				<span id="statusVersion" class="statusVersion" title="Version"><span id="gitVersion"></span></span>
+			</section>
+			<div id="stashListSlot"></div>
+			<header id="controls" class="gitGraphToolbar" role="toolbar" aria-label="Git Graph controls">
+				<span id="repoControl" class="toolbarGroup" title="Repo">
+					<span class="toolbarLabel unselectable">Repo</span>
+					<div id="repoSelect" class="dropdown"></div>
+				</span>
+				<span id="branchControl" class="toolbarGroup" title="Branches">
+					<span class="toolbarLabel unselectable">Branches</span>
+					<div id="branchSelect" class="dropdown"></div>
+				</span>
+				<span id="authorControl" class="toolbarGroup" title="Authors">
+					<span class="toolbarLabel unselectable">Authors</span>
+					<div id="authorSelect" class="dropdown"></div>
+				</span>
+				<span id="tagControl" class="toolbarGroup" title="Tags">
+					<span class="toolbarLabel unselectable">Tags</span>
+					<div id="tagSelect" class="dropdown"></div>
+				</span>
+				<label id="showRemoteBranchesControl" class="toolbarCheckbox">
+					<input type="checkbox" id="showRemoteBranchesCheckbox" value="1" checked>
+					<span>Show Remote Branches</span>
+				</label>
+				<span id="findControl" class="toolbarFind" hidden>
+					<input id="findInput" class="toolbarFindInput" type="search" aria-label="Find Commits" placeholder="Find commits" autocomplete="off" spellcheck="false">
+					<span id="findMatchCount" class="toolbarFindCount" aria-live="polite"></span>
+					<button id="findSearchHistoryBtn" class="toolbarIconButton" type="button" title="Search History" aria-label="Search History"><span class="toolbarIcon" aria-hidden="true">↺</span></button>
+					<button id="findPreviousBtn" class="toolbarIconButton" type="button" title="Find Previous" aria-label="Find Previous"><span class="toolbarIcon" aria-hidden="true">↑</span></button>
+					<button id="findNextBtn" class="toolbarIconButton" type="button" title="Find Next" aria-label="Find Next"><span class="toolbarIcon" aria-hidden="true">↓</span></button>
+					<button id="findClearBtn" class="toolbarIconButton" type="button" title="Clear" aria-label="Clear"><span class="toolbarIcon" aria-hidden="true">✕</span></button>
+				</span>
+				<span class="toolbarActions">
+					<button id="findBtn" class="toolbarIconButton" type="button" title="Find Commits" aria-label="Find Commits"><span class="toolbarIcon" aria-hidden="true">⌕</span></button>
+					<button id="blinkHeadBtn" class="toolbarIconButton" type="button" title="Locate Head" aria-label="Locate Head"><span class="toolbarIcon" aria-hidden="true">⌖</span></button>
+					<button id="fetchBtn" class="toolbarIconButton" type="button" title="Fetch" aria-label="Fetch" hidden><span class="toolbarIcon" aria-hidden="true">↓</span></button>
+					<button id="pushTagsBtn" class="toolbarIconButton" type="button" title="Push All Tags" aria-label="Push All Tags" hidden><span class="toolbarIcon" aria-hidden="true">↑</span></button>
+					<button id="worktreesBtn" class="toolbarIconButton" type="button" title="Worktrees" aria-label="Worktrees" hidden><span class="toolbarIcon" aria-hidden="true">⎇</span></button>
+					<button id="settingsBtn" class="toolbarIconButton" type="button" title="Settings" aria-label="Settings"><span class="toolbarIcon" aria-hidden="true">⚙</span></button>
+					<button id="refreshBtn" class="toolbarIconButton" type="button" title="Refresh" aria-label="Refresh"><span class="toolbarIcon" aria-hidden="true">⟳</span></button>
+				</span>
+			</header>
 		</div>
-		<div id="scrollShadow"></div>
+		<div id="settingsWidgetBacking" hidden></div>
+		<aside id="settingsWidget" role="dialog" aria-modal="true" tabindex="-1" aria-label="Settings" hidden></aside>
+		<div id="content" hidden>
+			<div id="commitGraph"></div>
+			<div id="commitTable"></div>
+		</div>
+		<div id="footer"></div>
+		<ul id="contextMenu" role="menu"></ul>
+		<div id="dialogBacking"></div>
+		<div id="dialog"></div>
 
 		<div id="ggViewer" hidden>
 			<div class="ggViewerBackdrop"></div>

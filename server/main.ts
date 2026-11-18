@@ -385,7 +385,7 @@ export const server = createServer((req, res) => {
 				onGitPage(res);
 				return;
 			}
-			const vendor = /^\/gitgraph\/vendor\/(out\.min\.(?:js|css))$/.exec(url.pathname);
+			const vendor = /^\/gitgraph\/vendor\/([a-z0-9._-]+)$/.exec(url.pathname);
 			if (vendor) {
 				onGitVendor(res, vendor[1]);
 				return;

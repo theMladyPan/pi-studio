@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - feat: Press x to roll a terminal drawer up from the bottom of the board: a real shell in the workspace folder, kept alive between rolls, so a few commands can be typed without leaving the board. [t-b31cfa8d]
+- feat: Draw the git drawer with Git Graph Libre instead of the older Git Graph webview, so the rolled-down graph uses the rounded lanes, repo/branches/authors/tags filters and commit details you asked for. The drawing is borrowed from the copy already installed in your VS Code and never shipped from here, and the daemon keeps working when it is missing. [t-72278b19]
 
 ## [0.2.6] - 2026-11-18
 
