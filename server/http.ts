@@ -95,8 +95,12 @@ function encodeWebSocketFrame(opcode, payload = Buffer.alloc(0)) {
  * Upgrade one authenticated request to a WebSocket. The returned object keeps the small write shape
  * the board's broadcast helper already knows, so a board tab and a welcome tab differ only in which
  * client set they join.
+ *
+ * `onMessage`, when given, is what the browser's own frames are handed to: the terminal socket
+ * needs the keys the human types. Without it a client frame ends the socket, because the live
+ * streams are one-way and a stray frame is a mistake to close over.
  */
-export function upgradeWebSocket(req, socket, head) {
+export function upgradeWebSocket(req, socket, head, onMessage) {
 	const key = req.headers["sec-websocket-key"];
 	const upgrade = String(req.headers.upgrade || "").toLowerCase();
 	const connection = String(req.headers.connection || "")
@@ -221,8 +225,13 @@ export function upgradeWebSocket(req, socket, head) {
 			if (opcode === 0xa) continue;
 			// Application messages are not used in this direction: the browser only receives live
 			// frames, so the server only needs control frames and close codes from it. Continuation
-			// frames without a message and stray text frames are simply not accepted.
+			// frames without a message are not accepted either way. A stray text or binary frame
+			// ends a one-way socket, and is handed to the terminal's own handler where one is.
 			if (opcode === 0 || opcode === 0x1 || opcode === 0x2) {
+				if ((opcode === 0x1 || opcode === 0x2) && typeof onMessage === "function") {
+					onMessage(payload);
+					continue;
+				}
 				socket.destroy();
 				return;
 			}

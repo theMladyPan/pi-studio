@@ -1224,6 +1224,36 @@
      paints no scrim at all. */
   #gitScrim[hidden] { display: none; }
 
+  /* The terminal drawer: a panel that rolls up from the bottom of the board with `x`, the git
+     drawer's mirror image. It slides by `transform` and hides with `visibility` for the same
+     reason — the screen inside keeps its size and its scrollback, and rolling it down never
+     reloads it. The shell keeps running on the daemon while it is shut. z-index matches the git
+     drawer's 1500, so the two never stack wrongly, and the pickers above them still show. */
+  #termDrawer {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 45vh; min-height: 220px; z-index: 1500;
+    display: flex; flex-direction: column; background: var(--bg);
+    border-top: 1px solid var(--border-bright); box-shadow: 0 -18px 48px rgba(0,0,0,.6);
+    transform: translateY(100%); visibility: hidden;
+    transition: transform 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms;
+  }
+  body.term-open #termDrawer { transform: none; visibility: visible;
+    transition: transform 170ms cubic-bezier(.2,.9,.25,1); }
+  /* The bar is the header's row continued, the same mono and the same buttons as the git bar. */
+  #termDrawer .td-bar { display: flex; align-items: center; gap: 8px; padding: 6px 14px;
+    border-bottom: 1px solid var(--border); }
+  #termDrawer .td-title { font: 12px var(--mono); color: var(--muted); }
+  #termDrawer .td-workspace { font: 11px var(--mono); color: var(--text); min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #termDrawer .td-status { font: 11px var(--mono); color: var(--muted); min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #termDrawer .td-bar .grow { flex: 1; }
+  #termDrawer button { font: 12px var(--mono); color: var(--muted); background: #161b22;
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+  #termDrawer button:hover { color: var(--text); border-color: var(--border-bright); }
+  #termHost { flex: 1; min-height: 0; padding: 6px 10px; background: #0d1117; }
+  #termHost .xterm { height: 100%; }
+  #termDrawer .td-note { margin: 0; padding: 18px; color: var(--muted); font: 12px var(--mono); }
+
   /* ---------- the files drawer: VS Code's Explorer ---------- */
   /* The two fonts the Explorer draws with are the ones VS Code installs beside the theme these colours
      come from; their notices sit under /explorer/. */
@@ -1418,6 +1448,7 @@
   <button id="activityBtn" type="button" aria-controls="drawerActivity" aria-expanded="false" title="show the activity drawer (a)">activity</button>
   <button id="cardsBtn" type="button" aria-controls="drawerCards" aria-expanded="false" title="show the cards drawer (c)">cards</button>
   <button id="gitBtn" type="button" aria-expanded="false" aria-controls="gitDrawer" title="roll the git graph down (g)">git</button>
+  <button id="termBtn" type="button" aria-expanded="false" aria-controls="termDrawer" title="roll the terminal drawer up from the bottom (x)">terminal</button>
   <button id="keysBtn" title="every keyboard shortcut" aria-haspopup="dialog" aria-expanded="false">keys</button>
   <button id="configBtn" title="this board's settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
 </header>
@@ -1688,6 +1719,24 @@
   <div class="gd-body"><iframe id="gdFrame" title="git graph"></iframe></div>
 </section>
 
+<!-- The terminal drawer: a real shell in a panel that rolls up from the bottom with `x`. The
+     screen and the socket are made once by the module in /client/terminal-drawer.js and kept, so
+     rolling it down never loses the shell, its prompt or its scrollback. The terminal library is
+     vendored beside the client modules, so the daemon still needs no downloads. -->
+<section id="termDrawer" aria-label="terminal" inert>
+  <div class="td-bar">
+    <span class="td-title">terminal</span>
+    <span class="td-workspace" id="tdWorkspace"></span>
+    <span class="grow"></span>
+    <span class="td-status" id="tdStatus" role="status"></span>
+    <button id="tdClose" type="button" title="roll the terminal drawer down (x)">roll down (x)</button>
+  </div>
+  <div id="termHost"></div>
+</section>
+
+<link rel="stylesheet" href="/client/vendor/xterm.css">
+<script src="/client/vendor/xterm.js"></script>
+<script src="/client/vendor/addon-fit.js"></script>
 <script type="module" src="/client/board.js"></script>
 </body>
 </html>

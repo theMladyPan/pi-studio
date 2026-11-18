@@ -11,6 +11,7 @@ import { retireWorktree } from "./worktrees/retire.ts";
 import { stopStream, liveTurn } from "./child/run.ts";
 import { INSTANCE } from "./paths.ts";
 import { stopShells } from "./command-shell.ts";
+import { stopTerminal } from "./terminal.ts";
 import { MODEL } from "./models.ts";
 import { activeConfig } from "./workspaces.ts";
 import { scheduleSave } from "./store.ts";
@@ -330,6 +331,9 @@ export function clearBoard(board) {
 	// A `!` command running in this board's folder is part of what is being thrown away: left running, it
 	// writes its output file back where the file was and its note onto the board nobody is looking at.
 	stopShells(board.id);
+	// The board's terminal is part of what is being thrown away for the same reason: a shell left
+	// running writes into the folder that was just emptied.
+	stopTerminal(board.id);
 	for (const thread of [...board.threads.values()]) {
 		board.children.get(thread.id)?.kill("SIGKILL");
 		board.children.delete(thread.id);
