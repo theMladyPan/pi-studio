@@ -83,6 +83,39 @@ test("a tab that attaches to a running shell hears its scrollback", async (t) =>
 });
 
 /** One daemon on its own state folder, started the way a human starts it. */
+test("an emptied board's shell ends, and the old handle cannot revive it", async (t) => {
+	if (!helperHere()) return t.skip("no `script` helper on this machine");
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-terminal-"));
+	const workspaceId = `terminal-test-clear-${Date.now()}`;
+	const seen: TerminalEvent[] = [];
+	const handle = attachTerminal(workspaceId, folder, (event) => seen.push(event));
+	handle.resize({ cols: 80, rows: 24 });
+	// The board is emptied while the tab is still attached: the shell ends and the tab hears it.
+	stopTerminal(workspaceId);
+	assert.ok(seen.some((event) => event.type === "exit"), "the attached tab hears the shell end");
+	// And the next keystroke starts nothing: a new shell would have answered.
+	handle.write("echo resurrected\n");
+	handle.resize({ cols: 80, rows: 24 });
+	await new Promise((done) => setTimeout(done, 400));
+	const text = seen.filter((event) => event.type === "output").map((event) => (event as { data: string }).data).join("");
+	assert.doesNotMatch(text, /resurrected/, "the emptied board's shell stayed dead");
+	handle.detach();
+});
+
+test("a thread may not open the terminal socket", async () => {
+	// `threadRefusal` is the same one-line guard the `/terminal` upgrade runs, and the route
+	// test above already proves the human reaches it; this proves the thread does not.
+	const { threadRefusal } = (await import("../server/main.ts")) as {
+		threadRefusal: (caller: unknown, method: string, pathname: string, workspace: string) => string | null;
+	};
+	const child = { human: false, board: { id: "board-a" }, thread: { parentThread: "master" } };
+	assert.equal(threadRefusal(child, "GET", "/terminal", "board-a"), "a spawned child has no board tools");
+	const master = { human: false, board: { id: "board-a" }, thread: { parentThread: null } };
+	assert.equal(threadRefusal(master, "GET", "/terminal", "board-a"), "a thread may not use that");
+	assert.equal(threadRefusal({ human: true }, "GET", "/terminal", "board-a"), null);
+});
+
+/** One daemon on its own state folder, started the way a human starts it. */
 async function boot(folder: string) {
 	const child = spawn(process.execPath, [join(repo, "server.ts"), "--no-open"], {
 		cwd: repo,

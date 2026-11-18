@@ -309,7 +309,12 @@ function startTerminalStream(req, socket, head) {
 		if (message?.type === "resize") attach().resize(terminalSize(message));
 		else if (message?.type === "input" && typeof message.data === "string") attach().write(message.data);
 	});
-	if (!client || client.writableEnded || client.destroyed) return;
+	if (!client || client.writableEnded || client.destroyed) {
+		// A message that arrived in the upgrade head may have attached a listener before this
+		// return; a dead tab must not stay attached to the shell.
+		handle?.detach();
+		return;
+	}
 	const keepAlive = setInterval(() => client.ping(), 20_000);
 	if (typeof keepAlive.unref === "function") keepAlive.unref();
 	// A closed tab detaches from the shell; the shell itself outlives it, as a terminal left
@@ -940,5 +945,14 @@ export function start() {
 		console.error(`pi-studio: ${error.message}`);
 		process.exit(1);
 	}
+	// A stopped daemon must not leave its shells behind: they are spawned detached, so a
+	// plain exit would orphan them. Stop them and go: the boards' own shutdown flushes
+	// nothing on a signal today, and the tests kill their daemons the same way.
+	const stopTerminals = () => {
+		stopAllTerminals();
+		process.exit(0);
+	};
+	process.on("SIGTERM", stopTerminals);
+	process.on("SIGINT", stopTerminals);
 	startListening(Number(process.env.PI_STUDIO_PORT) || lastPort(), host);
 }

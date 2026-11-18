@@ -165,12 +165,24 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
    * Inside the terminal the letter belongs to the shell (`typingSomewhere` says so), and it
    * listens on the way down so the board's own `x`, which opens the drawer, never sees the press
    * that rolled it down.
+   *
+   * Escape is the opposite way round: the terminal screen swallows every key in its helper
+   * textarea on capture, so a press inside the shell would never reach the board's escape
+   * handler and the drawer could not be rolled down from the keyboard while typing. It is taken
+   * here instead, before the screen sees it, which means Escape always rolls the drawer down
+   * and never reaches the shell — the bar and the `x` key stay the ways back in, and a shell
+   * that needed the escape key works with it rolled down.
    */
   window.addEventListener(
     "keydown",
     (event) => {
-      if (event.key !== "x" || event.metaKey || event.ctrlKey || event.altKey) return;
-      if (!shown || typingSomewhere()) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (!shown) return;
+      if (event.key === "x") {
+        if (typingSomewhere()) return;
+      } else if (event.key === "Escape") {
+        if (!typingSomewhere()) return;
+      } else return;
       event.preventDefault();
       event.stopPropagation();
       close();

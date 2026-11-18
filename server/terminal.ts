@@ -122,8 +122,11 @@ export type TerminalHandle = {
 export function attachTerminal(workspaceId: string, folder: string, listener: Listener): TerminalHandle {
 	let session = sessions.get(workspaceId);
 	if (session?.dead) session = undefined;
+	// A session this handle already saw end — the shell exited, or the board was emptied —
+	// never revives under it. The next roll up is a new socket, and that one starts fresh.
+	const refused = () => Boolean(session && session.dead);
 	const ensure = (size: TerminalSize): Session => {
-		if (!session || session.dead) {
+		if (!session) {
 			session = spawnSession(folder, size);
 			sessions.set(workspaceId, session);
 		}
@@ -139,12 +142,12 @@ export function attachTerminal(workspaceId: string, folder: string, listener: Li
 	let detached = false;
 	return {
 		write: (data) => {
-			if (detached || !data) return;
+			if (detached || refused() || !data) return;
 			const held = ensure(DEFAULT_SIZE);
 			held.child.stdin?.write(data);
 		},
 		resize: (size) => {
-			if (detached) return;
+			if (detached || refused()) return;
 			const wanted = terminalSize(size);
 			// Before the shell exists the size is its birth size. After it, the pty keeps the size
 			// it was born with — `script` takes no other — so this only records the want.
@@ -163,6 +166,9 @@ export function stopTerminal(workspaceId: string): void {
 	if (!session) return;
 	sessions.delete(workspaceId);
 	session.dead = true;
+	// The tabs still attached hear the shell end, so a drawer left open over an emptied board
+	// says so instead of sitting on a prompt that is never coming.
+	for (const listener of session.listeners) listener({ type: "exit", code: null });
 	session.listeners.clear();
 	killGroup(session.child);
 }
