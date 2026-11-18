@@ -124,7 +124,7 @@ test("being told the name keeps the members the board drives", async () => {
 test("closing does not give the keyboard to a hidden toolbox button", async () => {
 	standInPage();
 	const drawer = await drawerFor("b08b6688eaf9");
-	const doc = (globalThis as { document: { body: FakeElement; activeElement: unknown; getElementById: (id: string) => FakeElement | null } }).document;
+	const doc = (globalThis as unknown as { document: { body: FakeElement; activeElement: unknown; getElementById: (id: string) => FakeElement | null } }).document;
 	const btn = doc.getElementById("gitBtn")!;
 	doc.activeElement = doc.body;
 	doc.body.offsetParent = null;
