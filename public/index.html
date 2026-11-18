@@ -1129,6 +1129,20 @@
   .card.dim { opacity: .7; }
   /* The second press of a press that acts is the confirmation, so the button says so. */
   header button.armed, .sheet .sheet-btn.armed { color: #f85149; border-color: rgba(248, 81, 73, .5); }
+  header button[aria-expanded="true"] { color: var(--text); border-color: var(--border-bright); background: #1c222b; }
+  header button.has-open { color: var(--text); border-color: var(--border-bright); }
+  /* The header menus: one column, the board's own colours, and the key a item answers on its right. */
+  .header-menu { position: fixed; z-index: 2050; min-width: 170px; padding: 4px;
+    background: #0d1420; border: 1px solid var(--border-bright); border-radius: 8px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, .55); display: flex; flex-direction: column; gap: 2px; }
+  .header-menu[hidden] { display: none; }
+  .header-menu button { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    width: 100%; text-align: left; padding: 6px 10px; border: 0; border-radius: 5px;
+    background: transparent; color: var(--text); font: 12px var(--mono); cursor: pointer; }
+  .header-menu button:hover, .header-menu button:focus-visible { background: #1a2230; outline: none; }
+  .header-menu .hm-key { color: var(--muted); font-size: 11px; }
+  .header-menu button.armed { color: #f85149; background: rgba(248, 81, 73, .12); }
+  .header-menu button[aria-expanded="true"] { color: var(--accent); }
   /* A sheet that has already said what goes with the press: its yes is red all the time, because the
      question was the sheet and the press is the answer. */
   .sheet .sheet-btn.danger { color: #f85149; border-color: rgba(248, 81, 73, .45); }
@@ -1204,22 +1218,18 @@
   #boardConfig .cfg-kids { display: flex; flex-direction: column; margin-left: 10px; padding-left: 6px;
     border-left: 1px solid #1b2029; }
   #boardConfig .cfg-failure { margin: 6px 8px; color: #f85149; font: 11px/1.5 var(--mono); }
-  /* Every key the board listens for, in the frame the settings wear and hanging in the same corner:
-     taller than a screen it scrolls, because a map missing its last line reads as a map with no such key. */
-  #shortcutPanel { position: fixed; z-index: 2000; top: 46px; right: 12px; display: flex; flex-direction: column;
-    width: 430px; max-width: calc(100vw - 24px); max-height: calc(100vh - 70px); overflow-y: auto; padding: 10px 10px 12px;
-    background: #0d1117; border: 1px solid var(--border-bright); border-radius: 10px;
-    box-shadow: 0 12px 32px rgba(1, 4, 9, .55); }
-  #shortcutPanel[hidden] { display: none; }
-  #shortcutPanel .cfg-head { margin: 0; padding: 8px 8px 5px; color: var(--muted); font: 10.5px var(--mono);
-    text-transform: uppercase; letter-spacing: .8px; border-top: 1px solid #1b2029; }
-  #shortcutPanel .cfg-head:first-child { border-top: 0; padding-top: 2px; }
-  /* Keys left, what they do right: the keys are one short word and never wrap, so the sentence gets
-     the rest of the line and the rows line up down the panel. */
-  #shortcutPanel .cfg-row { display: flex; gap: 12px; align-items: baseline; padding: 3px 8px; }
-  #shortcutPanel .cfg-row b { flex: none; min-width: 104px; color: var(--accent); font: 12px var(--mono);
-    font-weight: 500; }
-  #shortcutPanel .cfg-row span { color: #c9d1d9; font: 11.5px/1.45 var(--mono); }
+  /* Every key the board listens for, folded inside the settings: one line per group, keys left and
+     what they do right, so the map on screen is never a rule the code has forgotten. */
+  #boardConfig #shortcutList .cfg-row { justify-content: flex-start; cursor: default; padding: 3px 8px; }
+  #boardConfig #shortcutList .cfg-row:hover { background: transparent; }
+  #boardConfig #shortcutList .cfg-row b { flex: none; min-width: 104px; font-size: 12px; }
+  #boardConfig #shortcutList .cfg-row span { color: #c9d1d9; white-space: normal; }
+  #cfgLocal { display: flex; flex-direction: column; }
+  #boardConfig .cfg-check { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; border-radius: 6px;
+    color: var(--text); font: 12px var(--mono); cursor: pointer; }
+  #boardConfig .cfg-check:hover { background: #161b22; }
+  #boardConfig .cfg-check input { accent-color: var(--accent); cursor: pointer; }
+  #boardConfig .cfg-check .cfg-sub { margin-left: auto; }
   /* The prompt files are plain markdown, so the editor is a list and a textarea: what is saved is what
      the daemon reads on the next thread that starts. */
   #promptEditor { position: fixed; z-index: 2100; top: 46px; right: 374px; display: flex;
@@ -1488,7 +1498,7 @@
 </head>
 <body>
 <header>
-  <span class="brand" title="every keyboard shortcut is listed under the keys button">pi</span>
+  <span class="brand" title="every keyboard shortcut is listed under settings">pi</span>
   <button class="sess" id="sess" type="button" title="switch workspace"></button>
   <!-- Polite, so the state is spoken when it changes; the elapsed clock is decoration that ticks
        every second and is hidden, so it is never read out. -->
@@ -1499,24 +1509,34 @@
   <button class="stat" id="statCtx" title="compact the context, the same as /compact" hidden><span id="statCtxValue"></span><span class="act" aria-hidden="true">compact</span></button>
   <button id="newPill" style="display:none">0 new</button>
   <button id="threadOrder"></button>
-  <button id="stack" title="cascade every thread again under its root">stack</button>
-  <button id="tidy">tidy</button>
-  <button id="fit">fit all</button>
+  <button id="viewBtn" type="button" aria-haspopup="menu" aria-expanded="false" title="layout and zoom">view</button>
   <button id="reset">100%</button>
-  <button id="mapBtn" aria-pressed="true" title="hide the board overview (m)">map</button>
-  <button id="cleanBtn" title="forget dead threads and their logs">clean</button>
-  <button id="leftBtn" title="folders and branches the board left behind, cleared one at a time">leftovers</button>
-  <button id="newBtn" title="start over in this workspace: same folder, same settings, empty board">new</button>
-  <!-- The three left drawers. One is open at a time, and each door names the key that opens it. -->
-  <button id="filesBtn" type="button" aria-controls="drawerFiles" aria-expanded="false" title="show the files drawer (f)">files</button>
+  <button id="housekeepingBtn" type="button" aria-haspopup="menu" aria-expanded="false" title="workspace housekeeping">housekeeping</button>
+  <button id="toolboxBtn" type="button" aria-haspopup="menu" aria-expanded="false" title="files, source control, git graph, and terminal">toolbox</button>
+  <!-- The two drawers that stay in the header. One drawer is open at a time, and each door names the key that opens it. -->
   <button id="activityBtn" type="button" aria-controls="drawerActivity" aria-expanded="false" title="show the activity drawer (a)">activity</button>
   <button id="cardsBtn" type="button" aria-controls="drawerCards" aria-expanded="false" title="show the cards drawer (c)">cards</button>
-  <button id="sourceBtn" type="button" aria-controls="drawerSource" aria-expanded="false" title="show the source control drawer (d)">source</button>
-  <button id="gitBtn" type="button" aria-expanded="false" aria-controls="gitDrawer" title="roll the git graph down (g)">git</button>
-  <button id="termBtn" type="button" aria-expanded="false" aria-controls="termDrawer" title="roll the terminal drawer up from the bottom (x)">terminal</button>
-  <button id="keysBtn" title="every keyboard shortcut" aria-haspopup="dialog" aria-expanded="false">keys</button>
   <button id="configBtn" title="this board's settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
 </header>
+
+<!-- The header's menus live outside the header, whose overflow would clip them. One is open at a
+     time, and each item keeps the id and title of the header button it replaces. -->
+<div class="header-menu" id="viewMenu" hidden role="menu" aria-label="view">
+  <button id="stack" type="button" role="menuitem" title="cascade every thread again under its root"><span>stack</span></button>
+  <button id="tidy" type="button" role="menuitem"><span>tidy</span></button>
+  <button id="fit" type="button" role="menuitem"><span>fit all</span><span class="hm-key">shift+f</span></button>
+</div>
+<div class="header-menu" id="housekeepingMenu" hidden role="menu" aria-label="housekeeping">
+  <button id="newBtn" type="button" role="menuitem" title="start over in this workspace: same folder, same settings, empty board">new</button>
+  <button id="cleanBtn" type="button" role="menuitem" title="forget dead threads and their logs">clean</button>
+  <button id="leftBtn" type="button" role="menuitem" title="folders and branches the board left behind, cleared one at a time">leftovers</button>
+</div>
+<div class="header-menu" id="toolboxMenu" hidden role="menu" aria-label="toolbox">
+  <button id="filesBtn" type="button" role="menuitem" aria-controls="drawerFiles" aria-expanded="false" title="show the files drawer (f)"><span>files</span><span class="hm-key">f</span></button>
+  <button id="sourceBtn" type="button" role="menuitem" aria-controls="drawerSource" aria-expanded="false" title="show the source control drawer (d)"><span>source control</span><span class="hm-key">d</span></button>
+  <button id="gitBtn" type="button" role="menuitem" aria-expanded="false" aria-controls="gitDrawer" title="roll the git graph down (g)"><span>git graph</span><span class="hm-key">g</span></button>
+  <button id="termBtn" type="button" role="menuitem" aria-expanded="false" aria-controls="termDrawer" title="roll the terminal drawer up from the bottom (x)"><span>terminal</span><span class="hm-key">x</span></button>
+</div>
 
 <!-- The board's own numbers, the way a console keeps them along its bottom edge: what answers, what
      it has cost, how much of a context is in play, and how many threads are running. -->
@@ -1535,12 +1555,16 @@
      in the whole app. -->
 <div id="boardConfig" hidden role="dialog" aria-label="this board's settings">
   <div id="cfgTree"></div>
-</div>
-
-<!-- Every key the board listens for, drawn from the one list in the client: a heading per group and a
-     row of keys beside what they do, so the map on screen is never a rule the code has forgotten. -->
-<div id="shortcutPanel" hidden role="dialog" aria-label="every keyboard shortcut">
-  <div id="shortcutList"></div>
+  <!-- The board's own display choice and the map of every key live here, outside the tree the
+       daemon serves, so a re-render of the tree never wipes them. -->
+  <div id="cfgLocal">
+    <p class="cfg-head">board view</p>
+    <label class="cfg-check" for="mapToggle"><input type="checkbox" id="mapToggle" checked> <span>overview map</span><span class="cfg-sub">show the small overview map (m)</span></label>
+    <details class="cfg-group" id="cfgShortcuts">
+      <summary><span>hotkeys</span><span class="cfg-preview">all keyboard shortcuts</span></summary>
+      <div class="cfg-kids" id="shortcutList"></div>
+    </details>
+  </div>
 </div>
 
 <div id="promptEditor" hidden role="dialog" aria-label="prompt files">
