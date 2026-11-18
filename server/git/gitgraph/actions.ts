@@ -308,3 +308,296 @@ export function runAction(repo: string, request: GitGraphRequest, entry?: RepoEn
 	running.set(repo, job);
 	return job;
 }
+
+// ---------- Git Graph Libre actions ----------
+
+import type { LibreRequest } from "./libre.ts";
+import { isRefName, isRemoteName, isRemoteUrl, repoPath } from "./validate.ts";
+
+function str(fields: Record<string, unknown>, key: string): string {
+	const v = fields[key];
+	return typeof v === "string" ? v : "";
+}
+function bool(fields: Record<string, unknown>, key: string): boolean {
+	return fields[key] === true;
+}
+function libreMoves(command: string, fields: Record<string, unknown>): boolean {
+	switch (command) {
+		case "checkoutBranch": case "checkoutAndFastForward": case "checkoutCommit": case "mergeBranch": case "mergeCommit":
+		case "rebaseCurrentBranch": case "cherrypickCommit": case "revertCommit": case "resetToCommit": case "resetUncommittedChanges":
+		case "resetFileToRevision": case "pushStash": case "applyStash": case "popStash": case "dropStash": case "branchFromStash":
+		case "cleanUntrackedFiles": case "pullBranch": case "updateBranchFromUpstream": case "undoLastCommit": case "editHeadCommitMessage":
+		case "squashCommitSelection": case "dropCommit": case "dropCommitSelection": case "stageFiles": case "unstageFiles":
+			return true;
+		case "createBranch": return bool(fields, "checkout");
+		case "removeWorktree": case "moveWorktree": case "repairWorktree":
+			return true;
+		default: return false;
+	}
+}
+const libreRunning = new Map<string, Promise<string | null>>();
+async function libreGitWrite(repo: string, args: readonly string[], kind: "read" | "write" | "network" = "write"): Promise<string | null> {
+	const result = await runGit(repo, args, { kind });
+	if (result.ok) return null;
+	if (result.timedOut) return "git did not answer in time";
+	if (result.truncated) return "git printed more than this view will read";
+	return result.stderr || `git could not run: git ${args[0] ?? ""}`;
+}
+
+/**
+ * One Git Graph Libre command that writes to a repository, as the sentence git
+ * gave for whatever failed, or `null` when it worked. Same guards as
+ * `runAction`: a live tree refuses moves, one mutation at a time per repo,
+ * interactive rebase refused, merge drop refused.
+ */
+export function runLibreAction(repo: string, request: LibreRequest, entry?: RepoEntry): Promise<string | null> {
+	const fields = request as Record<string, unknown>;
+	const command = request.command;
+	if (entry?.live && libreMoves(command, fields)) {
+		return Promise.resolve(entry.label ? `${LIVE_REFUSAL}: ${entry.label}` : LIVE_REFUSAL);
+	}
+	if (libreRunning.has(repo)) return Promise.resolve(BUSY_REFUSAL);
+	const job = librePerform(repo, command, fields).finally(() => libreRunning.delete(repo));
+	libreRunning.set(repo, job);
+	return job;
+}
+
+async function librePerform(repo: string, command: string, f: Record<string, unknown>): Promise<string | null> {
+	const addTag = async (): Promise<string | null> => {
+		const tagName = str(f, "tagName");
+		const commitHash = str(f, "commitHash");
+		const lightweight = f.lightweight === true;
+		const message = str(f, "message");
+		if (!isRefName(tagName) || !commitHash) return "tag name or commit is missing";
+		const args = lightweight ? ["tag", "--end-of-options", tagName, commitHash] : ["tag", "-a", "-m", message, "--end-of-options", tagName, commitHash];
+		return libreGitWrite(repo, args);
+	};
+	switch (command) {
+		case "addTag": return addTag();
+		case "createBranch": {
+			const made = await libreGitWrite(repo, ["branch", "--end-of-options", str(f, "branchName"), str(f, "commitHash")]);
+			if (made !== null) return made;
+			if (bool(f, "checkout")) return libreGitWrite(repo, ["checkout", "--end-of-options", str(f, "branchName")]);
+			return null;
+		}
+		case "renameBranch": return libreGitWrite(repo, ["branch", "-m", "--end-of-options", str(f, "oldName"), str(f, "newName")]);
+		case "deleteBranch": {
+			const err = await libreGitWrite(repo, ["branch", bool(f, "forceDelete") ? "-D" : "-d", "--end-of-options", str(f, "branchName")]);
+			if (err !== null) return err;
+			const remotes = Array.isArray(f.deleteOnRemotes) ? (f.deleteOnRemotes as string[]) : [];
+			for (const r of remotes) { const e = await libreGitWrite(repo, ["push", "--delete", "--end-of-options", r, str(f, "branchName")], "network"); if (e !== null) return e; }
+			return null;
+		}
+		case "deleteTag": {
+			const err = await libreGitWrite(repo, ["tag", "-d", "--end-of-options", str(f, "tagName")]);
+			if (err !== null) return err;
+			const remotes = Array.isArray(f.deleteOnRemotes) ? (f.deleteOnRemotes as string[]) : (f.deleteOnRemote ? [String(f.deleteOnRemote)] : []);
+			for (const r of remotes) { const e = await libreGitWrite(repo, ["push", "--end-of-options", r, `:refs/tags/${str(f, "tagName")}`], "network"); if (e !== null) return e; }
+			return null;
+		}
+		case "checkoutBranch": {
+			const rb = f.remoteBranch;
+			if (typeof rb === "string" && rb) return libreGitWrite(repo, ["checkout", "-b", str(f, "branchName"), "--track", "--end-of-options", rb]);
+			return libreGitWrite(repo, ["checkout", "--end-of-options", str(f, "branchName")]);
+		}
+		case "checkoutAndFastForward": {
+			const c = await libreGitWrite(repo, ["checkout", "--end-of-options", str(f, "branchName")]);
+			if (c !== null) return c;
+			return libreGitWrite(repo, ["merge", "--ff-only", "--end-of-options", str(f, "target")]);
+		}
+		case "checkoutCommit": return libreGitWrite(repo, ["checkout", "--end-of-options", str(f, "commitHash")]);
+		case "mergeBranch": case "mergeCommit": {
+			const obj = command === "mergeBranch" ? str(f, "branchName") : str(f, "commitHash");
+			const args = ["merge"];
+			if (bool(f, "squash")) args.push("--squash");
+			else if (bool(f, "createNewCommit")) args.push("--no-ff");
+			if (bool(f, "noCommit")) args.push("--no-commit");
+			if (bool(f, "noVerify")) args.push("--no-verify");
+			args.push("--end-of-options", obj);
+			return libreGitWrite(repo, args);
+		}
+		case "rebaseCurrentBranch": {
+			if (bool(f, "interactive")) return "an interactive rebase needs a terminal this tab does not have";
+			const args = ["rebase", ...(bool(f, "ignoreDate") ? ["--ignore-date"] : []), "--end-of-options", str(f, "target")];
+			return libreGitWrite(repo, args);
+		}
+		case "cherrypickCommit": {
+			const args = ["cherry-pick"];
+			if (bool(f, "noCommit")) args.push("--no-commit");
+			const p = typeof f.parentIndex === "number" ? f.parentIndex : 0;
+			if (p > 0) args.push("-m", String(p));
+			args.push("--end-of-options", str(f, "commitHash"));
+			return libreGitWrite(repo, args);
+		}
+		case "revertCommit": {
+			const args = ["revert", "--no-edit"];
+			const p = typeof f.parentIndex === "number" ? f.parentIndex : 0;
+			if (p > 0) args.push("-m", String(p));
+			args.push("--end-of-options", str(f, "commitHash"));
+			return libreGitWrite(repo, args);
+		}
+		case "resetToCommit": {
+			const mode = typeof f.resetMode === "string" ? f.resetMode : "mixed";
+			const flag = mode === "soft" ? "--soft" : mode === "hard" ? "--hard" : "--mixed";
+			return libreGitWrite(repo, ["reset", flag, "--end-of-options", str(f, "commitHash")]);
+		}
+		case "resetUncommittedChanges": {
+			const mode = typeof f.resetMode === "string" ? f.resetMode : "mixed";
+			const flag = mode === "hard" ? "--hard" : "--mixed";
+			return libreGitWrite(repo, ["reset", flag, "--end-of-options"]);
+		}
+		case "resetFileToRevision": {
+			const p = f.filePath;
+			const checked = repoPath(p);
+			if (!checked.ok) return checked.error;
+			return libreGitWrite(repo, ["restore", `--source=${str(f, "commitHash")}`, "--staged", "--worktree", "--end-of-options", checked.value]);
+		}
+		case "dropCommit": {
+			const hash = str(f, "commitHash");
+			const parents = await runGit(repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", hash], { kind: "read" });
+			if (!parents.ok) return parents.stderr || "git could not read that commit";
+			const words = parents.stdout.toString("utf8").trim().split(/\s+/).filter(Boolean);
+			if (words.length - 1 > 1) return "a merge commit cannot be dropped: it is where two histories join";
+			return libreGitWrite(repo, ["rebase", "--onto", `${hash}^`, "--end-of-options", hash]);
+		}
+		case "dropCommitSelection": {
+			const hashes = Array.isArray(f.commitHashes) ? (f.commitHashes as string[]) : [];
+			for (const h of hashes) { const e = await librePerform(repo, "dropCommit", { commitHash: h }); if (e !== null) return e; }
+			return null;
+		}
+		case "squashCommitSelection": {
+			const hashes = Array.isArray(f.commitHashes) ? (f.commitHashes as string[]) : [];
+			if (hashes.length < 2) return "squashing needs at least two commits";
+			const message = str(f, "message") || "Squashed commits";
+			for (let i = 1; i < hashes.length; i++) {
+				const e = await libreGitWrite(repo, ["rebase", "--onto", `${hashes[i]}^`, "--end-of-options", hashes[i]]);
+				if (e !== null) return e;
+			}
+			return libreGitWrite(repo, ["reset", "--soft", `${hashes[hashes.length - 1]}^`]);
+		}
+		case "undoLastCommit": return libreGitWrite(repo, ["reset", "--soft", "HEAD^"]);
+		case "editHeadCommitMessage": {
+			const message = str(f, "message");
+			if (!message.trim()) return "message cannot be empty";
+			return libreGitWrite(repo, ["commit", "--amend", "-m", message]);
+		}
+		case "pushStash": {
+			const args = ["stash", "push", ...(bool(f, "includeUntracked") ? ["-u"] : []), ...(str(f, "message") ? ["-m", str(f, "message")] : [])];
+			return libreGitWrite(repo, args);
+		}
+		case "applyStash": return libreGitWrite(repo, ["stash", "apply", ...(bool(f, "reinstateIndex") ? ["--index"] : []), "--end-of-options", str(f, "selector")]);
+		case "popStash": return libreGitWrite(repo, ["stash", "pop", ...(bool(f, "reinstateIndex") ? ["--index"] : []), "--end-of-options", str(f, "selector")]);
+		case "dropStash": return libreGitWrite(repo, ["stash", "drop", "--end-of-options", str(f, "selector")]);
+		case "branchFromStash": return libreGitWrite(repo, ["stash", "branch", "--end-of-options", str(f, "branchName"), str(f, "selector")]);
+		case "cleanUntrackedFiles": return libreGitWrite(repo, ["clean", bool(f, "includeDirectories") ? "-fd" : "-f"]);
+		case "fetchRemotes": {
+			const r = typeof f.remote === "string" && f.remote ? f.remote : null;
+			const args = ["fetch", ...(r ? ["--end-of-options", r] : ["--all"]), ...(bool(f, "prune") ? ["--prune"] : []), ...(bool(f, "pruneTags") ? ["--prune-tags"] : [])];
+			// --end-of-options placement: if no remote, no end marker needed
+			const fixed = r ? args : ["fetch", "--all", ...(bool(f, "prune") ? ["--prune"] : []), ...(bool(f, "pruneTags") ? ["--prune-tags"] : [])];
+			return libreGitWrite(repo, fixed, "network");
+		}
+		case "fetchTags": {
+			const remotes = Array.isArray(f.remotes) ? (f.remotes as string[]) : [];
+			for (const r of remotes) { const e = await libreGitWrite(repo, ["fetch", "--tags", "--end-of-options", r], "network"); if (e !== null) return e; }
+			return null;
+		}
+		case "pruneRemote": return libreGitWrite(repo, ["remote", "prune", "--end-of-options", str(f, "name")], "network");
+		case "pushBranch": {
+			const remotes = Array.isArray(f.remotes) ? (f.remotes as string[]) : ["origin"];
+			const mode = typeof f.mode === "string" && f.mode !== "normal" ? f.mode : "";
+			for (const r of remotes) {
+				const e = await libreGitWrite(repo, ["push", ...(bool(f, "setUpstream") ? ["--set-upstream"] : []), ...(mode ? [`--${mode}`] : []), ...(bool(f, "noVerify") ? ["--no-verify"] : []), "--end-of-options", r, str(f, "branchName")], "network");
+				if (e !== null) return e;
+			}
+			return null;
+		}
+		case "pushAllTags": {
+			const remotes = Array.isArray(f.remotes) ? (f.remotes as string[]) : ["origin"];
+			const mode = typeof f.mode === "string" && f.mode !== "normal" ? f.mode : "";
+			for (const r of remotes) { const e = await libreGitWrite(repo, ["push", ...(mode ? [`--${mode}`] : []), ...(bool(f, "noVerify") ? ["--no-verify"] : []), "--end-of-options", r, "--tags"], "network"); if (e !== null) return e; }
+			return null;
+		}
+		case "pushTag": {
+			const remotes = Array.isArray(f.remotes) ? (f.remotes as string[]) : ["origin"];
+			const mode = typeof f.mode === "string" && f.mode !== "normal" ? f.mode : "";
+			for (const r of remotes) { const e = await libreGitWrite(repo, ["push", ...(mode ? [`--${mode}`] : []), ...(bool(f, "noVerify") ? ["--no-verify"] : []), "--end-of-options", r, str(f, "tagName")], "network"); if (e !== null) return e; }
+			return null;
+		}
+		case "pullBranch": {
+			const args = ["pull", ...(bool(f, "squash") ? ["--squash"] : bool(f, "createNewCommit") ? ["--no-ff"] : []), ...(bool(f, "noVerify") ? ["--no-verify"] : []), "--end-of-options", str(f, "remote"), str(f, "branchName")];
+			return libreGitWrite(repo, args, "network");
+		}
+		case "updateBranchFromUpstream": {
+			const e = await libreGitWrite(repo, ["checkout", "--end-of-options", str(f, "branchName")]);
+			if (e !== null) return e;
+			return libreGitWrite(repo, ["merge", "--ff-only", "--end-of-options", `${str(f, "branchName")}@{upstream}`]);
+		}
+		case "deleteRemoteBranch": return libreGitWrite(repo, ["push", "--delete", "--end-of-options", str(f, "remote"), str(f, "branchName")], "network");
+		case "fetchIntoLocalBranch": {
+			const args = ["fetch", ...(bool(f, "force") ? ["--force"] : []), "--end-of-options", str(f, "remote"), str(f, "remoteBranch"), str(f, "localBranch")];
+			return libreGitWrite(repo, args, "network");
+		}
+		case "addRemote": {
+			const name = str(f, "name");
+			const fetchUrl = str(f, "fetchUrl");
+			if (!isRemoteName(name) || !isRemoteUrl(fetchUrl)) return "remote name or url is not accepted";
+			const args = ["remote", "add", name, fetchUrl];
+			const e = await libreGitWrite(repo, args);
+			if (e !== null) return e;
+			if (bool(f, "fetch")) return libreGitWrite(repo, ["fetch", "--end-of-options", name], "network");
+			return null;
+		}
+		case "deleteRemote": return libreGitWrite(repo, ["remote", "remove", "--end-of-options", str(f, "name")]);
+		case "editRemote": {
+			const oldName = str(f, "oldName");
+			const name = str(f, "name");
+			const fetchUrl = str(f, "fetchUrl");
+			if (!isRemoteName(name) || (fetchUrl && !isRemoteUrl(fetchUrl))) return "remote name or url is not accepted";
+			if (oldName !== name) { const e = await libreGitWrite(repo, ["remote", "rename", "--end-of-options", oldName, name]); if (e !== null) return e; }
+			if (fetchUrl) { const e = await libreGitWrite(repo, ["remote", "set-url", name, fetchUrl]); if (e !== null) return e; }
+			const pushUrl = str(f, "pushUrl");
+			if (pushUrl && isRemoteUrl(pushUrl)) return libreGitWrite(repo, ["remote", "set-url", "--push", name, pushUrl]);
+			return null;
+		}
+		case "stageFiles": {
+			const files = Array.isArray(f.filePaths) ? (f.filePaths as string[]) : [];
+			for (const p of files) { const c = repoPath(p); if (!c.ok) return c.error; }
+			if (!files.length) return null;
+			return libreGitWrite(repo, ["add", "--end-of-options", ...files]);
+		}
+		case "unstageFiles": {
+			const files = Array.isArray(f.filePaths) ? (f.filePaths as string[]) : [];
+			if (!files.length) return null;
+			for (const p of files) { const c = repoPath(p); if (!c.ok) return c.error; }
+			return libreGitWrite(repo, ["reset", "--end-of-options", ...files]);
+		}
+		case "addWorktree": {
+			const p = str(f, "path");
+			if (!p || !p.startsWith("/") && !/^[A-Za-z]:/.test(p)) return "worktree path must be absolute";
+			const args = ["worktree", "add", "--end-of-options", p];
+			if (f.newBranch || f.branch) args.push(str(f, "newBranch") || str(f, "branch"));
+			else if (bool(f, "detach")) args.push("--detach");
+			else if (f.startPoint) args.push(str(f, "startPoint"));
+			const e = await libreGitWrite(repo, args);
+			if (e !== null) return e;
+			if (typeof f.lockReason === "string") return libreGitWrite(repo, f.lockReason ? ["worktree", "lock", "--end-of-options", p, f.lockReason] : ["worktree", "lock", "--end-of-options", p]);
+			return null;
+		}
+		case "removeWorktree": {
+			const p = str(f, "path");
+			if (bool(f, "unlock")) { const e = await libreGitWrite(repo, ["worktree", "unlock", "--end-of-options", p]); if (e !== null) return e; }
+			return libreGitWrite(repo, ["worktree", "remove", ...(bool(f, "force") ? ["--force"] : []), "--end-of-options", p]);
+		}
+		case "lockWorktree": return libreGitWrite(repo, typeof f.reason === "string" && f.reason ? ["worktree", "lock", "--end-of-options", str(f, "path"), f.reason as string] : ["worktree", "lock", "--end-of-options", str(f, "path")]);
+		case "unlockWorktree": return libreGitWrite(repo, ["worktree", "unlock", "--end-of-options", str(f, "path")]);
+		case "moveWorktree": return libreGitWrite(repo, ["worktree", "move", "--end-of-options", str(f, "path"), str(f, "newPath")]);
+		case "pruneWorktrees": return libreGitWrite(repo, ["worktree", "prune"]);
+		case "repairWorktree": {
+			if (!f.newPath) return "repair needs a new path, which this tab cannot pick";
+			return libreGitWrite(repo, ["worktree", "repair", "--end-of-options", str(f, "path"), str(f, "newPath")]);
+		}
+		default:
+			return "This tab cannot do that yet.";
+	}
+}

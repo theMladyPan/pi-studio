@@ -1218,11 +1218,11 @@ function readRequest(command: string, raw: Fields): GitGraphRequest | null {
 		case "revertCommit":
 			return { command, repo: repoRoot(raw), commitHash: hash(raw, "commitHash"), parentIndex: count(raw, "parentIndex") };
 		case "setGlobalViewState":
-			return { command, state: globalViewStateFrom(stateObject(raw, "state")) };
+			return { command, state: globalViewStateFrom(stateObject(raw, "state")) as unknown as GlobalViewState };
 		case "setRepoState":
-			return { command, repo: repoRoot(raw), state: repoStateFrom(stateObject(raw, "state")) };
+			return { command, repo: repoRoot(raw), state: repoStateFrom(stateObject(raw, "state")) as unknown as GitRepoState };
 		case "setWorkspaceViewState":
-			return { command, state: workspaceViewStateFrom(stateObject(raw, "state")) };
+			return { command, state: workspaceViewStateFrom(stateObject(raw, "state")) as unknown as WorkspaceViewState };
 		case "showErrorMessage":
 			return { command, message: text(raw, "message", 4096) };
 		case "startCodeReview": {

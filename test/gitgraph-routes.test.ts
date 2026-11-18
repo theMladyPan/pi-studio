@@ -18,13 +18,18 @@ import { git, scratchRepo } from "../test-support/git.ts";
  */
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 
-/** A folder that looks like an installed mhutchie.git-graph 1.30.0, holding the two files it serves. */
+/** A folder that looks like an installed git-graph-libre 1.10.0, holding the webview files it serves. */
 function fakeExtension() {
 	const dir = mkdtempSync(join(tmpdir(), "pi-studio-gitgraph-ext-"));
-	mkdirSync(join(dir, "media"));
-	writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "mhutchie.git-graph", version: "1.30.0" }));
-	writeFileSync(join(dir, "media", "out.min.js"), "var stoodInForTheBundle = true;\n");
-	writeFileSync(join(dir, "media", "out.min.css"), "body { color: #c9d1d9; }\n");
+	mkdirSync(join(dir, "media"), { recursive: true });
+	mkdirSync(join(dir, "out"), { recursive: true });
+	mkdirSync(join(dir, "l10n"), { recursive: true });
+	writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "git-graph-libre", version: "1.10.0", publisher: "PlohnenSoftware" }));
+	writeFileSync(join(dir, "out", "web.min.js"), "var stoodInForTheBundle = true;\n");
+	writeFileSync(join(dir, "out", "startup.min.js"), "var s = 1;\n");
+	writeFileSync(join(dir, "out", "diffTab.min.js"), "var d = 1;\n");
+	for (const css of ["tokens.css", "base.css", "checkbox.css", "table.css", "commit-details.css", "refs.css", "toolbar.css", "settings.css", "dialogs.css", "dropdown.css"]) writeFileSync(join(dir, "media", css), "body { color: #c9d1d9; }\n");
+	writeFileSync(join(dir, "l10n", "bundle.l10n.json"), "{}\n");
 	return dir;
 }
 
@@ -93,11 +98,12 @@ test("the page is served with the headers a framed view needs", async () => {
 			assert.ok(csp.includes(rule), `the policy must hold ${rule}: ${csp}`);
 		}
 		// The bundle stops silently without these, so they are part of the contract rather than of taste.
-		for (const id of ["view", "controls", "repoDropdown", "branchDropdown", "showRemoteBranchesCheckbox", "findBtn", "terminalBtn", "settingsBtn", "fetchBtn", "refreshBtn", "content", "commitGraph", "commitTable", "footer", "scrollShadow"]) {
+		for (const id of ["topBar", "statusStrip", "statusText", "statusVersion", "controls", "repoControl", "repoSelect", "branchControl", "branchSelect", "authorSelect", "tagSelect", "showRemoteBranchesCheckbox", "findBtn", "blinkHeadBtn", "fetchBtn", "refreshBtn", "content", "commitGraph", "commitTable", "footer", "contextMenu", "dialog", "settingsWidget", "stashListSlot", "ggNotice", "ggViewer", "ggViewerTitle", "ggViewerBody"]) {
 			assert.ok(page.body.includes(`id="${id}"`), `the page must hold #${id}`);
 		}
 		assert.ok(page.body.includes('src="/client/gitgraph/host.js"'), "the page runs one script of ours");
-		assert.ok(page.body.includes('href="/gitgraph/vendor/out.min.css"'), "and the bundle's stylesheet");
+		assert.ok(page.body.includes('href="/gitgraph/vendor/base.css"'), "and the bundle's stylesheet");
+		assert.ok(page.body.includes('href="/gitgraph/vendor/tokens.css"'), "and the bundle's tokens");
 		assert.ok(page.body.includes('href="/favicon.svg"'), "and the mark, so a tab does not 404 for one");
 		// The twelve graph colours are drawn before any script runs, so the page repeats the daemon's list.
 		for (const colour of BRANCH_COLOURS) assert.ok(page.body.includes(colour), `the page must carry the graph colour ${colour}`);
@@ -149,7 +155,7 @@ test("every file the page names is served, so nothing it needs is a 404", async 
 	}
 });
 
-test("init refuses a caller without a token and answers a signed-in one with the three globals", async () => {
+test("init refuses a caller without a token and answers a signed-in one with the view state", async () => {
 	const extension = fakeExtension();
 	const daemon = await boot({ PI_STUDIO_GITGRAPH_DIR: extension });
 	try {
@@ -162,17 +168,13 @@ test("init refuses a caller without a token and answers a signed-in one with the
 		const payload = JSON.parse(init.body);
 		assert.equal(payload.available, true);
 		assert.equal(payload.reason, null);
-		assert.equal(payload.initialState.loadViewTo, null);
-		assert.equal(payload.initialState.loadRepoInfoRefreshId, 0);
-		assert.equal(payload.initialState.loadCommitsRefreshId, 0);
-		assert.equal(payload.initialState.config.fetchAvatars, false, "no avatar is fetched on a human's behalf");
-		const paths = Object.keys(payload.initialState.repos);
+		assert.equal(payload.viewState.lastActiveRepo, realpathSync(folder));
+		assert.equal(payload.viewState.fetchAvatars, false, "no avatar is fetched on a human's behalf");
+		const paths = Object.keys(payload.viewState.repos);
 		assert.equal(paths.length, 1);
 		assert.equal(paths[0], realpathSync(folder));
-		assert.equal(payload.initialState.repos[paths[0]].name, folder.split("/").pop(), "a repository nobody renamed is labelled by its folder");
-		assert.equal(payload.initialState.lastActiveRepo, paths[0]);
-		assert.deepEqual(payload.globalState, { alwaysAcceptCheckoutCommit: false, issueLinkingConfig: null, pushTagSkipRemoteCheck: false });
-		assert.deepEqual(payload.workspaceState, { findIsCaseSensitive: false, findIsRegex: false, findOpenCommitDetailsView: false });
+		assert.equal(payload.viewState.repos[paths[0]].displayName, folder.split("/").pop(), "a repository nobody renamed is labelled by its folder");
+		assert.equal(payload.version, "1.10.0");
 		rmSync(folder, { recursive: true, force: true });
 	} finally {
 		daemon.child.kill();
@@ -190,7 +192,7 @@ test("init says why a tab cannot draw, and never fails the request", async () =>
 		const payload = JSON.parse(init.body);
 		assert.equal(payload.available, false);
 		assert.match(payload.reason, /PI_STUDIO_GITGRAPH_DIR/);
-		assert.equal(payload.initialState, null);
+		assert.equal(payload.viewState, null);
 		rmSync(folder, { recursive: true, force: true });
 	} finally {
 		daemon.child.kill();
@@ -219,17 +221,17 @@ test("the bundle's two files are served from the installed copy, and nothing els
 	const daemon = await boot({ PI_STUDIO_GITGRAPH_DIR: extension });
 	try {
 		// No token on purpose: these bytes carry no data, and the page fetches them before it is signed in.
-		const script = await get(daemon, "/gitgraph/vendor/out.min.js");
+		const script = await get(daemon, "/gitgraph/vendor/web.min.js");
 		assert.equal(script.status, 200);
 		assert.match(script.type, /javascript/);
 		assert.equal(script.headers.get("cache-control"), "no-store");
 		assert.match(script.body, /stoodInForTheBundle/);
-		const style = await get(daemon, "/gitgraph/vendor/out.min.css");
+		const style = await get(daemon, "/gitgraph/vendor/base.css");
 		assert.equal(style.status, 200);
 		assert.match(style.type, /text\/css/);
 		// A path that is not one of the two is not a vendor path at all, so it falls through to the token
 		// check; with a token it reaches the route, which refuses it by name rather than by path.
-		const elsewhere = await get(daemon, `/gitgraph/vendor/%2e%2e%2fout.min.js?token=${daemon.token}`);
+		const elsewhere = await get(daemon, `/gitgraph/vendor/%2e%2e%2fweb.min.js?token=${daemon.token}`);
 		assert.equal(elsewhere.status, 404, "a path that escapes the bundle folder is refused before anything is read");
 		const madeUp = await get(daemon, `/gitgraph/vendor/not-a-bundle.js?token=${daemon.token}`);
 		assert.equal(madeUp.status, 404);
@@ -252,16 +254,17 @@ test("one message is answered with its replies, and refused without the token", 
 		});
 		assert.equal(refused.status, 403);
 
-		const answered = await post(daemon, `/git/msg?workspace=${board}`, { command: "loadRepoInfo", repo: folder, refreshId: 5, showRemoteBranches: true, showStashes: false, hideRemotes: [] });
+		const resolved = realpathSync(folder);
+		const answered = await post(daemon, `/git/msg?workspace=${board}`, { command: "loadRepoInfo", requestId: 5, repo: resolved, showStashes: false });
 		assert.equal(answered.status, 200);
 		const replies = JSON.parse(answered.body) as Array<Record<string, unknown>>;
 		assert.equal(replies.length, 1);
 		assert.equal(replies[0].command, "loadRepoInfo");
-		assert.equal(replies[0].refreshId, 5);
-		assert.deepEqual(replies[0].branches, ["dev"]);
+		assert.equal(replies[0].requestId, 5);
+		assert.equal((replies[0].repoInfo as { head: string }).head, "dev");
 
-		const notOpen = await post(daemon, `/git/msg?workspace=${board}`, { command: "loadRepoInfo", repo: "/nowhere-at-all", refreshId: 6, showRemoteBranches: true, showStashes: false, hideRemotes: [] });
-		assert.equal(JSON.parse(notOpen.body)[0].error, "That repository is no longer open in this tab.");
+		const notOpen = await post(daemon, `/git/msg?workspace=${board}`, { command: "loadRepoInfo", requestId: 6, repo: "/nowhere-at-all", showStashes: false });
+		assert.equal((JSON.parse(notOpen.body)[0].error as { message: string }).message, "That repository is no longer open in this tab.");
 		rmSync(folder, { recursive: true, force: true });
 	} finally {
 		daemon.child.kill();
@@ -306,27 +309,27 @@ test("a board with a worktree offers the dropdown two repositories, and the tree
 		assert.equal(init.status, 200);
 		const payload = JSON.parse(init.body);
 		assert.equal(payload.available, true, payload.reason);
-		const repos = payload.initialState.repos as Record<string, { name: string | null }>;
+		const repos = payload.viewState.repos as Record<string, { displayName: string | null }>;
 		const paths = Object.keys(repos);
 		assert.equal(paths.length, 2, `expected the folder and its tree, got ${paths.join(", ")}`);
 		assert.equal(paths[0], realpathSync(folder), "the folder the workspace opened comes first");
 		assert.equal(paths[1], realpathSync(tree.path), "the tree is keyed by its own path");
-		assert.equal(repos[paths[0]].name, folder.split("/").pop(), "the folder is labelled by its own name");
-		assert.equal(repos[paths[1]].name, "feat/drawer · the drawer's tree", "the tree carries its branch and the thread's title");
-		assert.equal(payload.initialState.lastActiveRepo, paths[0], "the dropdown opens on the folder");
+		assert.equal(repos[paths[0]].displayName, folder.split("/").pop(), "the folder is labelled by its own name");
+		assert.equal(repos[paths[1]].displayName, "feat/drawer · the drawer's tree", "the tree carries its branch and the thread's title");
+		assert.equal(payload.viewState.lastActiveRepo, paths[0], "the dropdown opens on the folder");
 		// The page refreshes itself by re-reading this same list through the message route, and the answer to
 		// that is the one the dropdown is drawn from: a name the init route filled and this one left `null`
 		// would be wiped back to the tree's own folder id, which is what a human would then read instead.
 		const listed = await post(daemon, `/git/msg?workspace=${board}`, { command: "loadRepos", check: false });
 		assert.equal(listed.status, 200);
-		const replies = JSON.parse(listed.body) as Array<{ command: string; repos: Record<string, { name: string | null }> }>;
+		const replies = JSON.parse(listed.body) as Array<{ command: string; repos: Record<string, { displayName: string | null }> }>;
 		assert.equal(replies.length, 1);
 		assert.equal(replies[0].command, "loadRepos");
-		assert.equal(replies[0].repos[paths[1]].name, "feat/drawer · the drawer's tree", "the message route labels the tree exactly as the init route did");
-		assert.equal(replies[0].repos[paths[0]].name, folder.split("/").pop(), "and the folder by its own name, so the two routes agree on every entry");
+		assert.equal(replies[0].repos[paths[1]].displayName, "feat/drawer · the drawer's tree", "the message route labels the tree exactly as the init route did");
+		assert.equal(replies[0].repos[paths[0]].displayName, folder.split("/").pop(), "and the folder by its own name, so the two routes agree on every entry");
 		// This is what makes the dropdown exist at all, and it is the bundle's decision rather than this
 		// daemon's: `loadRepos` in the installed `media/out.min.js` sets the `singleRepo` class on
-		// `#controls` from `Object.keys(repos).length === 1`, and `media/out.min.css` carries
+		// `#controls` from `Object.keys(repos).length === 1`, and the toolbar stylesheet carries
 		// `.singleRepo #repoControl{display:none;}`. With two keys the class is not set and `#repoControl`
 		// is drawn. Unverified in a browser from here: that is the bundle's code, and this daemon only
 		// answers the two keys.

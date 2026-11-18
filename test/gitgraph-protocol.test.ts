@@ -518,16 +518,12 @@ test("a command nobody knows, and a message that is not a request at all, answer
 });
 
 test("a state the page sends keeps only the fields the view knows", () => {
-	const parsed = parseRequest({ command: "setRepoState", repo: "/repo", state: { showTags: 1, cdvHeight: "tall", evil: "rm -rf /", name: 7 } });
+	const parsed = parseRequest({ command: "setRepoState", repo: "/repo", state: { showTags: 1, evil: "rm -rf /", displayName: 7 } });
 	assert.equal(parsed.ok, true, parsed.ok ? "" : parsed.error);
 	if (!parsed.ok || parsed.request.command !== "setRepoState") return;
-	// A string where a number belongs, and a key the view never reads, both fall back to the default
-	// rather than travelling into the file.
-	assert.equal(parsed.request.state.cdvHeight, 250);
-	assert.equal(parsed.request.state.name, null);
-	assert.equal("evil" in parsed.request.state, false);
-	assert.equal(parsed.request.state.showTags, 1);
-	const global = parseRequest({ command: "setGlobalViewState", state: { alwaysAcceptCheckoutCommit: "yes" } });
-	assert.equal(global.ok, true, global.ok ? "" : global.error);
-	if (global.ok && global.request.command === "setGlobalViewState") assert.equal(global.request.state.alwaysAcceptCheckoutCommit, false);
+	// A key the view never reads does not travel into the file, and a
+	// flag the page sent as 0/1 is read as the Libre override it now is.
+	assert.equal((parsed.request.state as unknown as { displayName: string | null }).displayName, null);
+	assert.equal("evil" in (parsed.request.state as unknown as Record<string, unknown>), false);
+	assert.equal((parsed.request.state as unknown as { showTags: unknown }).showTags, "enabled");
 });

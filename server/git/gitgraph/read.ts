@@ -1,7 +1,7 @@
 /**
  * Everything the Git Graph page reads out of a repository, answered in the page's own words.
  *
- * The page is mhutchie's bundle, so nothing here may invent a field name or a shape: what leaves this
+ * The page is Libre's bundle, so nothing here may invent a field name or a shape: what leaves this
  * module is `protocol.ts` and nothing else. Every read goes through `gitText`, which is where a prompt,
  * a pager, a hang and a runaway print are already answered, and every read answers a value or a
  * sentence rather than throwing — the caller is a route whose reply has to be sent either way.
@@ -16,6 +16,8 @@
 import { gitText } from "../exec.ts";
 import { DEFAULT_READ_FLAGS } from "./config.ts";
 import { UNCOMMITTED } from "./protocol.ts";
+import { UNCOMMITTED as LibreUncommitted } from "./libre.ts";
+import type { GitCommitNode, GitCommitSearchResult, GitQueryError, GitRef, GitRemote, GitRepoInfo as LibreRepoInfo, GitStash as LibreStash, GitTagDetails as LibreTagDetails, GitWorktree } from "./libre.ts";
 import type {
 	GitCommit,
 	GitCommitDetails,
@@ -753,3 +755,418 @@ export async function getRepoConfig(repo: string, remotes: readonly string[]): P
 	};
 }
 
+
+// ---------- Git Graph Libre shapes ----------
+
+
+
+export function libreError(message: string): GitQueryError {
+	return { message, stderr: null, exitCode: null, task: null };
+}
+
+export async function libreStashes(repo: string): Promise<LibreStash[]> {
+	const listed = await gitText(repo, ["stash", "list", `--format=%gd${LOG_FIELD}%H${LOG_FIELD}%gs${LOG_FIELD}%ct${LOG_FIELD}%P${LOG_RECORD}`]);
+	if (!listed.ok) return [];
+	const out: LibreStash[] = [];
+	for (const record of recordTexts(listed.text)) {
+		const f = fieldsOf(record);
+		const ref = f[0] ?? "";
+		const m = /^stash@\{(\d+)\}$/.exec(ref);
+		if (!m) continue;
+		const hash = f[1] ?? "";
+		if (!hash) continue;
+		const sourceHash = (f[4] ?? "").split(" ").filter(Boolean)[0] ?? null;
+		out.push({
+			index: Number(m[1]),
+			ref,
+			hash,
+			message: f[2] ?? "",
+			date: f[3] ? secondsOf(f[3]) : null,
+			sourceHash: sourceHash || null,
+		});
+	}
+	return out;
+}
+
+async function libreWorktrees(repo: string): Promise<GitWorktree[]> {
+	const result = await gitText(repo, ["worktree", "list", "--porcelain", "-z"]);
+	if (!result.ok) return [];
+	const entries: GitWorktree[] = [];
+	// porcelain -z: every field is NUL-terminated and every record ends with
+	// an empty field (two NULs), so split on NUL and group fields.
+	const fields = result.text.split(RECORD);
+	let path = "";
+	let head: string | null = null;
+	let branch: string | null = null;
+	let detached = false;
+	let bare = false;
+	let locked: { reason: string } | null = null;
+	let prunable: { reason: string } | null = null;
+	const flush = () => {
+		if (!path) return;
+		const isMain = entries.length === 0;
+		let real = path;
+		const isCurrent = real === repo || path === repo;
+		entries.push({ path, head, branch, detached, bare, isMain, isCurrent, locked, prunable });
+		path = "";
+		head = null;
+		branch = null;
+		detached = false;
+		bare = false;
+		locked = null;
+		prunable = null;
+	};
+	for (const field of fields) {
+		if (field === "") { flush(); continue; }
+		const line = field.startsWith("\n") ? field.slice(1) : field;
+		if (!line) { flush(); continue; }
+		if (line.startsWith("worktree ")) path = line.slice(9);
+		else if (line.startsWith("HEAD ")) head = line.slice(5).trim();
+		else if (line.startsWith("branch ")) {
+			const b = line.slice(7).trim();
+			branch = b.startsWith("refs/heads/") ? b.slice(11) : b;
+		} else if (line === "detached") detached = true;
+		else if (line === "bare") bare = true;
+		else if (line === "locked") locked = { reason: "" };
+		else if (line.startsWith("locked ")) locked = { reason: line.slice(7) };
+		else if (line === "prunable") prunable = { reason: "" };
+		else if (line.startsWith("prunable ")) prunable = { reason: line.slice(9) };
+	}
+	flush();
+	return entries;
+}
+
+export async function libreBranches(repo: string, showRemoteBranches: boolean, hiddenRemotes: readonly string[]): Promise<{ branches: string[]; head: string | null; isRepo: boolean; worktrees: GitWorktree[]; upstreams: Record<string, string | null> }> {
+	const refs = await readRefs(repo);
+	if (!refs.ok) return { branches: [], head: null, isRepo: false, worktrees: [], upstreams: {} };
+	const root = await readRepoRoot(repo);
+	if (!root) return { branches: [], head: null, isRepo: false, worktrees: [], upstreams: {} };
+	const head = await readHead(repo);
+	const branches: string[] = [];
+	for (const h of refs.value.heads) branches.push(h.name);
+	const upstreamMap: Record<string, string | null> = {};
+	for (const h of refs.value.heads) upstreamMap[h.name] = h.upstream ? h.upstream : null;
+	if (showRemoteBranches) {
+		for (const r of refs.value.remotes) {
+			if (hiddenRemotes.includes(r.remote)) continue;
+			if (!branches.includes(r.name)) branches.push(r.name);
+		}
+	}
+	// Head first, like Libre's branch list.
+	if (head) {
+		const i = branches.indexOf(head);
+		if (i >= 0) branches.splice(i, 1);
+		branches.unshift(head);
+	}
+	const worktrees = await libreWorktrees(repo);
+	return { branches, head, isRepo: true, worktrees, upstreams: upstreamMap };
+}
+
+export async function libreRepoInfo(repo: string, showStashes: boolean): Promise<LibreRepoInfo> {
+	const root = await readRepoRoot(repo);
+	if (!root) return { isRepo: false, head: null, headCommit: null, authors: [], tags: [], remotes: [], stashes: [], stashCount: 0, config: { userName: { local: null, global: null }, userEmail: { local: null, global: null } } };
+	const head = await readHead(repo);
+	const refs = await readRefs(repo);
+	const authorsSet = new Set<string>();
+	// authors/tags from refs walk? Use log authors via getCommits authors? Simpler: from log --format=%an limited? Use for-each-ref? Actually need authors list for filter dropdown: list authors of commits. Do a lightweight `git log --format=%an` capped.
+	const authors: string[] = [];
+	try {
+		const res = await gitText(repo, ["log", "--format=%an", "--max-count=500"]);
+		if (res.ok) {
+			for (const line of res.text.split("\n")) {
+				const a = line.trim();
+				if (a && !authorsSet.has(a)) { authorsSet.add(a); authors.push(a); }
+			}
+		}
+	} catch {}
+	const tags = refs.ok ? refs.value.tags.map((t) => t.name).sort() : [];
+	const remotes: GitRemote[] = [];
+	if (refs.ok) {
+		const remoteNames = new Set<string>();
+		for (const r of refs.value.remotes) remoteNames.add(r.remote);
+		for (const name of remoteNames) {
+			const fetch = await gitText(repo, ["remote", "get-url", name]);
+			const pushRes = await gitText(repo, ["remote", "get-url", "--push", name]);
+			remotes.push({
+				name,
+				fetchUrls: fetch.ok && fetch.text.trim() ? [fetch.text.trim().split("\n")[0]] : [],
+				pushUrls: pushRes.ok && pushRes.text.trim() ? pushRes.text.trim().split("\n").filter(Boolean) : [],
+			});
+		}
+	}
+	const stashes = showStashes ? await libreStashes(repo) : [];
+	// user config local/global
+	const local = await gitText(repo, ["config", "--local", "--get", "user.name"]);
+	const localE = await gitText(repo, ["config", "--local", "--get", "user.email"]);
+	const global = await gitText(repo, ["config", "--global", "--get", "user.name"]);
+	const globalE = await gitText(repo, ["config", "--global", "--get", "user.email"]);
+	const headCommit = head ? (refs.ok ? refs.value.heads.find((h) => h.name === head)?.hash ?? null : null) : null;
+	return {
+		isRepo: true,
+		head,
+		headCommit,
+		authors,
+		tags,
+		remotes,
+		stashes,
+		stashCount: stashes.length,
+		config: {
+			userName: { local: local.ok ? local.text.trim() || null : null, global: global.ok ? global.text.trim() || null : null },
+			userEmail: { local: localE.ok ? localE.text.trim() || null : null, global: globalE.ok ? globalE.text.trim() || null : null },
+		},
+	};
+}
+
+export async function libreCommits(repo: string, opts: { maxCommits: number; branches: readonly string[] | null; branchName: string; authors: readonly string[] | null; tags: readonly string[] | null; showRemoteBranches: boolean; hiddenRemotes: readonly string[]; showTags: boolean; includeReflog: boolean; includeUnreachable: boolean; onlyFollowFirstParent: boolean; commitOrdering: "date" | "author-date" | "topo"; showStashes: boolean }): Promise<{ commits: GitCommitNode[]; head: string | null; more: boolean; error: string | null }> {
+	// Reuse old walker but without stash commits, then inject stash rows.
+	const refs = await readRefs(repo);
+	if (!refs.ok) return { commits: [], head: null, more: false, error: refs.error };
+	const head = await readHead(repo);
+	// Map Libre filters to old CommitOptions: branches null => all
+	const old = await getCommits(repo, {
+		maxCommits: opts.maxCommits,
+		showTags: opts.showTags,
+		showRemoteBranches: opts.showRemoteBranches,
+		includeCommitsMentionedByReflogs: opts.includeReflog,
+		onlyFollowFirstParent: opts.onlyFollowFirstParent,
+		commitOrdering: opts.commitOrdering,
+		branches: opts.branches !== null && opts.branches.length > 0 ? opts.branches : (opts.branchName ? [opts.branchName] : null),
+		remotes: [...new Set([...refs.value.heads.flatMap((h) => [])])],
+		hideRemotes: [...opts.hiddenRemotes],
+		stashes: [],
+	});
+	if (!old.ok) return { commits: [], head: null, more: false, error: old.error };
+	// getCommits already included uncommitted row + real commits; rebuild refs mapping
+	const refsByHash = new Map<string, GitRef[]>();
+	const pushRef = (hash: string, r: GitRef) => { const a = refsByHash.get(hash) ?? []; a.push(r); refsByHash.set(hash, a); };
+	for (const h of refs.value.heads) pushRef(h.hash, { hash: h.hash, name: h.name, type: "head" });
+	if (opts.showTags) for (const t of refs.value.tags) pushRef(t.hash, { hash: t.hash, name: t.name, type: "tag", signed: false });
+	for (const r of refs.value.remotes) {
+		if (!opts.showRemoteBranches) continue;
+		if (opts.hiddenRemotes.includes(r.remote)) continue;
+		pushRef(r.hash, { hash: r.hash, name: r.name, type: "remote" });
+	}
+	// authors/tags filters are post-filters (single repo walk already limited); apply client-side narrowing like a filter
+	let rows = old.value.commits;
+	// rows[0] is uncommitted row
+	const uncommitted = rows[0]?.hash === LibreUncommitted ? rows[0] : null;
+	let real = uncommitted ? rows.slice(1) : rows;
+	if (opts.authors && opts.authors.length > 0) real = real.filter((c) => opts.authors!.includes(c.author));
+	if (opts.tags && opts.tags.length > 0) {
+		const tagNames = new Set(opts.tags);
+		real = real.filter((c) => c.tags.some((t) => tagNames.has(t.name)));
+	}
+	// Build nodes
+	const nodes: GitCommitNode[] = [];
+	if (uncommitted) {
+		nodes.push({ hash: uncommitted.hash, parentHashes: uncommitted.parents, author: uncommitted.author, email: uncommitted.email, date: uncommitted.date, message: uncommitted.message, refs: [] });
+	}
+	// stash injection map
+	const stashes = opts.showStashes ? await libreStashes(repo) : [];
+	const byBase = new Map<string, LibreStash[]>();
+	for (const s of stashes) { if (!s.sourceHash) continue; const a = byBase.get(s.sourceHash) ?? []; a.push(s); byBase.set(s.sourceHash, a); }
+	for (const c of real) {
+		// skip stash commits that old walker may have included? Old walker with stashes [] excludes them, so none.
+		for (const s of byBase.get(c.hash) ?? []) {
+			nodes.push({ hash: s.hash, parentHashes: [c.hash], author: "", email: "", date: s.date ?? c.date, message: s.message, refs: [], signature: null, stash: { ref: s.ref } });
+		}
+		// Signature mapping: old signature status strings -> libre enum
+		let sig: GitCommitNode["signature"] = null;
+		if (c.signature) {
+			const map: Record<string, GitCommitNode["signature"]> = { "G": { status: "valid", key: c.signature.key, signer: c.signature.signer }, "U": { status: "unknown", key: null, signer: null } };
+			sig = (map[c.signature.status] ?? { status: "unknown", key: null, signer: null }) as GitCommitNode["signature"];
+		}
+		nodes.push({
+			hash: c.hash,
+			parentHashes: c.parents,
+			author: c.author,
+			email: c.email,
+			date: c.date,
+			message: c.message,
+			refs: refsByHash.get(c.hash) ?? [],
+			signature: sig,
+		});
+	}
+	return { commits: nodes, head: old.value.head, more: old.value.moreCommitsAvailable, error: null };
+}
+
+export async function libreCommitDetails(repo: string, hash: string): Promise<{ details: import("./libre.ts").GitCommitDetails | null; error: GitQueryError | null }> {
+	const meta = await readMetadata(repo, hash === LibreUncommitted ? "HEAD" : hash);
+	if (!meta.ok) return { details: null, error: libreError(meta.error) };
+	// Detect stash
+	const stashes = await libreStashes(repo);
+	const isStash = stashes.some((s) => s.hash === hash);
+	let changes: import("./protocol.ts").GitFileChange[] = [];
+	if (hash === LibreUncommitted) {
+		const u = await getUncommittedDetails(repo);
+		if (u.ok) changes = u.value.fileChanges;
+		else changes = [];
+	} else if (isStash) {
+		const s = stashes.find((x) => x.hash === hash)!;
+		const d = await getStashDetails(repo, s.ref, hash);
+		if (d.ok) changes = d.value.fileChanges;
+	} else {
+		const hasParents = meta.value.parents.length > 0;
+		const d = await getCommitDetails(repo, hash, hasParents);
+		if (d.ok) changes = d.value.fileChanges;
+	}
+	const fileChanges: import("./libre.ts").GitFileChange[] = changes.map((c) => {
+		if (c.type === "U") return { oldFilePath: c.oldFilePath, newFilePath: c.newFilePath, type: "A" as const, additions: c.additions, deletions: c.deletions, untracked: true as const };
+		if (c.type === "C") return { oldFilePath: c.oldFilePath, newFilePath: c.newFilePath, type: "T" as const, additions: c.additions, deletions: c.deletions };
+		return { oldFilePath: c.oldFilePath, newFilePath: c.newFilePath, type: c.type as "A" | "M" | "D" | "R" | "T", additions: c.additions, deletions: c.deletions };
+	});
+	return {
+		details: {
+			hash: meta.value.hash,
+			parents: meta.value.parents,
+			author: meta.value.author,
+			email: meta.value.authorEmail,
+			authorDate: meta.value.authorDate,
+			committer: meta.value.committer,
+			committerEmail: meta.value.committerEmail,
+			committerDate: meta.value.committerDate,
+			body: meta.value.body,
+			fileChanges,
+		},
+		error: null,
+	};
+}
+
+export async function libreTagDetails(repo: string, tagName: string): Promise<{ details: LibreTagDetails | null; error: GitQueryError | null }> {
+	const old = await getTagDetails(repo, tagName);
+	if (!old.ok) return { details: null, error: libreError(old.error) };
+	const v = old.value;
+	// Determine annotated vs lightweight via `git cat-file -t`
+	const t = await gitText(repo, ["cat-file", "-t", `refs/tags/${tagName}`]);
+	const isAnnotated = t.ok && t.text.trim() === "tag";
+	const targetType = "commit";
+	const subject = v.message.split("\n")[0] ?? "";
+	return {
+		details: {
+			tagName,
+			type: isAnnotated ? "annotated" : "lightweight",
+			objectHash: v.tagHash,
+			targetHash: v.tagHash,
+			targetType,
+			taggerName: v.name || null,
+			taggerEmail: v.email || null,
+			taggerDate: v.date ? Math.floor(new Date(v.date).getTime() / 1000) : null,
+			subject,
+			body: v.message,
+			signature: null,
+		},
+		error: null,
+	};
+}
+
+export async function libreUncommitted(repo: string): Promise<{ changes: import("./libre.ts").GitUncommittedChanges | null; error: GitQueryError | null }> {
+	const staged = await gitText(repo, ["diff", "--name-only", "-z", "--cached"]);
+	const unstaged = await gitText(repo, ["diff", "--name-only", "-z"]);
+	const untracked = await gitText(repo, ["ls-files", "--others", "--exclude-standard", "-z"]);
+	const stagedSet = new Set(staged.ok ? staged.text.split("\0").filter(Boolean) : []);
+	const unstagedSet = new Set(unstaged.ok ? unstaged.text.split("\0").filter(Boolean) : []);
+	const untrackedSet = new Set(untracked.ok ? untracked.text.split("\0").filter(Boolean) : []);
+	const all = new Set([...stagedSet, ...unstagedSet, ...untrackedSet]);
+	// Get kinds via `git status --porcelain` for XY?
+	const porcelain = await gitText(repo, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]);
+	const map = new Map<string, { stagedKind: string | null; unstagedKind: string | null; oldPath: string | null }>();
+	if (porcelain.ok) {
+		const entries = porcelain.text.split("\0");
+		for (let i = 0; i < entries.length; i++) {
+			const e = entries[i];
+			if (!e) continue;
+			const x = e[0] ?? " ";
+			const y = e[1] ?? " ";
+			let p = e.slice(3);
+			let oldPath: string | null = null;
+			if ((x === "R" || x === "C" || y === "R" || y === "C") && entries[i + 1]) {
+				oldPath = p;
+				p = entries[i + 1];
+				i += 1;
+			}
+			map.set(p, { stagedKind: x === " " ? null : x, unstagedKind: y === " " ? null : y, oldPath });
+		}
+	}
+	const outStaged: import("./libre.ts").GitUncommittedFile[] = [];
+	const outUnstaged: import("./libre.ts").GitUncommittedFile[] = [];
+	for (const p of [...all].sort()) {
+		const m = map.get(p);
+		if (m?.stagedKind) outStaged.push({ path: p, oldPath: m.oldPath, stagedKind: m.stagedKind, unstagedKind: m.unstagedKind });
+		else if (stagedSet.has(p)) outStaged.push({ path: p, oldPath: null, stagedKind: "M", unstagedKind: unstagedSet.has(p) ? "M" : null });
+		if (m?.unstagedKind || unstagedSet.has(p) || untrackedSet.has(p)) {
+			outUnstaged.push({ path: p, oldPath: m?.oldPath ?? null, stagedKind: m?.stagedKind ?? null, unstagedKind: m?.unstagedKind ?? (untrackedSet.has(p) ? "?" : "M") });
+		}
+	}
+	return { changes: { staged: outStaged, unstaged: outUnstaged }, error: null };
+}
+
+export async function libreSearch(repo: string, query: string, maxResults: number, opts: { showRemoteBranches: boolean; hiddenRemotes: readonly string[]; showTags: boolean; branches: readonly string[] | null; authors: readonly string[] | null; tags: readonly string[] | null }): Promise<{ results: GitCommitSearchResult[]; error: GitQueryError | null }> {
+	const q = query.trim();
+	if (!q) return { results: [], error: null };
+	// Use git log --grep or --all --grep with -i
+	const result = await gitText(repo, ["log", "--all", "--no-walk=unsorted", "--format=%H|%P|%an|%ae|%at|%s", `--max-count=${Math.max(1, Math.min(maxResults, 200))}`, "--grep", q, "-i"]);
+	if (!result.ok) {
+		// Fallback: log grep without --no-walk
+		const fb = await gitText(repo, ["log", "--all", `--format=%H|%P|%an|%ae|%at|%s`, "--grep", q, "-i", `--max-count=${Math.max(1, Math.min(maxResults, 200))}`]);
+		if (!fb.ok) return { results: [], error: libreError(reasonOf(fb)) };
+		return { results: parseSearch(fb.text, q), error: null };
+	}
+	return { results: parseSearch(result.text, q), error: null };
+}
+function parseSearch(text: string, q: string): GitCommitSearchResult[] {
+	const out: GitCommitSearchResult[] = [];
+	for (const line of text.split("\n")) {
+		if (!line.trim()) continue;
+		const [hash, parents, author, email, date, msg] = line.split("|");
+		out.push({ hash, parentHashes: parents ? parents.split(" ").filter(Boolean) : [], author, email, date: Number(date) || 0, message: msg, loadCount: 0 });
+	}
+	return out;
+}
+
+export async function libreRemoteTags(repo: string): Promise<{ tags: Record<string, { hash: string; remotes: string[] }>; unavailable: string[]; error: GitQueryError | null }> {
+	const refs = await readRefs(repo);
+	if (!refs.ok) return { tags: {}, unavailable: [], error: libreError(refs.error) };
+	const tags: Record<string, { hash: string; remotes: string[] }> = {};
+	for (const t of refs.value.tags) tags[t.name] = { hash: t.hash, remotes: [] };
+	return { tags, unavailable: [], error: null };
+}
+
+export async function librePushDefaults(repo: string, branch: string): Promise<{ upstreamRemote: string | null; pushRemote: string | null; error: GitQueryError | null }> {
+	const up = await gitText(repo, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", `${branch}@{upstream}`]);
+	let upstreamRemote: string | null = null;
+	if (up.ok) {
+		const name = up.text.trim();
+		if (name.startsWith("refs/remotes/")) upstreamRemote = name.slice(13).split("/")[0];
+	}
+	const push = await gitText(repo, ["config", "--get", `branch.${branch}.pushRemote`]);
+	const pushRemote = push.ok && push.text.trim() ? push.text.trim() : upstreamRemote;
+	return { upstreamRemote, pushRemote, error: null };
+}
+
+export async function libreWorktreeStatus(repo: string, paths: string[]): Promise<Record<string, { state: "clean" | "dirty" | "unknown"; count: number; truncated: boolean }>> {
+	const out: Record<string, { state: "clean" | "dirty" | "unknown"; count: number; truncated: boolean }> = {};
+	for (const p of paths) {
+		try {
+			const res = await gitText(p, ["status", "--porcelain=v1", "--untracked-files=normal"]);
+			if (!res.ok) out[p] = { state: "unknown", count: 0, truncated: false };
+			else {
+				const lines = res.text.split("\n").filter(Boolean);
+				out[p] = { state: lines.length ? "dirty" : "clean", count: lines.length, truncated: false };
+			}
+		} catch { out[p] = { state: "unknown", count: 0, truncated: false }; }
+	}
+	return out;
+}
+
+export async function libreWorktreeChanges(repo: string, path: string): Promise<{ path: string; files: string[]; truncated: boolean; error: GitQueryError | null }> {
+	const res = await gitText(path, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]);
+	if (!res.ok) return { path, files: [], truncated: false, error: libreError(reasonOf(res)) };
+	const files = res.text.split("\0").map((e) => e.slice(3)).filter(Boolean).slice(0, 500);
+	return { path, files, truncated: files.length >= 500, error: null };
+}
+
+export async function libreResolveRef(repo: string, ref: string): Promise<{ hash: string | null; error: GitQueryError | null }> {
+	const res = await gitText(repo, ["rev-parse", "--verify", ref]);
+	if (!res.ok) return { hash: null, error: libreError(reasonOf(res)) };
+	return { hash: res.text.trim(), error: null };
+}
