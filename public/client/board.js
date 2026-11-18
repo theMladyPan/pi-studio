@@ -5587,7 +5587,7 @@ const scMergeCount = document.getElementById("scMergeCount");
 const scMerge = document.getElementById("scMerge");
 const scStageAll = document.getElementById("scStageAll");
 const scUnstageAll = document.getElementById("scUnstageAll");
-let scState = { staged: [], changes: [], conflicts: [], merge: null };
+let scState = { staged: [], changes: [], conflicts: [], merge: null, prefix: "" };
 let scBusy = false;
 /** The merge the message field was prefilled for, so a refresh never overwrites typed text. */
 let scMergeSeen = "";
@@ -5695,6 +5695,16 @@ function scPaint() {
   scMessage.disabled = scBusy;
 }
 
+/**
+ * A repository path as the workspace drawer knows it, or null when the file sits outside the
+ * workspace folder: the explorer and its editor only speak workspace-relative names.
+ */
+function scRel(path) {
+  if (!scState.prefix) return path;
+  const head = `${scState.prefix}/`;
+  return path.startsWith(head) ? path.slice(head.length) : null;
+}
+
 async function scLoad() {
   if (!workspace) {
     scSay("this board has no folder of its own, so there is nothing to commit");
@@ -5712,7 +5722,7 @@ async function scLoad() {
     scSay(data.error || "git could not read this folder");
     return;
   }
-  scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null };
+  scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null, prefix: data.prefix ?? "" };
   // A new merge brings its own message; a merge already seen keeps whatever the field holds.
   if (scState.merge && scState.merge.id !== scMergeSeen) {
     scMergeSeen = scState.merge.id;
@@ -5739,7 +5749,7 @@ async function scMove(paths, stage) {
   scPaint();
   try {
     const data = await scPost(stage ? `/source-control/stage?${auth}` : `/source-control/unstage?${auth}`, { paths });
-    scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null };
+    scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null, prefix: data.prefix ?? "" };
     scSay("");
   } catch (error) {
     scSay(error.message);
@@ -5757,7 +5767,7 @@ async function scCommit() {
   try {
     if (merging) {
       const data = await scPost(`/source-control/continue?${auth}`, { message, mergeId: scState.merge.id });
-      scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null };
+      scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null, prefix: data.prefix ?? "" };
       scMessage.value = "";
       scSay("merge concluded");
     } else {
@@ -5780,9 +5790,15 @@ async function scCommit() {
 // format, meld) stay in the graph drawer where they belong.
 const scMenuEl = document.getElementById("scMenu");
 
+let scMenuPrior = null;
+
 function scCloseMenu() {
+  if (scMenuEl.hidden) return;
   scMenuEl.hidden = true;
   scMenuEl.replaceChildren();
+  const prior = scMenuPrior;
+  scMenuPrior = null;
+  if (prior instanceof HTMLElement && document.contains(prior)) prior.focus();
 }
 
 function scMenuItem(label, run, danger = false) {
@@ -5799,17 +5815,20 @@ function scMenuItem(label, run, danger = false) {
 
 function scOpenMenu(event, file, scope) {
   const items = [];
+  const rel = scRel(file.path);
   if (scope === "staged" || scope === "changes") {
     items.push(scMenuItem("Open Changes", () => scOpenDiff(file, scope)));
-    items.push(scMenuItem("Open File", () => exEditOpen(file.path)));
-    if (scope === "staged") items.push(scMenuItem("Open File (HEAD)", () => scOpenHead(file)));
+    // A deleted file has nothing to open, and a file outside the workspace has no explorer name.
+    if (rel && file.kind !== "D") items.push(scMenuItem("Open File", () => exEditOpen(rel)));
+    // An addition has no HEAD to read; a rename reads at the name it had there.
+    if (scope === "staged" && file.kind !== "A") items.push(scMenuItem("Open File (HEAD)", () => scOpenHead(file)));
     items.push(scMenuItem(scope === "staged" ? "Unstage Changes" : "Stage Changes", () => scMove([file.path], scope === "changes")));
     items.push(scMenuItem("Discard Changes", () => scDiscard(file), true));
     if (scope === "changes" && file.kind === "U") items.push(scMenuItem("Add to .gitignore", () => scIgnore(file)));
-    items.push(scMenuItem("Reveal in Explorer", () => scReveal(file)));
+    if (rel) items.push(scMenuItem("Reveal in Explorer", () => scReveal(file)));
   } else {
     items.push(scMenuItem("Open in Merge Editor", () => scOpenConflict(file.path)));
-    items.push(scMenuItem("Reveal in Explorer", () => scReveal(file)));
+    if (rel) items.push(scMenuItem("Reveal in Explorer", () => scReveal(file)));
   }
   scMenuEl.replaceChildren(...items);
   scMenuEl.hidden = false;
@@ -5817,8 +5836,17 @@ function scOpenMenu(event, file, scope) {
   const y = Math.min(event.clientY, innerHeight - items.length * 32 - 16);
   scMenuEl.style.left = `${Math.max(4, x)}px`;
   scMenuEl.style.top = `${Math.max(4, y)}px`;
+  scMenuPrior = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   items[0].focus();
 }
+scMenuEl.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const buttons = [...scMenuEl.querySelectorAll("button")];
+  const at = buttons.indexOf(document.activeElement);
+  const step = event.key === "ArrowDown" ? 1 : -1;
+  buttons[(at + step + buttons.length) % buttons.length].focus();
+});
 
 document.addEventListener("click", (event) => {
   if (!scMenuEl.hidden && !event.target.closest("#scMenu")) scCloseMenu();
@@ -5838,7 +5866,7 @@ document.addEventListener(
 async function scIgnore(file) {
   try {
     const data = await scPost(`/source-control/ignore?${auth}`, { path: file.path });
-    scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null };
+    scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null, prefix: data.prefix ?? "" };
     scSay(`${file.path} added to .gitignore`);
   } catch (error) {
     scSay(error.message);
@@ -5846,15 +5874,23 @@ async function scIgnore(file) {
   scPaint();
 }
 
-/** The files drawer, opened on the folder that holds this file. */
+/** The files drawer, opened on the folder that holds this file, every folder above it open. */
 async function scReveal(file) {
-  toggleDrawer("files");
-  const slash = file.path.lastIndexOf("/");
-  if (slash < 0) return;
-  const dir = file.path.slice(0, slash);
-  exState.expanded.add(dir);
-  await exLoad(dir, { quiet: true });
+  const rel = scRel(file.path);
+  if (!rel) return;
+  showDrawer("files");
+  exState.filter = "";
+  exFilterEl.value = "";
+  const parts = rel.split("/").slice(0, -1);
+  let dir = "";
+  for (const part of parts) {
+    dir = dir ? `${dir}/${part}` : part;
+    exState.expanded.add(dir);
+    await exLoad(dir, { quiet: true });
+  }
+  explorerCore.select(exState.sel, rel);
   exPaint();
+  exTreeEl.querySelector(`.ex-row[data-path="${CSS.escape(rel)}"]`)?.scrollIntoView({ block: "nearest" });
 }
 
 /** A file as HEAD held it, read-only in the diff modal's own frame. */
@@ -5869,7 +5905,7 @@ async function scOpenHead(file) {
   scDiffCloseBtn.focus();
   let data;
   try {
-    const res = await fetch(`/source-control/file?${auth}&path=${encodeURIComponent(file.path)}`);
+    const res = await fetch(`/source-control/file?${auth}&path=${encodeURIComponent(file.oldPath || file.path)}`);
     data = await res.json();
   } catch {
     if (!scDiffEl.hidden && gen === scDiffGen) scDiffFlags.textContent = "the daemon did not answer";
@@ -5890,7 +5926,7 @@ async function scOpenHead(file) {
     empty.textContent = data.binary ? "This file is not text." : "This file is empty.";
     scDiffBody.append(empty);
   } else {
-    const host = el("div");
+    const host = el("div", "sc-head-host");
     const preview = createTextPreview(host, { readOnly: true });
     preview.setDocument({ path: file.path, content: scDiffText });
     scDiffBody.append(host);
@@ -6051,7 +6087,7 @@ async function scDiscard(file) {
   scPaint();
   try {
     const data = await scPost(`/source-control/discard?${auth}`, { path: file.path });
-    scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null };
+    scState = { staged: data.staged ?? [], changes: data.changes ?? [], conflicts: data.conflicts ?? [], merge: data.merge ?? null, prefix: data.prefix ?? "" };
     scSay(`${file.path} discarded`);
   } catch (error) {
     scSay(error.message);
@@ -12917,6 +12953,7 @@ const openSheet = () => document.querySelector(".sheet:not([hidden])");
  * open. A menu and a name being typed are.
  */
 const drawerSurface = () =>
+  !scMenuEl.hidden ||
   !scDiffEl.hidden ||
   !exEditorEl.hidden ||
   !exConfirmEl.hidden ||
