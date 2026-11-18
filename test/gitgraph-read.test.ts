@@ -12,6 +12,10 @@ import {
 	getStashDetails,
 	getTagDetails,
 	getUncommittedDetails,
+	libreCommits,
+	libreRepoInfo,
+	libreSearch,
+	libreTagDetails,
 } from "../server/git/gitgraph/read.ts";
 import { UNCOMMITTED } from "../server/git/gitgraph/protocol.ts";
 import { git, scratchRepo } from "../test-support/git.ts";
@@ -111,7 +115,7 @@ test(
 		assert.ok(log.ok, log.ok ? "" : log.error);
 		const [uncommitted, ...commits] = log.value.commits;
 		assert.equal(uncommitted.hash, UNCOMMITTED);
-		assert.equal(uncommitted.message, "Uncommitted Changes");
+		assert.equal(uncommitted.message, "Uncommitted Changes (2)", "the row carries its count, so the page does not show it as ?");
 		// The walk covers the branch, the tag and `refs/stash`, so the stash's own commits — the change,
 		// its index and its untracked files — are rows beside the branch's three, newest first.
 		const branch = commits.filter((commit) => ["rename", "second", "first"].includes(commit.message));
@@ -144,7 +148,7 @@ test(
 		assert.ok(log.ok, log.ok ? "" : log.error);
 		assert.deepEqual(
 			log.value.commits.map((commit) => commit.message),
-			["Uncommitted Changes", "rename", "second", "first"],
+			["Uncommitted Changes (2)", "rename", "second", "first"],
 		);
 	}),
 );
@@ -165,7 +169,7 @@ test(
 		assert.ok(none.ok, none.ok ? "" : none.error);
 		assert.deepEqual(
 			none.value.commits.map((commit) => commit.message),
-			["Uncommitted Changes", "rename", "second", "first"],
+			["Uncommitted Changes (2)", "rename", "second", "first"],
 		);
 	}),
 );
@@ -286,6 +290,79 @@ test(
 		assert.ok(plain.ok, plain.ok ? "" : plain.error);
 		assert.equal(plain.value.name, "test");
 		assert.equal(plain.value.message.trim(), "rename");
+	}),
+);
+
+test(
+	"a clean tree gets no uncommitted row, and a dirty one keeps it with its count",
+	async () => {
+		// scratchRepo commits everything it writes, so it starts clean.
+		const repo = scratchRepo();
+		try {
+			const clean = await getCommits(repo, { ...graphOptions, stashes: [] });
+			assert.ok(clean.ok, clean.ok ? "" : clean.error);
+			assert.ok(clean.value.commits.every((commit) => commit.hash !== UNCOMMITTED), "no phantom * row on a clean tree");
+			assert.deepEqual(clean.value.commits.map((commit) => commit.message), ["first"]);
+			writeFileSync(join(repo, "dirty.txt"), "not committed\n");
+			const dirty = await getCommits(repo, { ...graphOptions, stashes: [] });
+			assert.ok(dirty.ok, dirty.ok ? "" : dirty.error);
+			assert.equal(dirty.value.commits[0].hash, UNCOMMITTED);
+			assert.equal(dirty.value.commits[0].message, "Uncommitted Changes (1)");
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	},
+);
+
+test(
+	"tags are shown even when the page asks for them hidden, so a picked tag filters the graph",
+	withHistory(async (repo) => {
+		const opts = { maxCommits: 50, branches: null, branchName: "", authors: null, tags: ["v1"], showRemoteBranches: true, hiddenRemotes: [] as string[], showTags: false, includeReflog: false, includeUnreachable: false, onlyFollowFirstParent: false, commitOrdering: "date" as const, showStashes: false };
+		const out = await libreCommits(repo, opts);
+		assert.equal(out.error, null);
+		assert.equal(out.commits.length, 1, "only the commit v1 names, and the tree is dirty so its row is filtered out by the tag pick");
+		assert.equal(out.commits[0].message, "rename");
+		assert.deepEqual(out.commits[0].refs.filter((ref) => ref.type === "tag").map((ref) => ref.name).sort(), ["plain", "v1"]);
+		// The dropdown and the pills agree: without a tag pick the same commit still carries both pills.
+		const unfiltered = await libreCommits(repo, { ...opts, tags: null });
+		assert.equal(unfiltered.error, null);
+		const tip = unfiltered.commits.find((commit) => commit.message === "rename");
+		assert.deepEqual(tip?.refs.filter((ref) => ref.type === "tag").map((ref) => ref.name).sort(), ["plain", "v1"]);
+		// And the repo info dropdown lists the same tags the pills show.
+		const info = await libreRepoInfo(repo, false);
+		assert.deepEqual(info.tags, ["plain", "v1"]);
+	}),
+);
+
+test(
+	"an annotated tag's details name the commit it peels to, not the tag object",
+	withHistory(async (repo) => {
+		const out = await libreTagDetails(repo, "v1");
+		assert.equal(out.error, null);
+		assert.ok(out.details);
+		assert.equal(out.details.type, "annotated");
+		assert.equal(out.details.targetHash, git(repo, "rev-parse", "v1^{commit}"));
+		assert.notEqual(out.details.objectHash, out.details.targetHash, "the tag object is not the commit");
+		const plain = await libreTagDetails(repo, "plain");
+		assert.equal(plain.error, null);
+		assert.equal(plain.details?.type, "lightweight");
+		assert.equal(plain.details?.targetHash, git(repo, "rev-parse", "plain^{commit}"));
+		assert.equal(plain.details?.objectHash, plain.details?.targetHash);
+	}),
+);
+
+test(
+	"search honours the picked tags and authors instead of dropping them",
+	withHistory(async (repo) => {
+		git(repo, "tag", "old", "HEAD~1");
+		const base = { showRemoteBranches: true, hiddenRemotes: [] as string[], showTags: true, branches: null, authors: null, tags: null };
+		const byTag = await libreSearch(repo, "second", 10, { ...base, tags: ["old"] });
+		assert.equal(byTag.error, null);
+		assert.deepEqual(byTag.results.map((entry) => entry.message), ["second"]);
+		const wrongTag = await libreSearch(repo, "second", 10, { ...base, tags: ["v1"] });
+		assert.deepEqual(wrongTag.results, []);
+		const byAuthor = await libreSearch(repo, "second", 10, { ...base, authors: ["nobody"] });
+		assert.deepEqual(byAuthor.results, []);
 	}),
 );
 

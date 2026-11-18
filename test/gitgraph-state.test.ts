@@ -21,6 +21,13 @@ function freshWorkspace(id: string) {
 	return { id };
 }
 
+test("a stored showTags of disabled, or the legacy 0, reads back as default so tags stay visible", () => {
+	assert.equal(state.repoStateFrom({ showTags: "disabled" }).showTags, "default");
+	assert.equal(state.repoStateFrom({ showTags: 0 }).showTags, "default");
+	assert.equal(state.repoStateFrom({ showTags: "enabled" }).showTags, "enabled");
+	assert.equal(state.repoStateFrom({ showTags: 1 }).showTags, "enabled");
+});
+
 test("a workspace nobody has opened the view in starts from the defaults", () => {
 	const ws = freshWorkspace("w-defaults");
 	const loaded = state.stateFor(ws);

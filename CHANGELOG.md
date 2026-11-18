@@ -6,6 +6,7 @@
 - fix: Choose the default model on the crossroads settings page from a dropdown of the scoped models pi cycles, instead of typing it, so the list matches what the board's model picker offers. [t-39485919]
 - feat: Add a helper model setting, chosen from the same scoped list, for the model that names a thread and drafts a commit message, replacing the hardcoded naming model. [t-39485919]
 - feat: Consolidate the top bar into `view`, `housekeeping` and `toolbox` menu chips, and move the overview map toggle and the hotkeys list into board settings, so the header keeps only the doors and actions used most. [t-e07b713a]
+- fix: Show git tags in the graph again — a stored "disabled" no longer hides the tag pills while the tag dropdown still lists them, so picking a tag filters the graph instead of emptying it; drop the phantom uncommitted row on a clean tree and carry its change count when the tree is dirty; name the commit an annotated tag peels to in its details; honour the picked branches, authors and tags in commit search and the unreachable-commits setting in the walk, all of which were accepted and ignored — and draw the graph toolbar icons in Codicon at full brightness instead of faint text glyphs. [t-bb52fc39]
 
 ## [0.4.0] - 2026-11-18
 
