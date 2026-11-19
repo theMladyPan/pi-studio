@@ -42,9 +42,21 @@ It installs only the release it names: the archive has to be the official build 
 and tag, and an older release never replaces a newer installed copy.
 
 Node 22.18 or newer has to be on that machine already, and the installer stops without it. `git` and
-the `pi` CLI are what threads need: the installer warns when either is missing and installs anyway, so
-add them before you use the board. It ships none of them and installs no npm packages. A release is
-compiled JavaScript, so the Node you have does not have to read TypeScript.
+the `pi` CLI are what threads need, so the run ends with a report of what the board still cannot do:
+the four parts it leans on, what was found, and the command that installs what was not. It ships none
+of them and installs no npm packages. A release is compiled JavaScript, so the Node you have does not
+have to read TypeScript.
+
+```bash
+pi-studio doctor
+```
+
+That report stays a command of its own, so it can be asked again after anything changes on the
+machine, and its exit code is 1 while something is missing: a setup script can ask the same question
+without reading the English. `--json` prints the same report as data. The four parts are the Node a
+shell would start the command with, git for the repository features, the pi install a thread is started
+from, and the drawing the git drawer borrows — the only one the board runs without, with just
+the full graph staying dark.
 
 ### From a checkout
 

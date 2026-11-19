@@ -253,6 +253,12 @@ test("--version works in the source clone and in a staged copy", async () => {
 	assert.ok(existsSync(join(staged, "bin", "runtime.mjs")), "staged tree carries the lifecycle helpers");
 	assert.ok(existsSync(join(staged, "bin", "manage.mjs")), "staged tree carries the lifecycle helpers");
 	assert.ok(!existsSync(join(staged, "bin", "install.mjs")), "staged tree does not carry the source-only install entry");
+
+	// The staged launcher asks the compiled doctor, which is the one rewrite the staging does beyond
+	// the app entry: a specifier left as TypeScript would answer with a module-not-found instead.
+	const stagedDoctor = await run(process.execPath, [join(staged, "bin", "pi-studio"), "doctor"]);
+	assert.match(stagedDoctor.stdout, /^pi-studio \d+\.\d+\.\d+ at /m, stagedDoctor.stdout + stagedDoctor.stderr);
+	for (const part of ["node", "git", "pi", "graph"]) assert.match(stagedDoctor.stdout, new RegExp(`(ok|missing)\\s+${part}`), stagedDoctor.stdout);
 });
 
 test("install stages a versioned copy, switches current and the launcher, and leaves the source alone", async (t) => {

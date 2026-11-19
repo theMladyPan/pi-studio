@@ -98,8 +98,12 @@ function main() {
 
 	// Staged launcher only; the source bin/pi-studio keeps pointing at server.ts for dev.
 	// The launcher imports its lifecycle helpers by relative path, so the staged tree must
-	// carry them too; the source-only install entry (bin/install.mjs) stays out.
-	const launcher = readFileSync(join(root, "bin", "pi-studio"), "utf8").replaceAll("server.ts", "server.js");
+	// carry them too; the source-only install entry (bin/install.mjs) stays out. The doctor the
+	// launcher reaches for is compiled like the rest of the app, so its specifier is the second
+	// rewrite: both name a module the staged tree holds as JavaScript.
+	const launcher = readFileSync(join(root, "bin", "pi-studio"), "utf8")
+		.replaceAll("server.ts", "server.js")
+		.replaceAll("server/doctor.ts", "server/doctor.js");
 	mkdirSync(join(out, "bin"), { recursive: true });
 	writeFileSync(join(out, "bin", "pi-studio"), launcher);
 	chmodSync(join(out, "bin", "pi-studio"), 0o755);
