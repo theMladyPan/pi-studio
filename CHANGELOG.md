@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Emptying the board now sweeps the trees its threads worked in, so spent worktrees leave with the board instead of lingering on disk with no thread left to retire them; trees holding unmerged work stay for leftovers to name. The same sweep runs when the put-away cap drops a child. [t-e855512f]
+
 ## [0.5.1] - 2026-11-19
 
 - fix: Show git tags in the graph again — a stored "disabled" no longer hides the tag pills while the tag dropdown still lists them, so picking a tag filters the graph instead of emptying it; drop the phantom uncommitted row on a clean tree and carry its change count when the tree is dirty; name the commit an annotated tag peels to in its details; honour the picked branches, authors and tags in commit search and the unreachable-commits setting in the walk, all of which were accepted and ignored — and draw the graph toolbar icons in Codicon at full brightness instead of faint text glyphs.

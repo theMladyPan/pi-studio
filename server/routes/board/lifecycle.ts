@@ -205,7 +205,9 @@ function hideClosedCard(board, thread) {
  * Both places count the one shape `putAwayByBoard` describes — a child the board put away — so a thread the
  * human started or closed by hand is never read as room, however many rows the rail draws with it. Only a
  * child the board put away is retired: a thread that still owns a card is drawn through it, and one that is
- * not idle is still working, so each of those is passed over rather than read as room.
+ * not idle is still working, so each of those is passed over rather than read as room. A trimmed child's
+ * tree is swept the way a closed thread's is: spent work goes at once, and a tree holding unmerged work
+ * stays for leftovers to name, instead of lingering with no thread left to answer for it.
  */
 function trimPutAway(board) {
 	const away = [...board.threads.values()].filter(putAwayByBoard);
@@ -223,6 +225,9 @@ function trimPutAway(board) {
 		board.children.delete(old.id);
 		board.threads.delete(old.id);
 	}
+	// The trimmed threads are gone, so their trees are no longer live: retire the spent ones in place and
+	// leave a tree holding unmerged work standing, rather than leaving every such folder behind.
+	sweepTrees(board);
 }
 
 
