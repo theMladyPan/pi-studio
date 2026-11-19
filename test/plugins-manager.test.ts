@@ -22,6 +22,7 @@ process.env.PI_STUDIO_STATE = join(root, "state");
 const { notifyPlugin, pluginManager, startPlugins, stopPlugins } = await import("../server/plugins/manager.ts");
 const { createPluginService } = await import("../server/plugins/service.ts");
 const { threadSettled } = await import("../server/bus.ts");
+const { streamTick } = await import("../server/child/run.ts");
 
 // A plugin is any executable that speaks the line protocol. This one answers `initialize`, echoes what
 // it is asked, records the events the daemon sends it, and writes what it did to a file, so a test can
@@ -289,6 +290,50 @@ test("a subscribed plugin is told with the envelope, and one that never asked he
 		assert.deepEqual(event.thread, { id: "thread-1", title: "fix the parser", status: "idle", answered: true });
 		// The plugin that never subscribed is not sent an event it did not ask for.
 		assert.equal(await manager.request("silent", "recall"), null);
+	} finally {
+		await manager.close();
+	}
+});
+
+test("a subscribed plugin hears a running answer as it is written", async () => {
+	const watching = entry("streamer");
+	const settling = entry("settler");
+	const service = createPluginService();
+	const manager = await startPlugins({
+		file: register("stream", [watching.entry, settling.entry]),
+		log: quiet,
+		onRequest: (call) => service.handle(call),
+	});
+	try {
+		assert.deepEqual(await manager.request("streamer", "subscribe", { types: ["thread.stream"] }), { types: ["thread.stream"] });
+		assert.deepEqual(await manager.request("settler", "subscribe", { types: ["thread.settled"] }), { types: ["thread.settled"] });
+		// The flush a browser's card is repainted with is the flush a subscriber reads, so the event is
+		// raised by the same tick and carries the same words.
+		const board = { id: "workspace-1", name: "board", folder: "/tmp", activity: [], cards: new Map(), threads: new Map(), clients: new Set() };
+		const thread = {
+			id: "thread-2",
+			title: "say something",
+			status: "running",
+			hidden: false,
+			answering: { turn: 0 },
+			turns: [{ text: "say something", status: "sent", streaming: true }],
+			streamInterim: ["reading the file"],
+			streamLast: "",
+			streamParts: new Map([["part-1", "half a sen"]]),
+		};
+		board.threads.set(thread.id, thread);
+		streamTick(board, thread);
+		const event = (await manager.request("streamer", "recall")) as any;
+		assert.deepEqual(Object.keys(event).sort(), ["at", "interim", "reply", "thread", "turn", "type", "workspace"]);
+		assert.equal(event.type, "thread.stream");
+		assert.equal(event.workspace, "workspace-1");
+		assert.equal(typeof event.at, "number");
+		assert.deepEqual(event.thread, { id: "thread-2", title: "say something" });
+		assert.equal(event.turn, 0);
+		assert.deepEqual(event.interim, ["reading the file"]);
+		assert.equal(event.reply, "half a sen");
+		// A plugin that asked only for the settled run is not sent the words on the way there.
+		assert.equal(await manager.request("settler", "recall"), null);
 	} finally {
 		await manager.close();
 	}

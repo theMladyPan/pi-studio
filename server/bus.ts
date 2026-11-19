@@ -48,6 +48,37 @@ export function threadSettled(board, thread, turn) {
 
 
 
+/**
+ * Whoever hears a running answer as it is written, besides the tab that repaints its card. A flush
+ * already carries what the run has said so far, so a subscriber reads the same words the card shows
+ * rather than a second reading of the child's lines.
+ */
+const streamListeners = new Set();
+
+
+
+/** Listen for what a running answer says on its way. The returned function stops the listening. */
+export function onThreadStream(listener) {
+	streamListeners.add(listener);
+	return () => streamListeners.delete(listener);
+}
+
+
+
+/** A running answer was flushed: `said` is the reply so far and the narration that led to it. */
+export function threadStream(board, thread, said) {
+	for (const listener of [...streamListeners]) {
+		try {
+			listener(board, thread, said);
+		} catch (error) {
+			// One listener that throws is that subscriber's problem, never the board's.
+			console.error(`pi-studio: a stream listener failed: ${error.message}`);
+		}
+	}
+}
+
+
+
 /** Rebuild every open tab from the board as it stands, after something large changed at once. */
 export function resync(board) {
 	// A snapshot is everything a tab draws. The closed cards go in for the other half of the reason: a link to a

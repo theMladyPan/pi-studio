@@ -15,7 +15,7 @@ import { StringDecoder } from "node:string_decoder";
 import { lastLine, transientFailure } from "./describe.ts";
 import { nameThread, titleFromRequest } from "../worktrees/name.ts";
 import { helperModel } from "../workspaces.ts";
-import { broadcast, card, update, updateCard } from "../bus.ts";
+import { broadcast, card, threadStream, update, updateCard } from "../bus.ts";
 import { compacted } from "../waiters.ts";
 import { modeChangeNote } from "./modes.ts";
 import { beginCommand, flushCommands, settleCommand } from "./command.ts";
@@ -403,8 +403,8 @@ export function stopStream(thread) {
 
 
 /**
- * Put what the child has said so far on the turn and tell the browsers. The board file is not
- * written: half a sentence is not a thing to reopen tomorrow.
+ * Put what the child has said so far on the turn and tell the browsers and whoever subscribed to the
+ * running answer. The board file is not written: half a sentence is not a thing to reopen tomorrow.
  */
 export function streamTick(board, thread) {
 	streamTimers.delete(thread);
@@ -425,4 +425,6 @@ export function streamTick(board, thread) {
 		const shown = homeCard(board, thread);
 		if (shown) broadcast(board, { type: "update", card: plainCardFor(shown, board), quiet: true });
 	}
+	// Whoever subscribed to a running answer hears the same flush the card was repainted with.
+	threadStream(board, thread, { interim, reply });
 }
