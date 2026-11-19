@@ -44,6 +44,188 @@ document.getElementById("termBtn").addEventListener("click", () => {
   closeHeaderMenus();
   terminalDrawer.toggle();
 });
+// The plugin panel: one sandboxed frame for the life of the page, the doors the toolbox lists for the
+// plugins that declared a panel, and the one call a panel is allowed to make.
+const pluginPanel = createPluginPanelHost({ workspace });
+
+// ---------- the plugin panel ---------------------------------------------
+/**
+ * The board's window onto a plugin's own panel.
+ *
+ * A plugin is a program the human installed and the daemon runs. When the registration also names a panel,
+ * the toolbox gets a door for it, and pressing one loads that panel's own page into a frame here. The frame
+ * is sandboxed with `allow-scripts` and nothing else, so its document has an opaque origin: it is handed no
+ * cookie, it cannot read this page, its storage or its DOM, and it opens no popup and follows no form.
+ *
+ * What a panel wants travels one way and is answered in one place. It posts a message to this page, this
+ * page posts it to `/plugins/visual/request` with the session cookie the tab already holds, and the answer
+ * goes back as a message. A message is believed only when it comes from this frame's own window and carries
+ * the secret this page made for the panel it loaded: the sandbox is what keeps another frame from being that
+ * window, and the secret is what tells a panel of this load from one left behind by an earlier one.
+ *
+ * The words, in both directions, are the whole bridge:
+ *
+ *   this page → panel   { type: "pi-studio.host.hello", nonce, plugin }
+ *   panel → this page   { type: "pi-studio.visual.request", nonce, id, method, params }
+ *   panel → this page   { type: "pi-studio.visual.close", nonce }
+ *   this page → panel   { type: "pi-studio.visual.result", nonce, id, result }
+ *   this page → panel   { type: "pi-studio.visual.error", nonce, id, error: { code, message } }
+ *
+ * Neither direction carries a token, a cookie or the daemon's address: the frame is same-origin with this
+ * page for its own files only, and every request it makes is made here, with this page's own promise.
+ */
+function createPluginPanelHost({ workspace }) {
+  const drawer = document.getElementById("pluginDrawer");
+  const scrim = document.getElementById("pluginScrim");
+  const frame = document.getElementById("pvFrame");
+  const titleEl = document.getElementById("pvTitle");
+  const noteEl = document.getElementById("pvNote");
+  const closeBtn = document.getElementById("pvClose");
+  const doors = document.getElementById("pluginDoors");
+  /** The plugin whose panel is on screen, `""` before a door was ever pressed. */
+  let plugin = "";
+  /** Has the panel's own document loaded, which is when it can hear a greeting. */
+  let loaded = false;
+  /** The secret this page made for the panel it loaded. The only one it believes an answer from. */
+  let nonce = "";
+  /** What had the focus before the panel took it, so closing puts it back. */
+  let back = null;
+
+  function newNonce() {
+    try {
+      if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+    } catch {}
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  /**
+   * One message to the panel. The target origin is `"*"` because a sandboxed document has no origin of its
+   * own to name; what keeps a stranger out is the frame's window above, and the secret in every message.
+   */
+  function say(message) {
+    if (!frame.contentWindow) return;
+    frame.contentWindow.postMessage({ ...message, nonce }, "*");
+  }
+
+  /**
+   * One request from the panel, asked of the daemon and answered back into the frame. This page adds the two
+   * things the frame cannot know and must not decide: which plugin it is showing, and which workspace this
+   * tab belongs to. The daemon resolves the workspace against its own list, so no page names a folder.
+   */
+  async function relay(request) {
+    const id = request.id;
+    if (id === undefined || id === null) return;
+    const method = typeof request.method === "string" ? request.method : "";
+    if (method === "") {
+      say({ type: "pi-studio.visual.error", id, error: { code: -32600, message: "a panel call names the method it wants" } });
+      return;
+    }
+    let answer;
+    try {
+      const response = await fetch(`/plugins/visual/request?plugin=${encodeURIComponent(plugin)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace, method, params: request.params ?? {} }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (payload && payload.error) answer = { type: "pi-studio.visual.error", id, error: payload.error };
+      else answer = { type: "pi-studio.visual.result", id, result: payload ? payload.result ?? null : null };
+    } catch (error) {
+      answer = { type: "pi-studio.visual.error", id, error: { code: -32000, message: `the daemon did not answer: ${error.message || error}` } };
+    }
+    say(answer);
+  }
+
+  function open(panel) {
+    if (!panel || typeof panel.url !== "string" || panel.url === "") return;
+    closeHeaderMenus();
+    const opening = drawer.hidden;
+    plugin = typeof panel.name === "string" ? panel.name : "";
+    titleEl.textContent = (typeof panel.title === "string" && panel.title) || plugin || "plugin";
+    noteEl.textContent = plugin;
+    if (frame.dataset.plugin !== plugin) {
+      // Another plugin is another document and another secret. A frame that kept the page it had would keep
+      // a secret this page no longer believes, which is why the panel's plugin is part of what is compared.
+      nonce = newNonce();
+      loaded = false;
+      frame.dataset.plugin = plugin;
+      frame.src = panel.url;
+    }
+    if (opening) back = document.activeElement instanceof Element ? document.activeElement : null;
+    scrim.hidden = false;
+    drawer.hidden = false;
+    frame.focus();
+    // A panel already loaded keeps its state, so a second press finds it where it was rather than reloading it.
+    if (loaded) say({ type: "pi-studio.host.hello", plugin });
+  }
+
+  function close() {
+    if (drawer.hidden) return;
+    drawer.hidden = true;
+    scrim.hidden = true;
+    const target = back instanceof Element && back.isConnected ? back : null;
+    back = null;
+    if (target) target.focus();
+  }
+
+  // The frame is `about:blank` until a door is pressed, and that is not a panel to greet. Once one is, its
+  // own document has landed, and the greeting is what tells it the secret every message of this load carries.
+  frame.addEventListener("load", () => {
+    if (plugin === "") return;
+    loaded = true;
+    say({ type: "pi-studio.host.hello", plugin });
+  });
+
+  window.addEventListener("message", (event) => {
+    // The frame's own window, and a document the sandbox left without an origin: either check alone is
+    // reachable, since this page can hold other frames and another site can frame this page.
+    if (!frame.contentWindow || event.source !== frame.contentWindow) return;
+    if (event.origin !== "null") return;
+    const data = event.data;
+    if (!data || typeof data !== "object") return;
+    // The secret this page made for the panel it loaded. A panel left in the frame by an earlier load, and
+    // a frame a panel put inside itself, cannot know it.
+    if (nonce === "" || data.nonce !== nonce) return;
+    if (data.type === "pi-studio.visual.close") return close();
+    if (data.type === "pi-studio.visual.request") void relay(data);
+  });
+
+  /**
+   * One door per panel the daemon lists, read once: which plugins are installed and running is a fact of its
+   * own start, so a panel added while it runs is a door on the next one. The listing is the daemon's answer
+   * about the human at the keyboard, and a board no plugin offers a panel to simply keeps its toolbox as it
+   * was.
+   */
+  async function listDoors() {
+    if (!workspace) return;
+    let payload;
+    try {
+      const response = await fetch("/plugins/visual");
+      if (!response.ok) return;
+      payload = await response.json();
+    } catch {
+      return;
+    }
+    const panels = Array.isArray(payload?.plugins) ? payload.plugins : [];
+    for (const panel of panels) {
+      if (!panel || typeof panel.name !== "string" || typeof panel.url !== "string") continue;
+      const door = document.createElement("button");
+      door.type = "button";
+      door.setAttribute("role", "menuitem");
+      door.textContent = (typeof panel.title === "string" && panel.title) || panel.name;
+      door.title = `open the ${door.textContent} plugin panel`;
+      door.addEventListener("click", () => open(panel));
+      doors.append(door);
+    }
+    doors.hidden = panels.length === 0;
+  }
+  void listDoors();
+
+  closeBtn.addEventListener("click", () => close());
+  scrim.addEventListener("click", () => close());
+
+  return { isOpen: () => !drawer.hidden, close };
+}
 // ---------- the header menus ---------------------------------------------
 // Three chips in the header, each opening one menu outside it. A menu that closed while its item held
 // the focus would leave the keyboard on a hidden element, so closing hands the focus to the chip.
@@ -828,7 +1010,7 @@ function exDrawerToggle(state, name) {
  * opens in stands over everything, a name being edited or a menu standing open goes before the drawer,
  * and the drawer goes before the card the board is reading.
  */
-const EX_ESCAPE_ORDER = ["editor", "confirm", "menu", "rename", "create", "sheet", "git", "terminal", "drawer", "card"];
+const EX_ESCAPE_ORDER = ["editor", "confirm", "menu", "rename", "create", "sheet", "plugin", "git", "terminal", "drawer", "card"];
 
 function exEscapeTarget(open) {
   for (const one of EX_ESCAPE_ORDER) if (open?.[one]) return one;
@@ -8823,7 +9005,7 @@ const SHORTCUTS = [
       { keys: "r", does: "reply to the card you are reading" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
       { keys: "q", does: "close the card you are reading" },
-      { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the git graph, then the terminal, then the files drawer, or with nothing open, let go of the selected card" },
+      { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the plugin panel, then the git graph, then the terminal, then the files drawer, or with nothing open, let go of the selected card" },
       { keys: "ctrl+z", does: "undo a close and put the card back" },
       { keys: "ctrl+m", does: "cycle the mode of the card you are reading: agent, plan, boss, discuss, then back on" },
     ],
@@ -8933,9 +9115,10 @@ function paintShortcuts() {
  * Whether a panel of the header is reading the screen. Both of them cover the board, so the letters the
  * map on screen teaches are not the letters a board key may act on behind it. An open header menu covers
  * the board the same way, so its own letters wait behind it too. The git drawer covers it
- * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too.
+ * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too, and so does
+ * a plugin's panel, whose page is the only thing the keyboard can reach while it is down.
  */
-const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || gitDrawer.isOpen() || terminalDrawer.isOpen();
+const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen();
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
@@ -12762,6 +12945,7 @@ function exOpenSurfaces() {
     create: Boolean(exState.draft),
     sheet: Boolean(sheet),
     git: gitDrawer.isOpen(),
+    plugin: pluginPanel.isOpen(),
     terminal: terminalDrawer.isOpen(),
     drawer: Boolean(drawerState.open),
     card: Boolean(document.querySelector(".card.active")) || selectedIds.size > 0,
@@ -12771,8 +12955,8 @@ function exOpenSurfaces() {
 // The selection is a reading position, so Escape gives it up: the board stops dimming and the wheel
 // goes back to moving the board. Everything that stands over the board takes Escape first and stops it
 // there, and the order it is read in is the drawer's own list — the editor a file opened in, the
-// permanent-delete question, a name or a menu of the files drawer, a sheet, the git graph, the drawer,
-// and only then the card being read.
+// permanent-delete question, a name or a menu of the files drawer, a sheet, a plugin's panel, the git
+// graph, the drawer, and only then the card being read.
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   // The `@` list is its own surface and takes Escape first, so shutting it does not also drop
@@ -12805,6 +12989,7 @@ document.addEventListener("keydown", (event) => {
   }
   // The drawer covers the board, so Escape rolls it up before it lets go of the card being read. A press
   // inside its page never reaches this handler, and comes back as the page's own `close` message.
+  if (target === "plugin") return pluginPanel.close();
   if (target === "git") return gitDrawer.close();
   if (target === "terminal") return terminalDrawer.close();
   // The files drawer is an overlay of the left column, so Escape rolls it up before it lets go of the

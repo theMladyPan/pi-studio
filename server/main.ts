@@ -35,6 +35,7 @@ import { onCardPdf } from "./routes/board/pdf.ts";
 import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onThreadCollect, onUndo } from "./routes/board/lifecycle.ts";
 import { onShell } from "./routes/board/shell.ts";
 import { onGitInit, onGitMsg, onGitPage, onGitVendor } from "./routes/gitgraph.ts";
+import { onVisualFile, onVisualPanels, onVisualRequest, VISUAL_PREFIX } from "./routes/plugins.ts";
 import { onCommand } from "./routes/board/command.ts";
 import { onSourceControlCommit, onSourceControlConflict, onSourceControlContinue, onSourceControlDiff, onSourceControlDiscard, onSourceControlFileAtHead, onSourceControlIgnore, onSourceControlMessage, onSourceControlResolve, onSourceControlStage, onSourceControlStatus, onSourceControlUnstage } from "./routes/board/source-control.ts";
 import { attachTerminal, stopAllTerminals, terminalSize } from "./terminal.ts";
@@ -735,7 +736,24 @@ export const server = createServer((req, res) => {
 			);
 			return;
 		}
+		// The panels a plugin may put on this board, and the files one of them loads. They name no board of
+		// their own, because a panel belongs to the daemon rather than to a folder, and they sit behind the
+		// caller check like every other data route because a panel is the human's to see.
+		if (req.method === "GET" && url.pathname === "/plugins/visual") {
+			onVisualPanels(res);
+			return;
+		}
+		if (req.method === "GET" && url.pathname.startsWith(VISUAL_PREFIX)) {
+			onVisualFile(res, url.pathname);
+			return;
+		}
 		if (req.method === "POST") {
+			// One call a panel's frame makes. The plugin is the one whose panel is on screen, and the
+			// workspace is resolved here from this daemon's own list, so a page never names a folder.
+			if (url.pathname === "/plugins/visual/request") {
+				await onVisualRequest(req, res, url, caller);
+				return;
+			}
 			const routing = {
 				"/thread": onThread,
 				"/thread/spawn": onThreadSpawn,

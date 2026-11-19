@@ -4,7 +4,7 @@
  */
 import { answer, fail, readJson } from "../../http.ts";
 import { cardIndex } from "./index.ts";
-import { cardPreamble, field } from "./thread.ts";
+import { cardPreamble, field, refusal } from "./thread.ts";
 import { randomUUID } from "node:crypto";
 import { runtimeDefaults } from "../../workspaces.ts";
 import { card, update, updateCard } from "../../bus.ts";
@@ -58,15 +58,36 @@ function pickedNames(held) {
 export async function onMessage(req, res, board) {
 	const body = await readJson(req, res);
 	if (!body) return;
+	let sent;
+	try {
+		sent = await messageOnBoard(board, body);
+	} catch (error) {
+		return void fail(res, error.status ?? 500, error.message);
+	}
+	answer(res, 200, sent);
+}
+
+
+
+/**
+ * A message into a thread, and the turn it was written on.
+ *
+ * It is the service behind `POST /message` and behind the `threads.prompt` a plugin calls, so a plugin's
+ * words reach the thread the way the human's do: the board's sections above the human's own line, the
+ * turn drawn on the card, and a thread already answering queues the message behind its run unless the
+ * caller steers it into the one in flight. A refusal throws with the status the route would have
+ * answered.
+ */
+export async function messageOnBoard(board, body) {
 	const text = typeof body.text === "string" ? body.text.trim() : "";
 	// A message may be pictures alone: the words are what a turn says, and a screenshot says something.
 	const images = acceptedImages(body.images);
 	// The commands the human arranged as chips beside the words, in their order: names the menu offered, and
 	// the whole list rides this one message.
 	const picked = pickedNames(body.commands);
-	if (typeof picked === "string") return void fail(res, 400, picked);
+	if (typeof picked === "string") throw refusal(400, picked);
 	// Chips alone are still something to say: a skill's file and the instruction to read it are the request.
-	if (!text && !images.length && !picked.length) return void fail(res, 400, "empty message");
+	if (!text && !images.length && !picked.length) throw refusal(400, "empty message");
 	// What the turn remembers of them, which is the thumbnail and not the bytes.
 	const thumbs = thumbImages(images);
 	const mode = body.mode === "steer" ? "steer" : "queue";
@@ -86,7 +107,7 @@ export async function onMessage(req, res, board) {
 	// or a thread that has since ended, starts a thread of its own under the card instead.
 	const askedCard = asked ? board.cards.get(asked) : undefined;
 	let thread = asked && !askedCard ? board.threads.get(asked) : undefined;
-	if (asked && !askedCard && !thread) return void fail(res, 409, "no such card");
+	if (asked && !askedCard && !thread) throw refusal(409, "no such card");
 	// Only the thread that already answers for a card keeps the question on that card. A fork, or a card
 	// nobody answers for, gets a thread of its own, and a thread card is where its turns belong.
 	let answeredByOwner = false;
@@ -138,12 +159,12 @@ export async function onMessage(req, res, board) {
 			card(board, thread);
 		}
 	}
-	if (thread.status === "dead") return void fail(res, 409, "thread ended");
+	if (thread.status === "dead") throw refusal(409, "thread ended");
 	// What the chips bring to the turn: a skill named for the agent to read, a template's text carried, an
 	// extension command run, both before the message goes out — one turn and one answer is what the human asked
 	// the chips to be.
 	const chipped = picked.length ? await chipSections(board, thread, picked) : { sections: "" };
-	if ("error" in chipped) return void fail(res, chipped.status, chipped.error);
+	if ("error" in chipped) throw refusal(chipped.status, chipped.error);
 
 	// The card shows what the human typed; the child is told what card it is about. The answer is kept
 	// where it will be read: a thread that is drawn has a card of its own, the field is docked in that
@@ -207,7 +228,7 @@ export async function onMessage(req, res, board) {
 	} else {
 		prompt(board, thread, message, target, images, said);
 	}
-	answer(res, 200, { id: thread.id, turn: index });
+	return { id: thread.id, turn: index };
 }
 
 

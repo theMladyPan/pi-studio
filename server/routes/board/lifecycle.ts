@@ -9,7 +9,7 @@ import { CHILD_CLOSE_DELAY_MS, MAX_PUT_AWAY_CHILDREN } from "../../limits.ts";
 import { MAX_PLAIN_CARDS, putAwayByBoard, scheduleSave } from "../../store.ts";
 import { ownedCards, refreshOwned } from "./message.ts";
 import { answer, fail, readJson } from "../../http.ts";
-import { field } from "./thread.ts";
+import { field, refusal } from "./thread.ts";
 import { randomUUID } from "node:crypto";
 import { cleanBoard, clearBoard, plainCardFor, stopQueue, sweepTrees } from "../../cards.ts";
 import { existsSync, unlinkSync } from "node:fs";
@@ -465,15 +465,33 @@ export async function onUndo(req, res, board) {
 
 
 export async function onStop(req, res, board) {
-	// A card stops its own thread; no card stops every running thread, which is what the bottom bar of a one-session board asks for.
 	const body = (await readJson(req, res)) ?? {};
+	let stopped;
+	try {
+		stopped = stopOnBoard(board, body);
+	} catch (error) {
+		return void fail(res, error.status ?? 500, error.message);
+	}
+	answer(res, 200, stopped);
+}
+
+
+
+/**
+ * Ask a run to give up, and answer the threads it was asked of.
+ *
+ * It is the service behind `POST /stop` and behind the `threads.stop` a plugin calls: a card stops its
+ * own thread, and no card stops every running thread, which is what the bottom bar of a one-session
+ * board asks for. A refusal throws with the status the route would have answered.
+ */
+export function stopOnBoard(board, body) {
 	const asked = body?.cardId ? threadForRuntime(board, field(body.cardId, 100)) : undefined;
 	const running = asked
 		? asked.status === "running"
 			? [asked]
 			: []
 		: [...board.threads.values()].filter((thread) => thread.status === "running");
-	if (!running.length) return void fail(res, 409, asked ? "this thread has no run in progress" : "no run in progress");
+	if (!running.length) throw refusal(409, asked ? "this thread has no run in progress" : "no run in progress");
 	for (const thread of running) {
 		// A child still starting has no run to abort, so the request is kept for its first turn.
 		thread.abortWanted = true;
@@ -484,7 +502,7 @@ export async function onStop(req, res, board) {
 			// A child already gone has nothing to abort.
 		}
 	}
-	answer(res, 200, { stopped: running.map((thread) => thread.id) });
+	return { stopped: running.map((thread) => thread.id) };
 }
 
 

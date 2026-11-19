@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>example panel</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <!--
+    An example plugin panel. It is a plain page with no dependency of its own, shown in a frame that has no
+    origin of its own, so it can reach neither the board around it nor the daemon behind it: every call it
+    makes is one message to the board, which asks the daemon for it. `panel.js` holds that conversation.
+  -->
+  <h1>example panel</h1>
+  <p class="note" id="status">waiting for the board</p>
+  <p>
+    <button type="button" id="echo">ask the plugin to echo</button>
+    <button type="button" id="now">ask the plugin for its clock</button>
+    <button type="button" id="close">close the panel</button>
+  </p>
+  <pre id="log" aria-live="polite"></pre>
+  <script src="panel.js"></script>
+</body>
+</html>
