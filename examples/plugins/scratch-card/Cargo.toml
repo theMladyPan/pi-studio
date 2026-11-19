@@ -1,0 +1,9 @@
+[package]
+name = "pi-studio-scratch-card"
+version = "0.1.0"
+edition = "2021"
+description = "An example pi-studio plugin: one note on the scratch board for every run that ends"
+publish = false
+
+[dependencies]
+serde_json = "1"
