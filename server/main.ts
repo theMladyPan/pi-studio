@@ -858,6 +858,23 @@ server.on("upgrade", (req, socket, head) => {
 /** Set once the daemon is on its way out, so a second signal does not flush and close everything twice. */
 let stopping = false;
 
+/** The plugin start in flight. `start()` sets it, and a signal waits on it before it leaves. */
+let pluginsUp: Promise<unknown> = Promise.resolve();
+
+/**
+ * Stop every plugin, including one still on its way up, and answer once they are gone.
+ *
+ * A start in flight is in no manager yet — the roster is held only once every handshake is answered —
+ * so closing what `pluginManager()` holds would close nothing and leave that plugin behind a daemon
+ * that had already gone. Both waits carry their own clock, the handshake's and the close's, so this
+ * settles on its own; nothing here is raced against a timer, because a timer that fired first is
+ * exactly what would strand the process it was waiting for.
+ */
+async function stopPluginsOnExit() {
+	await pluginsUp;
+	await stopPlugins();
+}
+
 export function shutdown() {
 	if (stopping) return;
 	stopping = true;
@@ -868,7 +885,7 @@ export function shutdown() {
 	// A plugin is a process this daemon started, so it is asked to stop before the daemon goes and the
 	// exit waits for it. The clock below is the end of that wait: a plugin that ignores `shutdown` is
 	// left to the operating system rather than keeping a stopped daemon alive.
-	const plugins = stopPlugins();
+	const plugins = stopPluginsOnExit();
 	server.close(() => {
 		void plugins.finally(() => process.exit(0));
 	});
@@ -984,17 +1001,25 @@ export function start() {
 		process.exit(1);
 	}
 	// A stopped daemon must not leave its shells behind: they are spawned detached, so a plain exit
-	// would orphan them. Every live way out goes through `shutdown`, which flushes the boards, stops the
-	// shells, the children and the plugins, and then closes the socket.
-	process.on("SIGTERM", shutdown);
-	process.on("SIGINT", shutdown);
+	// would orphan them. A plugin is a process this daemon started too, so it is asked to stop and the
+	// exit waits for it, however slowly it was coming up. The boards are left as they are: a signal does
+	// not flush, so a caller that stops a daemon and then deletes the folder it served is not racing a
+	// write. `shutdown` is the explicit way out that flushes first.
+	const stop = () => {
+		if (stopping) return;
+		stopping = true;
+		stopAllTerminals();
+		void stopPluginsOnExit().finally(() => process.exit(0));
+	};
+	process.on("SIGTERM", stop);
+	process.on("SIGINT", stop);
 	startListening(Number(process.env.PI_STUDIO_PORT) || lastPort(), host);
 	// The plugins the human registered start after the socket is open, so a plugin that never answers its
 	// handshake delays nothing the human is waiting for. Each start is its own: one that fails is a line
 	// on stderr and the rest of the roster runs. Nothing is started before this call, and nothing here
-	// writes into a workspace.
+	// writes into a workspace. The caller catches, so `pluginsUp` is a promise that always settles.
 	const service = createPluginService();
-	void startPlugins({ onRequest: (call) => service.handle(call), closeTimeoutMs: 400 }).catch((error) =>
+	pluginsUp = startPlugins({ onRequest: (call) => service.handle(call), closeTimeoutMs: 400 }).catch((error) =>
 		console.error(`pi-studio: the plugins could not be started: ${error.message}`),
 	);
 }

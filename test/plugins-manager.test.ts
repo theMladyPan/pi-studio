@@ -50,7 +50,13 @@ rl.on("line", (line) => {
 		}
 		return;
 	}
-	if (message.method === "initialize") return reply(message.id, { protocolVersion: mode === "old" ? 2 : 1, name: "fixture", version: "0.0.1" });
+	if (message.method === "initialize") {
+		const said = { protocolVersion: mode === "old" ? 2 : 1, name: "fixture", version: "0.0.1" };
+		// A plugin that is slow to come up answers its handshake late, so a test can signal the daemon
+		// while this one is still on its way up.
+		if (mode === "slow") return void setTimeout(() => reply(message.id, said), 1_500);
+		return reply(message.id, said);
+	}
 	// The daemon's own notice on its way out, told apart from the pipe simply closing behind a dead daemon.
 	if (message.method === "shutdown") return say("told");
 	if (message.method === "echo") return reply(message.id, message.params);
@@ -186,12 +192,11 @@ test("a daemon with no registration starts no plugin at all", async () => {
 
 // ---------- the daemon the human starts ----------
 
-test("a daemon started the way a human starts it stops its plugins on a signal", async () => {
-	const good = entry("signal");
+/** A daemon started the way a human starts it, reading its registration from its own state folder. */
+function startDaemon(state: string, rows: { name: string; command: string; args: string[] }[]) {
 	// The daemon reads its registration from its own state folder, under the name it asks for.
-	const state = join(root, "signal-state");
 	mkdirSync(state, { recursive: true });
-	writeFileSync(join(state, "plugins.json"), JSON.stringify({ plugins: [good.entry] }));
+	writeFileSync(join(state, "plugins.json"), JSON.stringify({ plugins: rows }));
 	const daemon = spawn(process.execPath, [join(repo, "server.ts"), "--no-open"], {
 		cwd: repo,
 		env: { ...process.env, PI_STUDIO_STATE: state, PI_STUDIO_PORT: "" },
@@ -199,21 +204,31 @@ test("a daemon started the way a human starts it stops its plugins on a signal",
 	});
 	const noise: string[] = [];
 	daemon.stderr.on("data", (chunk) => noise.push(String(chunk)));
-	try {
-		// A daemon that is up says so on stdout, which is also the proof that starting a plugin never
-		// held the socket back.
-		await new Promise<void>((resolve, reject) => {
-			const timer = setTimeout(() => reject(new Error(`the daemon did not listen: ${noise.join("")}`)), 20_000);
-			daemon.stdout.on("data", (chunk) => {
-				if (!String(chunk).includes("listening on")) return;
-				clearTimeout(timer);
-				resolve();
-			});
-			daemon.on("exit", (code) => {
-				clearTimeout(timer);
-				reject(new Error(`the daemon exited with ${code}: ${noise.join("")}`));
-			});
+	return { daemon, noise };
+}
+
+/** Wait until the daemon says on stdout that it listens, which is also proof it started without waiting. */
+function listening(daemon: ReturnType<typeof spawn>, noise: string[]): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error(`the daemon did not listen: ${noise.join("")}`)), 20_000);
+		daemon.stdout?.on("data", (chunk) => {
+			if (!String(chunk).includes("listening on")) return;
+			clearTimeout(timer);
+			resolve();
 		});
+		daemon.on("exit", (code) => {
+			clearTimeout(timer);
+			reject(new Error(`the daemon exited with ${code}: ${noise.join("")}`));
+		});
+	});
+}
+
+test("a daemon started the way a human starts it stops its plugins on a signal", async () => {
+	const good = entry("signal");
+	const state = join(root, "signal-state");
+	const { daemon, noise } = startDaemon(state, [good.entry]);
+	try {
+		await listening(daemon, noise);
 		assert.deepEqual(await waitForLife(good.marker, "started"), ["started"], `the registered plugin ran: ${noise.join("")}`);
 		const gone = new Promise<number | null>((resolve) => daemon.on("exit", (code) => resolve(code)));
 		daemon.kill("SIGTERM");
@@ -221,6 +236,27 @@ test("a daemon started the way a human starts it stops its plugins on a signal",
 		// The plugin was asked to stop on the way out — the daemon's own notice, not merely the pipe
 		// closing behind a process that is gone — instead of being left running behind a dead daemon.
 		assert.deepEqual(await waitForLife(good.marker, "stopped", 5_000), ["started", "told", "stopped"]);
+	} finally {
+		if (daemon.exitCode === null && daemon.signalCode === null) daemon.kill("SIGKILL");
+		await removeTree(state);
+	}
+});
+
+test("a signal waits for a plugin that is still on its way up and stops it too", async () => {
+	const slow = entry("slow-start", "slow");
+	const state = join(root, "slow-signal-state");
+	const { daemon, noise } = startDaemon(state, [slow.entry]);
+	try {
+		await listening(daemon, noise);
+		// The plugin is a process already, still answering its handshake: the signal lands mid-start, when
+		// no manager holds it yet.
+		assert.deepEqual(await waitForLife(slow.marker, "started"), ["started"], `the registered plugin ran: ${noise.join("")}`);
+		const gone = new Promise<number | null>((resolve) => daemon.on("exit", (code) => resolve(code)));
+		daemon.kill("SIGTERM");
+		assert.equal(await gone, 0, "a signalled daemon exits cleanly");
+		// It was waited for and then told to stop, rather than left running behind the daemon that
+		// started it with nothing left to close it.
+		assert.deepEqual(await waitForLife(slow.marker, "stopped", 10_000), ["started", "told", "stopped"]);
 	} finally {
 		if (daemon.exitCode === null && daemon.signalCode === null) daemon.kill("SIGKILL");
 		await removeTree(state);
