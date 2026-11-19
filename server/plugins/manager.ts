@@ -17,10 +17,10 @@ import { PluginFailure, startPlugin } from "./host.ts";
 import { PLUGIN_UNAVAILABLE } from "./protocol.ts";
 import { loadPluginRegistry, PLUGINS_FILE } from "./registry.ts";
 import type { PluginCall, PluginHost } from "./host.ts";
-import type { PluginProblem, PluginRegistry } from "./registry.ts";
+import type { PluginProblem, PluginRegistry, PluginVisual } from "./registry.ts";
 
 /** One plugin as the daemon holds it. The seam a settings page or a status report reads. */
-export type PluginRoster = { name: string; command: string; version: string; running: boolean };
+export type PluginRoster = { name: string; command: string; version: string; running: boolean; visual?: PluginVisual };
 
 export type PluginStartOptions = {
 	/** The registration to read. A test names its own file; the daemon reads its own state folder. */
@@ -115,6 +115,9 @@ export async function startPlugins(options: PluginStartOptions = {}): Promise<Pl
 				command: host.entry.command,
 				version: host.info.version,
 				running: host.running(),
+				// The panel this plugin declared, so the board can offer its door without reading the
+				// registration a second time and disagreeing with what was actually started.
+				...(host.entry.visual ? { visual: host.entry.visual } : {}),
 			})),
 		problems: () => [...problems],
 		close: async () => {
