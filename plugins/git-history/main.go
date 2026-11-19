@@ -144,7 +144,8 @@ func (p *plugin) answer(call frame) {
 }
 
 // initialize is the handshake: the daemon says which protocol it speaks, and this plugin answers with the
-// same number or refuses. It also names its view's files, so a host that keeps them can find them.
+// same number or refuses. It also repeats the panel `plugin.json` declares, so a reader of the handshake
+// sees what this plugin offers; the daemon serves a panel from its own registration, not from here.
 func (p *plugin) initialize(params json.RawMessage) (any, *rpcError) {
 	var ask struct {
 		ProtocolVersion *int `json:"protocolVersion"`

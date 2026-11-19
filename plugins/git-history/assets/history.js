@@ -1,10 +1,12 @@
 // The history view: rows a line high with real lanes, the refs beside each commit, and a details pane
 // with the files a commit changed and the patch of the one that was picked.
 //
-// Everything this page knows comes from the host, over the one channel the host opens: it sends a hello
-// with a nonce and this plugin's name, this page asks for a method with that nonce, and the answers come
-// back with the same nonce. There is no token, no cookie and no request to the daemon from here: a view
-// that could fetch on its own would be a second door into the board, and the host already has one.
+// Everything this page knows comes from the board, over the one channel the board opens: it greets the
+// page with a secret, this page asks for a method with that secret, and the answers back carry the same
+// one. There is no token, no cookie and no request to the daemon from here: a document the sandbox left
+// without an origin of its own could not make one, and the board asks on this page's behalf. The board
+// also knows which plugin this page belongs to and which workspace the tab is showing, so this page names
+// neither and could not say either.
 //
 // The lanes are drawn from the geometry the plugin computes: each row says which column its commit sits
 // in, whether a line reaches it from above, and where the lines of other lanes pass or bend. Numbers
@@ -12,7 +14,6 @@
 (() => {
 	"use strict";
 
-	const PLUGIN = "git-history";
 	const ROW_HEIGHT = 24;
 	const COLUMN_WIDTH = 14;
 	const PAGE_LIMIT = 40;
@@ -21,7 +22,6 @@
 	/** The state the view draws from. Only ever replaced by an answer from the plugin. */
 	const state = {
 		host: false,
-		workspace: "",
 		summary: null,
 		page: null,
 		rows: [],
@@ -36,36 +36,43 @@
 
 	// ---------- the host bridge ----------
 
-	/** The one channel to the host: its nonce, the window to answer, and the calls still waiting. */
+	/** The one channel to the board: the secret it gave this page, and the calls still waiting. */
 	const bridge = {
 		nonce: "",
-		target: null,
-		origin: "*",
+		host: false,
 		nextId: 0,
 		waiting: new Map(),
 	};
 
-	/** post sends one message to the host, which is the only place this page talks to. */
+	/**
+	 * post says one thing to the board. The target is `"*"` because a document the sandbox left without an
+	 * origin of its own has none to name; the board checks which frame a message came from instead.
+	 */
 	function post(message) {
-		if (!bridge.target) return;
-		bridge.target.postMessage(message, bridge.origin);
+		window.parent.postMessage({ ...message, nonce: bridge.nonce }, "*");
 	}
 
 	/**
-	 * request asks the plugin one thing through the host. The host forwards `{ workspace, method, params }`
-	 * as a `visual.request`; this page never names the workspace itself, the host already knows it.
+	 * request asks the plugin one thing. The board forwards it to the daemon as a `visual.request` and
+	 * answers with the same id, and adds the two things this page cannot know: the plugin it is showing and
+	 * the workspace the tab belongs to. The daemon resolves the workspace from its own list, so no page here
+	 * ever names a folder.
 	 */
 	function request(method, params) {
 		if (!bridge.host) return Promise.reject(new Error("no host is connected"));
 		const id = (bridge.nextId += 1);
-		const message = { type: "pi-plugin:request", plugin: PLUGIN, nonce: bridge.nonce, id, method, params: params || {} };
 		return new Promise((resolve, reject) => {
 			bridge.waiting.set(id, { resolve, reject });
-			post(message);
+			post({ type: "pi-studio.visual.request", id, method, params: params || {} });
 		});
 	}
 
-	/** settle hands one answer from the host to the call waiting for it. */
+	/** close asks the board to put this panel away, which is what the board's own close button does too. */
+	function close() {
+		post({ type: "pi-studio.visual.close" });
+	}
+
+	/** settle hands one answer from the board to the call waiting for it. */
 	function settle(id, result, error) {
 		const waiter = bridge.waiting.get(id);
 		if (!waiter) return;
@@ -75,22 +82,21 @@
 	}
 
 	window.addEventListener("message", (event) => {
+		// The board is the one frame above this page, and a message from any other window is not for it.
+		if (event.source !== window.parent) return;
 		const data = event.data;
-		if (!data || typeof data !== "object" || data.plugin !== PLUGIN) return;
-		if (data.type === "pi-plugin:hello") {
+		if (!data || typeof data !== "object") return;
+		if (data.type === "pi-studio.host.hello") {
 			if (typeof data.nonce !== "string" || data.nonce === "") return;
 			bridge.nonce = data.nonce;
-			bridge.target = event.source;
-			bridge.origin = event.origin || "*";
 			bridge.host = true;
-			if (typeof data.workspace === "string") state.workspace = data.workspace;
 			load();
 			return;
 		}
-		// Everything else must carry the nonce this page was given, or it is not an answer to this page.
-		if (!bridge.nonce || data.nonce !== bridge.nonce) return;
-		if (data.type === "pi-plugin:result") settle(data.id, data.result, null);
-		if (data.type === "pi-plugin:error") settle(data.id, null, data.error || { message: "the plugin refused the call" });
+		// Everything else must carry the secret this page was given, or it is not an answer to this page.
+		if (!bridge.host || data.nonce !== bridge.nonce) return;
+		if (data.type === "pi-studio.visual.result") settle(data.id, data.result, null);
+		if (data.type === "pi-studio.visual.error") settle(data.id, null, data.error || { message: "the plugin refused the call" });
 	});
 
 	// ---------- reading ----------
@@ -170,6 +176,7 @@
 		rows: document.getElementById("rows"),
 		range: document.getElementById("range"),
 		refresh: document.getElementById("refresh"),
+		close: document.getElementById("close"),
 		newest: document.getElementById("newest"),
 		newer: document.getElementById("newer"),
 		older: document.getElementById("older"),
@@ -525,6 +532,7 @@
 	});
 	el.detailClose.addEventListener("click", closeDetail);
 	el.refresh.addEventListener("click", () => void load());
+	el.close.addEventListener("click", () => close());
 	el.newest.addEventListener("click", () => void goPage(0));
 	el.newer.addEventListener("click", () => void goPage(Math.max(0, (state.page ? state.page.offset : 0) - PAGE_LIMIT)));
 	el.older.addEventListener("click", () => {

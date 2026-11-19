@@ -16,6 +16,10 @@ import (
 // manifestFile is the name of the file read from the folder the executable sits in.
 const manifestFile = "plugin.json"
 
+// maxVisualTitle is how long a panel's title may be, because a board draws it on one line of a menu and of
+// a bar. The daemon refuses a longer one, so this plugin refuses it first rather than at registration.
+const maxVisualTitle = 80
+
 // manifest is the plugin's own description of itself, and the source of the version it answers with.
 type manifest struct {
 	Name     string          `json:"name"`
@@ -24,13 +28,14 @@ type manifest struct {
 	Visual   *visualManifest `json:"visual"`
 }
 
-// visualManifest names the files of the view. The entry is the page a host puts in a frame; the styles
-// and scripts are the files it must also serve, kept apart from the page so the page needs no inline
-// code and a host can cache them.
+// visualManifest declares the panel this plugin offers a board, in the same words the daemon's own
+// registration uses: a title for its door, the document a frame loads, and every file that frame may
+// fetch, each relative to the executable. The shape and the rules are the daemon's, so that a
+// registration written from this file is accepted as it stands.
 type visualManifest struct {
-	Entry   string   `json:"entry"`
-	Styles  []string `json:"styles"`
-	Scripts []string `json:"scripts"`
+	Title string   `json:"title"`
+	Entry string   `json:"entry"`
+	Files []string `json:"files"`
 }
 
 // loadManifest reads the manifest from folder, which is the folder of the executable, and checks that
@@ -51,12 +56,25 @@ func loadManifest(folder string) (manifest, error) {
 		read.Version = "0.0.0"
 	}
 	if read.Visual != nil {
-		named := append([]string{read.Visual.Entry}, read.Visual.Styles...)
-		named = append(named, read.Visual.Scripts...)
-		for _, file := range named {
+		title := strings.TrimSpace(read.Visual.Title)
+		if title == "" || len(title) > maxVisualTitle {
+			return manifest{}, failf(internalError, "%s names a panel whose title is one line of 1 to %d characters", manifestFile, maxVisualTitle)
+		}
+		read.Visual.Title = title
+		if len(read.Visual.Files) == 0 {
+			return manifest{}, failf(internalError, "%s names a panel with no files", manifestFile)
+		}
+		entry := false
+		for _, file := range read.Visual.Files {
 			if !insideFolder(file) {
 				return manifest{}, failf(internalError, "%s names %q, which is not a file inside the plugin folder", manifestFile, file)
 			}
+			if file == read.Visual.Entry {
+				entry = true
+			}
+		}
+		if !entry {
+			return manifest{}, failf(internalError, "%s names a panel whose entry %q is not one of its files", manifestFile, read.Visual.Entry)
 		}
 	}
 	return read, nil

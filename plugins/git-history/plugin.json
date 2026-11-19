@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "protocol": 1,
   "visual": {
+    "title": "git history",
     "entry": "assets/history.html",
-    "styles": ["assets/history.css"],
-    "scripts": ["assets/history.js"]
+    "files": ["assets/history.html", "assets/history.css", "assets/history.js"]
   }
 }

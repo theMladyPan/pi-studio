@@ -26,17 +26,18 @@ argument and defaults to `./git-history`.
 
 ## Registering it with a daemon
 
-The daemon starts an executable named by absolute path in its own `plugins.json`
-(`~/.pi/agent/state/pi-studio/plugins.json` by default, `$PI_STUDIO_STATE` if that is set):
+The daemon starts an executable named by absolute path in its own `plugins.json`. Global records live under
+`~/.local/state/pi-studio`, so the file is `~/.local/state/pi-studio/plugins.json` unless
+`$XDG_STATE_HOME`, `$PI_STUDIO_STATE` or `--state` moved that folder. The folder the executable sits in is
+also the folder its panel's files are served from, so build it where it will stay:
 
-```json
-{
-	"plugins": [{ "name": "git-history", "command": "/absolute/path/to/plugins/git-history/git-history", "args": [] }]
-}
+```sh
+cd plugins/git-history
+go build -o git-history .
 ```
 
 `plugin.json` beside the executable is this plugin's own manifest. It names the version the handshake
-answers with and the files its view is made of, all relative to the executable:
+answers with, and the panel the board may show, in the words the daemon's registration uses:
 
 ```json
 {
@@ -44,14 +45,50 @@ answers with and the files its view is made of, all relative to the executable:
 	"version": "0.1.0",
 	"protocol": 1,
 	"visual": {
+		"title": "git history",
 		"entry": "assets/history.html",
-		"styles": ["assets/history.css"],
-		"scripts": ["assets/history.js"]
+		"files": ["assets/history.html", "assets/history.css", "assets/history.js"]
 	}
 }
 ```
 
-A path that is absolute or climbs out of the plugin folder is refused at startup.
+A registration that offers this panel copies that `visual` block as it stands, and points `command` at the
+executable the build wrote:
+
+```json
+{
+	"plugins": [
+		{
+			"name": "git-history",
+			"command": "/absolute/path/to/plugins/git-history/git-history",
+			"args": [],
+			"visual": {
+				"title": "git history",
+				"entry": "assets/history.html",
+				"files": ["assets/history.html", "assets/history.css", "assets/history.js"]
+			}
+		}
+	]
+}
+```
+
+- `name` — how the daemon logs this plugin, and how its panel is addressed.
+- `command` — the absolute path of an executable, spawned directly. A relative path or a bare name is
+  refused, because both would be resolved against something the installer does not control.
+- `args` — a list of strings, and nothing in it becomes another command.
+- `visual` — optional. Without it the plugin runs and the board offers no door for it.
+  - `title` — one line of 1 to 80 characters, shown on the door and in the panel's bar.
+  - `entry` — the document the frame loads.
+  - `files` — every file the daemon will serve for this panel, and nothing beside them: the request path
+    is looked up in this list rather than joined to a folder. It has to include `entry`.
+
+Both paths are relative to the folder the executable sits in. A declared file that is absolute, climbs out
+of that folder, or is not a plain file there is refused when the registration is read, so a panel that
+points at nothing is a line in the daemon's log at startup rather than a door that fails when pressed.
+
+The daemon serves a panel's files from its own registration and never from the manifest, so the two blocks
+above have to say the same thing. `assets` below is this plugin's own answer on the same list, which is
+what the tests compare against the folder.
 
 ## What the plugin speaks
 
@@ -105,26 +142,40 @@ against its first parent, as `{ status, path }` with git's `A`/`M`/`D`/`T` lette
 for a root commit, which is diffed against the empty tree), plus `added`, `removed`, `binary` and
 `truncated`. A patch is cut at 512 KiB and says so.
 
-`assets` `{}` — the view's files as `{ root, entry, files: [{ path, kind, has }] }`, every path relative
-to the executable, which is what a host serves from.
+`assets` `{}` — the panel's files as `{ root, entry, files: [{ path, has }] }`, every path relative to the
+executable, with whether each one is really there.
 
 A refusal carries a standard code: `-32602` for params, a workspace or a revision the plugin cannot use,
 `-32601` for a method it does not answer, `-32000` when the daemon did not answer a call in time.
 
-## What the page needs from the host
+## What the page needs from the board
 
-The page in `assets/history.html` is served by the host, and it reaches the plugin only through the host.
-It takes one message protocol on `window.postMessage`, with `plugin: "git-history"` in every message:
+The page in `assets/history.html` is served by the daemon and shown by the board in a frame sandboxed with
+`allow-scripts` and nothing else, so its document has an opaque origin: it holds no cookie of the daemon,
+it cannot read the board around it, and it makes no request of its own. Its one way out is
+`window.postMessage` to the board above it, in the board's own words:
 
-- host → page: `{ type: "pi-plugin:hello", plugin, nonce, workspace? }`. The page starts reading when
-  this arrives.
-- page → host: `{ type: "pi-plugin:request", plugin, nonce, id, method, params }`. The host forwards
-  `{ workspace, method, params }` as a `visual.request` and answers with the same `id`.
-- host → page: `{ type: "pi-plugin:result", plugin, nonce, id, result }` or
-  `{ type: "pi-plugin:error", plugin, nonce, id, error }`.
+- board → page: `{ type: "pi-studio.host.hello", nonce, plugin }`. The page starts reading when this
+  arrives, and keeps the `nonce` every later message has to carry.
+- page → board: `{ type: "pi-studio.visual.request", nonce, id, method, params }`. The board asks the
+  daemon with `{ workspace, method, params }` and answers with the same `id`. The workspace is the board's
+  own, resolved by the daemon from its list, and the plugin is the one whose panel is on screen, so the
+  page names neither.
+- board → page: `{ type: "pi-studio.visual.result", nonce, id, result }` or
+  `{ type: "pi-studio.visual.error", nonce, id, error: { code, message } }`. The `code` is the JSON-RPC
+  code of the refusal, `-32602` for params or a workspace this plugin will not take, and the page shows its
+  `message` beside the graph.
+- page → board: `{ type: "pi-studio.visual.close", nonce }`, which puts the panel away. The close button
+  in the bar sends it; the board's own close does the same without asking the page.
 
-Anything without the nonce the page was given is ignored. The page holds no token and makes no request of
-its own: it has no way to reach the daemon, which is why a host must open this channel for it.
+The greeting is the one message with no secret in it, and every other message is ignored unless it carries
+the `nonce` the page was given. A message from any window but `window.parent` is ignored as well.
+
+The frame imposes two rules on the files themselves. The daemon serves them with no CORS header, and the
+document has an opaque origin, so the page loads a classic script (`<script src="history.js">`) and never a
+module, whose fetch would be a cross-origin request the daemon refuses. And the served document carries
+`sandbox allow-scripts`, so the page has no storage, no cookie and no request of its own: everything it
+knows it asked the board for.
 
 ## What it will not do
 

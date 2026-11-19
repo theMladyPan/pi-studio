@@ -63,9 +63,9 @@ func startHarness(t *testing.T, workspace workspaceInfo, open bool) *harness {
 			Name:    "git-history",
 			Version: "0.1.0",
 			Visual: &visualManifest{
-				Entry:   "assets/history.html",
-				Styles:  []string{"assets/history.css"},
-				Scripts: []string{"assets/history.js"},
+				Title: "git history",
+				Entry: "assets/history.html",
+				Files: []string{"assets/history.html", "assets/history.css", "assets/history.js"},
 			},
 		},
 		root:   ".",
@@ -424,7 +424,7 @@ func TestAssetsAreNamedRelativeToTheExecutable(t *testing.T) {
 		t.Fatalf("the entry should be the page the manifest names, got %q", list.Entry)
 	}
 	if len(list.Files) != 3 {
-		t.Fatalf("the view is a page, a stylesheet and a script, got %+v", list.Files)
+		t.Fatalf("the panel is a page, a stylesheet and a script, got %+v", list.Files)
 	}
 	// The test runs in the package folder, which holds the same files the manifest names.
 	for _, file := range list.Files {

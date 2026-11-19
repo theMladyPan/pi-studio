@@ -49,15 +49,16 @@ type summary struct {
 	Repo      repoInfo      `json:"repo"`
 }
 
-// asset is one file the view is made of, as the host needs it: a path relative to this executable and
+// asset is one file the panel is made of, as a host needs it: a path relative to this executable and
 // whether it is really there.
 type asset struct {
 	Path string `json:"path"`
-	Kind string `json:"kind"`
 	Has  bool   `json:"has"`
 }
 
-// assetList is the answer to `assets`, so a host can serve the view without guessing its files.
+// assetList is the answer to `assets`: the panel's files, so whoever serves them can check them without
+// guessing. The daemon that runs this plugin serves the files its registration names, and `plugin.json`
+// declares those in the registration's own words.
 type assetList struct {
 	Root  string  `json:"root"`
 	Entry string  `json:"entry"`
@@ -140,25 +141,21 @@ func (p *plugin) repoFor(ctx context.Context, workspace string) (repo, error) {
 	return openRepo(ctx, known.Folder)
 }
 
-// assets is what this plugin's view is made of. A host serves the files from the paths named here, all of
-// them relative to the executable, so a plugin installed anywhere finds its own view.
+// assets is what this plugin's panel is made of. A host serves the files from the paths named here, all of
+// them relative to the executable, so a plugin installed anywhere finds its own files.
 func (p *plugin) assets() assetList {
 	list := assetList{Root: p.root, Files: []asset{}}
 	if p.manifest.Visual == nil {
 		return list
 	}
 	list.Entry = p.manifest.Visual.Entry
-	list.Files = append(list.Files, p.describeAsset(p.manifest.Visual.Entry, "entry"))
-	for _, style := range p.manifest.Visual.Styles {
-		list.Files = append(list.Files, p.describeAsset(style, "style"))
-	}
-	for _, script := range p.manifest.Visual.Scripts {
-		list.Files = append(list.Files, p.describeAsset(script, "script"))
+	for _, file := range p.manifest.Visual.Files {
+		list.Files = append(list.Files, p.describeAsset(file))
 	}
 	return list
 }
 
-func (p *plugin) describeAsset(path, kind string) asset {
+func (p *plugin) describeAsset(path string) asset {
 	_, err := os.Stat(filepath.Join(p.root, filepath.FromSlash(path)))
-	return asset{Path: path, Kind: kind, Has: err == nil}
+	return asset{Path: path, Has: err == nil}
 }
