@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-19
+
+- fix: Show git tags in the graph again — a stored "disabled" no longer hides the tag pills while the tag dropdown still lists them, so picking a tag filters the graph instead of emptying it; drop the phantom uncommitted row on a clean tree and carry its change count when the tree is dirty; name the commit an annotated tag peels to in its details; honour the picked branches, authors and tags in commit search and the unreachable-commits setting in the walk, all of which were accepted and ignored — and draw the graph toolbar icons in Codicon at full brightness instead of faint text glyphs.
+
 ## [0.5.0] - 2026-11-18
 
 - fix: Remove the right-hand git tree strip from the board, so the daemon no longer polls the repository every few seconds for a picture nobody could click. The full graph on g, source control on d and the terminal remain; an open source control drawer no longer re-reads on commits made elsewhere, it reads again on the next open.

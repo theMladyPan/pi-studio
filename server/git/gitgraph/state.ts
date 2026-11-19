@@ -57,7 +57,10 @@ export function repoStateFrom(value: unknown): GitRepoState {
 	// Old files used 0/1 flags and different names (showRemoteBranches boolean, etc).
 	const showRemoteOld = typeof raw.showRemoteBranches === "boolean" ? (raw.showRemoteBranches ? "enabled" : "disabled") : raw.showRemoteBranchesV2 === 1 ? "enabled" : raw.showRemoteBranchesV2 === 0 ? "disabled" : override(raw.showRemoteBranches);
 	const showStashesOld = raw.showStashes === 1 ? "enabled" : raw.showStashes === 0 ? "disabled" : override(raw.showStashes);
-	const showTagsOld = raw.showTags === 1 ? "enabled" : raw.showTags === 0 ? "disabled" : override(raw.showTags);
+	// Tags are always drawn: a stored "disabled" (or the legacy 0 that migrated to it) hid every
+	// tag pill while the tag dropdown still listed the tags, so picking one filtered the graph
+	// to nothing. Neutralise both to "default", which the view reads as shown.
+	const showTagsOld = raw.showTags === 1 || raw.showTags === "enabled" ? "enabled" : "default";
 	const colRaw = raw.columnWidths;
 	let columnWidths: number[] | null = null;
 	if (Array.isArray(colRaw)) {

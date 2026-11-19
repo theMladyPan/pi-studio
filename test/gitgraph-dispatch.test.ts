@@ -40,7 +40,7 @@ test("loadRepoInfo answers in the Libre shape", async () => {
 	assert.equal(info.error, null);
 });
 
-test("loadCommits answers in the Libre shape with the uncommitted row first", async () => {
+test("loadCommits answers in the Libre shape, with the uncommitted row only when the tree is dirty", async () => {
 	const commits = await one({
 		command: "loadCommits",
 		requestId: 42,
@@ -57,8 +57,18 @@ test("loadCommits answers in the Libre shape with the uncommitted row first", as
 	assert.equal(commits.requestId, 42);
 	assert.equal(commits.error, null);
 	const rows = commits.commits as Array<{ hash: string; message: string; parentHashes: string[]; refs: unknown[] }>;
-	assert.equal(rows[0].hash, "*");
-	assert.equal(rows[1].message, "first");
+	assert.ok(rows.every((row) => row.hash !== "*"), "a clean tree has no uncommitted row");
+	assert.equal(rows[0].message, "first");
+	writeFileSync(join(repo, "dirty.txt"), "not committed\n");
+	try {
+		const dirty = await one({ command: "loadCommits", requestId: 43, repo, branchName: "dev", maxCommits: 10, showRemoteBranches: true, showTags: true, includeReflog: false, onlyFollowFirstParent: false, commitOrdering: "date" });
+		const dirtyRows = dirty.commits as Array<{ hash: string; message: string }>;
+		assert.equal(dirtyRows[0].hash, "*");
+		assert.equal(dirtyRows[0].message, "Uncommitted Changes (1)");
+		assert.equal(dirtyRows[1].message, "first");
+	} finally {
+		rmSync(join(repo, "dirty.txt"));
+	}
 });
 
 test("a repository this tab no longer has is refused in one sentence", async () => {
