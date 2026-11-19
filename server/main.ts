@@ -38,6 +38,8 @@ import { onGitInit, onGitMsg, onGitPage, onGitVendor } from "./routes/gitgraph.t
 import { onCommand } from "./routes/board/command.ts";
 import { onSourceControlCommit, onSourceControlConflict, onSourceControlContinue, onSourceControlDiff, onSourceControlDiscard, onSourceControlFileAtHead, onSourceControlIgnore, onSourceControlMessage, onSourceControlResolve, onSourceControlStage, onSourceControlStatus, onSourceControlUnstage } from "./routes/board/source-control.ts";
 import { attachTerminal, stopAllTerminals, terminalSize } from "./terminal.ts";
+import { startPlugins, stopPlugins } from "./plugins/manager.ts";
+import { createPluginService } from "./plugins/service.ts";
 import { commandList, forMenu } from "./commands.ts";
 import { workdirOf } from "./worktrees/make.ts";
 import { migrateLegacyGlobalState } from "./state-storage.ts";
@@ -853,12 +855,23 @@ server.on("upgrade", (req, socket, head) => {
 	else startLiveStream(req, socket, head);
 });
 
+/** Set once the daemon is on its way out, so a second signal does not flush and close everything twice. */
+let stopping = false;
+
 export function shutdown() {
+	if (stopping) return;
+	stopping = true;
 	// What the debounce still holds is the last thing the human did, so it goes to disk first.
 	for (const board of boards.values()) flushBoard(board);
 	stopAllTerminals();
 	for (const board of boards.values()) for (const child of board.children.values()) child.kill("SIGKILL");
-	server.close(() => process.exit(0));
+	// A plugin is a process this daemon started, so it is asked to stop before the daemon goes and the
+	// exit waits for it. The clock below is the end of that wait: a plugin that ignores `shutdown` is
+	// left to the operating system rather than keeping a stopped daemon alive.
+	const plugins = stopPlugins();
+	server.close(() => {
+		void plugins.finally(() => process.exit(0));
+	});
 	// A socket that will not close must not keep a stopped daemon alive.
 	setTimeout(() => process.exit(0), 1000).unref();
 }
@@ -970,14 +983,18 @@ export function start() {
 		console.error(`pi-studio: ${error.message}`);
 		process.exit(1);
 	}
-	// A stopped daemon must not leave its shells behind: they are spawned detached, so a
-	// plain exit would orphan them. Stop them and go: the boards' own shutdown flushes
-	// nothing on a signal today, and the tests kill their daemons the same way.
-	const stopTerminals = () => {
-		stopAllTerminals();
-		process.exit(0);
-	};
-	process.on("SIGTERM", stopTerminals);
-	process.on("SIGINT", stopTerminals);
+	// A stopped daemon must not leave its shells behind: they are spawned detached, so a plain exit
+	// would orphan them. Every live way out goes through `shutdown`, which flushes the boards, stops the
+	// shells, the children and the plugins, and then closes the socket.
+	process.on("SIGTERM", shutdown);
+	process.on("SIGINT", shutdown);
 	startListening(Number(process.env.PI_STUDIO_PORT) || lastPort(), host);
+	// The plugins the human registered start after the socket is open, so a plugin that never answers its
+	// handshake delays nothing the human is waiting for. Each start is its own: one that fails is a line
+	// on stderr and the rest of the roster runs. Nothing is started before this call, and nothing here
+	// writes into a workspace.
+	const service = createPluginService();
+	void startPlugins({ onRequest: (call) => service.handle(call), closeTimeoutMs: 400 }).catch((error) =>
+		console.error(`pi-studio: the plugins could not be started: ${error.message}`),
+	);
 }

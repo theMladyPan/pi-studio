@@ -4,7 +4,7 @@
  * that brings one back.
  */
 import { liveTurn, stopStream } from "../../child/run.ts";
-import { broadcast, card, closedCards, nudgeWelcome, resync, update, updateCard } from "../../bus.ts";
+import { broadcast, card, closedCards, nudgeWelcome, resync, threadSettled, update, updateCard } from "../../bus.ts";
 import { CHILD_CLOSE_DELAY_MS, MAX_PUT_AWAY_CHILDREN } from "../../limits.ts";
 import { MAX_PLAIN_CARDS, putAwayByBoard, scheduleSave } from "../../store.ts";
 import { ownedCards, refreshOwned } from "./message.ts";
@@ -123,6 +123,9 @@ export function killChild(board, thread) {
 	scheduleSave(board);
 	// A killed child is the end of its run, so whoever waits on it stops waiting.
 	finished(thread);
+	// A plugin subscribed to the board's events hears this run end the way it hears any other. A child
+	// killed between two runs ended none, so there is nothing to announce.
+	if (turn) threadSettled(board, thread, turn);
 	return true;
 }
 
