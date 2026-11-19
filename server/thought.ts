@@ -6,7 +6,7 @@
 import { refreshOwned } from "./routes/board/message.ts";
 import { autoCloseChild } from "./routes/board/lifecycle.ts";
 import { start } from "./main.ts";
-import { addRow, card, patchRow, threadRef, update, updateCard } from "./bus.ts";
+import { addRow, card, patchRow, threadRef, threadSettled, update, updateCard } from "./bus.ts";
 import { randomUUID } from "node:crypto";
 import { MAX_ROW_CHARS } from "./limits.ts";
 import { scheduleSave } from "./store.ts";
@@ -559,6 +559,9 @@ function endRun(board, thread, reached) {
 	}
 	// The run is over for anyone waiting on it.
 	finished(thread);
+	// And for whoever subscribed to the board's events: a settled run is the one moment a plugin that
+	// asked for work is told about.
+	threadSettled(board, thread, reached);
 	// The answer is in its reader's hands the moment this run resolves, so a child whose run ended as an
 	// answer is a spent card and the board puts it away a moment later — hidden, never killed, so the
 	// tree it worked in is still there to assemble. A turn that was stopped or failed is not an answer,

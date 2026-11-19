@@ -426,7 +426,7 @@ export function gitFacts(folder) {
  * come back as old history on the list. A linked project home is never read through, and nothing here
  * creates state in a scratch or missing folder.
  */
-function savedBoardFor(workspace) {
+export function savedBoardFor(workspace) {
 	const file = boardFile(workspace);
 	if (!workspace.folder) return readJsonFile(file, null);
 	try {

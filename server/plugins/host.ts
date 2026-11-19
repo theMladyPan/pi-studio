@@ -146,6 +146,16 @@ export class PluginFailure extends Error {
 
 type Pending = { method: string; resolve: (result: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
 
+/**
+ * The code a refusal carries. A caller that throws an error with a numeric `code` of its own — the daemon
+ * refusing a method or a param rather than a host that broke — is answered with that code; anything else
+ * is this host's own `INTERNAL_ERROR`.
+ */
+function codeOf(error: unknown): number {
+	const code = (error as { code?: unknown } | null)?.code;
+	return typeof code === "number" ? code : INTERNAL_ERROR;
+}
+
 // ---------- starting one ----------
 
 /**
@@ -347,7 +357,9 @@ export async function startPlugin(entry: PluginEntry, options: PluginHostOptions
 		try {
 			send(resultFrame(id, await onRequest({ plugin: entry.name, method, params })));
 		} catch (error) {
-			send(errorFrame(id, { code: INTERNAL_ERROR, message: (error as Error).message }));
+			// What the daemon refuses a call with is its own code to say: a method it does not answer and
+			// params it cannot use are worth telling the plugin apart from a daemon that broke answering.
+			send(errorFrame(id, { code: codeOf(error), message: (error as Error).message }));
 		}
 	}
 
