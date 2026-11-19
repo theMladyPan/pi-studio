@@ -121,6 +121,18 @@
 			[data-color="9"] { --git-graph-color: var(--git-graph-color9); }
 			[data-color="10"] { --git-graph-color: var(--git-graph-color10); }
 			[data-color="11"] { --git-graph-color: var(--git-graph-color11); }
+			/* The branch you are on. The bundle gives its ref badge nothing but a coloured border, which
+			   at a glance reads like any other pill in the row, so the checked-out branch carries weight
+			   and a wash of its own lane colour. A branch shown with its remote is one group, and the
+			   parts inside it are kept clear so the tint arrives as a single badge. */
+			.gitRef.head.active,
+			.gitRefGroup.active {
+				font-weight: 700;
+				color: #ffffff;
+				background-color: color-mix(in oklab, var(--git-graph-color) 22%, #0d1117);
+			}
+			.gitRefGroup.active > .gitRef,
+			.gitRefGroup.active > .gitRefAlias { background-color: transparent; }
 			html, body { height: 100%; margin: 0; }
 			body { background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif; }
 			#ggNotice { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.6em; padding: 2em; text-align: center; }
