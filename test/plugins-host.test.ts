@@ -264,7 +264,7 @@ test("the daemon reads the plugins it was told about, and says why one is refuse
 	const registry = loadPluginRegistry(file);
 	assert.deepEqual(registry.plugins, [{ name: "echo", command: process.execPath, args: [fixture] }]);
 	assert.deepEqual(registry.problems, [
-		{ name: "relative", problem: "command must be an absolute path to an executable" },
+		{ name: "relative", problem: "command must be an absolute path to an executable, or bundled must name a plugin this install ships" },
 		{ name: "missing", problem: `${join(root, "nowhere")} is not an executable file` },
 		{ name: "plain", problem: `${plain} is not an executable file` },
 		{ name: "echo", problem: "the name is used twice" },

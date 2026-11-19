@@ -2,9 +2,9 @@
  * The plugins this daemon runs: the executables the human registered, started once, asked for work, and
  * closed when the daemon goes.
  *
- * A plugin is a program named in the daemon's own `plugins.json` by the absolute path of an executable,
- * so the roster is a deliberate act on this machine and nothing a board, a thread or a drop says is read
- * here. The daemon starts the roster when it starts — from `start()` in `main.ts`, which is the one
+ * A plugin is a program named in the daemon's own `plugins.json`, by the absolute path of an executable or
+ * by the name of one this install ships, so the roster is a deliberate act on this machine and nothing a
+ * board, a thread or a drop says is read here. The daemon starts the roster when it starts — from `start()` in `main.ts`, which is the one
  * callable that boots it — and never on import, so a test that only imports daemon code starts no
  * program and a plugin is never started by somebody opening a file.
  *
@@ -15,7 +15,7 @@
  */
 import { PluginFailure, startPlugin } from "./host.ts";
 import { PLUGIN_UNAVAILABLE } from "./protocol.ts";
-import { loadPluginRegistry, PLUGINS_FILE } from "./registry.ts";
+import { loadPluginRegistry } from "./registry.ts";
 import type { PluginCall, PluginHost } from "./host.ts";
 import type { PluginProblem, PluginRegistry, PluginVisual } from "./registry.ts";
 
@@ -25,6 +25,8 @@ export type PluginRoster = { name: string; command: string; version: string; run
 export type PluginStartOptions = {
 	/** The registration to read. A test names its own file; the daemon reads its own state folder. */
 	file?: string;
+	/** The plugins this install ships. A test names its own folder; the daemon reads the one it was installed in. */
+	bundledDir?: string;
 	/** Where a plugin's stderr and this daemon's own complaints go. */
 	log?: (line: string) => void;
 	/** What the daemon offers a plugin that calls it. */
@@ -71,7 +73,7 @@ export function notifyPlugin(plugin: string, method: string, params?: unknown): 
  */
 export async function startPlugins(options: PluginStartOptions = {}): Promise<PluginManager> {
 	await stopPlugins();
-	const registry: PluginRegistry = loadPluginRegistry(options.file ?? PLUGINS_FILE);
+	const registry: PluginRegistry = loadPluginRegistry(options.file, options.bundledDir);
 	const log = options.log ?? ((line: string) => process.stderr.write(line));
 	const problems: PluginProblem[] = [...registry.problems];
 	for (const problem of registry.problems) log(`pi-studio: plugin ${problem.name || "(unnamed)"} is not usable: ${problem.problem}\n`);

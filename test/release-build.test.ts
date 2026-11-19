@@ -79,6 +79,10 @@ test("the staged tree carries the compiled app, runtime assets, and metadata —
 		"prompts/roles/scout.md",
 		"prompts/flows/simple.md",
 		"docs/boss-and-subagents.md",
+		"docs/plugins.md",
+		"plugins/git-history/plugin.json",
+		"plugins/git-history/README.md",
+		"plugins/git-history/assets/history.html",
 		"bin/pi-studio",
 		"package.json",
 		"build.json",
@@ -98,6 +102,12 @@ test("the staged tree carries the compiled app, runtime assets, and metadata —
 	for (const file of staged) {
 		assert.ok(!file.endsWith(".ts"), `staged tree carries TypeScript: ${file}`);
 		assert.ok(!/(^|\/)(node_modules|test|bench|mockups|site|\.git)(\/|$)/.test(file), `staged tree carries ${file}`);
+	}
+
+	// A plugin is staged as what runs it and what draws it, never as the sources it was built from.
+	for (const file of staged.filter((one) => one.startsWith("plugins/"))) {
+		assert.ok(!/\.(go|mod|sum|rs|toml|lock)$/.test(file), `staged plugin carries a source file: ${file}`);
+		assert.ok(!/(^|\/)dist(\/|$)/.test(file), `staged plugin carries the build folder: ${file}`);
 	}
 
 	// No `.ts` import specifiers survive compilation (other `.ts` string literals do, by design).

@@ -4,7 +4,9 @@ An example pi-studio plugin, in Rust, that writes one note on the scratch board 
 ends.
 
 It is an example and nothing else. No daemon registers it, ships it or looks for it: a plugin is a
-program you name yourself in `plugins.json`, by the absolute path of an executable on this machine.
+program you name yourself in `plugins.json`, by the absolute path of an executable on this machine. The
+plugin system as a whole — the protocol, the registration, the methods and the panel a plugin can put on a
+board — is documented in `docs/plugins.md`.
 
 ## What it does
 
@@ -12,7 +14,7 @@ The daemon starts the program, calls `initialize` on it, and from then on the tw
 pipes, one JSON object per line. This plugin:
 
 1. answers the handshake with `{ "protocolVersion": 1, "name": "scratch-card", "version": … }`;
-2. calls `events.subscribe` for `thread.settled`, the one event a daemon sends;
+2. calls `events.subscribe` for `thread.settled`, the event a run that has ended is announced with;
 3. calls `workspace.list` and keeps the id of the row that says `"scratch": true`;
 4. for every run that ends on that board, calls `cards.note` with `key: "scratch-card:<thread id>"`.
 
@@ -76,5 +78,5 @@ not opened at all. Both checks skip nothing: they fail when the binary is missin
 ## What it is not
 
 This is not a sandbox or a template for reading anything you like. A plugin runs as you, with an
-allowlisted environment, and it can do whatever your user can do; what the daemon offers it is the four
-methods in `service.ts`.
+allowlisted environment, and it can do whatever your user can do; what the daemon offers it is the eight
+methods in `service.ts`, and this example uses three of them.

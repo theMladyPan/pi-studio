@@ -1,9 +1,10 @@
 /**
  * The plugins this daemon trusts, read from its own state folder and from nowhere else.
  *
- * A plugin is a program the human named in `plugins.json` by the absolute path of an executable, so
+ * A plugin is a program the human named in `plugins.json`: either by the absolute path of an executable, so
  * registering one is a deliberate act on this machine and not something a workspace can do to whoever
- * opens it. Nothing a board, a thread or a drop says is read here.
+ * opens it, or by the name of a plugin this install ships, which is the same act in one word. Nothing a
+ * board, a thread or a drop says is read here, and a plugin nobody registered never starts.
  *
  * The file is read at startup and whenever a caller asks, never watched: a plugin that is added while
  * the daemon runs is picked up by the next read, and one that is broken is reported beside the ones
@@ -11,10 +12,17 @@
  */
 import { accessSync, constants, existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { STATE_DIR, readJsonFile } from "../paths.ts";
+import { REPO_DIR, STATE_DIR, readJsonFile } from "../paths.ts";
 
 /** Where the daemon's own registration lives: beside its token and its workspaces. */
 export const PLUGINS_FILE = join(STATE_DIR, "plugins.json");
+
+/**
+ * The plugins a release ships: one folder per plugin under the app's own root, holding a `plugin.json`, the
+ * panel's files, and an executable built for each platform the release was packaged on. A source checkout
+ * has the same folder, so the same registration works there with a binary built in place.
+ */
+export const BUNDLED_DIR = join(REPO_DIR, "plugins");
 
 /**
  * The panel a plugin may put on a board: the document a frame loads, and every file that frame may
@@ -37,6 +45,8 @@ export type PluginEntry = {
 	args: string[];
 	/** The panel this plugin offers the board, when it offered one. */
 	visual?: PluginVisual;
+	/** The folder name of the plugin this install ships, when the row named one instead of a path. */
+	bundled?: string;
 };
 
 /** One row of the file that is not a plugin the daemon can start, and why. */
@@ -53,7 +63,7 @@ export type PluginRegistry = { plugins: PluginEntry[]; problems: PluginProblem[]
  * this daemon reads, and a `visual` it cannot use is a problem on that row rather than a row it half
  * accepts: a panel whose files are not where it says would be a door onto a page that never loads.
  */
-export function loadPluginRegistry(file: string = PLUGINS_FILE): PluginRegistry {
+export function loadPluginRegistry(file: string = PLUGINS_FILE, bundledDir: string = BUNDLED_DIR): PluginRegistry {
 	if (!existsSync(file)) return { plugins: [], problems: [] };
 	const document = readJsonFile<unknown>(file, undefined);
 	if (document === undefined) return { plugins: [], problems: [{ name: "", problem: "the file could not be read as JSON" }] };
@@ -78,16 +88,41 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE): PluginRegistry 
 			continue;
 		}
 		seen.add(name);
+		const args = bag.args ?? [];
+		if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string")) {
+			problems.push({ name, problem: "args must be a list of strings" });
+			continue;
+		}
+		// A bundled row names a plugin this install ships, and takes its program and its panel from that
+		// folder, so one word is the whole registration.
+		if (bag.bundled !== undefined) {
+			if (bag.command !== undefined) {
+				problems.push({ name, problem: "a row names either command or bundled, not both" });
+				continue;
+			}
+			if (bag.visual !== undefined) {
+				problems.push({ name, problem: "a bundled row takes its panel from the plugin's own plugin.json; drop visual" });
+				continue;
+			}
+			const found = bundledOf(bag.bundled, bundledDir);
+			if (found.problem !== undefined) {
+				problems.push({ name, problem: found.problem });
+				continue;
+			}
+			plugins.push({
+				name,
+				command: found.command as string,
+				args: [...(args as string[])],
+				...(found.visual ? { visual: found.visual } : {}),
+				bundled: (bag.bundled as string).trim(),
+			});
+			continue;
+		}
 		const command = bag.command;
 		// A relative path would be resolved against whatever folder the daemon happens to be in, and a
 		// bare name would be looked up on a PATH someone else may own. Both are refused here.
 		if (typeof command !== "string" || !isAbsolute(command)) {
-			problems.push({ name, problem: "command must be an absolute path to an executable" });
-			continue;
-		}
-		const args = bag.args ?? [];
-		if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string")) {
-			problems.push({ name, problem: "args must be a list of strings" });
+			problems.push({ name, problem: "command must be an absolute path to an executable, or bundled must name a plugin this install ships" });
 			continue;
 		}
 		if (!isExecutableFile(command)) {
@@ -102,6 +137,49 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE): PluginRegistry 
 		plugins.push({ name, command, args: [...(args as string[])], ...(visual.visual ? { visual: visual.visual } : {}) });
 	}
 	return { plugins, problems };
+}
+
+/**
+ * One row that names a bundled plugin: the executable this platform runs, and the panel its own manifest
+ * declares, both read from that plugin's folder and from nothing else.
+ *
+ * The manifest is the plugin's own account of itself, and the daemon serves a panel from its registration,
+ * so the panel is taken from the manifest here rather than copied by hand into `plugins.json` and left to
+ * drift. A panel the manifest declares badly is a problem on the row, the same as a hand-written one.
+ */
+function bundledOf(value: unknown, bundledDir: string): { command?: string; visual?: PluginVisual; problem?: string } {
+	const folder = typeof value === "string" ? value.trim() : "";
+	// One folder name, not a path: the registration may name a plugin this install carries and nothing else.
+	if (folder === "" || folder.length > 64 || folder.startsWith(".") || /[\\/\0]/.test(folder)) {
+		return { problem: "bundled must name one folder inside this install's plugins folder" };
+	}
+	const root = join(bundledDir, folder);
+	if (!isDirectory(root)) return { problem: `this install carries no plugin folder ${folder} in ${bundledDir}` };
+	const manifest = readJsonFile<unknown>(join(root, "plugin.json"), undefined);
+	if (typeof manifest !== "object" || manifest === null) return { problem: `plugins/${folder}/plugin.json could not be read as one JSON object` };
+	const command = executableOf(root, folder);
+	if (command === null) return { problem: executableProblem(root, folder) };
+	const visual = visualOf(command, (manifest as { visual?: unknown }).visual);
+	if (visual.problem !== undefined) return { problem: visual.problem };
+	return { command, ...(visual.visual ? { visual: visual.visual } : {}) };
+}
+
+/**
+ * The executable a bundled plugin runs: the one this release built for this platform when it shipped one,
+ * and otherwise a binary built in the plugin's own folder, which is how a checkout is used.
+ */
+function executableOf(root: string, folder: string): string | null {
+	for (const file of [`${folder}-${process.platform}-${process.arch}`, folder]) {
+		const path = join(root, file);
+		if (isExecutableFile(path)) return path;
+	}
+	return null;
+}
+
+/** Why a bundled plugin cannot run here, naming the file a release of this platform would have shipped. */
+function executableProblem(root: string, folder: string): string {
+	const wanted = `${folder}-${process.platform}-${process.arch}`;
+	return `${root} holds no executable for ${process.platform}-${process.arch}: it needs ${wanted}, or ${folder} built in place`;
 }
 
 /** How long a panel's title may be, because it is drawn on one line of a menu and of a bar. */
@@ -172,6 +250,14 @@ export function resolvePluginFile(root: string, path: string): string | null {
 		return real;
 	} catch {
 		return null;
+	}
+}
+
+function isDirectory(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
 	}
 }
 

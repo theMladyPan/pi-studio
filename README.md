@@ -159,6 +159,24 @@ your words. When an update changes a prompt you have edited, `pi-studio update` 
 Nothing is merged and no screen shows it: the report is a file, and a thread can read it and settle each
 prompt with you.
 
+## Plugins
+
+A plugin is a program of its own that the daemon starts and talks to over its own pipes. It can read a
+board, post notes, drive threads, follow the runs they produce, and put a panel of its own in the toolbox,
+drawn in a frame sandboxed away from the board. It runs as you and is handed no token, and the daemon
+starts one only when you name it in `~/.local/state/pi-studio/plugins.json`: nothing is installed,
+downloaded or asked for, and a folder you open can never register one.
+
+An installed release carries `git-history`, which draws a workspace's git history in a panel, with
+prebuilt executables for Linux and macOS. Enabling it is one row:
+
+```json
+{ "plugins": [{ "name": "git-history", "bundled": "git-history" }] }
+```
+
+`docs/plugins.md` has the protocol, the methods a plugin may call and the rules for a panel, and
+`examples/plugins/scratch-card` is the same system written in Rust.
+
 ## From another computer
 
 `--host 0.0.0.0` (or `PI_STUDIO_HOST`) puts the board on every address the machine answers on, which is

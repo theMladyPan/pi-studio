@@ -90,6 +90,26 @@ The daemon serves a panel's files from its own registration and never from the m
 above have to say the same thing. `assets` below is this plugin's own answer on the same list, which is
 what the tests compare against the folder.
 
+### In an installed release
+
+A release ships this plugin ready to run: `plugins/git-history` beside the app, with its manifest, its panel
+and a prebuilt executable for Linux and macOS on x86_64 and arm64. Registering it there is one row, and no Go
+toolchain is involved:
+
+```json
+{
+	"plugins": [
+		{ "name": "git-history", "bundled": "git-history" }
+	]
+}
+```
+
+`bundled` names the folder this install carries. The daemon runs
+`plugins/git-history/git-history-<platform>` — `git-history-linux-x64`, `git-history-darwin-arm64` and the
+other two — and takes the panel from this folder's `plugin.json`, so there is no `command` and no `visual`
+to copy. A row that names both `bundled` and `command`, or a bundled row that also names `visual`, is
+refused rather than half read. The full rules are in `docs/plugins.md`.
+
 ## What the plugin speaks
 
 One JSON-RPC 2.0 message per LF-terminated line, in both directions, frames of at most 1 MiB.

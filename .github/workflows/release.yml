@@ -5,7 +5,8 @@
 #
 #   verify   proves that the tag, package.json and package-lock.json name one version, that the tag is
 #            annotated and sits on main, and that the tagged tree is clean; runs the full check gate;
-#            builds the three assets with `npm run package` and keeps them as the run's artifact.
+#            cross-builds the plugin executables an install has no toolchain for; builds the three assets
+#            with `npm run package` and keeps them as the run's artifact.
 #   publish  makes a draft GitHub Release from that artifact, uploads exactly the three assets, and
 #            publishes it as the latest release only once all three are there. A release that is
 #            already published is never replaced; the run fails instead.
@@ -67,6 +68,18 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Install the locked dependencies
         run: npm ci
+      # The plugins a release ships are executables, and a machine that installs the release has no Go
+      # toolchain, so they are cross-built here. Nothing but the standard library is used, so a cross
+      # build needs no toolchain per target.
+      - name: Set up Go for the bundled plugin
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - name: Run the plugin's own tests
+        run: go test ./...
+        working-directory: plugins/git-history
+      - name: Build the bundled plugins
+        run: npm run build:plugins
       - name: Run the full check gate
         run: npm run check
       - name: Build and package the release
@@ -100,6 +113,16 @@ jobs:
           identity="$(tar -xzOf "$tarball" "$top/build.json")"
           grep -q '"official": true' <<< "$identity" || { echo "::error::the packaged build is not an official build of $VERSION"; exit 1; }
           grep -qF "\"version\": \"$VERSION\"" <<< "$identity" || { echo "::error::the packaged build names another version than $VERSION"; exit 1; }
+          # The git history plugin ships ready to run: its manifest and panel, and one executable per
+          # platform, so registering it in an installed release needs no Go toolchain.
+          grep -qx "$top/plugins/git-history/plugin.json" <<< "$listing" || { echo "::error::$tarball carries no plugins/git-history/plugin.json"; exit 1; }
+          grep -qx "$top/plugins/git-history/assets/history.html" <<< "$listing" || { echo "::error::$tarball carries no git history panel"; exit 1; }
+          for platform in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            grep -qx "$top/plugins/git-history/git-history-$platform" <<< "$listing" || { echo "::error::$tarball carries no plugin executable for $platform"; exit 1; }
+          done
+          if grep -Eq '^[^/]+/plugins/[^/]+/dist/' <<< "$listing"; then
+            echo "::error::$tarball carries a plugin's dist folder"; exit 1
+          fi
           # The release notes are the dated changelog section for this version, and there is no
           # fallback: the heading must carry a real YYYY-MM-DD calendar date, the section must
           # hold notes, and a bullet that still names the thread that wrote it has not been
