@@ -16,7 +16,7 @@ const root = mkdtempSync(join(tmpdir(), "pi-studio-plugin-service-"));
 process.env.PI_STUDIO_STATE = join(root, "state");
 
 const { createPluginService, PLUGIN_EVENTS } = await import("../server/plugins/service.ts");
-const { boards, flushBoard } = await import("../server/store.ts");
+const { boardFor, boards, flushBoard } = await import("../server/store.ts");
 const { boardFile, readJsonFile } = await import("../server/paths.ts");
 const { ensureScratch, rememberWorkspace } = await import("../server/workspaces.ts");
 
@@ -75,6 +75,8 @@ test("reading a workspace the daemon has not opened writes nothing into it", asy
 	const read = await call(service, "workspace.read", { workspace: workspace.id });
 	assert.equal(read.open, false);
 	assert.deepEqual(read.cards, []);
+	// A list is a read too: it answers from what was written and opens nothing.
+	assert.deepEqual((await call(service, "threads.list", { workspace: workspace.id })).threads, []);
 	// Opening a board for real is what makes `.pi-studio` in somebody's project, and a read is not that.
 	assert.equal(existsSync(join(folder, ".pi-studio")), false);
 });
@@ -113,6 +115,76 @@ test("a note the board will not draw is refused with the reason, not with a daem
 	assert.equal(refusal.message, "empty note");
 });
 
+// ---------- a thread followed through the adapter ----------
+
+test("a plugin makes a thread, prompts it while it runs, and stops that one run", async () => {
+	const service = createPluginService();
+	const workspace = scratch();
+	const made = await call(service, "threads.create", { workspace: workspace.id, title: "a job" });
+	assert.ok(made.threadId);
+	assert.deepEqual(Object.keys(made.thread).sort(), ["at", "hidden", "id", "mode", "status", "title", "turns"]);
+	assert.equal(made.thread.status, "idle");
+
+	const listed = await call(service, "threads.list", { workspace: workspace.id });
+	assert.ok(listed.threads.some((thread: any) => thread.id === made.threadId));
+
+	// A thread with a run in flight takes the words behind it instead of starting a second run, so this
+	// drives the write path without a child to talk to.
+	const board = boardFor(workspace);
+	const thread = board.threads.get(made.threadId);
+	thread.status = "running";
+	const prompted = await call(service, "threads.prompt", { workspace: workspace.id, thread: made.threadId, text: "do the thing" });
+	assert.equal(prompted.turn, 0);
+	assert.equal(prompted.thread.turns, 1);
+	assert.equal(prompted.thread.status, "running");
+	assert.equal(thread.queued.length, 1);
+	assert.match(thread.queued[0].message, /\[user message\]\ndo the thing/);
+
+	// A stop names the thread it is asked of, and never the board's other runs.
+	const stopped = await call(service, "threads.stop", { workspace: workspace.id, thread: made.threadId });
+	assert.deepEqual(stopped.stopped, [made.threadId]);
+	assert.equal(stopped.workspace.id, workspace.id);
+	assert.equal(thread.abortWanted, true);
+});
+
+test("a thread this workspace does not hold is refused, and an unnamed stop never reaches the board", async () => {
+	const service = createPluginService();
+	const workspace = scratch();
+	const unknown = await refused(service, "threads.prompt", { workspace: workspace.id, thread: "not-a-thread", text: "go" });
+	assert.equal(unknown.code, -32602);
+	assert.match(unknown.message, /not-a-thread is not a thread in this workspace/);
+	// The human's own bottom bar stops every run on the board; a plugin asks for one thread or for nothing.
+	const unnamed = await refused(service, "threads.stop", { workspace: workspace.id });
+	assert.equal(unnamed.code, -32602);
+	assert.match(unnamed.message, /thread must be the id of a thread in this workspace/);
+});
+
+test("a thread with no run in progress has nothing to stop", async () => {
+	const service = createPluginService();
+	const workspace = scratch();
+	const made = await call(service, "threads.create", { workspace: workspace.id, title: "quiet job" });
+	const refusal = await refused(service, "threads.stop", { workspace: workspace.id, thread: made.threadId });
+	assert.equal(refusal.code, -32602);
+	assert.equal(refusal.message, "this thread has no run in progress");
+});
+
+test("a thread the board will not make is refused with the reason the route gives", async () => {
+	const service = createPluginService();
+	const refusal = await refused(service, "threads.create", { workspace: scratch().id, mode: "not-a-mode" });
+	assert.equal(refusal.code, -32602);
+	assert.equal(refusal.message, "unknown mode: not-a-mode");
+});
+
+test("an ended thread takes no new words", async () => {
+	const service = createPluginService();
+	const workspace = scratch();
+	const made = await call(service, "threads.create", { workspace: workspace.id, title: "spent job" });
+	boardFor(workspace).threads.get(made.threadId).status = "dead";
+	const refusal = await refused(service, "threads.prompt", { workspace: workspace.id, thread: made.threadId, text: "one more" });
+	assert.equal(refusal.code, -32602);
+	assert.equal(refusal.message, "thread ended");
+});
+
 // ---------- what the adapter will not answer ----------
 
 test("a method this daemon does not answer is refused as one", async () => {
@@ -131,8 +203,10 @@ test("params that are not one object are refused", async () => {
 
 test("a subscription names the events this daemon sends, and nothing else", async () => {
 	const service = createPluginService();
-	assert.deepEqual(PLUGIN_EVENTS, ["thread.settled"]);
-	assert.deepEqual(await call(service, "events.subscribe", { types: ["thread.settled"] }), { types: ["thread.settled"] });
+	assert.deepEqual(PLUGIN_EVENTS, ["thread.settled", "thread.stream"]);
+	assert.deepEqual(await call(service, "events.subscribe", { types: ["thread.settled", "thread.stream"] }), {
+		types: ["thread.settled", "thread.stream"],
+	});
 	const refusal = await refused(service, "events.subscribe", { types: ["card.made"] });
 	assert.equal(refusal.code, -32602);
 	assert.match(refusal.message, /card\.made is not an event this daemon sends/);

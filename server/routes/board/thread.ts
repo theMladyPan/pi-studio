@@ -155,15 +155,36 @@ function newThread(board, body, spec, choice = {}) {
 export async function onThread(req, res, board, caller = { human: true }) {
 	const body = await readJson(req, res);
 	if (!body) return;
+	let made;
+	try {
+		made = await threadOnBoard(board, body, caller);
+	} catch (error) {
+		return void fail(res, error.status ?? 500, error.message);
+	}
+	answer(res, 200, made);
+}
+
+
+
+/**
+ * Create a thread on a board, checked and drawn, and answer what the route answers.
+ *
+ * It is the service behind `POST /thread` and behind the `threads.create` a plugin calls, so a plugin
+ * makes the thread a human makes and is refused what a human is refused: the depth rule, a role or mode
+ * whose prompt is missing, and a model this machine does not have. Creation does not spawn, and a
+ * refusal throws with the status the route would have answered, so a caller with no response to write
+ * still says what went wrong.
+ */
+export async function threadOnBoard(board, body, caller = { human: true }) {
 	const spec = threadSpec(board, body, caller);
-	if (spec.error) return void fail(res, 409, spec.error);
+	if (spec.error) throw refusal(409, spec.error);
 	const choice = await chosenModel(body);
-	if (choice.error) return void fail(res, 409, choice.error);
+	if (choice.error) throw refusal(409, choice.error);
 	const thread = newThread(board, body, spec, choice);
 	// Creation does not spawn: the child starts on the first message, so an empty board costs nothing.
 	board.threads.set(thread.id, thread);
 	card(board, thread);
-	answer(res, 200, { threadId: thread.id, card: cardFor(thread, board) });
+	return { threadId: thread.id, card: cardFor(thread, board) };
 }
 
 
@@ -234,6 +255,19 @@ export function cardByKey(board, key, type) {
 /** A string field from a request body, trimmed and cut short. */
 export function field(value, limit = 80) {
 	return typeof value === "string" && value.trim() ? value.trim().slice(0, limit) : "";
+}
+
+
+
+/**
+ * A refusal the route would have answered with, thrown instead. The status rides on the error, so a
+ * caller with no response to write — the plugin service behind these routes — still says what went
+ * wrong and how a tab would have read it.
+ */
+export function refusal(status, message) {
+	const refused = new Error(message);
+	refused.status = status;
+	return refused;
 }
 
 
