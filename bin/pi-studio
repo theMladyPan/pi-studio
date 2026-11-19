@@ -2,8 +2,8 @@
 // Starts the pi-studio daemon. Its own file so `pi-studio` can sit in PATH without the repository
 // being on it, and so the app is one word to run from any folder.
 //
-// `--version`, `update` and `uninstall` are handled here, before the server is imported, so they
-// work in a source clone and in a staged/installed copy alike. Everything else starts the app.
+// `--version`, `doctor`, `update` and `uninstall` are handled here, before the server is imported, so
+// they work in a source clone and in a staged/installed copy alike. Everything else starts the app.
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildIdentity, formatVersion, parseFlags, registerManagedRuntime, selfInstallFlags } from "./runtime.mjs";
@@ -21,6 +21,11 @@ if (command === "--version" || command === "-V" || command === "version") {
 	} else {
 		console.log(formatVersion(identity));
 	}
+} else if (command === "doctor") {
+	// A report rather than a start, so it must answer on a machine where the app cannot start yet:
+	// it imports the doctor alone, never the server.
+	const { runDoctor } = await import("../server/doctor.ts");
+	process.exitCode = runDoctor(flags);
 } else if (command === "update" || command === "uninstall") {
 	const { update, uninstall } = await import("./manage.mjs");
 	// An installed copy knows its own install root and bin folder, so a later update or uninstall

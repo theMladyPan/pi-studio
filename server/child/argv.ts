@@ -3,9 +3,8 @@
  * The command line a thread's `pi` is started with: the CLI, the extension folders, and the flags that
  * carry the board's tools and its narrowed tool list.
  */
-import { basename, dirname, join } from "node:path";
-import { homedir } from "node:os";
-import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { boardPrompt } from "./prompts.ts";
 import { ceiling } from "./describe.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, TOOLS } from "../models.ts";
@@ -21,37 +20,10 @@ import { MODE_TOOLS_OFF, modeSystemPrompt } from "./modes.ts";
 // ---------- the child ------------------------------------------------------
 
 /**
- * The CLI a child needs. Same order as the rest of the tooling: the script this process is already
- * running pi from, then the managed install, then the `pi` binary on PATH.
+ * The CLI a child needs, found where the doctor finds it too (see `pi-cli.ts`): the code that
+ * answers that question lives on its own so both ask the same one.
  */
-/** Where pi keeps the install this app drives, and the extensions beside it. */
-export function installRoot() {
-	return process.env.PI_MANAGED_INSTALL_ROOT ?? join(homedir(), ".pi", "agent", "install");
-}
-
-
-
-export function extensionsDir() {
-	return join(dirname(installRoot()), "extensions");
-}
-
-
-
-export function piCli() {
-	const script = process.argv[1];
-	if (script && existsSync(script) && (basename(script) === "pi" || script.includes("pi-coding-agent"))) {
-		return { command: process.execPath, args: [script] };
-	}
-	const root = installRoot();
-	try {
-		const version = readFileSync(join(root, "current-version"), "utf8").trim();
-		const cli = join(root, "releases", version, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js");
-		if (version && existsSync(cli)) return { command: process.execPath, args: [cli] };
-	} catch {
-		// No managed install here; PATH is the last resort.
-	}
-	return { command: "pi", args: [] };
-}
+export { extensionsDir, installRoot, piCli } from "./pi-cli.ts";
 
 
 
