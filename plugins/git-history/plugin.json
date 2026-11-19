@@ -1,0 +1,10 @@
+{
+  "name": "git-history",
+  "version": "0.1.0",
+  "protocol": 1,
+  "visual": {
+    "entry": "assets/history.html",
+    "styles": ["assets/history.css"],
+    "scripts": ["assets/history.js"]
+  }
+}

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>git history</title>
+		<link rel="stylesheet" href="history.css" />
+	</head>
+	<body>
+		<header class="bar" id="bar">
+			<span class="title" id="title">git history</span>
+			<span class="where" id="where"></span>
+			<span class="spacer"></span>
+			<span class="counts" id="counts"></span>
+			<button class="button" id="refresh" type="button" title="read the repository again">refresh</button>
+		</header>
+
+		<p class="notice" id="notice" hidden></p>
+
+		<main class="cols">
+			<section class="graph" aria-label="commits">
+				<div class="rows" id="rows" tabindex="0" role="listbox" aria-label="commits"></div>
+				<footer class="page">
+					<button class="button" id="newest" type="button" title="back to the newest commits">newest</button>
+					<button class="button" id="newer" type="button" title="the page above this one">&uarr; newer</button>
+					<span class="range" id="range"></span>
+					<button class="button" id="older" type="button" title="the page below this one">older &darr;</button>
+				</footer>
+			</section>
+
+			<aside class="detail" id="detail" aria-label="commit details" hidden>
+				<header class="detail-head">
+					<h2 class="detail-subject" id="detail-subject"></h2>
+					<div class="detail-meta" id="detail-meta"></div>
+					<button class="button close" id="detail-close" type="button" title="close the details">close</button>
+				</header>
+				<p class="detail-note" id="detail-note" hidden></p>
+				<ul class="files" id="files" aria-label="files this commit changed"></ul>
+				<div class="patch" id="patch" aria-label="patch of the picked file"></div>
+			</aside>
+		</main>
+	</body>
+	<script src="history.js" defer></script>
+</html>
