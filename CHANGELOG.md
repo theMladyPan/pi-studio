@@ -6,6 +6,7 @@
 - fix: Make the branch you are on stand out in the git graph, drawn in bold on a wash of its own lane colour, so finding your own branch no longer means reading every pill in the row. [t-5cc9963c]
 - feat: Add `pi-studio doctor`, one report naming the Node, git, pi and graph copy the board leans on, saying what was found and the command that fixes each gap, with an exit code and `--json` for scripts; the installer ends by printing the same report, so a fresh install says what is still missing instead of each drawer going dark on its own. [t-5cc9963c]
 - fix: Judge `!` command completion by the search path alone in its check, handing that daemon a shell with no builtins of its own, so the check no longer fails on a host where `/bin/sh` is a link to bash and bash's builtins were counted as programs beside the one fixture. [t-4327662c]
+- fix: Ask a plugin to stop when the daemon is stopped with SIGTERM or SIGINT, and wait for it however slowly it was coming up, so no plugin outlives the daemon that started it; the signal still writes no board state, so stopping a daemon and then deleting the folder it served no longer lands a save in the folder being deleted. [t-54ad55e0]
 
 ## [0.5.1] - 2026-11-19
 
