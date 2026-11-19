@@ -311,8 +311,12 @@ describe("routes", { concurrency: 8 }, () => {
 		mkdirSync(join(first, "fixture-dir"));
 		// A search-path entry that does not exist is the ordinary case and must not spoil the listing. The shell
 		// that runs a `!` line is named outright: this check is about the walk, and a shell with builtins of its
-		// own would put names in the answer that are its business and not the path's.
-		const daemon = await boot(state, { PATH: [first, join(state, "missing"), second].join(delimiter), SHELL: "/bin/sh" });
+		// own would put names in the answer that are its business and not the path's. The fixture shell's real
+		// name is neither bash nor zsh, so it has no builtin table to ask; `/bin/sh` cannot say that, being a
+		// link to bash on some hosts, whose builtins would then be listed beside the one program here.
+		const shell = join(state, "fixture-shell");
+		writeFileSync(shell, "#!/bin/sh\nexec /bin/sh \"$@\"\n", { mode: 0o755 });
+		const daemon = await boot(state, { PATH: [first, join(state, "missing"), second].join(delimiter), SHELL: shell });
 		try {
 			const listed = await get(daemon, `/programs?token=${daemon.token}&prefix=fixture`);
 			assert.equal(listed.status, 200, listed.body);
