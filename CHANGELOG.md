@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - fix: Emptying the board now sweeps the trees its threads worked in, so spent worktrees leave with the board instead of lingering on disk with no thread left to retire them; trees holding unmerged work stay for leftovers to name. The same sweep runs when the put-away cap drops a child. [t-e855512f]
+- fix: Make the branch you are on stand out in the git graph, drawn in bold on a wash of its own lane colour, so finding your own branch no longer means reading every pill in the row. [t-5cc9963c]
 
 ## [0.5.1] - 2026-11-19
 
