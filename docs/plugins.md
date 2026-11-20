@@ -95,6 +95,10 @@ folder and never receives one it asked for by path. `cards.note`, `threads.creat
 `threads.stop` write what the human's own routes write, and are refused what those routes refuse. The
 exact params, the events and the refusal codes are documented at the top of `server/plugins/service.ts`.
 
+The shapes of those eight methods, the two events and `initialize` are frozen while the protocol version
+is 1: they may gain fields and new methods, but a field may never be removed, renamed or reshaped
+without a protocol 2. Unknown keys on either side are ignored, which is what makes that promise keepable.
+
 The daemon sends two notifications, to the plugins that asked for that type:
 
 - `thread.settled` — a run has ended, and whether it ended on an answer, a stop or a failure.

@@ -9342,13 +9342,26 @@ function renderPluginSettings() {
     remove.addEventListener("click", () => void savePluginSettings(gatherPluginRows().filter((_, at) => at !== index), `removed ${row.name}`));
     head.append(remove);
     nodes.push(head);
+    // A row that names a folder takes everything else from that folder's plugin.json, so it shows
+    // only what a row of its own can decide — its name, its args and its shortcut. The command, the
+    // panel and the place belong to the manifest and are never rewritten by this form.
     nodes.push(pluginField("name", row.name, "name", index));
-    nodes.push(pluginField("command", row.command, "command", index));
+    if (row.installed || row.bundled) {
+      nodes.push(
+        Object.assign(el("p", "cfg-note"), {
+          textContent: `the command, the panel and the place come from the ${row.installed ? "installed" : "shipped"} plugin.json`,
+        }),
+      );
+    } else {
+      nodes.push(pluginField("command", row.command, "command", index));
+    }
     nodes.push(pluginField("args", (row.args || []).join(", "), "args", index, "--flag value, comma separated"));
-    nodes.push(pluginPlaceSelect(row.visual?.place || "", index));
-    nodes.push(pluginField("panel title", row.visual?.title || "", "title", index));
-    nodes.push(pluginField("panel entry", row.visual?.entry || "", "entry", index));
-    nodes.push(pluginField("panel files", (row.visual?.files || []).join(", "), "files", index));
+    if (!(row.installed || row.bundled)) {
+      nodes.push(pluginPlaceSelect(row.visual?.place || "", index));
+      nodes.push(pluginField("panel title", row.visual?.title || "", "title", index));
+      nodes.push(pluginField("panel entry", row.visual?.entry || "", "entry", index));
+      nodes.push(pluginField("panel files", (row.visual?.files || []).join(", "), "files", index));
+    }
     nodes.push(pluginField("shortcut", row.shortcut || "", "shortcut", index, "one letter"));
   });
   // What is on disk that nobody registered, offered to enable: a plugin the human copied into the
@@ -9417,7 +9430,7 @@ async function enablePlugin(one) {
     args: one.defaults.args || [],
     ...(free ? { shortcut: suggested } : {}),
   });
-  await savePluginSettings(rows, free ? "enabled" : `enabled without the default shortcut — ${suggested} is taken; set another above`);
+  await savePluginSettings(rows, suggested && !free ? `enabled without the default shortcut — ${suggested} is taken; set another above` : "enabled");
 }
 
 /** The rows as the form has them, before the daemon is asked to prove them. */
@@ -9430,20 +9443,27 @@ function gatherPluginRows() {
   }
   return [...byIndex.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([_, fields]) => {
+    .map(([index, fields]) => {
+      // A row that names a folder keeps naming it: saving must never turn it into a command row,
+      // which would spawn it eagerly and pin it to a path the manifest no longer owns.
+      const named = (pluginData.plugins || [])[index];
       const row = {
         name: (fields.name || "").trim(),
-        command: (fields.command || "").trim(),
         args: (fields.args || "").split(",").map((one) => one.trim()).filter(Boolean),
       };
-      const files = (fields.files || "").split(",").map((one) => one.trim()).filter(Boolean);
-      if (files.length) {
-        row.visual = {
-          title: (fields.title || "").trim() || row.name,
-          entry: (fields.entry || "").trim(),
-          files,
-          ...(fields.place ? { place: fields.place } : {}),
-        };
+      if (named?.installed) row.installed = named.installed;
+      if (named?.bundled) row.bundled = named.bundled;
+      if (!named?.installed && !named?.bundled) {
+        row.command = (fields.command || "").trim();
+        const files = (fields.files || "").split(",").map((one) => one.trim()).filter(Boolean);
+        if (files.length) {
+          row.visual = {
+            title: (fields.title || "").trim() || row.name,
+            entry: (fields.entry || "").trim(),
+            files,
+            ...(fields.place ? { place: fields.place } : {}),
+          };
+        }
       }
       const shortcut = (fields.shortcut || "").trim().toLowerCase();
       if (shortcut) row.shortcut = shortcut;

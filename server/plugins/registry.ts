@@ -114,7 +114,7 @@ export type AvailablePlugin = {
 	title: string;
 	description: string;
 	start: "eager" | "lazy";
-	defaults: { args: string[]; shortcut?: string; place?: "drawer"; title: string; entry?: string; files?: string[] };
+	defaults: { args: string[]; shortcut?: string; place?: "drawer" };
 };
 
 /** A folder the settings page shows but cannot offer, and why. */
@@ -204,7 +204,9 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE, bundledDir: stri
 			plugins.push({
 				name,
 				command: found.command as string,
-				args: [...(args as string[])],
+				// A row that says nothing about args takes the manifest's: `args: []` written on purpose
+				// is still args: [], because a reader cannot tell the two apart afterwards and must not guess.
+				args: bag.args === undefined ? [...(found.manifest?.args ?? [])] : [...(args as string[])],
 				...(found.visual ? { visual: found.visual } : {}),
 				...(shortcut !== undefined ? { shortcut: shortcut as string } : {}),
 				...(found.version ? { version: found.version } : {}),
@@ -242,7 +244,7 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE, bundledDir: stri
  * so the panel is taken from the manifest here rather than copied by hand into `plugins.json` and left to
  * drift. A panel the manifest declares badly is a problem on the row, the same as a hand-written one.
  */
-function manifestOf(value: unknown, dir: string): { command?: string; visual?: PluginVisual; version?: string; start?: "eager" | "lazy"; problem?: string } {
+function manifestOf(value: unknown, dir: string): { command?: string; visual?: PluginVisual; version?: string; start?: "eager" | "lazy"; manifest?: PluginManifest; problem?: string } {
 	const folder = typeof value === "string" ? value.trim() : "";
 	// One folder name, not a path: the registration may name a plugin this folder holds and nothing else.
 	if (folder === "" || folder.length > 64 || folder.startsWith(".") || /[\\/\0]/.test(folder)) {
@@ -275,6 +277,7 @@ function manifestOf(value: unknown, dir: string): { command?: string; visual?: P
 		...(visual.visual ? { visual: visual.visual } : {}),
 		...(manifest.version ? { version: manifest.version } : {}),
 		...(manifest.start === "lazy" ? { start: "lazy" as const } : {}),
+		manifest,
 	};
 }
 
@@ -486,23 +489,16 @@ export function loadAvailablePlugins(registered: Iterable<string>, installedDir:
 				continue;
 			}
 			if (!isFolder) continue;
-			const document = readManifestFile(root, folder);
-			if ("problem" in document) {
-				unavailable.push({ folder, source, problem: document.problem });
+			// The scan proves a folder the same way a registration does, through the same reader, so
+			// what it offers is exactly what enabling it registers — no hand-rolled second proof.
+			const found = manifestOf(folder, dir);
+			if (found.problem !== undefined) {
+				unavailable.push({ folder, source, problem: found.problem });
 				continue;
 			}
-			const manifest = document.manifest;
-			if (manifest.start === "lazy" && manifest.visual === undefined) {
-				unavailable.push({ folder, source, problem: "a plugin that starts lazily needs a panel to start it" });
-				continue;
-			}
+			const manifest = found.manifest as PluginManifest;
 			const name = manifest.name ?? folder;
 			if (held.has(name) || offered.has(name)) continue;
-			const executable = executableOfManifest(root, folder, manifest.command);
-			if (executable.problem !== undefined) {
-				unavailable.push({ folder, source, problem: executable.problem });
-				continue;
-			}
 			offered.add(name);
 			available.push({
 				name,
@@ -511,13 +507,11 @@ export function loadAvailablePlugins(registered: Iterable<string>, installedDir:
 				version: manifest.version ?? "0.0.0",
 				title: manifest.title ?? name,
 				description: manifest.description ?? "",
-				start: manifest.start ?? "eager",
+				start: found.start ?? "eager",
 				defaults: {
 					args: manifest.args ?? [],
 					...(manifest.shortcut ? { shortcut: manifest.shortcut } : {}),
-					...(manifest.visual?.place === "drawer" ? { place: "drawer" as const } : {}),
-					title: manifest.title ?? name,
-					...(manifest.visual ? { entry: manifest.visual.entry, files: manifest.visual.files } : {}),
+					...(found.visual?.place === "drawer" ? { place: "drawer" as const } : {}),
 				},
 			});
 		}

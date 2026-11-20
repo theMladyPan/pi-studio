@@ -1640,9 +1640,10 @@
       <summary><span>plugins</span><span class="cfg-preview" id="pluginCount">none</span></summary>
       <div class="cfg-kids">
         <p class="cfg-note">A plugin is a program you name in the daemon's own list — nothing is
-        installed, updated or started but what you write here. A place puts the panel in the left
-        drawers; toolbox leaves it in the toolbox menu. A shortcut is one letter the board does not
-        answer to yet, and it opens the panel.</p>
+        installed, updated or started but what you write here. A plugin declares itself in a `plugin.json`
+        in its own folder; copy the folder into `~/.local/state/pi-studio/plugins/` and it is offered
+        below. A place puts the panel in the left drawers; toolbox leaves it in the toolbox menu.
+        A shortcut is one letter the board does not answer to yet, and it opens the panel.</p>
         <div id="pluginRows"></div>
         <div class="cfg-row is-typed"><span>name</span><input class="cfg-type" id="plName" maxlength="64" spellcheck="false" placeholder="bughound" /></div>
         <div class="cfg-row is-typed"><span>command</span><input class="cfg-type" id="plCommand" spellcheck="false" placeholder="/absolute/path/to/the/program" /></div>

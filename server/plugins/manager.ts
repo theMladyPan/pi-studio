@@ -197,6 +197,9 @@ export async function startPlugins(options: PluginStartOptions = {}): Promise<Pl
 			})),
 		problems: () => [...problems],
 		close: async () => {
+			// A first-request spawn still in flight is awaited, so its host lands here and is closed
+			// rather than leaking across the reload or the shutdown that is waiting on this close.
+			await Promise.allSettled([...starting.values()]);
 			// Every plugin is asked at once, and one that will not go is not a reason to keep the others.
 			await Promise.all([...hosts.values()].map((host) => host.close().catch(() => {})));
 			hosts.clear();
