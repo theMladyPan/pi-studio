@@ -21,7 +21,7 @@ const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-native-gitgraph-"));
 process.env.PI_STUDIO_STATE = stateHome;
 
 type Link = { from: number; to: number; tone: number; kind: "pass" | "in" | "out"; uncommitted: boolean };
-type LayoutRow = { lane: number; tone: number; links: Link[]; root: boolean; exits: Array<{ column: number; tone: number }> };
+type LayoutRow = { lane: number; tone: number; links: Link[]; root: boolean; exits: Array<{ column: number; tone: number; uncommitted: boolean }> };
 type Commit = { hash: string; parentHashes: string[] };
 type Layout = { rows: LayoutRow[]; width: number };
 
@@ -164,8 +164,33 @@ test("first parents only takes a merge's second line away", () => {
 	assert.deepEqual(rows[1].exits.map(({ column }) => column), [0]);
 });
 
-// ---------- what the page asks for ----------
+// The uncommitted row is drawn above the checked out commit, and the line between the two is the gray
+// one, because those changes are no commit yet. A lane that stays gray past that commit claims the same
+// of history the human did commit, and one that turns gray too late draws the row as a commit with a
+// colour of its own.
+test("the uncommitted row's gray lane runs from that row to the commit it sits on, and no further", () => {
+	const { rows } = graph.layoutGraph([
+		{ hash: "*", parentHashes: ["B"] },
+		{ hash: "B", parentHashes: ["D"] },
+		{ hash: "D", parentHashes: [] },
+	]);
+	assert.deepEqual(rows[0].links.map(({ kind, uncommitted }) => [kind, uncommitted]), [["out", true]], "the uncommitted row leaves a gray lane");
+	assert.deepEqual(rows[0].exits.map(({ uncommitted }) => uncommitted), [true], "and hands it to the row below as gray");
+	// The commit the row sits on draws that gray line into its own dot, and its own parent in its own colour.
+	assert.deepEqual(rows[1].links.map(({ kind, uncommitted }) => [kind, uncommitted]), [["in", true], ["out", false]]);
+	assert.deepEqual(rows[1].exits.map(({ uncommitted }) => uncommitted), [false], "the lane below the commit is the commit's own colour");
+	assert.deepEqual(rows[2].links.map(({ kind, uncommitted }) => [kind, uncommitted]), [["in", false]]);
+});
 
+test("an uncommitted row whose commit is not in these rows keeps its gray line to the bottom", () => {
+	// The window ends above the checked out commit, so the lane becomes a continuation the page paints
+	// itself, and it has to stay gray: the row it comes from holds changes nobody has committed.
+	const { rows } = graph.layoutGraph([{ hash: "*", parentHashes: ["B"] }], { more: true });
+	assert.deepEqual(rows[0].links.map(({ kind, uncommitted }) => [kind, uncommitted]), [["out", true]]);
+	assert.deepEqual(rows[0].exits.map(({ column, uncommitted }) => [column, uncommitted]), [[0, true]]);
+});
+
+// ---------- what the page asks for ----------
 // The read and the writes the page leans on hardest, checked as the page sends them instead of by
 // reading its source for command names: a branch list is answered about the repository named in the
 // request, a rename is the name the next read lists, and a repository this tab no longer has is refused
