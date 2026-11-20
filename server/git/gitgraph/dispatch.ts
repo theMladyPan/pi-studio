@@ -1,12 +1,12 @@
 /**
- * One message from the Git Graph Libre page, and every answer it earns.
+ * One message from the Git Graph page, and every answer it earns.
  *
- * The page is Libre's bundle: it posts one command per click and waits for a
- * reply carrying the same command name, sometimes with a `requestId` it
- * compares before it will draw the answer at all. This module is the
- * extension's message switch, minus everything that needed an editor or a
- * child process. Every answer is an array, and a failure is a reply too,
- * never a rejected promise, so the route always answers.
+ * The page posts one command per click and waits for a reply carrying the same
+ * command name, sometimes with a `requestId` it compares before it will draw the
+ * answer at all: those names are Libre's protocol, which this page speaks. This
+ * module is that protocol's message switch, minus everything that needed an
+ * editor or a child process. Every answer is an array, and a failure is a reply
+ * too, never a rejected promise, so the route always answers.
  */
 import { parseLibreRequest, queryError, UNCOMMITTED } from "./libre.ts";
 import type { LibreRequest } from "./libre.ts";

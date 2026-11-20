@@ -1,11 +1,11 @@
 /**
- * The settings the Git Graph Libre view is opened with, written out here rather than read from a
+ * The settings the Git Graph page is opened with, written out here rather than read from a
  * settings file, because this app has one place to look and a human with a broken JSON should still
  * get a view.
  *
- * Two things in here are deliberately unlike the extension this page came from. An action is offered
- * only once the daemon has the command behind it: the page draws its menus from these flags, and a
- * menu entry that answers "cannot do that yet" is worse than no entry at all. And `fetchAvatars` is
+ * Two things in here are deliberately unlike Git Graph Libre, whose protocol this page speaks. An action
+ * is offered only once the daemon has the command behind it: the page draws its menus from these flags,
+ * and a menu entry that answers "cannot do that yet" is worse than no entry at all. And `fetchAvatars` is
  * false, because an avatar is a request to GitHub or Gravatar made on behalf of a human who only
  * asked to see their own repository.
  */

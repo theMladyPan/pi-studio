@@ -2,7 +2,7 @@
  * Every command the Git Graph page can run that writes to a repository, in one table:
  * branches, tags, checkouts, merges, rebases, cherry-picks, reverts, resets, stashes and a fetch.
  *
- * The page was written for an extension, and its answers are the strings the human then reads: git's
+ * The page speaks an extension's protocol, so its answers are the strings the human then reads: git's
  * own stderr when a command failed, `null` when it worked. That shape is kept here, because a reply that
  * invents its own wording is one a human cannot search for in the terminal they already have open. Three
  * rules hold for every command in this module. It runs as an argument array, never a shell string, so no
