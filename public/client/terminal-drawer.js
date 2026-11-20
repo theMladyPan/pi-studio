@@ -9,6 +9,10 @@
  *
  * The screen is drawn by the vendored terminal library (`Terminal` and the `FitAddon`), loaded as
  * plain scripts before the board module, the way the git graph's page carries its own bundle.
+ *
+ * Its height is the user's furniture, the way the left rail's width is: a drag on the top edge
+ * sets the `--term` property, the shell refits through the same observer that fits it on open,
+ * and the height is remembered so a reload rolls it up at the height it was left.
  */
 
 /** One drawer, for the whole life of the page. `typingSomewhere` comes from the board rather than a
@@ -23,6 +27,56 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
   const closeBtn = document.getElementById("tdClose");
   const statusEl = document.getElementById("tdStatus");
   const workspaceLabel = document.getElementById("tdWorkspace");
+  const grip = document.getElementById("termGrip");
+  const root = document.documentElement;
+
+  // The drawer is the user's furniture: its height survives a reload, the way the rail's width
+  // does. The floor is the height the drawer always kept at minimum; the ceiling is the rail's,
+  // and never more than the screen can hold with the header still visible.
+  const TERM_MIN = 220;
+  const TERM_MAX = 720;
+
+  function termHeight(px) {
+    const viewport = typeof window !== "undefined" && Number.isFinite(window.innerHeight) ? window.innerHeight : 0;
+    const ceiling = viewport > 0 ? Math.max(TERM_MIN, Math.min(TERM_MAX, Math.floor(viewport * 0.85))) : TERM_MAX;
+    const height = Math.max(TERM_MIN, Math.min(ceiling, Math.round(px)));
+    if (root?.style) root.style.setProperty("--term", `${height}px`);
+    try {
+      localStorage.setItem("board.termHeight", String(height));
+    } catch {}
+    return height;
+  }
+
+  // The last height the drawer was left at, restored before anything is drawn.
+  try {
+    const saved = Number(localStorage.getItem("board.termHeight")) || 0;
+    if (saved) termHeight(saved);
+  } catch {}
+
+  // Drag handle, the rail grip on its side: press on the top edge, drag up or down, and the
+  // drawer follows the cursor. The observer on the host refits the shell as it grows, so no
+  // size is told to the daemon here the way it is at connect.
+  if (grip) {
+    let dragging = false;
+    grip.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      dragging = true;
+      grip.setPointerCapture?.(event.pointerId);
+      document.body.classList.add("term-resizing");
+      event.preventDefault();
+    });
+    grip.addEventListener("pointermove", (event) => {
+      if (dragging && typeof window !== "undefined" && Number.isFinite(window.innerHeight)) termHeight(window.innerHeight - event.clientY);
+    });
+    const stop = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove("term-resizing");
+      if (grip.hasPointerCapture?.(event.pointerId)) grip.releasePointerCapture(event.pointerId);
+    };
+    grip.addEventListener("pointerup", stop);
+    grip.addEventListener("pointercancel", stop);
+  }
 
   /** The bar names the board the way a human knows it, as the git drawer's bar does. */
   function setName(name) {
