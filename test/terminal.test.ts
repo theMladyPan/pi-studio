@@ -45,7 +45,7 @@ test("a shell is born in the folder, in a pty, and answers typed keys", async (t
 		let text = "";
 		while (Date.now() < deadline) {
 			text = seen.filter((event) => event.type === "output").map((event) => (event as { data: string }).data).join("");
-			if (text.includes("hello-terminal") && text.includes("/dev/pts/")) break;
+			if (text.includes("hello-terminal") && text.includes("/dev/pts/") && text.includes("33 111")) break;
 			await new Promise((done) => setTimeout(done, 50));
 		}
 		assert.match(text, /hello-terminal/, "the typed command ran");
@@ -53,6 +53,36 @@ test("a shell is born in the folder, in a pty, and answers typed keys", async (t
 		assert.match(text, /33 111/, "the pty is born at the size the drawer measured");
 		assert.ok(text.includes(folder) || text.includes("pi-studio-terminal-"), "the shell works in the workspace folder");
 	} finally {
+		handle.detach();
+		stopTerminal(workspaceId);
+	}
+});
+
+test("Ctrl+C interrupts a foreground command", async (t) => {
+	if (!helperHere()) return t.skip("no `script` or `socat` helper on this machine");
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-terminal-"));
+	const workspaceId = `terminal-test-ctrlc-${Date.now()}`;
+	const seen: TerminalEvent[] = [];
+	const handle = attachTerminal(workspaceId, folder, (event) => seen.push(event));
+	try {
+		handle.resize({ cols: 80, rows: 24 });
+		handle.write("sleep 30; echo should-not-print\n");
+		await new Promise((done) => setTimeout(done, 1_000));
+		handle.write("\u0003");
+		await new Promise((done) => setTimeout(done, 500));
+		handle.write("echo $((12345+67890))\n");
+		const deadline = Date.now() + 10_000;
+		let text = "";
+		while (Date.now() < deadline) {
+			text = seen.filter((event) => event.type === "output").map((event) => (event as { data: string }).data).join("");
+			if (/80235\r?\n/.test(text)) break;
+			await new Promise((done) => setTimeout(done, 50));
+		}
+		assert.match(text, /80235\r?\n/, "the next command ran promptly after Ctrl+C");
+		assert.doesNotMatch(text, /\r?\nshould-not-print/, "the interrupted command did not finish");
+	} finally {
+		handle.write("exit\n");
+		await new Promise((done) => setTimeout(done, 300));
 		handle.detach();
 		stopTerminal(workspaceId);
 	}
