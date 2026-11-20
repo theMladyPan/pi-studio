@@ -24,7 +24,13 @@ as you, with your privileges, and it is never installed, updated or started by a
 
 ## Registering one
 
-`plugins.json` holds one list of rows:
+The easiest way in is `pi-studio add <git-url>`: it clones the plugin's repository into the plugins
+folder (`<state dir>/plugins/<name>/`), builds it when it is Rust (`Cargo.toml` runs `cargo build
+--release`), and leaves it for the settings page to enable — the page scans the folder when it opens,
+so no daemon restart is needed. Adding one already installed pulls and rebuilds instead, and keeps
+whatever the human registered. A repository without a `plugin.json` is refused and its clone removed.
+
+Otherwise `plugins.json` holds one list of rows:
 
 ```json
 {
