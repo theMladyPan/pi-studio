@@ -1490,7 +1490,29 @@
   #exEditor .name { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; }
   #exEditor .ex-editor-body { flex: 1; min-height: 0; display: flex; }
+  #exEditor .ex-editor-body[hidden] { display: none; }
   #exEditorBody { flex: 1; min-width: 0; display: flex; }
+  /* The source/preview toggle a markdown or html file carries, and the open-in-a-tab press a preview
+     carries: the same small buttons the foot uses, with the one that is showing held in. */
+  #exEditor .ex-view-toggle { display: flex; gap: 2px; flex: none; }
+  #exEditor .ex-view-toggle[hidden] { display: none; }
+  #exEditor .ex-view-toggle button { font: 11px var(--mono); color: var(--muted); background: #161b22;
+    border: 1px solid var(--border); border-radius: 5px; padding: 3px 10px; cursor: pointer; }
+  #exEditor .ex-view-toggle button:hover { color: var(--text); border-color: var(--border-bright); }
+  #exEditor .ex-view-toggle button[aria-pressed="true"] { color: var(--text); border-color: var(--accent-dim);
+    background: rgba(56, 139, 253, .12); }
+  /* What a browser draws instead of text: a picture held to the panel, a document filling it, sound
+     with its own controls, and a rendered page scrolling like a note. One column, centred, so a small
+     picture is not stretched and a large one scrolls rather than bursting the panel. */
+  #exViewBody { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; overflow: auto; background: #0f141b; padding: 12px; }
+  #exViewBody[hidden] { display: none; }
+  #exViewBody > img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  #exViewBody > iframe { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; }
+  #exViewBody > audio { width: min(560px, 100%); }
+  #exViewBody > .ex-view-note { color: var(--muted); font: 12px var(--mono); text-align: center; }
+  #exViewBody > .ex-view-md { align-self: stretch; flex: 1; min-height: 0; overflow: auto; }
+  #exViewBody > .ex-view-md .note-body { min-height: 100%; box-sizing: border-box; }
   #exEditor .sheet-actions { display: flex; align-items: center; gap: 8px; flex: none; padding: 8px 10px;
     border-top: 1px solid var(--border); background: var(--card-head); }
   #exEditor .ex-editor-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
@@ -1761,11 +1783,20 @@
 </div>
 
 <!-- The text editor a file in the Files drawer opens in: the daemon reads it and writes it back, and the
-     status line at the bottom says which of those last happened. It stands over the board and holds the
+     status line at the bottom says which of those last happened. A file the browser can draw — a picture,
+     a document, sound — opens in the same frame with its own drawing instead of text; a markdown or html
+     file carries a toggle between its source and that drawing. It stands over the board and holds the
      keyboard while it stands. -->
 <div id="exEditor" hidden role="dialog" aria-modal="true" aria-labelledby="exEditorTitle">
   <div class="panel">
-    <div class="panel-head"><span class="name" id="exEditorTitle">file</span></div>
+    <div class="panel-head">
+      <span class="name" id="exEditorTitle">file</span>
+      <span class="ex-view-toggle" id="exViewToggle" hidden>
+        <button type="button" id="exViewSource" aria-pressed="true">source</button>
+        <button type="button" id="exViewPreview" aria-pressed="false">preview</button>
+      </span>
+      <button type="button" class="sheet-btn" id="exViewOpen" hidden>open in tab</button>
+    </div>
     <div id="exConflictBar" hidden>
       <div class="ex-conflict-hunks" id="exConflictHunks"></div>
       <div class="ex-conflict-actions">
@@ -1774,6 +1805,7 @@
       </div>
     </div>
     <div class="ex-editor-body"><div id="exEditorBody"></div></div>
+    <div id="exViewBody" hidden></div>
     <div class="sheet-actions">
       <span class="ex-editor-status" id="exEditorStatus"></span>
       <button type="button" class="sheet-btn" id="exEditorSave">save</button>

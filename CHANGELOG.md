@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 - fix: Make the terminal drawer resizable like the left drawers, by dragging its top edge: the height follows the cursor between a floor and a ceiling, is remembered across reloads, and the shell refits as it grows. [t-81baed9a]
-
+- feat: Let the files drawer draw what the browser can draw: a picture, vector graphic, PDF or audio file opens in the editor's frame as the browser's own picture, document or player, served by the daemon under its own type with ranges for seeking, and a markdown or html file carries a source/preview toggle, with markdown drawn by the board's own renderer and html drawn in a sandboxed frame; text files open in the editor as before. [t-1ec3d022]
 - fix: Give the terminal drawer a shell on a machine whose util-linux has no `script`, by falling back to `socat`, and keep the drawer on screen with the reason when no pty helper exists at all, instead of rolling down over the message before it can be read. [t-caadf71a]
 - fix: Make Ctrl+C interrupt a foreground command in the terminal drawer when the shell runs through `socat`, by making the pty the shell's controlling terminal; without that, ^C was only echoed and left long-running commands running. [t-caadf71a]
 - fix: Emptying the board now sweeps the trees its threads worked in, so spent worktrees leave with the board instead of lingering on disk with no thread left to retire them; trees holding unmerged work stay for leftovers to name. The same sweep runs when the put-away cap drops a child. [t-e855512f]

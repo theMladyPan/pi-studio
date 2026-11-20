@@ -18,7 +18,7 @@ import { closedCards } from "./bus.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
 import { onDefaults, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
-import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRead, onFileRename, onFileWrite, onFilesList } from "./routes/board/files.ts";
+import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead, onFileRename, onFileWrite, onFilesList } from "./routes/board/files.ts";
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
@@ -531,6 +531,14 @@ export const server = createServer((req, res) => {
 			const board = boardFrom(url, res);
 			if (!board) return;
 			await onFileRead(url, res, board);
+			return;
+		}
+		// The viewer's read: the same file as itself, for the browser to draw. A GET and its HEAD, like
+		// `/files/read`, so `threadRefusal` keeps it to the human; the bytes are streamed, with ranges.
+		if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/files/raw") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onFileRaw(req, url, res, board);
 			return;
 		}
 		// The programs a `!` command can name. It is a GET like `/browse`, so `threadRefusal` keeps it to

@@ -1070,6 +1070,106 @@ describe("reading one file", () => {
 	});
 });
 
+describe("serving one file as itself", () => {
+	test("pictures, vector graphics, documents and sound are served under their own type, with ranges", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-raw-"));
+		const folder = join(state, "proj");
+		const outside = join(state, "outside");
+		mkdirSync(folder);
+		mkdirSync(outside);
+		const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0x02, 0x03]);
+		writeFileSync(join(folder, "picture.png"), png);
+		writeFileSync(join(folder, "drawing.svg"), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+		writeFileSync(join(folder, "report.pdf"), "%PDF-1.4 fake\n");
+		writeFileSync(join(folder, "clip.mp3"), Buffer.from([0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00]));
+		writeFileSync(join(folder, "note.txt"), "plain\n");
+		// A name that claims a picture but holds a page: the type is the name's, and it is pinned.
+		writeFileSync(join(folder, "page.png"), "<html><body>not a picture</body></html>");
+		// Past the editor's ceiling: a drawing is not held to what an editor can open.
+		writeFileSync(join(folder, "big.png"), Buffer.alloc(600 * 1024, 0x61));
+		writeFileSync(join(outside, "secret.png"), png);
+		symlinkSync(join(outside, "secret.png"), join(folder, "escape.png"));
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			const raw = (path: string, init: RequestInit = {}, token = daemon.token) =>
+				fetch(`${daemon.base}/files/raw?token=${token}&workspace=${board}&path=${encodeURIComponent(path)}`, init);
+
+			const picture = await raw("picture.png");
+			assert.equal(picture.status, 200, picture.statusText);
+			assert.equal(picture.headers.get("content-type"), "image/png");
+			assert.equal(picture.headers.get("x-content-type-options"), "nosniff");
+			assert.equal(picture.headers.get("accept-ranges"), "bytes");
+			assert.equal(picture.headers.get("content-length"), String(png.length));
+			assert.deepEqual(Buffer.from(await picture.arrayBuffer()), png);
+
+			const svg = await raw("drawing.svg");
+			assert.equal(svg.status, 200);
+			assert.equal(svg.headers.get("content-type"), "image/svg+xml");
+			assert.match(svg.headers.get("content-security-policy") ?? "", /sandbox/, "vector graphics are sandboxed as documents");
+			await svg.arrayBuffer();
+
+			const pdf = await raw("report.pdf");
+			assert.equal(pdf.status, 200);
+			assert.equal(pdf.headers.get("content-type"), "application/pdf");
+			await pdf.arrayBuffer();
+
+			const sound = await raw("clip.mp3");
+			assert.equal(sound.status, 200);
+			assert.equal(sound.headers.get("content-type"), "audio/mpeg");
+			await sound.arrayBuffer();
+
+			const claimed = await raw("page.png");
+			assert.equal(claimed.headers.get("content-type"), "image/png", "a renamed page is still decoded as a picture");
+			await claimed.arrayBuffer();
+
+			const big = await raw("big.png");
+			assert.equal(big.status, 200, "past 512 KiB is still a file the viewer draws");
+			assert.equal(big.headers.get("content-length"), String(600 * 1024));
+			await big.arrayBuffer();
+
+			const head = await raw("picture.png", { method: "HEAD" });
+			assert.equal(head.status, 200);
+			assert.equal(head.headers.get("content-length"), String(png.length));
+			assert.equal((await head.arrayBuffer()).byteLength, 0, "a HEAD carries no body");
+
+			const slice = await raw("picture.png", { headers: { range: "bytes=2-5" } });
+			assert.equal(slice.status, 206);
+			assert.equal(slice.headers.get("content-range"), `bytes 2-5/${png.length}`);
+			assert.equal(slice.headers.get("content-length"), "4");
+			assert.deepEqual(Buffer.from(await slice.arrayBuffer()), png.subarray(2, 6));
+
+			const tail = await raw("picture.png", { headers: { range: "bytes=-3" } });
+			assert.equal(tail.status, 206);
+			assert.deepEqual(Buffer.from(await tail.arrayBuffer()), png.subarray(png.length - 3));
+
+			for (const range of ["bytes=99-100", "bytes=5-2", "bytes=0-1,3-4", "items=0-1"]) {
+				const refused = await raw("picture.png", { headers: { range } });
+				assert.equal(refused.status, 416, `${range} answered ${refused.status}`);
+				assert.equal(refused.headers.get("content-range"), `bytes */${png.length}`);
+				await refused.arrayBuffer();
+			}
+
+			const text = await raw("note.txt");
+			assert.equal(text.status, 415, "text is the editor's, not the viewer's");
+			assert.match(await text.text(), /cannot be previewed/);
+			const missing = await raw("nope.png");
+			assert.equal(missing.status, 404);
+			const escape = await raw("escape.png");
+			assert.equal(escape.status, 409, "a link out of the workspace is refused here too");
+			for (const path of ["../outside/secret.png", ".git/HEAD.png"]) {
+				const refused = await raw(path);
+				assert.equal(refused.status, 400, `${path} answered ${refused.status}`);
+			}
+			const foreign = await raw("picture.png", {}, "thread-secret-token");
+			assert.equal(foreign.status, 403, "a token that is not the human's is refused");
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("saving one file", () => {
 	test("a save puts the file's own endings and mark back, keeps its mode, and refuses what it did not read", async () => {
 		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-write-"));

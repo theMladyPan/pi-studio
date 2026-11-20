@@ -699,6 +699,28 @@ function exEditTarget(entry) {
 }
 
 /**
+ * What a path opens as, from the last extension in its name: a picture, the vector format browsers
+ * draw, a document, sound, markdown, html, or plain text. The drawer decides from the name before it
+ * asks the daemon for anything, so a picture never travels the text read that would refuse it. A
+ * dotfile, a name with no extension and a name no kind here knows are plain text, as a path with a
+ * trailing dot is. The server names the same kinds for its raw route; a name the two disagree on is
+ * answered by the server, never drawn by guess.
+ */
+function exPreviewKind(path) {
+  const name = String(path ?? "").split(/[\\/]/).pop() ?? "";
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0 || dot === name.length - 1) return "text";
+  const ext = name.slice(dot + 1).toLowerCase();
+  if (["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico"].includes(ext)) return "image";
+  if (ext === "svg") return "svg";
+  if (ext === "pdf") return "pdf";
+  if (["mp3", "wav", "ogg", "oga", "opus", "m4a", "aac", "flac"].includes(ext)) return "audio";
+  if (["md", "markdown"].includes(ext)) return "markdown";
+  if (["html", "htm"].includes(ext)) return "html";
+  return "text";
+}
+
+/**
  * Whether a press on this row opens or closes it. A folder is a switch, and the whole row is its handle:
  * the arrow toggles, and so does the name, because that is how the explorer this one copies behaves. A
  * press carrying shift, ctrl or command is picking several rows instead, so it only picks.
@@ -1201,6 +1223,7 @@ const explorerCore = {
   pressAgain: exPressAgain,
   pressAction: exPressAction,
   editTarget: exEditTarget,
+  previewKind: exPreviewKind,
   selectKeep: exSelectKeep,
   rebasePath: exRebasePath,
   rebaseListing: exRebaseListing,
@@ -10460,6 +10483,11 @@ const exEditorBody = document.getElementById("exEditorBody");
 const exEditorStatus = document.getElementById("exEditorStatus");
 const exEditorSaveBtn = document.getElementById("exEditorSave");
 const exEditorCloseBtn = document.getElementById("exEditorClose");
+const exViewBody = document.getElementById("exViewBody");
+const exViewToggle = document.getElementById("exViewToggle");
+const exViewSourceBtn = document.getElementById("exViewSource");
+const exViewPreviewBtn = document.getElementById("exViewPreview");
+const exViewOpenBtn = document.getElementById("exViewOpen");
 const pickCount = document.getElementById("pickCount");
 
 /**
@@ -11280,6 +11308,158 @@ function exEditorTrouble(status, text) {
   return String(text || "").slice(0, 140) || `the daemon answered ${status}`;
 }
 
+/** What the open file is: `image`, `svg`, `pdf`, `audio`, `markdown`, `html` or `text`, from its name. */
+let exEditorKind = "text";
+/** Where a markdown or html file stands: its `source`, or its `preview`. */
+let exEditorMode = "source";
+/** The raw address the open drawing was served from, for the open-in-a-tab press. */
+let exViewRaw = "";
+/** The wrapper the text surface sits in, so a drawing can take its place. */
+const exEditorBodyWrap = exEditorBody.parentElement;
+
+/** The address the daemon serves this file's own bytes from. */
+function exRawUrl(path) {
+  return `/files/raw?${auth}&path=${encodeURIComponent(path)}`;
+}
+
+/** A refusal from the raw route in words that name its cause, as the editor's own refusals are. */
+function exViewTrouble(status, text) {
+  if (status === 404) return "that path is not a file any more";
+  if (status === 415) return "this file cannot be previewed here";
+  if (status === 409) return "that path is outside the workspace";
+  return String(text || "").slice(0, 140) || `the daemon answered ${status}`;
+}
+
+/**
+ * The drawing gone and the text surface back: closing a viewer stops its sound and its document,
+ * because the element that held them is out of the page, and the toggle and the open press belong to
+ * the drawing that just left.
+ */
+function exViewClear() {
+  exViewBody.replaceChildren();
+  exViewBody.hidden = true;
+  if (exEditorBodyWrap) exEditorBodyWrap.hidden = false;
+  exViewToggle.hidden = true;
+  exViewOpenBtn.hidden = true;
+  exViewRaw = "";
+}
+
+/**
+ * A markdown preview is the board's own markdown, drawn from the text as it stands: the source a human
+ * edited is what is drawn, not the text that was read. Links a file wrote for another file are read as
+ * plain words here, because there is no card behind this frame for them to jump to, and a link that
+ * would run a script is taken out rather than drawn — a file is read, not trusted.
+ */
+function exRenderMarkdownPreview() {
+  const wrap = el("div", "ex-view-md");
+  const body = el("div", "note-body");
+  body.append(renderMarkdown(exEditorPreview.getText()));
+  wrap.append(body);
+  exViewBody.replaceChildren(wrap);
+  for (const link of exViewBody.querySelectorAll("a[href]")) {
+    const href = String(link.getAttribute("href") ?? "").trim().toLowerCase();
+    if (href.startsWith("javascript:") || href.startsWith("vbscript:") || href.startsWith("data:text/html")) link.removeAttribute("href");
+  }
+  for (const link of exViewBody.querySelectorAll(".xref, .tick")) {
+    link.classList.remove("xref", "tick");
+    link.removeAttribute("href");
+    link.removeAttribute("data-key");
+  }
+}
+
+/**
+ * An html preview is the file's own page in a frame that stands apart: it runs with scripts allowed
+ * and no origin of its own, so it cannot read this page, carry this page's session, or ask this daemon
+ * for anything as this page. A page that needs the workspace beside it is read as source instead.
+ */
+function exRenderHtmlPreview() {
+  const frame = el("iframe");
+  frame.title = exEditorDoc.path;
+  frame.setAttribute("sandbox", "allow-scripts");
+  frame.srcdoc = exEditorPreview.getText();
+  exViewBody.replaceChildren(frame);
+}
+
+/** Source or preview, for the two kinds that carry both. The text holds still either way. */
+function exSetViewMode(mode) {
+  if (!["markdown", "html"].includes(exEditorKind)) return;
+  exEditorMode = mode === "preview" ? "preview" : "source";
+  exViewSourceBtn.setAttribute("aria-pressed", String(exEditorMode === "source"));
+  exViewPreviewBtn.setAttribute("aria-pressed", String(exEditorMode === "preview"));
+  if (exEditorMode === "preview") {
+    if (exEditorBodyWrap) exEditorBodyWrap.hidden = true;
+    exViewBody.hidden = false;
+    if (exEditorKind === "markdown") exRenderMarkdownPreview();
+    else exRenderHtmlPreview();
+    exViewBody.querySelector("iframe, a[href], button")?.focus();
+  } else {
+    exViewBody.hidden = true;
+    if (exEditorBodyWrap) exEditorBodyWrap.hidden = false;
+    exEditorPreview.focus();
+  }
+}
+exViewSourceBtn.addEventListener("click", () => exSetViewMode("source"));
+exViewPreviewBtn.addEventListener("click", () => exSetViewMode("preview"));
+exViewOpenBtn.addEventListener("click", () => {
+  if (exViewRaw) window.open(exViewRaw, "_blank", "noopener");
+});
+
+/**
+ * Open one file the browser can draw. The daemon is asked whether the file is there before anything
+ * is drawn, so a refusal stands in the status line with the modal still open, as a failed text read
+ * does. The drawing itself is the browser's: a picture tag, a document frame, a sound control.
+ */
+async function exMediaOpen(path, kind) {
+  exViewRaw = exRawUrl(path);
+  exEditorSay("reading\u2026");
+  exEditorCloseBtn.focus();
+  let response;
+  try {
+    response = await fetch(exViewRaw, { method: "HEAD", credentials: "same-origin" });
+  } catch {
+    if (!exEditorEl.hidden && exEditorDoc.path === path) exEditorSay("could not reach the daemon \u2014 nothing was read", "bad");
+    return;
+  }
+  if (exEditorEl.hidden || exEditorDoc.path !== path) return;
+  if (!response.ok) {
+    exEditorSay(exViewTrouble(response.status, ""), "bad");
+    return;
+  }
+  const size = Number(response.headers.get("content-length")) || 0;
+  if (kind === "image" || kind === "svg") {
+    const img = el("img");
+    img.src = exViewRaw;
+    img.alt = path;
+    img.addEventListener("error", () => {
+      if (!exEditorEl.hidden && exEditorDoc.path === path) exEditorSay("this picture could not be drawn", "bad");
+    });
+    exViewBody.replaceChildren(img);
+  } else if (kind === "pdf") {
+    const frame = el("iframe");
+    frame.title = path;
+    frame.src = exViewRaw;
+    const note = el("p", "ex-view-note");
+    note.textContent = "if this stays empty, this browser has no PDF viewer — use open in tab";
+    exViewBody.replaceChildren(frame, note);
+  } else {
+    const player = el("audio");
+    player.controls = true;
+    player.preload = "metadata";
+    player.src = exViewRaw;
+    player.addEventListener("error", () => {
+      if (!exEditorEl.hidden && exEditorDoc.path === path) exEditorSay("this sound could not be played", "bad");
+    });
+    exViewBody.replaceChildren(player);
+  }
+  if (exEditorBodyWrap) exEditorBodyWrap.hidden = true;
+  exViewBody.hidden = false;
+  exViewOpenBtn.hidden = false;
+  exEditorSay(`read ${size} bytes`);
+  const drawn = exViewBody.querySelector("iframe, audio");
+  if (drawn) drawn.focus();
+  else exEditorCloseBtn.focus();
+}
+
 /** One GET, read either way: the status is what the editor speaks from, so a failure is an answer too. */
 async function exGet(path) {
   const response = await fetch(path, { credentials: "same-origin" });
@@ -11300,7 +11480,13 @@ async function exGet(path) {
 async function exEditOpen(path, target = "edit") {
   exConflict = null;
   exConflictBar.hidden = true;
-  exEditorSaveBtn.hidden = false;
+  exViewClear();
+  exEditorKind = explorerCore.previewKind(path);
+  exEditorMode = "source";
+  exViewSourceBtn.setAttribute("aria-pressed", "true");
+  exViewPreviewBtn.setAttribute("aria-pressed", "false");
+  // A file the browser can draw has no text to edit, so there is nothing to save and no toggle to offer.
+  exEditorSaveBtn.hidden = ["image", "svg", "pdf", "audio"].includes(exEditorKind);
   if (exEditorEl.hidden) exEditorPrior = document.activeElement;
   exEditorEl.hidden = false;
   exEditorTitle.textContent = path;
@@ -11308,6 +11494,7 @@ async function exEditOpen(path, target = "edit") {
   exEditorDoc.text = "";
   exEditorDoc.editable = false;
   exEditorPreview.setDocument({ path, content: "" });
+  if (["image", "svg", "pdf", "audio"].includes(exEditorKind)) return exMediaOpen(path, exEditorKind);
   // Nothing is typed into a file until the daemon has said the file may be written: the surface refuses
   // the caret while the read is in the air, not only after it has answered.
   exEditorPreview.setReadOnly(true);
@@ -11340,6 +11527,8 @@ async function exEditOpen(path, target = "edit") {
   exEditorSay(
     exEditorDoc.editable ? `read ${exEditorDoc.size} bytes` : "read only \u2014 this path is a link, or the workspace has no root",
   );
+  // A markdown or html file opens as it always did — in its source — with the toggle beside its name.
+  exViewToggle.hidden = !["markdown", "html"].includes(exEditorKind);
   if (exEditorDoc.editable) exEditorPreview.focus();
   else exEditorCloseBtn.focus();
 }
@@ -11352,6 +11541,8 @@ async function exEditSave() {
   // In conflict mode the save press resolves and stages; the ordinary write would save
   // without staging and leave the conflict exactly where it was.
   if (exConflict) return exConflictResolve();
+  // A drawing has no text behind it, so there is nothing for a save to write.
+  if (["image", "svg", "pdf", "audio"].includes(exEditorKind)) return;
   const path = exEditorDoc.path;
   if (exEditorEl.hidden || !path) return;
   if (!exEditorDoc.editable) return exEditorSay("read only \u2014 there is nothing here to save", "bad");
@@ -11381,6 +11572,8 @@ function exEditClose() {
   if (exEditorEl.hidden) return;
   exConflict = null;
   exConflictBar.hidden = true;
+  exViewClear();
+  exEditorKind = "text";
   exEditorSaveBtn.hidden = false;
   exEditorEl.hidden = true;
   exEditorDoc.path = "";
@@ -11403,7 +11596,7 @@ function exEditEscape() {
 exEditorEl.addEventListener("keydown", (event) => {
   if (event.key === "Tab") {
     // Visible only: a hidden bar's buttons take no focus, and a Tab that lands on one strands.
-    const stops = [...exEditorEl.querySelectorAll("textarea, button:not([disabled])")].filter((one) => one.offsetParent !== null || one === document.activeElement);
+    const stops = [...exEditorEl.querySelectorAll("textarea, iframe, audio, a[href], button:not([disabled])")].filter((one) => one.offsetParent !== null || one === document.activeElement);
     if (!stops.length) return;
     event.preventDefault();
     const at = stops.indexOf(document.activeElement);
@@ -11484,6 +11677,9 @@ function exConflictPaint() {
 
 /** Open one conflicted file in the editor, with its merge identity and version. */
 async function scOpenConflict(path) {
+  exViewClear();
+  exEditorKind = "text";
+  exEditorMode = "source";
   if (exEditorEl.hidden) exEditorPrior = document.activeElement;
   exEditorEl.hidden = false;
   exEditorTitle.textContent = path;

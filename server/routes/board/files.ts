@@ -47,6 +47,7 @@ import { randomUUID } from "node:crypto";
 import {
 	closeSync,
 	constants as fsConstants,
+	createReadStream,
 	fchmodSync,
 	fsyncSync,
 	lstatSync,
@@ -101,6 +102,62 @@ const STATUS_BYTES = 8 * 1024 * 1024;
 
 /** The editor holds one file at a time, and a file past this is not one an editor should open. */
 const MAX_FILE_BYTES = 512 * 1024;
+
+/**
+ * The file kinds the browser itself can draw, by extension and nothing else: pictures, the one vector
+ * format browsers draw, documents and sound. A name not in this table is not served raw at all, so a
+ * file renamed to one of these names is decoded as the type named here and never sniffed into another.
+ */
+const PREVIEW_TYPES: Record<string, string> = {
+	png: "image/png",
+	jpg: "image/jpeg",
+	jpeg: "image/jpeg",
+	gif: "image/gif",
+	webp: "image/webp",
+	avif: "image/avif",
+	bmp: "image/bmp",
+	ico: "image/x-icon",
+	svg: "image/svg+xml",
+	pdf: "application/pdf",
+	mp3: "audio/mpeg",
+	wav: "audio/wav",
+	ogg: "audio/ogg",
+	oga: "audio/ogg",
+	opus: "audio/ogg",
+	m4a: "audio/mp4",
+	aac: "audio/aac",
+	flac: "audio/flac",
+};
+
+/** The preview type a path names, or null when the browser has no drawing for it here. */
+function previewType(rel: string): string | null {
+	const name = rel.split("/").pop() ?? "";
+	const dot = name.lastIndexOf(".");
+	if (dot <= 0 || dot === name.length - 1) return null;
+	return PREVIEW_TYPES[name.slice(dot + 1).toLowerCase()] ?? null;
+}
+
+/**
+ * One `Range` header against a file of `size` bytes: the slice to send, or a refusal. A single range
+ * is the only kind a player or a document viewer asks for, so a list of ranges is refused rather than
+ * guessed at. No header at all is the whole file, which is also what a request that cannot be read gets.
+ */
+function parseRange(header: string | undefined, size: number): { start: number; end: number } | { error: string } | null {
+	if (!header) return null;
+	const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+	if (!match || (!match[1] && !match[2])) return { error: "bad range" };
+	if (size === 0) return { error: "the file is empty" };
+	if (!match[1]) {
+		const suffix = Number(match[2]);
+		if (!Number.isSafeInteger(suffix) || suffix <= 0) return { error: "bad range" };
+		return { start: Math.max(0, size - suffix), end: size - 1 };
+	}
+	const start = Number(match[1]);
+	if (!Number.isSafeInteger(start) || start >= size) return { error: "range starts past the end of the file" };
+	const end = match[2] ? Number(match[2]) : size - 1;
+	if (!Number.isSafeInteger(end) || end < start) return { error: "bad range" };
+	return { start, end: Math.min(end, size - 1) };
+}
 
 /**
  * A save carries the whole file as a JSON string, so its body is larger than the file: a control character
@@ -948,6 +1005,83 @@ export async function onFileRead(url: URL, res: ServerResponse, board: BoardFold
 		bom,
 		editable: !link,
 	});
+}
+
+/**
+ * One file of the workspace, as itself: the bytes a browser can draw, under the type its name claims.
+ * The path is resolved exactly as the editor's read resolves it, so a link that leaves the workspace
+ * is refused here too, and nothing outside the root is ever served. The bytes are streamed rather than
+ * held, because a picture, a document or a recording is not held to the editor's ceiling, and a
+ * `Range` is answered with the slice it asked for, which is what lets a player seek and a viewer page
+ * through a file larger than the screen. A `HEAD` answers the same headers with no body, so the client
+ * can ask whether the file is there before it draws anything.
+ *
+ * The type comes from the name and is pinned with `nosniff`: a file called `page.png` that holds HTML
+ * is decoded as a picture and fails as one, rather than being sniffed into a page. Vector graphics get
+ * a sandbox of their own, because an SVG opened as a document can carry a script and this one is only
+ * ever meant to be drawn.
+ */
+export async function onFileRaw(req: IncomingMessage, url: URL, res: ServerResponse, board: BoardFolder): Promise<void> {
+	const root = realRoot(board);
+	if (!root) return void fail(res, 409, `no such folder: ${board.folder}`);
+	const wanted = normalizeRel(url.searchParams.get("path"));
+	if ("error" in wanted) return void fail(res, 400, wanted.error);
+	const type = previewType(wanted.rel);
+	if (!type) return void fail(res, 415, `${wanted.rel} cannot be previewed here`);
+	const leaf = leafOf(root, wanted.rel);
+	if ("error" in leaf) return void fail(res, 409, leaf.error);
+	try {
+		lstatSync(leaf.abs);
+	} catch {
+		return void fail(res, 404, `no such file: ${wanted.rel}`);
+	}
+	let real: string;
+	try {
+		real = realpathSync(leaf.abs);
+	} catch {
+		return void fail(res, 404, `no such file: ${wanted.rel}`);
+	}
+	if (!inside(root, real)) return void fail(res, 409, `${wanted.rel} is outside the workspace`);
+	let stat: Stats;
+	try {
+		stat = statSync(real);
+	} catch {
+		return void fail(res, 404, `no such file: ${wanted.rel}`);
+	}
+	if (!stat.isFile()) return void fail(res, 404, `${wanted.rel} is not a file`);
+	const headers: Record<string, string> = {
+		"Content-Type": type,
+		"Cache-Control": "no-store",
+		"X-Content-Type-Options": "nosniff",
+		"Accept-Ranges": "bytes",
+	};
+	if (type === "image/svg+xml") headers["Content-Security-Policy"] = "default-src 'none'; sandbox";
+	if (req.method === "HEAD") {
+		res.writeHead(200, { ...headers, "Content-Length": stat.size });
+		res.end();
+		return;
+	}
+	const range = parseRange(req.headers.range, stat.size);
+	if (range && "error" in range) {
+		res.writeHead(416, { ...headers, "Content-Range": `bytes */${stat.size}`, "Content-Type": "text/plain" });
+		res.end(range.error);
+		return;
+	}
+	const start = range?.start ?? 0;
+	const end = range?.end ?? stat.size - 1;
+	const length = stat.size === 0 ? 0 : end - start + 1;
+	res.writeHead(range ? 206 : 200, {
+		...headers,
+		"Content-Length": length,
+		...(range ? { "Content-Range": `bytes ${start}-${end}/${stat.size}` } : {}),
+	});
+	if (stat.size === 0) {
+		res.end();
+		return;
+	}
+	const stream = createReadStream(real, { start, end });
+	stream.on("error", () => res.destroy());
+	stream.pipe(res);
 }
 
 /**
