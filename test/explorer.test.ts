@@ -43,6 +43,7 @@ type ExListing = {
 /** One page of a folder, in the shape `/files` answers with. */
 type ExPage = {
 	root?: string;
+	home?: string;
 	path?: string;
 	parent?: string | null;
 	canonical?: string;
@@ -75,6 +76,7 @@ type ExDeleteResult = {
 type ExCore = {
 	sortEntries(entries: ExSortable[]): ExSortable[];
 	basename(path: string): string;
+	shortPath(path: string, home: string): string;
 	listing(): ExListing;
 	listingStart(listing: ExListing, parent?: string): number;
 	listingPage(listing: ExListing, ticket: number, page: ExPage): boolean;
@@ -370,6 +372,13 @@ test("the drawer's header names the folder the human opened, and a repository st
 	assert.equal(core.basename("/work/project/"), "project");
 	assert.equal(core.basename("C:\\work\\project"), "project", "a Windows root is read the same way");
 	assert.equal(core.basename(""), "", "there is no name to print before the daemon has answered");
+	assert.equal(core.shortPath("/home/matus/projekty/pi-studio", "/home/matus"), "~/projekty/pi-studio");
+	assert.equal(core.shortPath("/home/matus", "/home/matus"), "~");
+	assert.equal(core.shortPath("/home/matus/projekty/pi-studio", "/home/matus/"), "~/projekty/pi-studio", "a home with a trailing slash shortens the same way");
+	assert.equal(core.shortPath("/srv/pi-studio", "/home/matus"), "/srv/pi-studio", "outside the home folder the full path stands");
+	assert.equal(core.shortPath("/home/matus2/pi-studio", "/home/matus"), "/home/matus2/pi-studio", "a name that only starts with the home letters is never shortened");
+	assert.equal(core.shortPath("", "/home/matus"), "", "there is no path to print before the daemon has answered");
+	assert.equal(core.shortPath("/srv/pi-studio", ""), "/srv/pi-studio", "with no home known the full path stands");
 	const listing = core.listing();
 	assert.equal(listing.repo, false, "a fresh listing is not a repository");
 	const ticket = core.listingStart(listing, "");

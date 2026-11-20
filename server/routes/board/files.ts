@@ -897,6 +897,7 @@ export async function onFilesList(url: URL, res: ServerResponse, board: BoardFol
 	const truncated = start + page.length < entries.length;
 	answer(res, 200, {
 		root,
+		home: homedir(),
 		path: wanted.rel,
 		parent: wanted.rel ? wanted.rel.split("/").slice(0, -1).join("/") : null,
 		canonical,
