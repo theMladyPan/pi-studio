@@ -164,6 +164,8 @@ describe("listing a workspace", () => {
 			const page = await listed(daemon, board);
 			assert.equal(page.status, 200, JSON.stringify(page.body));
 			assert.equal(page.body.root, root);
+			assert.equal(typeof page.body.home, "string", "the listing carries the home folder, so the header can shorten the root to `~`");
+			assert.ok(page.body.home.length > 0);
 			assert.equal(page.body.path, "");
 			assert.equal(page.body.parent, null);
 			assert.equal(page.body.canonical, "");

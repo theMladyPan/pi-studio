@@ -554,6 +554,21 @@ function exBasename(path) {
   return steps.length ? steps[steps.length - 1] : "";
 }
 
+/**
+ * A workspace path as a human writes it: the home folder shortened to `~`, everything else left as it is.
+ * The drawer's header prints this, so a workspace under the home folder reads `~/projekty/pi-studio`
+ * instead of a long absolute path, and one outside it keeps its full path.
+ */
+function exShortPath(path, home) {
+  const raw = String(path ?? "").replaceAll("\\", "/");
+  if (!raw) return "";
+  const base = String(home ?? "").replaceAll("\\", "/").replace(/\/+$/, "");
+  if (!base) return raw;
+  if (raw === base) return "~";
+  if (raw.startsWith(`${base}/`)) return `~${raw.slice(base.length)}`;
+  return raw;
+}
+
 /** Folders first, then names the way a person reads them: `file2` comes before `file10`. */
 function exSortEntries(entries) {
   return [...entries].sort((a, b) => {
@@ -1210,6 +1225,7 @@ const explorerCore = {
   under: exUnder,
   cleanPath: exCleanPath,
   basename: exBasename,
+  shortPath: exShortPath,
   sortEntries: exSortEntries,
   listing: exListing,
   listingStart: exListingStart,
@@ -10496,6 +10512,7 @@ const pickCount = document.getElementById("pickCount");
  */
 const exState = {
   root: "",
+  home: "",
   folders: new Map(),
   expanded: new Set([""]),
   filter: "",
@@ -10565,10 +10582,11 @@ async function exLoad(dir, { quiet = false } = {}) {
       // The canonical root comes from the daemon, so a path copied from the tree is the one its own
       // file tools open, whatever the workspace was reached by.
       if (typeof page.root === "string" && page.root) exState.root = page.root;
+      if (typeof page.home === "string" && page.home) exState.home = page.home;
       if (dir === "") {
-        // The section header is the folder the human opened, not the route that reached it, and not
-        // whether that folder happens to be a repository.
-        const label = explorerCore.basename(exState.root) || "explorer";
+        // The section header is the workspace path, shortened to `~` inside the home folder, not the
+        // route that reached it, and not whether that folder happens to be a repository.
+        const label = explorerCore.shortPath(exState.root, exState.home) || "files";
         exTitleEl.textContent = label;
         exTitleEl.title = exState.root || label;
       }
