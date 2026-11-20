@@ -45,13 +45,17 @@ as you, with your privileges, and it is never installed, updated or started by a
   `plugins/<name>/<name>-<platform>` when the package built one for this machine (for example
   `example-panel-linux-x64`), and otherwise `plugins/<name>/<name>`, which is a binary built in place in a
   checkout. This repository ships no plugin of its own, so a row here is normally a `command` row.
+- `installed` — the same one word for a folder the human put in the plugins folder,
+  `<state dir>/plugins/<name>/` (`~/.local/state/pi-studio/plugins/<name>/` unless `--state` moved it).
+  It lives in state rather than beside the app, so an installed plugin survives an update and an
+  uninstall. It is shown in settings as available to enable.
 - `args` — a list of strings, passed as they are. Nothing in it becomes another command.
 - `visual` — optional, and only on a `command` row: the panel the board may show for this plugin. See
   below.
 
 A row that cannot be used is a line in the daemon's log at startup, saying which row and why, and the
-other rows still start. Restart the daemon to pick up a change: the file is read when plugins start, not
-watched.
+other rows still start. The settings page writes the file and restarts the roster in place; the file is
+read when plugins start, never watched.
 
 ## What the daemon offers a plugin
 
@@ -59,6 +63,19 @@ One JSON-RPC 2.0 message per line, in both directions, frames of at most 1 MiB, 
 daemon sends `initialize` first and refuses a plugin that answers another version, then `visual.request`
 for whatever a panel asks, then `shutdown` on its way out. The code is `server/plugins/protocol.ts` and
 `server/plugins/host.ts`.
+
+A plugin that lives in its own folder declares itself in a `plugin.json` beside its executable — the
+plugin's responsibility, not the registry's. It carries its name, version, protocol and protocol minor,
+the smallest pi-studio it works with, its title and description, the folder-relative command, default
+args, one suggested shortcut, `start` (`"eager"` or `"lazy"`, see below), and its `visual` when it has
+a panel. Unknown keys are ignored, so a newer plugin's manifest is still readable by an older daemon.
+The daemon proves the manifest at read time, without starting anything, and refuses a row whose manifest
+asks for a protocol or a pi-studio newer than itself.
+
+`start: "lazy"` registers the plugin without spawning it: its door and panel serve from disk as usual,
+and the first panel request starts the process. It suits a plugin that only answers a door. A plugin
+that watches the world or listens for events declares `"eager"` — the default — and starts with the
+roster at boot, because nothing would ever wake it. A lazy plugin with no panel is refused.
 
 A plugin asks the daemon over the same pipe, and each answer is a call into the daemon's own services:
 

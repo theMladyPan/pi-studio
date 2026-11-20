@@ -41,10 +41,15 @@ written against.
 
 ## Register it
 
-The daemon reads its roster when it starts, from `plugins.json` in its state folder — by default
-`~/.local/state/pi-studio/plugins.json`, or `$PI_STUDIO_STATE/plugins.json` when the daemon was
-started with its own state folder. Add one row, with the absolute path of the binary you just built
-and the panel it carries, in the left drawers:
+This plugin declares itself in the `plugin.json` beside its source, so the simplest registration is
+the settings page: copy this whole folder into `~/.local/state/pi-studio/plugins/bughound/`, open the
+board's settings, and enable it there — the row takes the manifest's defaults (the drawer panel, the
+`b` shortcut). Nothing starts until you enable it.
+
+The hand-written way still works: the daemon reads its roster when it starts, from `plugins.json` in
+its state folder — by default `~/.local/state/pi-studio/plugins.json`, or `$PI_STUDIO_STATE/plugins.json`
+when the daemon was started with its own state folder. Add one row, with the absolute path of the binary
+you just built and the panel it carries, in the left drawers:
 
 ```json
 {
@@ -64,11 +69,12 @@ and the panel it carries, in the left drawers:
 }
 ```
 
-Then restart the daemon. `command` has to be an absolute path to an executable file; a bare name or a
-relative path is refused when the roster is read. A plugin that did not start says so in the daemon's
-log, as `pi-studio: plugin bughound did not start: …` followed by the reason.
+`command` has to be an absolute path to an executable file; a bare name or a relative path is refused
+when the roster is read. A plugin that did not start says so in the daemon's log, as
+`pi-studio: plugin bughound did not start: …` followed by the reason.
 
-To stop using it, take the row out of `plugins.json` and restart the daemon.
+To stop using it, remove the plugin in settings, or take the row out of `plugins.json` and restart the
+daemon.
 
 The args, all optional:
 

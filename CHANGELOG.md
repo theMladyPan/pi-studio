@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- feat: Let a plugin declare itself in a `plugin.json` in its own folder — name, version, the protocol and pi-studio floor it asks for, its title, default command, args and shortcut, and whether it starts eagerly at boot or lazily on its first panel request — and let folders in the plugins folder be offered in settings to enable in one click, with the manifest's defaults copied into the registration. The daemon proves every manifest at read time, without starting anything, and refuses what it cannot run with the reason beside the plugins that work. [t-81baed9a]
+- feat: Track what every plugin and the daemon are, so an upgrade breaks nothing: the wire protocol gains a minor, every manifest may ask for a protocol minor and a smallest pi-studio it works with, and those are checked at read time and a stranger minor at the handshake, while keys neither side knows are ignored. [t-81baed9a]
+
 - feat: Give the board a plugins section in its settings panel, so a plugin is registered there instead of by hand-writing the daemon's own file: name, command, arguments, place and shortcut are edited in the panel, the daemon proves the list by its reader before it replaces what it runs, and a save restarts the roster without a daemon restart. One plain letter per plugin opens its panel, never a letter the board already answers to. [t-81baed9a]
 
 - feat: Let a plugin's panel live in the left drawers, by giving its visual the place `"drawer"`: the board draws its pane with the rail's own head and close button, sizes it with the rail grip, and puts its door in the header beside activity and cards, while every other panel still opens in the toolbox as before. [t-81baed9a]

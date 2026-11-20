@@ -20,7 +20,16 @@ import type { PluginCall, PluginHost } from "./host.ts";
 import type { PluginProblem, PluginRegistry, PluginVisual } from "./registry.ts";
 
 /** One plugin as the daemon holds it. The seam a settings page or a status report reads. */
-export type PluginRoster = { name: string; command: string; version: string; running: boolean; visual?: PluginVisual; shortcut?: string };
+export type PluginRoster = {
+	name: string;
+	command: string;
+	version: string;
+	running: boolean;
+	visual?: PluginVisual;
+	shortcut?: string;
+	/** Registered but not yet spawned: a lazy plugin that waits for its first panel request. */
+	dormant?: boolean;
+};
 
 /** The start this process began with, so the roster can be read and started again without one. */
 let lastOptions: PluginStartOptions | null = null;
@@ -82,9 +91,67 @@ export async function startPlugins(options: PluginStartOptions = {}): Promise<Pl
 	const problems: PluginProblem[] = [...registry.problems];
 	for (const problem of registry.problems) log(`pi-studio: plugin ${problem.name || "(unnamed)"} is not usable: ${problem.problem}\n`);
 	const hosts = new Map<string, PluginHost>();
+	/** A lazy plugin registered but not yet started: its name until its first request spawns it. */
+	const dormant = new Set<string>();
+	/** A dormant plugin mid-spawn, so two first requests start it once. */
+	const starting = new Map<string, Promise<PluginHost>>();
+
+	/** Spawn a dormant plugin on its first request, and hand back its host. */
+	async function ensureStarted(name: string): Promise<PluginHost> {
+		const host = hosts.get(name);
+		if (host && !dormant.has(name)) return host;
+		if (!host) throw new PluginFailure(PLUGIN_UNAVAILABLE, `${name} is not a plugin this daemon runs`);
+		const ongoing = starting.get(name);
+		if (ongoing) return ongoing;
+		const entry = hosts.get(name)?.entry;
+		if (!entry) throw new PluginFailure(PLUGIN_UNAVAILABLE, `${name} is not a plugin this daemon runs`);
+		const spawn = (async () => {
+			try {
+				const host = await startPlugin(entry, {
+					log,
+					onRequest: options.onRequest,
+					...(options.handshakeTimeoutMs === undefined ? {} : { handshakeTimeoutMs: options.handshakeTimeoutMs }),
+					...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }),
+					...(options.closeTimeoutMs === undefined ? {} : { closeTimeoutMs: options.closeTimeoutMs }),
+				});
+				dormant.delete(name);
+				hosts.set(name, host);
+				return host;
+			} catch (error) {
+				// A lazy plugin that will not start is one problem until the next reload, never a
+				// process per click.
+				dormant.delete(name);
+				hosts.delete(name);
+				const problem = (error as Error).message;
+				problems.push({ name, problem });
+				log(`pi-studio: plugin ${name} did not start: ${problem}\n`);
+				throw error;
+			} finally {
+				starting.delete(name);
+			}
+		})();
+		starting.set(name, spawn);
+		return spawn;
+	}
 
 	await Promise.all(
 		registry.plugins.map(async (entry) => {
+			// A lazy plugin is registered but not spawned: its door opens, and the first request
+			// starts the process. The stub keeps the roster honest without spending a child.
+			if (entry.start === "lazy") {
+				dormant.add(entry.name);
+				hosts.set(entry.name, {
+					entry,
+					info: { name: entry.name, version: entry.version ?? "" },
+					running: () => false,
+					request: () => Promise.reject(new PluginFailure(PLUGIN_UNAVAILABLE, `${entry.name} starts on its first panel request`)),
+					notify: () => {},
+					diagnostics: () => "",
+					close: async () => {},
+					exited: new Promise(() => {}),
+				});
+				return;
+			}
 			try {
 				const host = await startPlugin(entry, {
 					log,
@@ -104,10 +171,11 @@ export async function startPlugins(options: PluginStartOptions = {}): Promise<Pl
 	);
 
 	const manager: PluginManager = {
-		request: <T = unknown>(plugin: string, method: string, params?: unknown, timeoutMs?: number) => {
+		request: async <T = unknown>(plugin: string, method: string, params?: unknown, timeoutMs?: number): Promise<T> => {
 			const host = hosts.get(plugin);
 			if (!host) return Promise.reject(new PluginFailure(PLUGIN_UNAVAILABLE, `${plugin} is not a plugin this daemon runs`));
-			return host.request<T>(method, params, timeoutMs);
+			const live = dormant.has(plugin) ? await ensureStarted(plugin) : host;
+			return live.request<T>(method, params, timeoutMs);
 		},
 		notify: (plugin, method, params) => {
 			const host = hosts.get(plugin);
@@ -125,6 +193,7 @@ export async function startPlugins(options: PluginStartOptions = {}): Promise<Pl
 				// registration a second time and disagreeing with what was actually started.
 				...(host.entry.visual ? { visual: host.entry.visual } : {}),
 				...(host.entry.shortcut ? { shortcut: host.entry.shortcut } : {}),
+				...(dormant.has(host.entry.name) ? { dormant: true } : {}),
 			})),
 		problems: () => [...problems],
 		close: async () => {

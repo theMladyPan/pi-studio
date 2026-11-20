@@ -30,7 +30,7 @@ import { dirname, extname } from "node:path";
 import { answer, fail, readJson } from "../http.ts";
 import { pluginManager, reloadPlugins } from "../plugins/manager.ts";
 import { INTERNAL_ERROR, PLUGIN_UNAVAILABLE } from "../plugins/protocol.ts";
-import { PLUGINS_FILE, PLUGIN_SHORTCUT_TAKEN, loadPluginRegistry, resolvePluginFile } from "../plugins/registry.ts";
+import { PLUGINS_FILE, PLUGIN_SHORTCUT_TAKEN, loadAvailablePlugins, loadPluginRegistry, resolvePluginFile } from "../plugins/registry.ts";
 import { workspaceById } from "../workspaces.ts";
 import type { PluginVisual } from "../plugins/registry.ts";
 
@@ -86,8 +86,9 @@ type Caller = { human?: unknown } | null | undefined;
 function visualRoster(): { name: string; root: string; visual: PluginVisual; shortcut?: string }[] {
 	const panels: { name: string; root: string; visual: PluginVisual; shortcut?: string }[] = [];
 	for (const one of pluginManager()?.roster() ?? []) {
-		// A plugin that failed to start has no page to ask, so its door is not offered either.
-		if (!one.running || !one.visual) continue;
+		// A plugin that failed to start has no page to ask, so its door is not offered either. A dormant
+		// one keeps its door: the page is served from disk, and the first request starts the process.
+		if ((!one.running && !one.dormant) || !one.visual) continue;
 		panels.push({ name: one.name, root: dirname(one.command), visual: one.visual, ...(one.shortcut ? { shortcut: one.shortcut } : {}) });
 	}
 	return panels;
@@ -135,11 +136,17 @@ export async function onPluginRegistry(req: IncomingMessage, res: ServerResponse
 		return;
 	}
 	const read = loadPluginRegistry();
+	const roster = pluginManager()?.roster() ?? [];
+	// What is on disk that nobody registered, for the settings page to offer. A folder a registration
+	// already holds is not offered twice.
+	const { available, unavailable } = loadAvailablePlugins([...read.plugins.map((one) => one.name), ...roster.map((one) => one.name)]);
 	answer(res, 200, {
 		plugins: read.plugins,
 		problems: read.problems,
-		roster: pluginManager()?.roster() ?? [],
+		roster,
 		taken: PLUGIN_SHORTCUT_TAKEN,
+		available,
+		unavailable,
 	});
 }
 

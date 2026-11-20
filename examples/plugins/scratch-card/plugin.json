@@ -1,0 +1,10 @@
+{
+  "name": "scratch-card",
+  "version": "1.0.0",
+  "protocol": 1,
+  "protocolMinor": 0,
+  "title": "scratch-card",
+  "description": "Writes one note on the scratch board for every run that ends.",
+  "command": "target/release/pi-studio-scratch-card",
+  "start": "eager"
+}

@@ -9309,7 +9309,10 @@ function pluginPlaceSelect(value, index) {
 /** One plugin as the section edits it: its name, its command, and the panel and shortcut it declares. */
 function renderPluginSettings() {
   if (!pluginRowsEl) return;
-  pluginCountEl.textContent = pluginData ? `${pluginData.plugins.length} registered` : "could not read";
+  const available = pluginData?.available || [];
+  pluginCountEl.textContent = pluginData
+    ? `${pluginData.plugins.length} registered${available.length ? ` · ${available.length} available` : ""}`
+    : "could not read";
   const nodes = [];
   if (!pluginData) {
     nodes.push(Object.assign(el("p", "cfg-note"), { textContent: "could not read the plugin list" }));
@@ -9317,6 +9320,7 @@ function renderPluginSettings() {
     return;
   }
   const roster = new Map((pluginData.roster || []).map((one) => [one.name, one]));
+  const stateOf = (state) => (state ? (state.running ? `running${state.version ? ` ${state.version}` : ""}` : state.dormant ? "starts on open" : "not running") : "not running");
   for (const problem of pluginData.problems || []) {
     nodes.push(
       Object.assign(el("p", "cfg-note"), {
@@ -9327,10 +9331,9 @@ function renderPluginSettings() {
   pluginData.plugins.forEach((row, index) => {
     const head = document.createElement("div");
     head.className = "cfg-prose-head";
-    const state = roster.get(row.name);
     head.append(
       Object.assign(el("b"), {
-        textContent: `${row.name} · ${state ? (state.running ? `running${state.version ? ` ${state.version}` : ""}` : "not running") : "not running"}${row.shortcut ? ` · ${row.shortcut}` : ""}`,
+        textContent: `${row.name} · ${stateOf(roster.get(row.name))}${row.shortcut ? ` · ${row.shortcut}` : ""}`,
       }),
     );
     const remove = el("button", "omni-browse");
@@ -9348,6 +9351,44 @@ function renderPluginSettings() {
     nodes.push(pluginField("panel files", (row.visual?.files || []).join(", "), "files", index));
     nodes.push(pluginField("shortcut", row.shortcut || "", "shortcut", index, "one letter"));
   });
+  // What is on disk that nobody registered, offered to enable: a plugin the human copied into the
+  // plugins folder declares itself, so enabling it is one click and the row takes its defaults.
+  if (available.length || (pluginData.unavailable || []).length) {
+    const head = document.createElement("div");
+    head.className = "cfg-prose-head";
+    head.append(Object.assign(el("b"), { textContent: "available in the plugins folder" }));
+    const rescan = el("button", "omni-browse");
+    rescan.type = "button";
+    rescan.textContent = "rescan";
+    rescan.addEventListener("click", () => void loadPluginSettings());
+    head.append(rescan);
+    nodes.push(head);
+    for (const one of available) {
+      const line = document.createElement("div");
+      line.className = "cfg-row is-typed";
+      line.append(Object.assign(el("b"), { textContent: `${one.title} · ${one.version}` }));
+      const preview = [
+        one.defaults.place === "drawer" ? "left drawers" : "toolbox",
+        one.start === "lazy" ? "starts on open" : "starts on boot",
+        one.defaults.shortcut ? `shortcut ${one.defaults.shortcut}` : null,
+        one.description,
+      ].filter(Boolean).join(" · ");
+      line.append(Object.assign(el("span"), { textContent: preview || one.name }));
+      const enable = el("button", "omni-browse");
+      enable.type = "button";
+      enable.textContent = "enable";
+      enable.addEventListener("click", () => void enablePlugin(one));
+      line.append(enable);
+      nodes.push(line);
+    }
+    for (const one of pluginData.unavailable || []) {
+      const line = document.createElement("div");
+      line.className = "cfg-row is-typed";
+      line.append(Object.assign(el("b"), { textContent: `${one.folder} · ${one.source}` }));
+      line.append(Object.assign(el("span"), { textContent: one.problem }));
+      nodes.push(line);
+    }
+  }
   const save = el("button", "cfg-prose-save");
   save.type = "button";
   save.textContent = "save plugins";
@@ -9357,6 +9398,26 @@ function renderPluginSettings() {
   actions.append(save);
   nodes.push(actions);
   pluginRowsEl.replaceChildren(...nodes);
+}
+
+/**
+ * One click registers a plugin the human installed: the row takes the manifest's defaults, and the
+ * suggested shortcut only when it is still free — a taken one is the human's to reassign, never a
+ * guess the daemon makes for them.
+ */
+async function enablePlugin(one) {
+  const rows = gatherPluginRows();
+  const taken = new Set(pluginData.taken || []);
+  for (const row of rows) if (row.shortcut) taken.add(row.shortcut);
+  const suggested = one.defaults.shortcut;
+  const free = suggested && !taken.has(suggested);
+  rows.push({
+    name: one.name,
+    [one.source]: one.folder,
+    args: one.defaults.args || [],
+    ...(free ? { shortcut: suggested } : {}),
+  });
+  await savePluginSettings(rows, free ? "enabled" : `enabled without the default shortcut — ${suggested} is taken; set another above`);
 }
 
 /** The rows as the form has them, before the daemon is asked to prove them. */
