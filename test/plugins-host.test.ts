@@ -223,6 +223,11 @@ test("a plugin's stderr is logged and its tail kept for a caller", async () => {
 	const host = await started({ log: (line) => lines.push(line) });
 	try {
 		assert.equal(await host.request("stderr"), true);
+		// Stderr and stdout are separate pipes, so the reply can arrive before the log line does,
+		// especially on a loaded machine. Wait for the line instead of assuming it beat the reply.
+		for (let waited = 0; lines.length === 0 && waited < 2_000; waited += 10) {
+			await new Promise((done) => setTimeout(done, 10));
+		}
 		assert.match(lines[0], /^\[plugin:echo\] fixture says hello/);
 		assert.match(host.diagnostics(), /fixture says hello/);
 	} finally {

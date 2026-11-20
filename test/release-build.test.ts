@@ -6,7 +6,7 @@
  * daemon boot stays a later chore with its own temp state fixture.
  */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, posix, relative, sep } from "node:path";
@@ -24,6 +24,27 @@ function buildInto() {
 	return out;
 }
 
+/** The same build without blocking the event loop, so the reproducibility test can build twice at once. */
+function buildIntoAsync(): Promise<string> {
+	const out = mkdtempSync(join(tmpdir(), "pi-studio-build-"));
+	return new Promise((resolvePromise, reject) => {
+		execFile(process.execPath, [helper, "--out", out], { cwd: root, timeout: CHILD_TIMEOUT_MS }, (error) => {
+			if (error) reject(error);
+			else resolvePromise(out);
+		});
+	});
+}
+
+/** One staged file parses, the way `node --check` on it alone would say. */
+function checkParses(file: string): Promise<void> {
+	return new Promise((resolvePromise, reject) => {
+		execFile(process.execPath, ["--check", file], { timeout: CHILD_TIMEOUT_MS }, (error, stdout, stderr) => {
+			if (error) reject(new Error(`${file} does not parse: ${stderr || stdout || error.message}`));
+			else resolvePromise();
+		});
+	});
+}
+
 function filesUnder(dir: string): string[] {
 	const found: string[] = [];
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -32,12 +53,6 @@ function filesUnder(dir: string): string[] {
 		else found.push(full);
 	}
 	return found;
-}
-
-function stagedBuild(t: { after: (fn: () => void) => void }) {
-	const out = buildInto();
-	t.after(() => rmSync(out, { recursive: true, force: true }));
-	return out;
 }
 
 /**
@@ -61,7 +76,7 @@ function sharedBuild(): string {
 	return sharedStaged;
 }
 
-test("the staged tree carries the compiled app, runtime assets, and metadata — and nothing else", () => {
+test("the staged tree carries the compiled app, runtime assets, and metadata — and nothing else", async () => {
 	const out = sharedBuild();
 	const sourcePkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
@@ -110,11 +125,17 @@ test("the staged tree carries the compiled app, runtime assets, and metadata —
 
 	// No `.ts` import specifiers survive compilation (other `.ts` string literals do, by design).
 	const specifier = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)["'][^"']+\.ts["']/;
-	for (const file of filesUnder(out).filter((one) => one.endsWith(".js"))) {
+	const stagedJs = filesUnder(out).filter((one) => one.endsWith(".js"));
+	for (const file of stagedJs) {
 		for (const line of readFileSync(file, "utf8").split("\n")) {
 			assert.ok(!specifier.test(line), `${relative(out, file)} still imports a .ts specifier: ${line.trim()}`);
 		}
-		execFileSync(process.execPath, ["--check", file], { timeout: CHILD_TIMEOUT_MS });
+	}
+	// Every staged file still parses on its own. One `node --check` per file, in small batches, so a
+	// hundred process starts overlap instead of waiting one after another; the batches bound how many
+	// node processes are alive at once on a loaded machine.
+	for (let batch = 0; batch < stagedJs.length; batch += 8) {
+		await Promise.all(stagedJs.slice(batch, batch + 8).map(checkParses));
 	}
 
 	// The staged launcher points at server.js; the source launcher still points at server.ts.
@@ -225,9 +246,10 @@ test("staged modules resolve the runtime layout from the staged root, with no .g
 	for (const one of flows) assert.ok(one.svg.startsWith("<svg"), `${one.path} drawing reads from staged docs/`);
 });
 
-test("the same source builds the same build.json twice", (t) => {
-	const first = stagedBuild(t);
-	const second = stagedBuild(t);
+test("the same source builds the same build.json twice", async (t) => {
+	const [first, second] = await Promise.all([buildIntoAsync(), buildIntoAsync()]);
+	t.after(() => rmSync(first, { recursive: true, force: true }));
+	t.after(() => rmSync(second, { recursive: true, force: true }));
 	assert.equal(
 		readFileSync(join(first, "build.json"), "utf8"),
 		readFileSync(join(second, "build.json"), "utf8"),
