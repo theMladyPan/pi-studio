@@ -1640,10 +1640,13 @@
 <div id="boardConfig" hidden role="dialog" aria-label="this board's settings">
   <div id="cfgTree"></div>
   <!-- The board's own display choice and the map of every key live here, outside the tree the
-       daemon serves, so a re-render of the tree never wipes them. -->
+       daemon serves, so a re-render of the tree never wipes them. The map row is only parked here: the
+       group the document names for it takes it as the tree is drawn, and it comes back if that tree
+       cannot be read. -->
   <div id="cfgLocal">
-    <p class="cfg-head">board view</p>
-    <label class="cfg-check" for="mapToggle"><input type="checkbox" id="mapToggle" checked> <span>overview map</span><span class="cfg-sub">show the small overview map (m)</span></label>
+    <div id="mapRow">
+      <label class="cfg-check" for="mapToggle"><input type="checkbox" id="mapToggle" checked> <span>overview map</span><span class="cfg-sub">show the small overview map (m)</span></label>
+    </div>
     <details class="cfg-group" id="cfgShortcuts">
       <summary><span>hotkeys</span><span class="cfg-preview">all keyboard shortcuts</span></summary>
       <div class="cfg-kids" id="shortcutList"></div>

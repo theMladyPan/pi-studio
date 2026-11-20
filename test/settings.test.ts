@@ -285,10 +285,16 @@ test("every leaf carries a value, and the defaults object the caller passed is w
 	assert.equal(byId.showCharts.value, "many");
 	// The lists are the daemon's own, not a copy written out here.
 	assert.deepEqual(byId.thinking.options, THINKING_LEVELS);
-	// `dim others` sits under the canvas in both documents, because the canvas is where it is drawn.
+	// `dim others` sits under the canvas in both documents, because the canvas is where it is drawn. So does
+	// the overview map, which the page draws for itself: the group names the row rather than carrying a leaf.
 	for (const one of [document, boardDocument]) {
 		const canvas = one.groups.find((group) => group.id === "canvas");
 		assert.deepEqual((canvas?.fields ?? []).map((field) => field.id), ["dimOthers"]);
+		assert.equal(canvas?.host, "map");
+		assert.deepEqual(
+			one.groups.filter((group) => group.host).map((group) => group.id),
+			["canvas"],
+		);
 	}
 });
 

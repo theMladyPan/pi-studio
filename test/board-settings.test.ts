@@ -145,6 +145,13 @@ test("every setting names its picker and the route a change goes back through", 
 	// `dim others` sits under the canvas, because the canvas is where it is drawn.
 	const canvas = document.groups.find((group) => group.id === "canvas");
 	assert.deepEqual((canvas?.fields ?? []).map((field) => field.id), ["dimOthers"]);
+	// The overview map is the browser's own switch, so it is no leaf: the canvas claims the row by name and
+	// the page moves it in. One group claims it, and only the canvas.
+	assert.equal(canvas?.host, "map");
+	assert.deepEqual(
+		document.groups.filter((group) => group.host).map((group) => [group.id, group.host]),
+		[["canvas", "map"]],
+	);
 });
 
 test("a one-key body carries the control's value, and the model leaf splits at the first slash", () => {
