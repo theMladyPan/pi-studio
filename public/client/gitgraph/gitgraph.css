@@ -116,12 +116,12 @@ input[type="search"] { min-width: 0; }
 .subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .head-dot { flex: none; height: 8px; width: 8px; border: 2px solid var(--lane); border-radius: 50%; }
 .ref, .ref-group .ref {
-  font: 11.5px/16px var(--mono); min-height: 18px; flex: 0 0 auto;
-  height: 18px; padding: 0 5px; border: 1px solid var(--border-bright); border-radius: 4px;
+  font: 11.5px/18px var(--mono); min-height: 20px; flex: 0 0 auto;
+  height: 20px; padding: 0 6px; border: 1px solid var(--border-bright); border-radius: 4px;
   background: color-mix(in srgb, var(--lane) 12%, var(--bg)); color: var(--text);
 }
-.ref-group { display: inline-flex; flex: none; height: 18px; align-items: center; border: 1px solid var(--border-bright); border-radius: 4px; }
-.ref-group .ref { border: 0; height: 16px; min-height: 16px; border-radius: 0; }
+.ref-group { display: inline-flex; flex: none; height: 20px; align-items: center; border: 1px solid var(--border-bright); border-radius: 4px; }
+.ref-group .ref { border: 0; height: 18px; min-height: 18px; border-radius: 0; }
 .ref-group .alias { border-left: 1px solid var(--border-bright); color: var(--muted); font-style: italic; }
 .ref.tag { color: var(--amber); }
 .ref.remote { color: var(--muted); }
