@@ -28,6 +28,8 @@ const module = async () =>
 			getText: () => string;
 			focus: () => void;
 			setLine: (line: number) => void;
+			setHighlights: (ranges: Array<{ from: number; to: number; kind: string }>) => void;
+			revealRange: (from: number, to: number) => void;
 			getPath: () => string;
 		};
 	};
@@ -42,6 +44,9 @@ class FakeElement {
 	scrollTop = 0;
 	scrollLeft = 0;
 	innerHTML = "";
+	style: Record<string, string> = {};
+	selectionStart = 0;
+	selectionEnd = 0;
 	children: FakeElement[] = [];
 	attributes = new Map<string, string>();
 	classes = new Set<string>();
@@ -180,25 +185,25 @@ test("the surface gives the document back, both before and after a human types i
 	preview.setDocument({ path: "src/a.py", content });
 	assert.equal(preview.getPath(), "src/a.py");
 	assert.equal(preview.getText(), content, "the document round-trips untouched");
-	// The area is the truth: the second child is the textarea, and its own value is what is read back.
-	const area = container.children[1];
+	// The area is the truth: the last child is the textarea, and its own value is what is read back.
+	const area = container.children[2];
 	assert.equal(area.value, content);
 	assert.ok(container.classes.has("tp"), "the container is the surface the pages style");
-	assert.equal(container.children.length, 2, "one layer to read, one to type into");
+	assert.equal(container.children.length, 3, "one lane, one layer to read, one to type into");
 	area.value = `${content}# typed\n`;
 	assert.equal(preview.getText(), `${content}# typed\n`, "what was typed is what would be saved");
 	// A read-only surface still shows its text; it only refuses the caret.
 	const readOnly = standInContainer();
 	const reader = createTextPreview(readOnly, { readOnly: true });
 	reader.setDocument({ path: "src/a.py", content });
-	assert.equal(readOnly.children[1].readOnly, true);
+	assert.equal(readOnly.children[2].readOnly, true);
 	assert.equal(reader.getText(), content);
 	// Whether the file is the human's to write is decided by the daemon after the read, so the surface has
 	// to be able to change its mind: the textarea itself refuses the typing, not only the save button.
 	const editable = standInContainer();
 	const surface = createTextPreview(editable);
 	surface.setDocument({ path: "src/a.py", content });
-	const surfaceArea = editable.children[1];
+	const surfaceArea = editable.children[2];
 	assert.equal(surfaceArea.readOnly, false, "an editable file takes typing");
 	surface.setReadOnly(true);
 	assert.equal(surfaceArea.readOnly, true);
@@ -206,5 +211,33 @@ test("the surface gives the document back, both before and after a human types i
 	assert.equal(surfaceArea.readOnly, false, "the next file opens editable again");
 	// The coloured layer is painted through the same function the test above drives, trailing line included.
 	surface.setDocument({ path: "a.txt", content: "one\ntwo\n" });
-	assert.ok(editable.children[0].children[0].innerHTML.endsWith("\n"), "the surface paints the final empty line");
+	assert.ok(editable.children[1].children[0].innerHTML.endsWith("\n"), "the surface paints the final empty line");
+});
+
+test("the highlight lane tints the given lines, and revealing a range selects it", async () => {
+	const { createTextPreview } = await module();
+	const container = standInContainer();
+	const preview = createTextPreview(container);
+	preview.setDocument({ path: "a.txt", content: "one\ntwo\nthree\nfour\n" });
+	preview.setHighlights([
+		{ from: 2, to: 3, kind: "ours" },
+		{ from: 1, to: 1, kind: "marker" },
+	]);
+	const lane = container.children[0];
+	assert.equal(lane.className, "tp-bg", "the first layer is the tint lane");
+	const blocks = lane.children[0].children;
+	assert.equal(blocks.length, 2, "one block per range");
+	assert.ok(blocks[0].className.includes("tp-bg-ours"), "the kind chooses the tint");
+	assert.equal(blocks[0].style.height, "40px", "a two-line block is two line heights tall");
+	assert.equal(blocks[0].style.top, "20px", "line 2 starts one line height down");
+	assert.ok(blocks[1].className.includes("tp-bg-marker"));
+	// Clearing the lane is an empty list, which is how an ordinary file opens after a conflict.
+	preview.setHighlights([]);
+	assert.equal(lane.children[0].children.length, 0);
+	// Revealing puts the first line on screen and selects the whole range.
+	preview.revealRange(2, 3);
+	const area = container.children[2];
+	assert.equal(area.selectionStart, 4);
+	assert.equal(area.selectionEnd, 13);
+	assert.equal(area.scrollTop, 20, "the first line scrolls to the top");
 });

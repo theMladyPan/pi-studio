@@ -1543,6 +1543,17 @@
     height: 100%; margin: 0; border: 0; padding: 8px 10px; font: 13px/20px var(--mono); tab-size: 4;
     white-space: pre; overflow: auto; scrollbar-gutter: stable; }
   .tp > .tp-code { overflow: hidden; color: #c9d1d9; pointer-events: none; }
+  /* The lane under both layers: one tinted block per conflict range, scrolled with the area. It sits
+     behind the coloured text, so the block reads as a background and never covers a glyph. */
+  .tp > .tp-bg { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .tp > .tp-bg-inner { position: absolute; left: 0; right: 0; top: 0; }
+  .tp-bg-line { position: absolute; left: 0; right: 0; border-left: 3px solid transparent; box-sizing: border-box; }
+  .tp-bg-marker { background: rgba(248, 81, 73, .16); border-left-color: #f85149; }
+  .tp-bg-ours { background: rgba(56, 139, 253, .13); border-left-color: #58a6ff; }
+  .tp-bg-theirs { background: rgba(63, 185, 80, .13); border-left-color: #3fb950; }
+  .tp-bg-base { background: rgba(210, 153, 34, .12); border-left-color: #d29922; }
+  .ex-conflict-hunk .hk-jump { cursor: pointer; }
+  .ex-conflict-hunk .hk-jump:hover { color: var(--text); border-color: var(--accent); }
   /* A `<code>` chooses a monospace of the engine's own; the colours are drawn on the panel's font, so
      the one inside the coloured layer inherits it instead of defaulting away from it. */
   .tp > .tp-code code { font: inherit; }
