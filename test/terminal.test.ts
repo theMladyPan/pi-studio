@@ -88,6 +88,31 @@ test("Ctrl+C interrupts a foreground command", async (t) => {
 	}
 });
 
+test("a shell's standard error reaches the drawer", async (t) => {
+	if (!helperHere()) return t.skip("no `script` or `socat` helper on this machine");
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-terminal-"));
+	const workspaceId = `terminal-test-stderr-${Date.now()}`;
+	const seen: TerminalEvent[] = [];
+	const handle = attachTerminal(workspaceId, folder, (event) => seen.push(event));
+	try {
+		handle.resize({ cols: 80, rows: 24 });
+		handle.write(`ls /definitely-not-here-${Date.now()}\n`);
+		const deadline = Date.now() + 10_000;
+		let text = "";
+		while (Date.now() < deadline) {
+			text = seen.filter((event) => event.type === "output").map((event) => (event as { data: string }).data).join("");
+			if (text.includes("No such file or directory")) break;
+			await new Promise((done) => setTimeout(done, 50));
+		}
+		assert.match(text, /No such file or directory/, "the command's error output came back over the pty");
+	} finally {
+		handle.write("exit\n");
+		await new Promise((done) => setTimeout(done, 300));
+		handle.detach();
+		stopTerminal(workspaceId);
+	}
+});
+
 test("a machine with no pty helper says what to install, and reports no exit", async () => {
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-terminal-"));
 	const workspaceId = `terminal-test-no-helper-${Date.now()}`;

@@ -64,10 +64,12 @@ const HELPERS: PtyHelper[] = [
 		// `socat` takes the size as an option of its own. Its command is one quoted word, so a shell path
 		// with a space in it stays one word; one with a quote in it is the `script` helper's job. `ctty`
 		// matters: without it the pty is only the shell's stdio, not its controlling terminal, so ^C is
-		// echoed by the line discipline but no SIGINT reaches the foreground command.
+		// echoed by the line discipline but no SIGINT reaches the foreground command. `stderr` matters
+		// for the same reason: without it `socat` sends the subprocess's error output to `socat`'s own
+		// stderr, which the daemon drains away, so the drawer's shell would look silent on any error.
 		name: "socat",
 		command: "socat",
-		argv: (shell, size) => ["-", `SYSTEM:'exec "${shell}"',pty,setsid,ctty,sigint,sane,tiocswinsz=${size.cols}:${size.rows}`],
+		argv: (shell, size) => ["-", `SYSTEM:'exec "${shell}"',pty,setsid,ctty,stderr,sigint,sane,tiocswinsz=${size.cols}:${size.rows}`],
 	},
 ];
 
@@ -142,8 +144,9 @@ function spawnSession(folder: string, size: TerminalSize): Session {
 		session.scrollback = (session.scrollback + text).slice(-SCROLLBACK_CHARS);
 		for (const listener of session.listeners) listener({ type: "output", data: text });
 	});
-	// The helper's stderr carries its own notices, not the shell's; the shell's stderr arrives on the
-	// pty and is stdout here. Draining this one keeps a noisy helper from blocking instead.
+	// The helper's own stderr carries only its notices, which the drawer has no use for; the shell's
+	// stderr arrives on the pty (under `script` directly, under `socat` because of the `stderr` option
+	// above) and is stdout here. Draining this one keeps a noisy helper from blocking instead.
 	child.stderr?.on("data", () => {});
 	child.on("error", (error) => {
 		// A helper that is there but refuses to start is the ordinary shape of this failure, and the
