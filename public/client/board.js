@@ -9367,29 +9367,34 @@ function renderPluginSettings() {
     head.append(rescan);
     nodes.push(head);
     for (const one of available) {
-      const line = document.createElement("div");
-      line.className = "cfg-row is-typed";
-      line.append(Object.assign(el("b"), { textContent: `${one.title} · ${one.version}` }));
+      // Two lines, not one: the title keeps its ellipsis one line, and the description wraps under it
+      // rather than stretching the row past the panel — a long span here used to clip the whole
+      // settings page off the left edge.
+      const head = document.createElement("div");
+      head.className = "cfg-prose-head";
+      head.append(Object.assign(el("b"), { textContent: `${one.title} · ${one.version}` }));
+      const enable = el("button", "omni-browse");
+      enable.type = "button";
+      enable.textContent = "enable";
+      enable.addEventListener("click", () => void enablePlugin(one));
+      head.append(enable);
+      nodes.push(head);
       const preview = [
         one.defaults.place === "drawer" ? "left drawers" : "toolbox",
         one.start === "lazy" ? "starts on open" : "starts on boot",
         one.defaults.shortcut ? `shortcut ${one.defaults.shortcut}` : null,
         one.description,
       ].filter(Boolean).join(" · ");
-      line.append(Object.assign(el("span"), { textContent: preview || one.name }));
-      const enable = el("button", "omni-browse");
-      enable.type = "button";
-      enable.textContent = "enable";
-      enable.addEventListener("click", () => void enablePlugin(one));
-      line.append(enable);
-      nodes.push(line);
+      if (preview) {
+        nodes.push(Object.assign(el("p", "cfg-note"), { textContent: preview }));
+      }
     }
     for (const one of pluginData.unavailable || []) {
-      const line = document.createElement("div");
-      line.className = "cfg-row is-typed";
-      line.append(Object.assign(el("b"), { textContent: `${one.folder} · ${one.source}` }));
-      line.append(Object.assign(el("span"), { textContent: one.problem }));
-      nodes.push(line);
+      const head = document.createElement("div");
+      head.className = "cfg-prose-head";
+      head.append(Object.assign(el("b"), { textContent: `${one.folder} · ${one.source}` }));
+      nodes.push(head);
+      nodes.push(Object.assign(el("p", "cfg-note"), { textContent: one.problem }));
     }
   }
   const save = el("button", "cfg-prose-save");
