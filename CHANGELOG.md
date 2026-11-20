@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Refuse `npm run check` up front with the installing command in the message when the tree's own dev dependency is missing, so a fresh worktree does not sail past the guard and fail 29 tests deep in the install suite. [t-f4c279f1]
+
 - fix: Run the `npm run check` gate's stages in parallel, so syntax, imports, type checking, tests and smoke overlap instead of waiting one after another, and parse the staged files in small parallel batches instead of one process after another; the same checks run and the gate still fails if any stage fails, which cuts a clean run from about 42 seconds to about 27. [t-b3ebba91]
 - fix: Show a shell's standard error in the terminal drawer when the shell runs through `socat`, by sending the subprocess's error output to the pty; without that, errors went to a helper pipe the daemon drained away and never reached the drawer. [t-caadf71a]
 - fix: Drop the five design drafts of the home screen and its settings page, now that the chosen shelf layout lives in the app; nothing served or shipped them, and they stay readable in the history. [t-77d05e0c]
