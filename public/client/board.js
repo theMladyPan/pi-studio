@@ -47,6 +47,8 @@ document.getElementById("termBtn").addEventListener("click", () => {
 // The plugin panel: one sandboxed frame for the life of the page, the doors the toolbox lists for the
 // plugins that declared a panel, and the one call a panel is allowed to make.
 const pluginPanel = createPluginPanelHost({ workspace });
+/** One plain letter to the panel it opens, as the daemon lists them; set in settings, read by the keys. */
+const pluginShortcuts = new Map();
 
 // ---------- the plugin panel ---------------------------------------------
 /**
@@ -74,7 +76,8 @@ const pluginPanel = createPluginPanelHost({ workspace });
  * Neither direction carries a token, a cookie or the daemon's address: the frame is same-origin with this
  * page for its own files only, and every request it makes is made here, with this page's own promise.
  */
-function createPluginPanelHost({ workspace }) {
+function createPluginPanelHost({ workspace, mode = "overlay" }) {
+  const drawerMode = mode === "drawer";
   const drawer = document.getElementById("pluginDrawer");
   const scrim = document.getElementById("pluginScrim");
   const frame = document.getElementById("pvFrame");
@@ -82,6 +85,15 @@ function createPluginPanelHost({ workspace }) {
   const noteEl = document.getElementById("pvNote");
   const closeBtn = document.getElementById("pvClose");
   const doors = document.getElementById("pluginDoors");
+  // Drawer mode: the panel lives in the left drawers' column instead of behind the toolbox overlay,
+  // so its frame is made on its first open rather than read from the page.
+  const drawerColumn = document.getElementById("drawers");
+  const drawerDoorsEl = document.getElementById("pluginDrawerDoors");
+  let pane = null;
+  let paneFrame = null;
+  let paneKey = "";
+  let registeredLetters = [];
+  const targetFrame = () => (drawerMode ? paneFrame : frame);
   /** The plugin whose panel is on screen, `""` before a door was ever pressed. */
   let plugin = "";
   /** Has the panel's own document loaded, which is when it can hear a greeting. */
@@ -103,8 +115,9 @@ function createPluginPanelHost({ workspace }) {
    * own to name; what keeps a stranger out is the frame's window above, and the secret in every message.
    */
   function say(message) {
-    if (!frame.contentWindow) return;
-    frame.contentWindow.postMessage({ ...message, nonce }, "*");
+    const live = targetFrame();
+    if (!live?.contentWindow) return;
+    live.contentWindow.postMessage({ ...message, nonce }, "*");
   }
 
   /**
@@ -139,8 +152,9 @@ function createPluginPanelHost({ workspace }) {
   function open(panel) {
     if (!panel || typeof panel.url !== "string" || panel.url === "") return;
     closeHeaderMenus();
-    const opening = drawer.hidden;
     plugin = typeof panel.name === "string" ? panel.name : "";
+    if (drawerMode) return openDrawer(panel);
+    const opening = drawer.hidden;
     titleEl.textContent = (typeof panel.title === "string" && panel.title) || plugin || "plugin";
     noteEl.textContent = plugin;
     if (frame.dataset.plugin !== plugin) {
@@ -179,7 +193,8 @@ function createPluginPanelHost({ workspace }) {
   window.addEventListener("message", (event) => {
     // The frame's own window, and a document the sandbox left without an origin: either check alone is
     // reachable, since this page can hold other frames and another site can frame this page.
-    if (!frame.contentWindow || event.source !== frame.contentWindow) return;
+    const live = targetFrame();
+    if (!live?.contentWindow || event.source !== live.contentWindow) return;
     if (event.origin !== "null") return;
     const data = event.data;
     if (!data || typeof data !== "object") return;
@@ -191,10 +206,67 @@ function createPluginPanelHost({ workspace }) {
   });
 
   /**
+   * The panel as one more left drawer: a pane in the drawers' column with the board's own rail-head and
+   * close button under it, sized by the rail grip like files, activity and cards. One pane per plugin,
+   * made on its first open and kept, so its state survives closing the drawer.
+   */
+  function openDrawer(panel) {
+    const key = `plugin:${plugin}`;
+    const paneId = `drawerPlugin-${plugin}`;
+    if (!pane || pane.id !== paneId) {
+      let live = document.getElementById(paneId);
+      if (!live) {
+        live = document.createElement("section");
+        live.className = "drawer plugin-pane";
+        live.id = paneId;
+        live.setAttribute("aria-label", (typeof panel.title === "string" && panel.title) || plugin);
+        live.tabIndex = -1;
+        const head = document.createElement("div");
+        head.className = "rail-head";
+        head.textContent = (typeof panel.title === "string" && panel.title) || plugin;
+        const shut = document.createElement("button");
+        shut.type = "button";
+        shut.className = "rail-close";
+        shut.title = "hide the drawer (esc)";
+        shut.textContent = "«";
+        shut.addEventListener("click", () => closeDrawers());
+        head.append(shut);
+        const inner = document.createElement("iframe");
+        inner.className = "drawer-frame";
+        inner.setAttribute("sandbox", "allow-scripts");
+        inner.title = `${(typeof panel.title === "string" && panel.title) || plugin} plugin panel`;
+        inner.addEventListener("load", () => {
+          if (plugin === "") return;
+          loaded = true;
+          say({ type: "pi-studio.host.hello", plugin });
+        });
+        live.append(head, inner);
+        drawerColumn.insertBefore(live, document.getElementById("railGrip"));
+        DRAWER_NAMES[key] = paneId;
+      }
+      pane = live;
+      paneFrame = live.querySelector("iframe.drawer-frame");
+      paneKey = key;
+    }
+    if (paneFrame.dataset.plugin !== plugin) {
+      nonce = newNonce();
+      loaded = false;
+      paneFrame.dataset.plugin = plugin;
+      paneFrame.src = panel.url;
+    }
+    if (gitDrawer.isOpen()) gitDrawer.close();
+    explorerCore.drawerOpen(drawerState, key);
+    paintDrawers();
+    paneFrame.focus();
+    if (loaded) say({ type: "pi-studio.host.hello", plugin });
+  }
+
+  /**
    * One door per panel the daemon lists, read once: which plugins are installed and running is a fact of its
    * own start, so a panel added while it runs is a door on the next one. The listing is the daemon's answer
    * about the human at the keyboard, and a board no plugin offers a panel to simply keeps its toolbox as it
-   * was.
+   * was. The two hosts each take the panels that are theirs: the toolbox takes every panel without a place,
+   * and the header takes only the ones that asked for the drawers.
    */
   async function listDoors() {
     if (!workspace) return;
@@ -207,24 +279,60 @@ function createPluginPanelHost({ workspace }) {
       return;
     }
     const panels = Array.isArray(payload?.plugins) ? payload.plugins : [];
-    for (const panel of panels) {
-      if (!panel || typeof panel.name !== "string" || typeof panel.url !== "string") continue;
+    const mine = panels.filter((panel) => panel && typeof panel.name === "string" && typeof panel.url === "string" && ((panel.place === "drawer") === drawerMode));
+    // A re-list replaces the doors rather than leaving a second set beside them.
+    if (drawerMode) {
+      drawerDoorsEl.replaceChildren();
+      for (const key of Object.keys(pluginDrawerDoors)) {
+        if (key.startsWith("plugin:")) delete pluginDrawerDoors[key];
+      }
+    } else {
+      doors.replaceChildren();
+    }
+    for (const letter of registeredLetters) pluginShortcuts.delete(letter);
+    registeredLetters = [];
+    for (const panel of mine) {
       const door = document.createElement("button");
       door.type = "button";
-      door.setAttribute("role", "menuitem");
       door.textContent = (typeof panel.title === "string" && panel.title) || panel.name;
-      door.title = `open the ${door.textContent} plugin panel`;
-      door.addEventListener("click", () => open(panel));
-      doors.append(door);
+      if (drawerMode) {
+        const key = `plugin:${panel.name}`;
+        door.setAttribute("aria-controls", `drawerPlugin-${panel.name}`);
+        door.setAttribute("aria-expanded", "false");
+        door.title = `show the ${door.textContent} drawer`;
+        door.addEventListener("click", () => {
+          if (drawerState.open === key) closeDrawers();
+          else open(panel);
+        });
+        pluginDrawerDoors[key] = door;
+        drawerDoorsEl.append(door);
+      } else {
+        door.setAttribute("role", "menuitem");
+        door.title = `open the ${door.textContent} plugin panel`;
+        door.addEventListener("click", () => open(panel));
+        doors.append(door);
+      }
+      if (typeof panel.shortcut === "string" && /^[a-z]$/.test(panel.shortcut)) {
+        pluginShortcuts.set(panel.shortcut, { panel, drawer: drawerMode });
+        registeredLetters.push(panel.shortcut);
+      }
     }
-    doors.hidden = panels.length === 0;
+    if (drawerMode) drawerDoorsEl.hidden = mine.length === 0;
+    else doors.hidden = mine.length === 0;
   }
   void listDoors();
 
-  closeBtn.addEventListener("click", () => close());
-  scrim.addEventListener("click", () => close());
+  if (!drawerMode) {
+    closeBtn.addEventListener("click", () => close());
+    scrim.addEventListener("click", () => close());
+  }
 
-  return { isOpen: () => !drawer.hidden, close };
+  return {
+    isOpen: () => (drawerMode ? drawerState.open === paneKey && paneKey !== "" : !drawer.hidden),
+    close: () => (drawerMode ? (drawerState.open === paneKey ? closeDrawers() : null) : close()),
+    open,
+    relist: listDoors,
+  };
 }
 // ---------- the header menus ---------------------------------------------
 // Three chips in the header, each opening one menu outside it. A menu that closed while its item held
@@ -5473,6 +5581,8 @@ const THOUGHT_STALL_MS = 3000;
 // rail are the ones these open with, because this is that rail with doors on it.
 const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards", source: "drawerSource" };
 const drawerState = explorerCore.drawers();
+/** The doors in the header for plugins whose panel lives in this column, by drawer name. */
+const pluginDrawerDoors = {};
 // The three doors in the header, read before anything paints them.
 const filesBtn = document.getElementById("filesBtn");
 const activityBtn = document.getElementById("activityBtn");
@@ -5500,7 +5610,7 @@ function paintDrawers() {
     const pane = document.getElementById(id);
     pane.classList.toggle("on", drawerState.open === name);
   }
-  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn };
+  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn, ...pluginDrawerDoors };
   for (const [name, door] of Object.entries(doors)) {
     door.setAttribute("aria-expanded", drawerState.open === name ? "true" : "false");
   }
@@ -5561,6 +5671,9 @@ for (const [name, door] of Object.entries({ files: filesBtn, activity: activityB
     toggleDrawer(name);
   });
 }
+// The header doors for plugins whose panel lives in this column: the same doors as activity and cards,
+// added as the daemon lists them, and painted with the same aria-expanded the drawers keep.
+const pluginDrawer = createPluginPanelHost({ workspace, mode: "drawer" });
 for (const shut of document.querySelectorAll("#drawers .rail-close")) {
   shut.addEventListener("click", () => closeDrawers());
 }
@@ -9040,6 +9153,7 @@ const SHORTCUTS = [
       { keys: "o", does: "flip the thread order, newest first or oldest first" },
       { keys: "g", does: "roll the git graph down, and press it again to roll it up" },
       { keys: "x", does: "roll the terminal drawer up from the bottom, and press it again to roll it down" },
+      { keys: "one letter per plugin", does: "open that plugin's panel — assigned in settings under plugins" },
       { keys: "t", does: "start a new thread, on a board of threads with no card selected" },
       { keys: "r", does: "reply to the card you are reading" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
@@ -9136,10 +9250,17 @@ const SHORTCUTS = [
   },
 ];
 
-/** The panel, drawn once from that list: a heading per group, then a row of keys beside what it does. */
+/** The panel, drawn once from that list: a heading per group, then a row of keys beside what it does.
+ * A plugin's own letter is a live row: the list is drawn when the settings are read, so the map always
+ * is the map, with the letters the settings page assigned. */
 function paintShortcuts() {
+  const live = [...pluginShortcuts.entries()].map(([letter, hit]) => ({
+    keys: letter,
+    does: `open the ${hit.panel.title || hit.panel.name} plugin, in the ${hit.drawer ? "drawers" : "toolbox"}`,
+  }));
+  const groups = live.length ? [...SHORTCUTS, { group: "plugins", rows: live }] : SHORTCUTS;
   shortcutList.replaceChildren(
-    ...SHORTCUTS.flatMap((group) => [
+    ...groups.flatMap((group) => [
       Object.assign(el("p", "cfg-head"), { textContent: group.group }),
       ...group.rows.map((row) => {
         const line = el("div", "cfg-row");
@@ -9148,6 +9269,250 @@ function paintShortcuts() {
       }),
     ]),
   );
+}
+
+// ---------- the plugins in settings --------------------------------------
+// The daemon's registration is the truth; whatever arrives is what the section shows. Saving writes
+// the whole list, and the daemon proves it by the reader before it replaces what it runs, so a row it
+// cannot use saves nothing.
+const pluginRowsEl = document.getElementById("pluginRows");
+const pluginCountEl = document.getElementById("pluginCount");
+const pluginNote = document.getElementById("plNote");
+let pluginData = null;
+
+function pluginField(label, value, field, index, placeholder) {
+  const row = document.createElement("div");
+  row.className = "cfg-row is-typed";
+  row.append(Object.assign(el("span"), { textContent: label }));
+  const input = el("input", "cfg-type");
+  input.type = "text";
+  input.value = value || "";
+  if (placeholder) input.placeholder = placeholder;
+  if (index !== null) input.dataset.index = String(index);
+  if (field) input.dataset.field = field;
+  row.append(input);
+  return row;
+}
+
+function pluginPlaceSelect(value, index) {
+  const row = document.createElement("div");
+  row.className = "cfg-row is-typed";
+  row.append(Object.assign(el("span"), { textContent: "place" }));
+  const select = el("select", "cfg-type");
+  select.dataset.index = String(index);
+  select.dataset.field = "place";
+  for (const [key, label] of [["", "toolbox"], ["drawer", "left drawers"]]) {
+    const option = el("option");
+    option.value = key;
+    option.textContent = label;
+    if ((value || "") === key) option.selected = true;
+    select.append(option);
+  }
+  row.append(select);
+  return row;
+}
+
+/** One plugin as the section edits it: its name, its command, and the panel and shortcut it declares. */
+function renderPluginSettings() {
+  if (!pluginRowsEl) return;
+  const available = pluginData?.available || [];
+  pluginCountEl.textContent = pluginData
+    ? `${pluginData.plugins.length} registered${available.length ? ` · ${available.length} available` : ""}`
+    : "could not read";
+  const nodes = [];
+  if (!pluginData) {
+    nodes.push(Object.assign(el("p", "cfg-note"), { textContent: "could not read the plugin list" }));
+    pluginRowsEl.replaceChildren(...nodes);
+    return;
+  }
+  const roster = new Map((pluginData.roster || []).map((one) => [one.name, one]));
+  const stateOf = (state) => (state ? (state.running ? `running${state.version ? ` ${state.version}` : ""}` : state.dormant ? "starts on open" : "not running") : "not running");
+  for (const problem of pluginData.problems || []) {
+    nodes.push(
+      Object.assign(el("p", "cfg-note"), {
+        textContent: problem.name ? `${problem.name}: ${problem.problem}` : problem.problem,
+      }),
+    );
+  }
+  pluginData.plugins.forEach((row, index) => {
+    const head = document.createElement("div");
+    head.className = "cfg-prose-head";
+    head.append(
+      Object.assign(el("b"), {
+        textContent: `${row.name} · ${stateOf(roster.get(row.name))}${row.shortcut ? ` · ${row.shortcut}` : ""}`,
+      }),
+    );
+    const remove = el("button", "omni-browse");
+    remove.type = "button";
+    remove.textContent = "remove";
+    remove.addEventListener("click", () => void savePluginSettings(gatherPluginRows().filter((_, at) => at !== index), `removed ${row.name}`));
+    head.append(remove);
+    nodes.push(head);
+    // A row that names a folder takes everything else from that folder's plugin.json, so it shows
+    // only what a row of its own can decide — its name, its args and its shortcut. The command, the
+    // panel and the place belong to the manifest and are never rewritten by this form.
+    nodes.push(pluginField("name", row.name, "name", index));
+    if (row.installed || row.bundled) {
+      nodes.push(
+        Object.assign(el("p", "cfg-note"), {
+          textContent: `the command, the panel and the place come from the ${row.installed ? "installed" : "shipped"} plugin.json`,
+        }),
+      );
+    } else {
+      nodes.push(pluginField("command", row.command, "command", index));
+    }
+    nodes.push(pluginField("args", (row.args || []).join(", "), "args", index, "--flag value, comma separated"));
+    if (!(row.installed || row.bundled)) {
+      nodes.push(pluginPlaceSelect(row.visual?.place || "", index));
+      nodes.push(pluginField("panel title", row.visual?.title || "", "title", index));
+      nodes.push(pluginField("panel entry", row.visual?.entry || "", "entry", index));
+      nodes.push(pluginField("panel files", (row.visual?.files || []).join(", "), "files", index));
+    }
+    nodes.push(pluginField("shortcut", row.shortcut || "", "shortcut", index, "one letter"));
+  });
+  // What is on disk that nobody registered, offered to enable: a plugin the human copied into the
+  // plugins folder declares itself, so enabling it is one click and the row takes its defaults.
+  if (available.length || (pluginData.unavailable || []).length) {
+    const head = document.createElement("div");
+    head.className = "cfg-prose-head";
+    head.append(Object.assign(el("b"), { textContent: "available in the plugins folder" }));
+    const rescan = el("button", "omni-browse");
+    rescan.type = "button";
+    rescan.textContent = "rescan";
+    rescan.addEventListener("click", () => void loadPluginSettings());
+    head.append(rescan);
+    nodes.push(head);
+    for (const one of available) {
+      const line = document.createElement("div");
+      line.className = "cfg-row is-typed";
+      line.append(Object.assign(el("b"), { textContent: `${one.title} · ${one.version}` }));
+      const preview = [
+        one.defaults.place === "drawer" ? "left drawers" : "toolbox",
+        one.start === "lazy" ? "starts on open" : "starts on boot",
+        one.defaults.shortcut ? `shortcut ${one.defaults.shortcut}` : null,
+        one.description,
+      ].filter(Boolean).join(" · ");
+      line.append(Object.assign(el("span"), { textContent: preview || one.name }));
+      const enable = el("button", "omni-browse");
+      enable.type = "button";
+      enable.textContent = "enable";
+      enable.addEventListener("click", () => void enablePlugin(one));
+      line.append(enable);
+      nodes.push(line);
+    }
+    for (const one of pluginData.unavailable || []) {
+      const line = document.createElement("div");
+      line.className = "cfg-row is-typed";
+      line.append(Object.assign(el("b"), { textContent: `${one.folder} · ${one.source}` }));
+      line.append(Object.assign(el("span"), { textContent: one.problem }));
+      nodes.push(line);
+    }
+  }
+  const save = el("button", "cfg-prose-save");
+  save.type = "button";
+  save.textContent = "save plugins";
+  save.addEventListener("click", () => void savePluginSettings(gatherPluginRows(), "saved"));
+  const actions = document.createElement("div");
+  actions.className = "cfg-prose-actions";
+  actions.append(save);
+  nodes.push(actions);
+  pluginRowsEl.replaceChildren(...nodes);
+}
+
+/**
+ * One click registers a plugin the human installed: the row takes the manifest's defaults, and the
+ * suggested shortcut only when it is still free — a taken one is the human's to reassign, never a
+ * guess the daemon makes for them.
+ */
+async function enablePlugin(one) {
+  const rows = gatherPluginRows();
+  const taken = new Set(pluginData.taken || []);
+  for (const row of rows) if (row.shortcut) taken.add(row.shortcut);
+  const suggested = one.defaults.shortcut;
+  const free = suggested && !taken.has(suggested);
+  rows.push({
+    name: one.name,
+    [one.source]: one.folder,
+    args: one.defaults.args || [],
+    ...(free ? { shortcut: suggested } : {}),
+  });
+  await savePluginSettings(rows, suggested && !free ? `enabled without the default shortcut — ${suggested} is taken; set another above` : "enabled");
+}
+
+/** The rows as the form has them, before the daemon is asked to prove them. */
+function gatherPluginRows() {
+  const byIndex = new Map();
+  for (const input of pluginRowsEl.querySelectorAll("input[data-index], select[data-index]")) {
+    const index = Number(input.dataset.index);
+    if (!byIndex.has(index)) byIndex.set(index, {});
+    byIndex.get(index)[input.dataset.field] = input.value;
+  }
+  return [...byIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([index, fields]) => {
+      // A row that names a folder keeps naming it: saving must never turn it into a command row,
+      // which would spawn it eagerly and pin it to a path the manifest no longer owns.
+      const named = (pluginData.plugins || [])[index];
+      const row = {
+        name: (fields.name || "").trim(),
+        args: (fields.args || "").split(",").map((one) => one.trim()).filter(Boolean),
+      };
+      if (named?.installed) row.installed = named.installed;
+      if (named?.bundled) row.bundled = named.bundled;
+      if (!named?.installed && !named?.bundled) {
+        row.command = (fields.command || "").trim();
+        const files = (fields.files || "").split(",").map((one) => one.trim()).filter(Boolean);
+        if (files.length) {
+          row.visual = {
+            title: (fields.title || "").trim() || row.name,
+            entry: (fields.entry || "").trim(),
+            files,
+            ...(fields.place ? { place: fields.place } : {}),
+          };
+        }
+      }
+      const shortcut = (fields.shortcut || "").trim().toLowerCase();
+      if (shortcut) row.shortcut = shortcut;
+      return row;
+    });
+}
+
+async function savePluginSettings(rows, said) {
+  pluginNote.textContent = "";
+  try {
+    const response = await fetch(`/plugins/registry?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plugins: rows }),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      const problems = (body?.problems || []).map((one) => (one.name ? `${one.name}: ` : "") + one.problem);
+      pluginNote.textContent = problems.join("; ") || "the daemon refused the list";
+      return;
+    }
+    pluginData = body;
+    renderPluginSettings();
+    pluginPanel.relist();
+    pluginDrawer.relist();
+    paintShortcuts();
+    pluginNote.textContent = `${said} — the roster restarted without a daemon restart`;
+  } catch (error) {
+    pluginNote.textContent = `could not save: ${error.message || error}`;
+  }
+}
+
+/** The section is read on every open, so the same page always shows the roster as it stands. */
+async function loadPluginSettings() {
+  try {
+    const response = await fetch(`/plugins/registry?${auth}`);
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    pluginData = await response.json();
+  } catch (error) {
+    pluginData = null;
+  }
+  paintShortcuts();
+  renderPluginSettings();
 }
 
 /**
@@ -10178,6 +10543,7 @@ configBtn.addEventListener("click", () => {
   // is what it settles on.
   if (boardDoc) renderTree(boardDoc);
   void loadBoardSettings();
+  void loadPluginSettings();
 });
 
 // ---------- the prompt files ----------------------------------------------
@@ -13393,6 +13759,16 @@ document.addEventListener("keydown", (event) => {
     if (letter === "fit") fitAll();
     else toggleDrawer(letter);
     return;
+  }
+  // A plugin's own letter opens its panel, in the drawers or the toolbox as its registration says.
+  if (!event.shiftKey) {
+    const hit = pluginShortcuts.get(event.key.toLowerCase());
+    if (hit) {
+      event.preventDefault();
+      if (hit.drawer) pluginDrawer.open(hit.panel);
+      else pluginPanel.open(hit.panel);
+      return;
+    }
   }
   if (event.shiftKey) return;
   if (event.key === "0") {

@@ -13,7 +13,7 @@
  * is read and none is written.
  */
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -38,7 +38,7 @@ const exampleRow = {
 	visual: { title: "example panel", entry: "panel.html", files: ["panel.html", "panel.js", "panel.css"] },
 };
 
-const { loadPluginRegistry } = await import("../server/plugins/registry.ts");
+const { loadAvailablePlugins, loadPluginRegistry } = await import("../server/plugins/registry.ts");
 const { threadRefusal } = await import("../server/main.ts");
 
 after(async () => {
@@ -110,6 +110,197 @@ test("a panel whose title or entry makes no sense is refused rather than half re
 		const { plugins, problems } = read([{ name: "half", command: exe, args: [], visual }]);
 		assert.deepEqual(plugins, [], what);
 		assert.match(problems[0]?.problem ?? "", reason, what);
+	}
+});
+
+test("a panel that asks for the drawer is read with its place, and one that asks for something else is refused", () => {
+	const exe = join(folder("placed"), "exe");
+	const row = { name: "placed", command: exe, args: [], visual: { title: "placed", entry: "panel.html", files: ["panel.html"], place: "drawer" } };
+	const { plugins, problems } = read([row]);
+	assert.deepEqual(problems, []);
+	assert.deepEqual(plugins, [{ name: "placed", command: exe, args: [], visual: row.visual }]);
+	const bad = read([{ name: "placed", command: exe, args: [], visual: { title: "placed", entry: "panel.html", files: ["panel.html"], place: "sidebar" } }]);
+	assert.deepEqual(bad.plugins, []);
+	assert.match(bad.problems[0]?.problem ?? "", /visual\.place/);
+});
+
+test("a row's shortcut is one free letter, and a letter twice or the board's is refused", () => {
+	const exe = join(folder("keyed"), "exe");
+	const row = (name: string, shortcut: unknown) => ({ name, command: exe, args: [], shortcut });
+	const { plugins, problems } = read([row("keyed", "b")]);
+	assert.deepEqual(problems, []);
+	assert.equal(plugins[0].shortcut, "b");
+	const clash = read([row("one", "b"), row("two", "b")]);
+	assert.equal(clash.plugins.length, 1, "the second row with the same letter is refused");
+	assert.match(clash.problems[0].problem, /already assigned/);
+	assert.match(read([row("board", "f")]).problems[0].problem, /belongs to the board/);
+	assert.match(read([row("shaped", "bb")]).problems[0].problem, /one lowercase letter/);
+	assert.match(read([row("capital", "B")]).problems[0].problem, /one lowercase letter/);
+});
+
+test("the settings list is read and written through the daemon, and only the human writes it", async () => {
+	const daemon = await boot([exampleRow]);
+	const gone = new Promise<void>((resolve) => daemon.child.once("exit", () => resolve()));
+	try {
+		// What the settings page reads: the row, the running roster beside it, and the letters a
+		// shortcut may not take.
+		const listed = await get(daemon, "/plugins/registry");
+		assert.equal(listed.status, 200);
+		const shown = JSON.parse(listed.body) as { plugins: { name: string }[]; taken: string[] };
+		assert.deepEqual(shown.plugins.map((one) => one.name), ["example-panel"]);
+		assert.ok(shown.taken.includes("f"));
+		// A list the reader cannot use changes nothing: the daemon answers why and keeps what it runs.
+		const refused = await post(daemon, "/plugins/registry", { plugins: [{ name: "broken" }] });
+		assert.equal(refused.status, 400, "a row with no command is not written");
+		assert.match(refused.body, /problems/);
+		const still = await get(daemon, "/plugins/registry");
+		assert.deepEqual((JSON.parse(still.body) as { plugins: { name: string }[] }).plugins.map((one) => one.name), ["example-panel"]);
+		// A usable list replaces the file and restarts the roster under it, with no daemon restart.
+		const written = await post(daemon, "/plugins/registry", { plugins: [{ ...exampleRow, shortcut: "b" }] });
+		assert.equal(written.status, 200, written.body);
+		const reread = (await get(daemon, "/plugins/registry")).body;
+		const after = JSON.parse(reread) as { plugins: { name: string; shortcut?: string }[]; roster: { name: string; running: boolean; shortcut?: string }[] };
+		assert.equal(after.plugins[0].shortcut, "b");
+		assert.deepEqual(after.roster.map((one) => [one.name, one.running, one.shortcut]), [["example-panel", true, "b"]]);
+		// A thread has no route here: writing a row starts whatever it names, so it stays the human's.
+		const thread = { human: false, board: { id: "ws" }, thread: {} };
+		assert.equal(threadRefusal(thread, "GET", "/plugins/registry", "ws"), "a thread may not use that");
+		assert.equal(threadRefusal(thread, "POST", "/plugins/registry", "ws"), "a thread may not use that");
+	} finally {
+		daemon.child.kill("SIGTERM");
+		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);
+	}
+});
+
+/** A folder `folder()` made, with its own name as the executable beside it, as an installed plugin is. */
+function ownExe(name: string): string {
+	const path = folder(name);
+	writeFileSync(join(path, name), "#!/bin/sh\nexit 0\n");
+	chmodSync(join(path, name), 0o755);
+	return path;
+}
+
+test("an installed row takes its program, panel and version from its own plugin.json", () => {
+	const path = ownExe("instlone");
+	writeFileSync(join(path, "plugin.json"), JSON.stringify({
+		name: "instlone",
+		version: "2.1.0",
+		protocol: 1,
+		protocolMinor: 0,
+		title: "installed one",
+		start: "lazy",
+		visual: { entry: "panel.html", files: ["panel.html"] },
+	}));
+	const file = join(root, "installed.json");
+	writeFileSync(file, JSON.stringify({ plugins: [{ name: "instlone", installed: "instlone", args: [] }] }));
+	const { plugins, problems } = loadPluginRegistry(file, undefined, root);
+	assert.deepEqual(problems, []);
+	assert.equal(plugins[0].installed, "instlone");
+	assert.equal(plugins[0].version, "2.1.0");
+	assert.equal(plugins[0].start, "lazy");
+	assert.equal(plugins[0].visual?.title, "installed one", "the panel title falls back to the manifest's");
+	assert.match(plugins[0].command, /instlone/);
+});
+
+test("a manifest that asks for more than this daemon carries is refused at read time", () => {
+	const write = (folderName: string, manifest: object) => {
+		const path = ownExe(folderName);
+		writeFileSync(join(path, "plugin.json"), JSON.stringify(manifest));
+		return join(root, `${folderName}.json`);
+	};
+	const fileFor = (folderName: string) => {
+		const file = join(root, `${folderName}-row.json`);
+		writeFileSync(file, JSON.stringify({ plugins: [{ name: folderName, installed: folderName, args: [] }] }));
+		return file;
+	};
+	const cases: [string, object, RegExp][] = [
+		["newer protocol", { name: "x", protocol: 2 }, /protocol/],
+		["newer minor", { name: "x", protocol: 1, protocolMinor: 99 }, /protocol minor/],
+		["newer daemon", { name: "x", protocol: 1, minPiStudio: "999.0.0" }, /pi-studio 999\.0\.0/],
+		["wrong name", { name: "not-the-folder", protocol: 1 }, /not-the-folder/],
+	];
+	const base = { version: "1.0.0", visual: { entry: "panel.html", files: ["panel.html"] } };
+	for (const [label, manifest, pattern] of cases) {
+		const folderName = `bad-${label.replace(/\s+/g, "-")}`;
+		write(folderName, { ...base, ...manifest });
+		const { plugins, problems } = loadPluginRegistry(fileFor(folderName), undefined, root);
+		assert.equal(plugins.length, 0, label);
+		assert.match(problems[0].problem, pattern, label);
+	}
+	// A lazy plugin with no panel is refused: nothing would ever start it.
+	const lazyFolder = "bad-lazy";
+	write(lazyFolder, { name: lazyFolder, version: "1.0.0", protocol: 1, start: "lazy" });
+	const { plugins, problems } = loadPluginRegistry(fileFor(lazyFolder), undefined, root);
+	assert.equal(plugins.length, 0);
+	assert.match(problems[0].problem, /lazily/, "lazy without a panel is refused");
+});
+
+test("folders in the plugins folder are offered to enable, and broken ones with the reason", () => {
+	// Its own folder, so fixtures made above are not re-read: the scan only sees what this case put here.
+	const found = join(root, "found");
+	mkdirSync(found, { recursive: true });
+	const leaf = (name: string, manifest: unknown) => {
+		const path = join(found, name);
+		mkdirSync(path, { recursive: true });
+		writeFileSync(join(path, name), "#!/bin/sh\nexit 0\n");
+		chmodSync(join(path, name), 0o755);
+		writeFileSync(join(path, "plugin.json"), JSON.stringify(manifest));
+	};
+	leaf("offered", {
+		name: "offered",
+		version: "3.0.0",
+		protocol: 1,
+		title: "offered one",
+		description: "offered",
+		shortcut: "y",
+		visual: { entry: "panel.html", files: ["panel.html"], place: "drawer" },
+	});
+	leaf("broken", { name: "broken", protocol: 2 });
+	leaf("middle", { name: "middle", version: "1.0.0", protocol: 1 });
+	const { available, unavailable } = loadAvailablePlugins(["offered"], found, join(found, "absent"));
+	assert.deepEqual(available.map((one) => one.name), ["middle"], "offered is registered already, so it is not offered twice");
+	assert.equal(available[0].defaults.shortcut ?? "", "");
+	assert.equal(unavailable.some((one) => one.folder === "broken" && /protocol/.test(one.problem)), true, "broken is shown with its reason");
+});
+
+test("a lazy plugin registers dormant, keeps its door, and starts on its first panel request", async () => {
+	const path = join(state, "plugins", "lazyone");
+	mkdirSync(path, { recursive: true });
+	writeFileSync(join(path, "lazyone"), readFileSync(join(example, "panel-plugin.mjs")));
+	chmodSync(join(path, "lazyone"), 0o755);
+	writeFileSync(join(path, "plugin.json"), JSON.stringify({
+		name: "lazyone",
+		version: "1.2.3",
+		protocol: 1,
+		title: "lazy one",
+		start: "lazy",
+		visual: { entry: "panel.html", files: ["panel.html", "panel.js", "panel.css"] },
+	}));
+	for (const file of ["panel.html", "panel.js", "panel.css"]) {
+		writeFileSync(join(path, file), readFileSync(join(example, file)));
+	}
+	const daemon = await boot([{ name: "lazyone", installed: "lazyone", args: [] }]);
+	const gone = new Promise<void>((resolve) => daemon.child.once("exit", () => resolve()));
+	try {
+		const listed = JSON.parse((await get(daemon, "/plugins/registry")).body) as {
+			roster: { name: string; running: boolean; dormant?: boolean; version: string }[];
+		};
+		assert.deepEqual(listed.roster.map((one) => [one.name, one.running, one.dormant, one.version]), [["lazyone", false, true, "1.2.3"]], "registered from the manifest, not yet spawned");
+		const panels = JSON.parse((await get(daemon, "/plugins/visual")).body) as { plugins: { name: string }[] };
+		assert.deepEqual(panels.plugins.map((one) => one.name), ["lazyone"], "its door is offered while it sleeps");
+		const opened = await post(daemon, "/workspace", { folder: root });
+		assert.equal(opened.status, 200);
+		const boardId = (JSON.parse(opened.body) as { workspace: { id: string } }).workspace.id;
+		const first = await post(daemon, "/plugins/visual/request?plugin=lazyone", { workspace: boardId, method: "echo", params: { from: "lazy" } });
+		assert.equal(first.status, 200, first.body);
+		assert.deepEqual(JSON.parse(first.body), { result: { workspace: boardId, method: "echo", params: { from: "lazy" } } });
+		const after = JSON.parse((await get(daemon, "/plugins/registry")).body) as {
+			roster: { name: string; running: boolean; dormant?: boolean }[];
+		};
+		assert.deepEqual(after.roster.map((one) => [one.running, one.dormant ?? false]), [[true, false]], "the first request started it");
+	} finally {
+		daemon.child.kill("SIGTERM");
+		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);
 	}
 });
 
@@ -258,6 +449,22 @@ test("the panels a daemon may show, its files, and the one call a panel makes", 
 		assert.equal((await post(daemon, "/plugins/visual/request?plugin=example-panel", { workspace: "nope", method: "echo" })).status, 400);
 		assert.equal((await post(daemon, "/plugins/visual/request?plugin=plain", { workspace, method: "echo" })).status, 404);
 		assert.equal((await post(daemon, "/plugins/visual/request?plugin=example-panel", { workspace, method: "echo" }, "")).status, 403);
+	} finally {
+		daemon.child.kill("SIGTERM");
+		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);
+	}
+});
+
+test("a panel that asks for the drawer is listed with its place", async () => {
+	const row = { ...exampleRow, name: "example-drawer", visual: { ...exampleRow.visual, place: "drawer" } };
+	const daemon = await boot([row]);
+	const gone = new Promise<void>((resolve) => daemon.child.once("exit", () => resolve()));
+	try {
+		const listed = await listedPanels(daemon);
+		assert.equal(listed.status, 200);
+		assert.deepEqual(JSON.parse(listed.body), {
+			plugins: [{ name: "example-drawer", title: "example panel", url: "/plugins/visual/example-drawer/panel.html", place: "drawer" }],
+		});
 	} finally {
 		daemon.child.kill("SIGTERM");
 		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);

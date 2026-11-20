@@ -1,5 +1,5 @@
 /**
- * What a plugin may ask of this daemon: eight fixed methods, none of them a route, and no credential.
+ * What a plugin may ask of this daemon: nine fixed methods, none of them a route, and no credential.
  *
  * A plugin runs beside the daemon as a trusted executable, so it is not handed the daemon's token, its
  * URL, or any other way in through the HTTP surface: the browser's token would let it act as the human,
@@ -19,6 +19,10 @@
  *   workspace.read     { workspace }     → { workspace, open, cards: [ …the board as a tab draws it… ] }
  *   cards.note         { workspace, markdown, title?, key?, size?, after? }
  *                                        → { cardId, card, updated?, report? }
+ *   cards.remove       { workspace, key } → { removed }
+ *                                        The card its key names, taken off the board: the paired
+ *                                        half of a stable key, so a plugin's one card can go when
+ *                                        its work does.
  *   threads.list       { workspace }     → { workspace, threads: [ { id, title, status, hidden, mode,
  *                                            parentThread?, turns, at } ] }
  *   threads.create     { workspace, title?, mode?, provider?, model?, thinking?, type?, after? }
@@ -60,8 +64,9 @@ import { INVALID_PARAMS, INTERNAL_ERROR, METHOD_NOT_FOUND } from "./protocol.ts"
 import { noteOnBoard } from "../routes/board/content.ts";
 import { stopOnBoard } from "../routes/board/lifecycle.ts";
 import { messageOnBoard } from "../routes/board/message.ts";
-import { threadOnBoard } from "../routes/board/thread.ts";
-import { boardFor, boards, restoredPlainCard, restoredThread } from "../store.ts";
+import { cardByKey, threadOnBoard } from "../routes/board/thread.ts";
+import { boardFor, boards, restoredPlainCard, restoredThread, scheduleSave } from "../store.ts";
+import { broadcast } from "../bus.ts";
 import { folderFacts, isScratch, savedBoardFor, workspaceById, workspaceList } from "../workspaces.ts";
 import type { PluginCall } from "./host.ts";
 
@@ -70,6 +75,7 @@ export const PLUGIN_METHODS = [
 	"workspace.list",
 	"workspace.read",
 	"cards.note",
+	"cards.remove",
 	"events.subscribe",
 	"threads.list",
 	"threads.create",
@@ -194,6 +200,7 @@ export function createPluginService(): PluginService {
 			if (call.method === "workspace.list") return { workspaces: workspaceList().map(describe) };
 			if (call.method === "workspace.read") return read(workspaceOf(params));
 			if (call.method === "cards.note") return note(workspaceOf(params), params);
+			if (call.method === "cards.remove") return removeCard(workspaceOf(params), params);
 			if (call.method === "threads.list") return listThreads(workspaceOf(params));
 			if (call.method === "threads.create") return createThread(workspaceOf(params), params);
 			if (call.method === "threads.prompt") return promptThread(workspaceOf(params), params);
@@ -270,6 +277,25 @@ function savedView(workspace: any) {
  */
 function note(workspace: any, params: Record<string, unknown>): unknown {
 	return through(() => noteOnBoard(openBoard(workspace), params));
+}
+
+/**
+ * The card a stable key names, off the board: the same close a human's close route performs, minus
+ * the human's bookkeeping (a plugin removing what it notes is not undoable), so a card whose problem
+ * is gone leaves with the problem. No card of that key answers `{ removed: false }`.
+ */
+function removeCard(workspace: any, params: Record<string, unknown>): unknown {
+	const key = params.key;
+	if (typeof key !== "string" || key.trim() === "") refuse(INVALID_PARAMS, "key must name the card to remove");
+	return through(() => {
+		const board = openBoard(workspace);
+		const held = cardByKey(board, key.trim(), "note");
+		if (!held) return { removed: false };
+		board.cards.delete(held.id);
+		broadcast(board, { type: "remove", id: held.id });
+		scheduleSave(board);
+		return { removed: true };
+	});
 }
 
 // ---------- the threads of a board ----------

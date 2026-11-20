@@ -16,6 +16,13 @@ import { fileURLToPath } from "node:url";
 
 /** The repository root: this file is one directory inside it. */
 export const REPO_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
+
+/** The version this daemon calls itself, from the one source. A plugin that asks for a newer pi-studio is refused at read time, not when its door is pressed. */
+function appVersion(): string {
+	const pkg = readJsonFile<{ version?: unknown }>(join(REPO_DIR, "package.json"), {});
+	return typeof pkg?.version === "string" ? pkg.version : "0.0.0";
+}
+export const APP_VERSION = appVersion();
 export const PUBLIC_DIR = join(REPO_DIR, "public");
 /** The extension a child loads so a thread can draw on the board it belongs to. */
 export const BRIDGE = join(REPO_DIR, "bridge", "child-bridge.mjs");
