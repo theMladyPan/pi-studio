@@ -10587,7 +10587,17 @@ async function exLoad(dir, { quiet = false } = {}) {
         // The section header is the workspace path, shortened to `~` inside the home folder, not the
         // route that reached it, and not whether that folder happens to be a repository.
         const label = explorerCore.shortPath(exState.root, exState.home) || "files";
-        exTitleEl.textContent = label;
+        // The workspace folder, the last step of the path, stands bold after the path to it.
+        const slash = label.lastIndexOf("/");
+        exTitleEl.textContent = "";
+        if (slash >= 0 && slash < label.length - 1) {
+          exTitleEl.append(label.slice(0, slash + 1));
+          const leaf = document.createElement("b");
+          leaf.textContent = label.slice(slash + 1);
+          exTitleEl.append(leaf);
+        } else {
+          exTitleEl.textContent = label;
+        }
         exTitleEl.title = exState.root || label;
       }
       exPaint();
