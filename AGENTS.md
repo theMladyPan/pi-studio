@@ -6,7 +6,9 @@ A local daemon that owns pi agents: a workspace is a folder, a thread on its boa
 
 The `hotkeys` group in `settings` lists every shortcut. It renders from one list, `SHORTCUTS` in
 `public/client/board.js`, which is the single source of truth for it. The overview map toggle is the
-`mapToggle` checkbox in `settings`.
+`mapToggle` checkbox, which the `canvas` group of `settings` draws beside `dim others`: the daemon's
+document names that group as the row's host, because the switch is the browser's own session choice and
+has no value for the daemon to keep.
 
 Any change to a shortcut handler must change that same list in the same commit, and the `mapToggle`
 checkbox's title in the same client, which names its own key (`"hide the board overview (m)"`).

@@ -5356,6 +5356,9 @@ const MAP_COLOUR = { note: "#7d8590", code: "#d2a8ff", sticky: "#d29922", questi
 const mapCanvas = document.getElementById("minimap");
 const mapCtx = mapCanvas.getContext("2d");
 const mapToggle = document.getElementById("mapToggle");
+// The row the switch sits in: the settings panel parks it beside the tree and the group the daemon names
+// for it takes it from there, so the map is a choice made under the canvas like `dim others`.
+const mapRow = document.getElementById("mapRow");
 let mapOn = true;
 let mapQueued = false;
 /** The projection the last paint used, so a press lands where the eye saw the picture. */
@@ -9075,11 +9078,15 @@ const configBtn = document.getElementById("configBtn");
 const configPanel = document.getElementById("boardConfig");
 const shortcutList = document.getElementById("shortcutList");
 const cfgTree = document.getElementById("cfgTree");
+// The part of the panel that sits outside the tree, so a reread of the daemon's document never wipes it.
+const cfgLocal = document.getElementById("cfgLocal");
 // The document the panel is drawn from, and what was drawn from it: every leaf in document order, and
 // every group with the leaves under it, so a config that arrives repaints all of them.
 let boardDoc = null;
 let treeLeaves = [];
 let treeGroups = [];
+/** Where a group asked for a control the page draws itself, by the name it gave; emptied per draw. */
+let treeHosts = new Map();
 const pePanel = document.getElementById("promptEditor");
 const pePick = document.getElementById("pePick");
 const peText = document.getElementById("peText");
@@ -9579,9 +9586,12 @@ async function loadBoardSettings() {
     boardDoc = null;
     treeLeaves = [];
     treeGroups = [];
+    treeHosts = new Map();
     const line = el("p", "cfg-failure");
     line.textContent = `could not read this board's settings: ${error.message || error}`;
     cfgTree.replaceChildren(line);
+    // No group claimed the rows the page draws, so they come home to the panel's own block.
+    placeOwnRows();
   }
 }
 
@@ -9591,10 +9601,29 @@ function refreshSettings() {
   void loadBoardSettings();
 }
 
+/**
+ * A control the page draws rather than the daemon: it holds nothing the board could keep, so the document
+ * names the group it belongs to and this is the row that goes there. The map is the only one, and its
+ * switch already lives in the panel's own block.
+ */
+const OWN_ROWS = { map: () => mapRow };
+
+/**
+ * Put every row the page draws into the group that asked for it. A tree with no such group — a page that
+ * failed to load — leaves the row in the panel's own block, so the switch is never out of reach.
+ */
+function placeOwnRows() {
+  for (const [host, row] of Object.entries(OWN_ROWS)) {
+    const slot = treeHosts.get(host);
+    (slot ?? cfgLocal).append(row());
+  }
+}
+
 /** The whole panel: what the board is, the groups, and the one line under them. */
 function renderTree(doc) {
   treeLeaves = [];
   treeGroups = [];
+  treeHosts = new Map();
   const nodes = [];
   if (doc.title) {
     const head = el("p", "cfg-head");
@@ -9613,6 +9642,7 @@ function renderTree(doc) {
     nodes.push(foot);
   }
   cfgTree.replaceChildren(...nodes);
+  placeOwnRows();
   paintConfig();
 }
 
@@ -9634,6 +9664,9 @@ function renderGroup(group, parentPath) {
     kids.append(leaf.row);
     mine.push(leaf);
   }
+  // A group that names a control the page draws takes it, so where the row sits is the document's word
+  // rather than the page's.
+  if (group.host) treeHosts.set(group.host, kids);
   for (const child of group.groups ?? []) {
     const drawn = renderGroup(child, path);
     kids.append(drawn.fold);
