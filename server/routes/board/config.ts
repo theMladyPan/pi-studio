@@ -15,8 +15,8 @@ import { broadcast, card, update } from "../../bus.ts";
 import { activeConfig } from "../../workspaces.ts";
 import { randomUUID } from "node:crypto";
 import { COMPACT_TIMEOUT_MS } from "../../limits.ts";
-import { ensureChild } from "../../child/run.ts";
-import { whenCompacted } from "../../waiters.ts";
+import { drainQueue, ensureChild } from "../../child/run.ts";
+import { beginCompact, endCompact, whenCompacted } from "../../waiters.ts";
 import { homeCard, refreshOwned } from "./message.ts";
 import { cardFor, plainCardFor } from "../../cards.ts";
 import { join } from "node:path";
@@ -88,11 +88,6 @@ export async function onThinking(req, res, board) {
 
 
 
-/** Threads with a summarising call in flight, so two tabs cannot pay for the same summary twice. */
-const compacting = new Set();
-
-
-
 /**
  * The one piece of housekeeping a human presses: squeeze the thread's context before it fills the
  * window. pi owns compaction, so the board asks the child and reads the answer back; the figures the
@@ -112,8 +107,7 @@ export async function onCompact(req, res, board) {
 	// frame written now would be dropped by the child as it goes.
 	if (thread.pendingClose) return void fail(res, 409, "this thread is finishing its run: try again in a moment");
 	// Two tabs are one human, and a summarising call twice over is money for the same summary.
-	if (compacting.has(thread.id)) return void fail(res, 409, "a compaction is already running for this thread");
-	compacting.add(thread.id);
+	if (!beginCompact(thread)) return void fail(res, 409, "a compaction is already running for this thread");
 	try {
 		// The child between two runs is gone, so a compaction starts one for the same session: nothing is
 		// asked of a model but the summary itself.
@@ -147,7 +141,11 @@ export async function onCompact(req, res, board) {
 		// answer asks for, so this route has nothing left to wait on.
 		answer(res, 200, { threadId: thread.id, ...result });
 	} finally {
-		compacting.delete(thread.id);
+		endCompact(thread);
+		// The summary is over, one way or another, and a message that arrived during it is still
+		// waiting: it goes now, the way one queued behind a run goes when the run settles. A compaction
+		// that failed leaves the thread idle too, and the words are still the human's to send.
+		drainQueue(board, thread);
 	}
 }
 

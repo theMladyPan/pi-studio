@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Queue a message sent while a compaction is in progress instead of sending it to a child that would refuse it, so the message waits and goes when the summary ends rather than stopping the thread. [t-8e311ca0]
+
 - fix: Print the workspace path in the files drawer header instead of only the folder's name, shortened to `~` inside the home folder and left as the full path outside it, so the drawer names the folder that is actually open. [t-f4c279f1]
 - fix: Refuse `npm run check` up front with the installing command in the message when the tree's own dev dependency is missing, so a fresh worktree does not sail past the guard and fail 29 tests deep in the install suite. [t-f4c279f1]
 

@@ -185,6 +185,38 @@ export function prompt(board, thread, text, target = null, images = [], said = t
 
 
 /**
+ * Send the next message that is waiting behind whatever kept the thread busy, if there is one. A run
+ * that settles and a compaction that ends both leave a queue behind them, and the message at its head
+ * starts now: the two callers are one habit rather than two that have to be kept in step. It answers
+ * whether a message was sent, so a caller with its own ending knows whether it still owes one.
+ */
+export function drainQueue(board, thread) {
+	if (thread.status === "running" || thread.status === "dead") return false;
+	const next = thread.queued?.shift();
+	if (!next) return false;
+	// An older board file queued plain strings; a card quote travels with the message now.
+	const text = typeof next === "string" ? next : next.text;
+	const target = typeof next === "string" ? null : (next.target ?? null);
+	if (target) {
+		// A card's turn and the thread's own turn differ only in where they are held.
+		const held = target.cardId ? board.cards.get(target.cardId) : undefined;
+		const waiting = held ? held.turns?.[target.turn] : thread.turns[target.turn];
+		if (waiting) {
+			waiting.status = "queued";
+			if (held) updateCard(board, held);
+			else update(board, thread);
+		}
+	} else {
+		thread.turns.push({ text, status: "queued", mode: "queue", at: Date.now() });
+		update(board, thread);
+	}
+	prompt(board, thread, typeof next === "string" ? next : next.message, target, typeof next === "string" ? [] : next.images);
+	return true;
+}
+
+
+
+/**
  * The message last sent to a thread's child, and how many times it has been sent again since. It is kept
  * off the thread for two reasons: `/state` serialises whole threads, and the pictures ride with the message.
  */
