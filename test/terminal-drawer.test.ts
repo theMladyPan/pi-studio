@@ -250,3 +250,49 @@ test("a shell that ends rolls the drawer down, and the next roll up opens a new 
 		delete (globalThis as Record<string, unknown>).WebSocket;
 	}
 });
+
+test("a shell that could not start keeps the drawer up with its reason", async () => {
+	const { elements, body } = standInPage();
+	const status = elements.get("tdStatus")!;
+	FakeWebSocket.instances = [];
+	Object.assign(globalThis, {
+		Terminal: FakeTerminal,
+		FitAddon: { FitAddon: FakeFit },
+		WebSocket: FakeWebSocket,
+	});
+	try {
+		const drawer = await drawerFor("b08b6688eaf9");
+		drawer.open();
+		assert.equal(drawer.isOpen(), true);
+		const socket = FakeWebSocket.instances[0];
+		socket.fire("open");
+
+		// This machine has no pty helper: the daemon says so, and the drawer stays up to be read
+		// rather than rolling down over the reason it was told.
+		const reason = "this machine has no terminal helper, so no shell can start";
+		socket.fire("message", { data: JSON.stringify({ type: "error", data: reason }) });
+		assert.equal(drawer.isOpen(), true, "the drawer keeps the reason on screen");
+		assert.equal(body.classList.contains("term-open"), true);
+		assert.equal(status.textContent, reason);
+		assert.equal(status.title, reason, "the whole reason is there to hover, past the bar's cut");
+		assert.equal(elements.get("tdClose")!.focused, true, "the bar's button takes the keyboard a dead screen would eat");
+		assert.equal(socket.readyState, 3, "the refused socket closes, so the next roll up can start fresh");
+
+		// The daemon's socket closes behind that answer, and the bar keeps the reason rather than
+		// replacing it with a disconnection nobody can act on.
+		socket.fire("message", { data: JSON.stringify({ type: "exit", code: null }) });
+		assert.equal(drawer.isOpen(), true, "a shell that never started did not exit");
+		assert.equal(status.textContent, reason);
+
+		// The next roll up connects anew and starts from a quiet bar.
+		drawer.close();
+		drawer.open();
+		assert.equal(FakeWebSocket.instances.length, 2, "the failed socket is not reused");
+		FakeWebSocket.instances[1].fire("open");
+		assert.equal(status.textContent, "");
+	} finally {
+		delete (globalThis as Record<string, unknown>).Terminal;
+		delete (globalThis as Record<string, unknown>).FitAddon;
+		delete (globalThis as Record<string, unknown>).WebSocket;
+	}
+});

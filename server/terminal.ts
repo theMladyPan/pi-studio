@@ -2,9 +2,11 @@
  * The terminal behind the bottom drawer: one real shell per board, in a pty, fed over a WebSocket.
  *
  * A pty needs a native module (`node-pty`) or a helper that already makes one. This daemon ships
- * with no dependencies of its own, so the shell runs under `script(1)` — util-linux on this
- * machine — which hands the shell a `/dev/pts` as its stdout and is the whole pty for our
- * purposes: colours, job control and full-screen programs behave as they do in a terminal.
+ * with no dependencies of its own, so the shell runs under a helper this machine already has —
+ * `script(1)` from util-linux, or `socat` — which hands the shell a `/dev/pts` as its stdout and is
+ * the whole pty for our purposes: colours, job control and full-screen programs behave as they do in
+ * a terminal. A machine with neither is told what to install instead of being left on an empty
+ * screen, and the drawer stays up to say it.
  *
  * Two limits come with that helper and both are priced into the design. The pty size is fixed at
  * spawn: `script` copies it from its own stdin once and a pipe has none, so the shell is started
@@ -17,6 +19,7 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { commandShell, killGroup } from "./command-shell.ts";
+import { programOnPath } from "./paths.ts";
 
 /** The pty size the drawer asks for, in character cells. */
 export type TerminalSize = { cols: number; rows: number };
@@ -35,10 +38,56 @@ const SCROLLBACK_CHARS = 200_000;
 /** The bounds a size is clamped to, so a wild number cannot widen a pty without limit. */
 const MAX_CELLS = 1000;
 
+/**
+ * The pty makers this daemon can run a shell in, best first. Each hands the shell a real `/dev/pts`,
+ * which is the whole of what the drawer needs, and each is asked for its absolute path before a
+ * spawn, so a machine with neither is known without waiting for a failed process.
+ */
+type PtyHelper = {
+	/** The name the drawer and this file call it. */
+	name: string;
+	/** The program to run. */
+	command: string;
+	/** The words that run `shell` in a pty of `size`, with the shell's path already quoted for it. */
+	argv: (shell: string, size: TerminalSize) => string[];
+};
+
+const HELPERS: PtyHelper[] = [
+	{
+		// util-linux `script(1)` has no flag for the size of the pty it makes, so `stty` writes it in
+		// before the shell starts.
+		name: "script",
+		command: "script",
+		argv: (shell, size) => ["-qec", `stty rows ${size.rows} cols ${size.cols}; exec '${shell.replace(/'/g, `'\\''`)}'`, "/dev/null"],
+	},
+	{
+		// `socat` takes the size as an option of its own. Its command is one quoted word, so a shell path
+		// with a space in it stays one word; one with a quote in it is the `script` helper's job.
+		name: "socat",
+		command: "socat",
+		argv: (shell, size) => ["-", `SYSTEM:'exec "${shell}"',pty,setsid,sigint,sane,tiocswinsz=${size.cols}:${size.rows}`],
+	},
+];
+
+/** What a board is told when this machine can make no pty at all: the reason, and the way out of it. */
+const NO_HELPER =
+	"no terminal helper on this machine, so no shell can start: install util-linux (sudo dnf install util-linux, sudo apt install util-linux, or sudo pacman -S util-linux) or socat";
+
+/** The pty maker this machine has, or null. Asked of PATH once per shell, so a helper installed while
+ * the daemon runs is found by the next board that starts one. */
+function helperHere(): { helper: PtyHelper; path: string } | null {
+	for (const helper of HELPERS) {
+		const path = programOnPath(helper.command);
+		if (path) return { helper, path };
+	}
+	return null;
+}
+
 type Listener = (event: TerminalEvent) => void;
 
 type Session = {
-	child: ChildProcess;
+	/** The helper running the shell, or null when this machine has none to run. */
+	child: ChildProcess | null;
 	/** The workspace folder the shell works in. */
 	folder: string;
 	/** Everything the shell said, kept drained so a detached shell never blocks on a full pipe. */
@@ -64,30 +113,40 @@ export function terminalSize(size: Partial<TerminalSize> | undefined): TerminalS
 
 /** One shell, born in the folder at the size the drawer measured. */
 function spawnSession(folder: string, size: TerminalSize): Session {
-	const shell = commandShell();
-	// The size is written into the pty with `stty` before the shell starts, because `script` has
-	// no flag for it and a pipe stdin carries no size to copy. The shell path is the daemon's own
-	// choice (`commandShell`), quoted so a space in it is one word, not two.
-	const inner = `stty rows ${size.rows} cols ${size.cols}; exec '${shell.replace(/'/g, `'\\''`)}'`;
-	const child = spawn("script", ["-qec", inner, "/dev/null"], {
+	const found = helperHere();
+	const session: Session = { child: null, folder, scrollback: "", listeners: new Set(), spawned: size, dead: false };
+	if (!found) {
+		// Nothing here can make a pty, so the tab is told why rather than left on an empty screen. The
+		// answer goes out a turn later, because the tab attaches to the session this returns; the session
+		// is spent either way, so the next roll up asks this machine again.
+		session.dead = true;
+		setTimeout(() => {
+			for (const listener of session.listeners) listener({ type: "error", data: NO_HELPER });
+			session.listeners.clear();
+			for (const [id, held] of sessions) if (held === session) sessions.delete(id);
+		}, 0);
+		return session;
+	}
+	// The shell path is the daemon's own choice (`commandShell`), and each helper quotes it its own way.
+	const child = spawn(found.path, found.helper.argv(commandShell(), size), {
 		cwd: folder,
 		detached: true,
 		stdio: ["pipe", "pipe", "pipe"],
 		env: { ...process.env, TERM: "xterm-256color" },
 	});
-	const session: Session = { child, folder, scrollback: "", listeners: new Set(), spawned: size, dead: false };
+	session.child = child;
 	child.stdout?.on("data", (chunk) => {
 		const text = String(chunk);
 		session.scrollback = (session.scrollback + text).slice(-SCROLLBACK_CHARS);
 		for (const listener of session.listeners) listener({ type: "output", data: text });
 	});
-	// stderr of `script` carries its own notices, not the shell's; the shell's stderr arrives on
-	// the pty and is stdout here. Draining this one keeps a missing helper from blocking instead.
+	// The helper's stderr carries its own notices, not the shell's; the shell's stderr arrives on the
+	// pty and is stdout here. Draining this one keeps a noisy helper from blocking instead.
 	child.stderr?.on("data", () => {});
 	child.on("error", (error) => {
-		// A missing `script` is the ordinary shape of this failure, and the drawer says so rather
-		// than sitting silent.
-		const message = `the terminal helper could not start: ${error.message}`;
+		// A helper that is there but refuses to start is the ordinary shape of this failure, and the
+		// drawer says so rather than sitting silent.
+		const message = `the ${found.helper.name} terminal helper could not start: ${error.message}`;
 		for (const listener of session.listeners) listener({ type: "error", data: message });
 		finish(session, null);
 	});
@@ -144,7 +203,7 @@ export function attachTerminal(workspaceId: string, folder: string, listener: Li
 		write: (data) => {
 			if (detached || refused() || !data) return;
 			const held = ensure(DEFAULT_SIZE);
-			held.child.stdin?.write(data);
+			held.child?.stdin?.write(data);
 		},
 		resize: (size) => {
 			if (detached || refused()) return;
@@ -170,7 +229,7 @@ export function stopTerminal(workspaceId: string): void {
 	// says so instead of sitting on a prompt that is never coming.
 	for (const listener of session.listeners) listener({ type: "exit", code: null });
 	session.listeners.clear();
-	killGroup(session.child);
+	if (session.child) killGroup(session.child);
 }
 
 /** The daemon is going: no shell outlives it. */
