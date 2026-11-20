@@ -350,11 +350,14 @@ function drawToolbar() {
 
 function refBadge(active, row, ref, display = ref.name, alias = false) {
 	const held = active.worktrees.find((tree) => !tree.isCurrent && tree.branch === ref.name);
-	const badge = menuOn(btn(elt("span", {}, display, held ? " ◇" : ""), () => {}, {
+	const options = () => refMenu(active, ref, row);
+	const badge = menuOn(btn(elt("span", {}, display, held ? " ◇" : ""), (event) => {
+		if (event.detail === 0) showMenu(event, options());
+	}, {
 		className: `ref ${ref.type}${alias ? " alias" : ""}${ref.type === "head" && ref.name === branchHead ? " active" : ""}`,
 		title: held ? `${ref.name} · checked out at ${held.path}` : ref.name,
-		"aria-label": ref.name,
-	}), () => refMenu(active, ref, row));
+		"aria-label": ref.name, "aria-haspopup": "menu",
+	}), options);
 	badge.addEventListener("click", (event) => event.stopPropagation());
 	badge.addEventListener("dblclick", (event) => {
 		event.stopPropagation();

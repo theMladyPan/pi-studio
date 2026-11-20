@@ -168,10 +168,10 @@ export function fetchFrom(ctx, remote = null) {
 
 function fetchTags(ctx) {
 	const remotes = remoteNames(ctx);
-	ask(ctx, "Fetch tags", "Fetch tags from remotes", "fetchTags", remotes.map((name, i) => field(`remote${i}`, name, true)), (form) => {
+	ask(ctx, "Fetch tags", "Fetch tags from remotes", "fetchTags", [...remotes.map((name, i) => field(`remote${i}`, name, true)), field("pruneTags", "Prune deleted tags", false)], (form) => {
 		const selected = remotes.filter((_, i) => form.has(`remote${i}`));
 		if (!selected.length) throw new Error("Select at least one remote.");
-		return { remotes: selected };
+		return { remotes: selected, ...checks(form, "pruneTags") };
 	});
 }
 
@@ -194,7 +194,10 @@ function worktreeItems(ctx, tree) {
 		item("Copy worktree path", () => copyText(tree.path)),
 		!tree.isMain && (tree.locked
 			? confirm(ctx, "Unlock worktree", `Unlock ${tree.path}?`, "unlockWorktree", { path: tree.path })
-			: confirm(ctx, "Lock worktree", `Lock ${tree.path}?`, "lockWorktree", { path: tree.path })),
+			: action(ctx, "Lock worktree", `Lock ${tree.path}?`, "lockWorktree", () => [field("reason", "Reason (optional)")],
+				(form) => ({ path: tree.path, reason: value(form, "reason") }))),
+		!tree.isMain && tree.prunable && action(ctx, "Repair worktree", `Repair the record of ${tree.path}`, "repairWorktree", () => [field("newPath", "Where the worktree was moved (absolute path)", "", required)],
+			(form) => ({ path: tree.path, newPath: value(form, "newPath") })),
 		!tree.isMain && !tree.locked && !tree.prunable && !ctx.hasRepo(tree.path) && action(ctx, "Move worktree", `Move ${tree.path}`, "moveWorktree", () => [field("newPath", "New absolute path", "", required)],
 			(form) => ({ path: tree.path, newPath: value(form, "newPath") })),
 		!tree.isMain && !tree.isCurrent && !ctx.hasRepo(tree.path) && item("Remove worktree…", () => removeWorktree(ctx, tree)),

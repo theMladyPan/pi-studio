@@ -105,25 +105,28 @@ function makeCommitFile(ctx, detail, file, label) {
 	const { type, oldFilePath, newFilePath, additions, deletions } = change;
 	const comparison = detail.comparison;
 	const hash = detail.hash;
-	const revision = comparison ? (type === "D" ? comparison.base : comparison.other) : type === "D" ? null : change.untracked ? `${hash}^3` : hash;
-	const tty = additions !== null && deletions !== null;
+	const fromStash = change.untracked && !comparison && hash !== "*";
+	const fromDisk = change.untracked && !fromStash;
+	const revision = comparison ? (type === "D" ? comparison.base : comparison.other) : type === "D" ? null : fromStash ? `${hash}^3` : hash;
+	const tty = !change.untracked && additions !== null && deletions !== null;
+	const canDiff = tty || change.untracked;
 	const diff = () => ctx.view("viewDiff", {
-		commitHash: hash, oldFilePath, newFilePath, type,
-		...(comparison ? { oldRef: comparison.base, newRef: comparison.other } : change.untracked ? { oldRef: `${hash}^`, newRef: `${hash}^3` } : {}),
+		commitHash: hash, oldFilePath, newFilePath, type: fromDisk ? "U" : type,
+		...(comparison ? { oldRef: comparison.base, newRef: comparison.other } : fromStash ? { oldRef: `${hash}^`, newRef: revision } : {}),
 	});
 	const open = () => ctx.view("openFile", { filePath: newFilePath });
 	const displayPath = newFilePath || oldFilePath;
 	const copy = () => copyText(displayPath).catch(ctx.fail);
-	const fileName = tty ? btn(label, () => diff().catch(ctx.fail), { className: "file-name", title: displayPath })
+	const fileName = canDiff ? btn(label, () => diff().catch(ctx.fail), { className: "file-name", title: displayPath })
 		: elt("span", { className: "file-name", title: `${displayPath} · binary file` }, label);
 	return menuOn(elt("li", { className: "changed-file", tabindex: 0 }, elt("code", { className: "file-kind", "data-kind": type, title: type === "R" ? `${oldFilePath} → ${newFilePath}` : null }, type), fileName,
 		tty && elt("span", { className: "file-stats" }, elt("span", { className: "plus" }, `+${additions}`), " ", elt("span", { className: "minus" }, `−${deletions}`)),
 		elt("span", { className: "file-actions" }, btn("Copy path", copy), type !== "D" && btn("Open file", () => open().catch(ctx.fail)))), () => [
-		tty && item("View file diff", diff),
+		canDiff && item("View file diff", diff),
 		revision && item("View file at revision", () => ctx.view("viewFileAtRevision", { commitHash: revision, filePath: displayPath })),
 		revision && revision !== "*" && item("Compare file with working tree", () => ctx.view("compareFileWithWorkingTree", { commitHash: revision, filePath: displayPath })),
 		type !== "D" && item("Open working file", open),
-		revision && revision !== "*" && item("Restore file from revision…", () => modal(`Restore ${displayPath} from ${short(revision)}?`, elt("p", {}, "This replaces the staged and working copies."), "Restore file", () => ctx.write("resetFileToRevision", { commitHash: revision, filePath: displayPath }), true), { danger: true }),
+		!fromDisk && revision && revision !== "*" && item("Restore file from revision…", () => modal(`Restore ${displayPath} from ${short(revision)}?`, elt("p", {}, "This replaces the staged and working copies."), "Restore file", () => ctx.write("resetFileToRevision", { commitHash: revision, filePath: displayPath }), true), { danger: true }),
 		item("Copy absolute path", () => copyText(`${ctx.repo.replace(/[/\\]$/, "")}/${displayPath}`)), item("Copy relative path", copy),
 	]);
 }
@@ -191,9 +194,13 @@ export function detailPanel(ctx, state, prefs, changePref) {
 			};
 			const files = groupFiles(rows, (file, label) => {
 				const stage = section === "staged" ? "Unstage" : "Stage";
+				const kind = section === "staged" ? file.stagedKind : file.unstagedKind;
+				const title = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
+				const untracked = section === "unstaged" && kind === "?";
+				const name = untracked ? btn(label, () => ctx.view("viewDiff", { commitHash: "*", newFilePath: file.path, type: "U" }).catch(ctx.fail), { className: "file-name", title })
+					: elt("span", { className: "file-name", title }, label);
 				const row = elt("li", { className: "changed-file", draggable: true },
-					elt("code", { className: "file-kind" }, (section === "staged" ? file.stagedKind : file.unstagedKind) || "?"),
-					elt("span", { className: "file-name", title: file.oldPath ? `${file.oldPath} → ${file.path}` : file.path }, label),
+					elt("code", { className: "file-kind" }, kind || "?"), name,
 					btn(stage, () => move([file.path]).catch(ctx.fail), { className: "file-actions", "aria-label": `${stage} ${file.path}` }));
 				drag(row, [file.path]);
 				return row;
