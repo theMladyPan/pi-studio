@@ -29,6 +29,9 @@ const resetBtn = document.getElementById("reset");
 // board route has to carry it.
 const workspace = (location.pathname.match(/^\/w\/([0-9a-f]{6,64})\/?$/) || [])[1] || "";
 const auth = workspace ? `workspace=${encodeURIComponent(workspace)}` : "";
+// A link written as `[[board/key]]` opens that board's page with the card it names in `?jump=`, and the
+// first snapshot takes the reader there. Read once, so the address stops carrying it after that.
+let pendingJump = new URLSearchParams(location.search).get("jump") || "";
 // One drawer for the life of the page, so the graph inside it keeps the scroll position, the expanded
 // commit and the repository the human left in it between rolls. `typingSomewhere` is passed rather
 // than copied, so the drawer and the board's letters read a field the same way.
@@ -3894,19 +3897,59 @@ function startCardDrag(card, event) {
     x: parseFloat(other.style.left),
     y: parseFloat(other.style.top),
   }));
+  // The field the press is over, while the card is moving and not on its first pixel: a card let go
+  // there is named in that message instead of being put down.
+  let moved = false;
+  let over = null;
+  const markField = (ev) => {
+    const field = moved ? composerUnder(ev.clientX, ev.clientY) : null;
+    if (field === over) return;
+    over?.root.classList.remove("dropping");
+    field?.root.classList.add("dropping");
+    over = field;
+  };
   const move = (ev) => {
+    moved = moved || Math.abs(ev.clientX - sx) > 6 || Math.abs(ev.clientY - sy) > 6;
     const dx = (ev.clientX - sx) / view.k;
     const dy = (ev.clientY - sy) / view.k;
     for (const spot of from) {
       spot.card.style.left = `${spot.x + dx}px`;
       spot.card.style.top = `${spot.y + dy}px`;
     }
+    markField(ev);
     scheduleMap();
     scheduleArrows();
   };
   const up = () => {
     removeEventListener("pointermove", move);
     removeEventListener("pointerup", up);
+    const field = over;
+    over = null;
+    field?.root.classList.remove("dropping");
+    if (field) {
+      // A reference, not a move: the cards go back where they were and the message names them.
+      for (const spot of from) {
+        spot.card.classList.remove("dragging");
+        spot.card.style.left = `${spot.x}px`;
+        spot.card.style.top = `${spot.y}px`;
+      }
+      scheduleMap();
+      scheduleArrows();
+      // A thread card is its own conversation, so a message names the cards a thread wrote and not the
+      // thread itself: the daemon quotes the cards it is given.
+      const cards = from.filter((spot) => spot.entry && spot.entry.data.type !== "sticky");
+      const named = cards.filter((spot) => addReference(field, spot.entry));
+      focusComposer(field);
+      footNote(
+        named.length
+          ? `named ${named.length === 1 ? `“${cardName(named[0].entry)}”` : `${named.length} cards`} in the message`
+          : cards.length
+            ? "those cards are already named in that message"
+            : "a thread is read in its own field: a message names the cards it wrote",
+        !named.length,
+      );
+      return;
+    }
     for (const spot of from) {
       spot.card.classList.remove("dragging");
       const x = Math.round(parseFloat(spot.card.style.left));
@@ -3928,6 +3971,19 @@ function startCardDrag(card, event) {
   };
   addEventListener("pointermove", move);
   addEventListener("pointerup", up);
+}
+
+/**
+ * The message field under a point, if a dragged card has just been let go over one. The dragged cards
+ * follow the pointer, so the field is the first thing under it that none of them covers.
+ */
+function composerUnder(x, y) {
+  for (const hit of document.elementsFromPoint(x, y)) {
+    if (hit.closest(".card.dragging")) continue;
+    const root = hit.closest(".composer");
+    if (root) return composers.get(root.dataset.composer ?? "") ?? null;
+  }
+  return null;
 }
 
 /** The agent is blocked on this card until the question on it is answered. */
@@ -5006,7 +5062,6 @@ function openQuestion() {
   return record;
 }
 
-/** Follow a [[key]] reference: by key first, then by card title. */
 /**
  * Where a cross-reference can land right now: what each card carries as its key, and its name.
  * A card that was closed takes both with it, so a link to it is dead and has to look it.
@@ -5030,16 +5085,82 @@ function refreshXrefs() {
     for (const link of record.card.querySelectorAll(".xref")) {
       const key = String(link.dataset.key ?? "");
       const known = keys.has(key.toLowerCase());
-      link.classList.toggle("stale", !known);
+      // A link that names its board is answered there, and this board cannot say whether the card is
+      // still on it, so it is neither marked dead nor promised.
+      const other = known ? null : otherBoardKey(key);
+      link.classList.toggle("stale", !known && !other);
       link.title = known
         ? `jump to ${key}`
-        : `${key} is not on this board: that card was closed or never written`;
+        : other
+          ? `open ${other.key} on the board of ${other.board}`
+          : `${key} is not on this board: that card was closed or never written`;
     }
   }
 }
 
-function jumpToKey(key) {
-  const wanted = key.toLowerCase();
+/**
+ * A link that names its board: `[[workspace/key]]`, where the workspace is a board's name, its folder or
+ * its id. Every other link is a key on this board, which is asked first.
+ */
+function otherBoardKey(key) {
+  const cut = String(key).indexOf("/");
+  if (cut < 1) return null;
+  const board = String(key).slice(0, cut).trim();
+  const rest = String(key).slice(cut + 1).trim();
+  return board && rest ? { board, key: rest } : null;
+}
+
+/** The workspaces the daemon knows, read once: a board page is not the crossroads, so it has no list. */
+let knownWorkspaces = null;
+function loadWorkspaces() {
+  knownWorkspaces ??= fetch("/workspaces", { cache: "no-store" })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((payload) => (Array.isArray(payload?.workspaces) ? payload.workspaces : []))
+    .catch(() => []);
+  return knownWorkspaces;
+}
+async function workspaceNamed(name) {
+  const known = await loadWorkspaces();
+  const wanted = String(name).toLowerCase();
+  return (
+    known.find((one) =>
+      [one.id, one.name, one.folder].some((value) => String(value ?? "").toLowerCase() === wanted),
+    ) ?? null
+  );
+}
+
+/**
+ * Follow a link that carries its board. The card is read where it lives, so that board's page opens in a
+ * tab of its own, centred on the card: the reader keeps the board they were on.
+ */
+async function jumpToOtherBoard(board, key) {
+  const found = await workspaceNamed(board);
+  if (!found) {
+    footNote(`no workspace called “${board}” here`, true);
+    return true;
+  }
+  // A link may name the board the reader is already on, and then the card is simply here.
+  if (found.id === workspace && jumpToKeyLocal(key)) return true;
+  const url = `/w/${found.id}?jump=${encodeURIComponent(key)}`;
+  // A tab the browser refused leaves the reader where they were, so the board is gone to in this one.
+  if (!window.open(url, "_blank", "noopener")) location.assign(url);
+  else footNote(`opened “${key}” on the board of ${found.name}`);
+  return true;
+}
+
+/**
+ * Follow a [[key]] reference: by key first, then by card title on this board, then on the board the link
+ * names. Answers whether the click went somewhere, so a dead link can say so.
+ */
+async function jumpToKey(key) {
+  if (jumpToKeyLocal(key)) return true;
+  const other = otherBoardKey(key);
+  return other ? jumpToOtherBoard(other.board, other.key) : false;
+}
+
+/** The card of this board a key or a title names, centred, if the board holds one. */
+function jumpToKeyLocal(key) {
+  const wanted = String(key).toLowerCase();
   for (const record of byId.values()) {
     if (record.data.key && record.data.key.toLowerCase() === wanted) {
       centerOn(record);
@@ -5073,7 +5194,9 @@ viewport.addEventListener("click", (event) => {
   const key = String(link.dataset.key ?? "");
   // A link whose card was closed points at nothing, and a click that does nothing reads as a broken
   // board. Say which card is missing instead.
-  if (!jumpToKey(key)) footNote(`${key} is not on this board: that card was closed or never written`);
+  void jumpToKey(key).then((visited) => {
+    if (!visited) footNote(`${key} is not on this board: that card was closed or never written`);
+  });
 });
 
 /** A wheel reports pixels, lines or pages, so one factor turns any of them into pixels. */
@@ -7515,6 +7638,33 @@ function focusedComposer() {
 }
 
 /**
+ * The field the human wrote in last, while it is still on the board. A card read after a message was
+ * written belongs to that message, which is what lets one thread name a card of another.
+ */
+function lastComposer() {
+  if (!activeComposer) return null;
+  if (!activeComposer.key) return activeComposer;
+  const held = composers.get(activeComposer.key);
+  return held === activeComposer && byId.has(activeComposer.key) ? held : null;
+}
+
+/**
+ * The field a board offers when nothing has been written in yet: the bottom bar of a one-session board,
+ * or the newest thread's field, which is the one the human is most likely working in. The note under the
+ * field says where the card went, so a wrong guess costs one chip and not a lost message.
+ */
+function boardField() {
+  const bar = document.body.classList.contains("threads") ? null : composers.get("");
+  if (bar) return bar;
+  const fields = [...composers.values()].filter((inst) => inst.key && byId.has(inst.key));
+  const newest = fields.reduce(
+    (best, inst) => (best && Number(best.entry?.data?.at ?? 0) >= Number(inst.entry?.data?.at ?? 0) ? best : inst),
+    null,
+  );
+  return newest;
+}
+
+/**
  * A field grows with its words and stops at ten of them, where it scrolls inside itself. The height is set
  * from the text and the box's own CSS clamps it, so the field's corner, the height of the card it sits in
  * and the window all keep the last word. One function serves the bottom bar and every card, so the two
@@ -7554,6 +7704,9 @@ function makeComposer(entry) {
   const key = entry ? entry.id : "";
   if (composers.has(key)) return composers.get(key);
   const root = composerTpl.content.firstElementChild.cloneNode(true);
+  // The card the field belongs to, on the element itself: a card dropped on the field is found by the
+  // element under the pointer, and this is how that element names its field.
+  root.dataset.composer = key;
   const inst = {
     key,
     entry: entry ?? null,
@@ -8160,21 +8313,23 @@ function focusComposer(inst) {
 
 /**
  * What `r` and the `↩` in a card's head do: name that card in a field. A thread card has a field of its
- * own, so the caret goes there; a note, source or question joins the message being written, or the
- * message of the thread that answers it when nothing is being written.
+ * own, so the caret goes there; a note, source or question joins the message being written, then the
+ * message the human last wrote in, then the one of the thread that answers it. A card nothing answers
+ * for — one a plugin wrote, or one whose thread has gone — has no field of its own, and the message
+ * being written is still somewhere to name it: the agent is handed the card quoted.
  */
 function replyToCard(entry) {
   if (!entry) return;
   const own = entry.data.type === "sticky" ? entry : null;
-  const house = composerOf(own ?? windowOf(entry));
-  if (!house) {
-    footNote("this card has no thread card to answer it", true);
-    return;
-  }
-  if (own) return focusComposer(house);
+  const house = own ? composerOf(own) : null;
+  if (house) return focusComposer(house);
   // A field with the keyboard is the message being written, and a card picked while writing is what
   // the message is about.
-  const into = focusedComposer() ?? house;
+  const into = focusedComposer() ?? lastComposer() ?? composerOf(windowOf(entry)) ?? boardField();
+  if (!into) {
+    footNote("no message field is open here, so there is nowhere to name that card", true);
+    return;
+  }
   const added = addReference(into, entry);
   focusComposer(into);
   footNote(
@@ -9164,7 +9319,7 @@ const SHORTCUTS = [
       { keys: "x", does: "roll the terminal drawer up from the bottom, and press it again to roll it down" },
       { keys: "one letter per plugin", does: "open that plugin's panel — assigned in settings under plugins" },
       { keys: "t", does: "start a new thread, on a board of threads with no card selected" },
-      { keys: "r", does: "reply to the card you are reading" },
+      { keys: "r", does: "name the card you are reading in the message you were writing" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
       { keys: "q", does: "close the card you are reading" },
       { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the plugin panel, then the git graph, then the terminal, then the files drawer, or with nothing open, let go of the selected card" },
@@ -13653,8 +13808,9 @@ document.addEventListener("keydown", (event) => {
   clearSelection();
 });
 
-// `r` names the card you last clicked in a field, `p` pins it and `q` closes it. A field keeps its own
-// keys, so a message being typed is never cut short.
+// `r` names the card you last clicked in the field you were writing in, `p` pins it and `q` closes it. A
+// card of another thread, or one no thread answers for, is named in the same field: the field the
+// keyboard was last in. A field keeps its own keys, so a message being typed is never cut short.
 document.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
   if ((key !== "r" && key !== "q" && key !== "p") || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -14213,6 +14369,16 @@ function connect() {
         framedView = true;
         if (cards.length) fitAll();
       }
+      // A tab opened on a card of this board, by a link from another one, is taken to that card now
+      // that the board is drawn. The address keeps the card only for that one load.
+      if (pendingJump) {
+        const wanted = pendingJump;
+        pendingJump = "";
+        history.replaceState(null, "", location.pathname);
+        void jumpToKey(wanted).then((visited) => {
+          if (!visited) footNote(`“${wanted}” is not on this board`);
+        });
+      }
     } else if (payload.type === "move") {
       const record = byId.get(payload.id);
       if (record && payload.rect) placeCard(record, payload.rect);
@@ -14262,6 +14428,9 @@ const BOARD_START = () => {
   updateEmpty();
   paintRuntime();
   connect();
+  // The workspaces are read while the board loads, so a link that names another board is followed
+  // without waiting for one.
+  void loadWorkspaces();
 };
 
 // A module runs after the page is parsed, so there is no inline call left to wait for.
