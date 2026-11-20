@@ -38,12 +38,6 @@ export type SettingsPick =
 	| "options";
 
 /**
- * A control the page draws itself rather than from a leaf: it holds no value the daemon keeps, so a group
- * claims it by name instead. The overview map is the only one — it is the browser's own switch.
- */
-export type SettingsHost = "map";
-
-/**
  * One control the panel draws. `value` is a string, a switch, the names a list has off, or `""` for a
  * prompt, which is a file rather than a value.
  *
@@ -90,12 +84,6 @@ export type SettingsGroup = {
 	/** Drawn unfolded the first time the panel opens. */
 	open?: boolean;
 	help?: string;
-	/**
-	 * A control the page draws itself, named here so the tree decides where it sits rather than the page.
-	 * The overview map is a session's choice in the browser, so it is no leaf the daemon could keep: the
-	 * page holds the switch, and this says which group it belongs under.
-	 */
-	host?: SettingsHost;
 	fields?: SettingsField[];
 	groups?: SettingsGroup[];
 };
@@ -447,9 +435,6 @@ export function settingsDocument({ scope, values, title, subtitle, foot }: Setti
 				label: "canvas",
 				open: false,
 				help: "painted by the browser",
-				// The overview map is the browser's own switch, so it arrives as no leaf at all: the group it
-				// belongs under is named here and the page moves its row in.
-				host: "map",
 				fields: [
 					{
 						id: "dimOthers",
@@ -457,6 +442,16 @@ export function settingsDocument({ scope, values, title, subtitle, foot }: Setti
 						type: "toggle",
 						value: values.dimOthers !== false,
 						write: write("dimOthers"),
+					},
+					{
+						id: "overviewMap",
+						label: "overview map",
+						type: "toggle",
+						// Nothing is kept here: the map is the browser's own choice for the session, so the leaf
+						// carries no route to write and the page answers what it is doing. It still arrives as a
+						// leaf, so the row is the same switch as `dim others` beside it.
+						value: true,
+						help: "the small map of the whole board, with the window you are looking through on it (m)",
 					},
 				],
 			},

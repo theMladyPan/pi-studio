@@ -5356,10 +5356,6 @@ const MAP_PAD = 8;
 const MAP_COLOUR = { note: "#7d8590", code: "#d2a8ff", sticky: "#d29922", question: "#db61a2" };
 const mapCanvas = document.getElementById("minimap");
 const mapCtx = mapCanvas.getContext("2d");
-const mapToggle = document.getElementById("mapToggle");
-// The row the switch sits in: the settings panel parks it beside the tree and the group the daemon names
-// for it takes it from there, so the map is a choice made under the canvas like `dim others`.
-const mapRow = document.getElementById("mapRow");
 let mapOn = true;
 let mapQueued = false;
 /** The projection the last paint used, so a press lands where the eye saw the picture. */
@@ -5503,11 +5499,21 @@ mapCanvas.addEventListener("pointerdown", (event) => {
   addEventListener("pointercancel", up);
 });
 
+/**
+ * The switches the page answers for rather than the daemon: a leaf that carries no route to write holds no
+ * value a board could keep, so the page says what it is doing and takes the press. The overview map is the
+ * only one, and `m` is the same press as its row.
+ *
+ * `leaf` is the row drawn for it while the settings panel is open, so the two never disagree about what
+ * the map is doing.
+ */
+const OWN_SWITCHES = {
+  overviewMap: { state: () => mapOn, set: (on) => setMap(on), leaf: null },
+};
+
+/** The map changed, so the row drawn for it says so — unless the panel is closed and no row is drawn. */
 function paintMapBtn() {
-  // The overview map is a checkbox in settings, so it says what the board shows rather than hiding
-  // behind a header button that no longer exists.
-  mapToggle.checked = mapOn;
-  mapToggle.title = mapOn ? "hide the board overview (m)" : "show the board overview (m)";
+  OWN_SWITCHES.overviewMap.leaf?.set();
 }
 
 /**
@@ -5522,9 +5528,8 @@ function setMap(on) {
   if (on) scheduleMap();
 }
 
-paintMapBtn();
+// No row is drawn yet, so there is nothing to paint; the panel reads `mapOn` when it draws one.
 document.body.classList.toggle("map-on", mapOn);
-mapToggle.addEventListener("change", () => setMap(mapToggle.checked));
 // The window rect is measured against the canvas, so the map follows the box it is drawn in:
 // a resized window and a rail that opens, closes or is dragged all land here.
 new ResizeObserver(() => scheduleMap()).observe(viewport);
@@ -9079,15 +9084,11 @@ const configBtn = document.getElementById("configBtn");
 const configPanel = document.getElementById("boardConfig");
 const shortcutList = document.getElementById("shortcutList");
 const cfgTree = document.getElementById("cfgTree");
-// The part of the panel that sits outside the tree, so a reread of the daemon's document never wipes it.
-const cfgLocal = document.getElementById("cfgLocal");
 // The document the panel is drawn from, and what was drawn from it: every leaf in document order, and
 // every group with the leaves under it, so a config that arrives repaints all of them.
 let boardDoc = null;
 let treeLeaves = [];
 let treeGroups = [];
-/** Where a group asked for a control the page draws itself, by the name it gave; emptied per draw. */
-let treeHosts = new Map();
 const pePanel = document.getElementById("promptEditor");
 const pePick = document.getElementById("pePick");
 const peText = document.getElementById("peText");
@@ -9587,12 +9588,11 @@ async function loadBoardSettings() {
     boardDoc = null;
     treeLeaves = [];
     treeGroups = [];
-    treeHosts = new Map();
+    // The row drawn for the map went with the tree, so nothing is left holding a stale switch.
+    OWN_SWITCHES.overviewMap.leaf = null;
     const line = el("p", "cfg-failure");
     line.textContent = `could not read this board's settings: ${error.message || error}`;
     cfgTree.replaceChildren(line);
-    // No group claimed the rows the page draws, so they come home to the panel's own block.
-    placeOwnRows();
   }
 }
 
@@ -9602,29 +9602,10 @@ function refreshSettings() {
   void loadBoardSettings();
 }
 
-/**
- * A control the page draws rather than the daemon: it holds nothing the board could keep, so the document
- * names the group it belongs to and this is the row that goes there. The map is the only one, and its
- * switch already lives in the panel's own block.
- */
-const OWN_ROWS = { map: () => mapRow };
-
-/**
- * Put every row the page draws into the group that asked for it. A tree with no such group — a page that
- * failed to load — leaves the row in the panel's own block, so the switch is never out of reach.
- */
-function placeOwnRows() {
-  for (const [host, row] of Object.entries(OWN_ROWS)) {
-    const slot = treeHosts.get(host);
-    (slot ?? cfgLocal).append(row());
-  }
-}
-
 /** The whole panel: what the board is, the groups, and the one line under them. */
 function renderTree(doc) {
   treeLeaves = [];
   treeGroups = [];
-  treeHosts = new Map();
   const nodes = [];
   if (doc.title) {
     const head = el("p", "cfg-head");
@@ -9643,7 +9624,6 @@ function renderTree(doc) {
     nodes.push(foot);
   }
   cfgTree.replaceChildren(...nodes);
-  placeOwnRows();
   paintConfig();
 }
 
@@ -9665,9 +9645,6 @@ function renderGroup(group, parentPath) {
     kids.append(leaf.row);
     mine.push(leaf);
   }
-  // A group that names a control the page draws takes it, so where the row sits is the document's word
-  // rather than the page's.
-  if (group.host) treeHosts.set(group.host, kids);
   for (const child of group.groups ?? []) {
     const drawn = renderGroup(child, path);
     kids.append(drawn.fold);
@@ -9757,11 +9734,16 @@ function renderProseLeaf(field) {
   return leaf;
 }
 
-/** One leaf: a label, its value, and the click that changes it. */
+/**
+ * One leaf: a label, its value, and the click that changes it. A switch the page answers for is drawn the
+ * same way and read from the page rather than from the leaf, so it says `on` or `off` like the rest and
+ * keeps saying it when the board's own key turns it.
+ */
 function renderLeaf(field) {
   // A whole text is not a row with a value on its right: it is a box that holds a file, and its own save.
   if (field.type === "prose") return renderProseLeaf(field);
   if (typedLeaf(field)) return renderTypedLeaf(field);
+  const own = OWN_SWITCHES[field.id];
   const row = el("button", "cfg-row");
   row.type = "button";
   row.title = field.help ?? "";
@@ -9769,8 +9751,17 @@ function renderLeaf(field) {
   label.textContent = field.label ?? field.id;
   const value = el("b");
   row.append(label, value);
-  row.addEventListener("click", () => void openLeaf(field, row));
-  const leaf = { field, row, value, set: () => (value.textContent = leafShown(field)) };
+  row.addEventListener("click", () => (own ? own.set(!own.state()) : void openLeaf(field, row)));
+  const leaf = {
+    field,
+    row,
+    value,
+    set: () => {
+      if (own) field.value = own.state();
+      value.textContent = leafShown(field);
+    },
+  };
+  if (own) own.leaf = leaf;
   treeLeaves.push(leaf);
   return leaf;
 }

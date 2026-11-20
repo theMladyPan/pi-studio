@@ -59,6 +59,12 @@ const settingLeaves = leavesOf(document.groups.filter((group) => group.id !== "p
 
 const byId = Object.fromEntries(leavesOf(document.groups).map((field) => [field.id, field]));
 
+/**
+ * The leaves a change goes back through. The overview map is the one with no route: it is a session's
+ * choice in the browser, so the page answers for it rather than the board.
+ */
+const writtenLeaves = settingLeaves.filter((field) => field.id !== "overviewMap");
+
 test("the document is five groups in the order the panel draws them", () => {
 	assert.equal(document.version, 1);
 	assert.equal(document.scope, "board");
@@ -88,8 +94,8 @@ test("the document is five groups in the order the panel draws them", () => {
 	);
 });
 
-test("the tree holds fifteen setting leaves and each one is a control a human can change", () => {
-	// Fifteen: six for the thread, two for the tools, six for the cards, one for the canvas.
+test("the tree holds sixteen setting leaves and each one is a control a human can change", () => {
+	// Sixteen: six for the thread, two for the tools, six for the cards, two for the canvas.
 	assert.deepEqual(
 		settingLeaves.map((field) => field.id),
 		[
@@ -108,12 +114,13 @@ test("the tree holds fifteen setting leaves and each one is a control a human ca
 			"showCharts",
 			"showReferences",
 			"dimOthers",
+			"overviewMap",
 		],
 	);
-	assert.equal(settingLeaves.length, 15);
+	assert.equal(settingLeaves.length, 16);
 	assert.deepEqual(
 		settingLeaves.map((field) => field.type),
-		["combo", "combo", "select", "combo", "select", "select", "list", "list", "select", "select", "select", "select", "select", "select", "toggle"],
+		["combo", "combo", "select", "combo", "select", "select", "list", "list", "select", "select", "select", "select", "select", "select", "toggle", "toggle"],
 	);
 	// A setting a later build dropped is not quietly back, and neither is a group nobody draws.
 	const whole = JSON.stringify(document);
@@ -121,7 +128,11 @@ test("the tree holds fifteen setting leaves and each one is a control a human ca
 });
 
 test("every setting names its picker and the route a change goes back through", () => {
-	for (const field of settingLeaves) {
+	// The overview map is the one leaf with no route, because the map is a session's choice in the browser
+	// rather than a value a board keeps: the page answers for it. Every other leaf says where it writes.
+	assert.equal(writtenLeaves.length, settingLeaves.length - 1);
+	assert.equal(byId.overviewMap.write, undefined);
+	for (const field of writtenLeaves) {
 		assert.ok(field.write, `${field.id} has no write`);
 		// The editor is studio-wide, so a board's page writes it to the crossroads' defaults with the rest.
 		assert.ok(["/model", "/thinking", "/defaults", "/config"].includes(field.write.route), `${field.id} writes to ${field.write.route}`);
@@ -142,16 +153,12 @@ test("every setting names its picker and the route a change goes back through", 
 	assert.equal(byId.helperModel.source, "/models");
 	assert.deepEqual(byId.helperModel.write.body, { helperProvider: "@head", helperModel: "@rest" });
 	assert.equal(byId.helperModel.write.route, "/defaults", "the helper model is studio-wide, like the editor");
-	// `dim others` sits under the canvas, because the canvas is where it is drawn.
+	// `dim others` and the overview map sit under the canvas, because the canvas is where they are drawn.
 	const canvas = document.groups.find((group) => group.id === "canvas");
-	assert.deepEqual((canvas?.fields ?? []).map((field) => field.id), ["dimOthers"]);
-	// The overview map is the browser's own switch, so it is no leaf: the canvas claims the row by name and
-	// the page moves it in. One group claims it, and only the canvas.
-	assert.equal(canvas?.host, "map");
-	assert.deepEqual(
-		document.groups.filter((group) => group.host).map((group) => [group.id, group.host]),
-		[["canvas", "map"]],
-	);
+	assert.deepEqual((canvas?.fields ?? []).map((field) => field.id), ["dimOthers", "overviewMap"]);
+	// The map is the browser's own switch, drawn as the same row as the setting beside it, so its title is
+	// the one place on the page that says which key turns it.
+	assert.match(String(byId.overviewMap.help), /\(m\)$/);
 });
 
 test("a one-key body carries the control's value, and the model leaf splits at the first slash", () => {
@@ -164,14 +171,14 @@ test("a one-key body carries the control's value, and the model leaf splits at t
 	assert.deepEqual(byId.model.write.body, { provider: "@head", model: "@rest" });
 	// A board's `/thinking` reads `level`, which is the key its own route takes.
 	assert.deepEqual(byId.thinking.write.body, { level: "@value" });
-	for (const field of settingLeaves) {
+	for (const field of writtenLeaves) {
 		const keys = Object.keys(field.write.body);
 		if (keys.length !== 1) continue;
 		assert.equal(field.write.body[keys[0]], "@value", `${field.id} sends ${field.write.body[keys[0]]}`);
 	}
 	// The two model leaves are the only leaves that write two keys, so they are the only ones that need the halves.
 	assert.deepEqual(
-		settingLeaves.filter((field) => Object.keys(field.write.body).length !== 1).map((field) => field.id),
+		writtenLeaves.filter((field) => Object.keys(field.write.body).length !== 1).map((field) => field.id),
 		["model", "helperModel"],
 	);
 });
@@ -243,6 +250,7 @@ test("every leaf carries a value, and the board's own choices are the ones the p
 			"charts",
 			"references",
 			"dim others",
+			"overview map",
 		],
 	);
 });
