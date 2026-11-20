@@ -25,7 +25,8 @@ checkbox's title in the same client, which names its own key (`"hide the board o
 - Merge, tag or publish only when the human asks. Otherwise, hand off the committed work branch.
 - Run `npm run check` before merging: syntax, imports, types, unit and route tests, and smoke tests
   must all pass. Targeted tests during development do not replace this gate. Use `npm ci` if the
-  locked development dependencies need installing.
+  locked development dependencies need installing; a fresh thread worktree has no `node_modules`, so run
+  `npm ci` in it once before the gate.
 
 ## Versioning
 
