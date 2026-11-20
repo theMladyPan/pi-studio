@@ -503,8 +503,14 @@ async function librePerform(repo: string, command: string, f: Record<string, unk
 			return libreGitWrite(repo, flags, "network");
 		}
 		case "fetchTags": {
-			const remotes = Array.isArray(f.remotes) ? (f.remotes as string[]) : [];
-			for (const r of remotes) { const e = await libreGitWrite(repo, ["fetch", "--tags", "--end-of-options", r], "network"); if (e !== null) return e; }
+			// Git 2.17's `--prune-tags` deletes local tags the remote does not have, and only prunes when `--prune`
+			// is given too. The page's own Fetch Tags dialog offers both, so the checked box means both flags, per
+			// remote named in the request: nothing is pruned from a remote the human did not list, and `--all` is
+			// never reached from here.
+			const remotes = (Array.isArray(f.remotes) ? (f.remotes as string[]) : []).map((r) => r.trim()).filter(Boolean);
+			if (remotes.length === 0) return "No remotes were selected for fetching tags.";
+			const prune = bool(f, "pruneTags") ? ["--prune", "--prune-tags"] : [];
+			for (const r of remotes) { const e = await libreGitWrite(repo, ["fetch", ...prune, "--tags", "--end-of-options", r], "network"); if (e !== null) return e; }
 			return null;
 		}
 		case "pruneRemote": return libreGitWrite(repo, ["remote", "prune", "--end-of-options", str(f, "name")], "network");
@@ -594,13 +600,19 @@ async function librePerform(repo: string, command: string, f: Record<string, unk
 			if (bool(f, "unlock")) { const e = await libreGitWrite(repo, ["worktree", "unlock", "--end-of-options", p]); if (e !== null) return e; }
 			return libreGitWrite(repo, ["worktree", "remove", ...(bool(f, "force") ? ["--force"] : []), "--end-of-options", p]);
 		}
-		case "lockWorktree": return libreGitWrite(repo, typeof f.reason === "string" && f.reason ? ["worktree", "lock", "--end-of-options", str(f, "path"), f.reason as string] : ["worktree", "lock", "--end-of-options", str(f, "path")]);
+		// The reason is an option of its own: git's `worktree lock` takes one positional argument, so a
+		// reason after the path is read as a second one and the command fails with its usage text.
+		case "lockWorktree": return libreGitWrite(repo, ["worktree", "lock", ...(typeof f.reason === "string" && f.reason ? [`--reason=${str(f, "reason")}`] : []), "--end-of-options", str(f, "path")]);
 		case "unlockWorktree": return libreGitWrite(repo, ["worktree", "unlock", "--end-of-options", str(f, "path")]);
 		case "moveWorktree": return libreGitWrite(repo, ["worktree", "move", "--end-of-options", str(f, "path"), str(f, "newPath")]);
 		case "pruneWorktrees": return libreGitWrite(repo, ["worktree", "prune"]);
 		case "repairWorktree": {
-			if (!f.newPath) return "repair needs a new path, which this tab cannot pick";
-			return libreGitWrite(repo, ["worktree", "repair", "--end-of-options", str(f, "path"), str(f, "newPath")]);
+			// Git repairs the record of the worktree it is given, finding the stale entry from there, so the path
+			// it is handed is the new one alone. The old path is not an argument: git reads it as a second
+			// worktree, cannot find it, and answers "not a valid path" for a record it has just repaired.
+			const newPath = str(f, "newPath");
+			if (!newPath) return "repair needs a new path, which this tab cannot pick";
+			return libreGitWrite(repo, ["worktree", "repair", "--end-of-options", newPath]);
 		}
 		default:
 			return "This tab cannot do that yet.";

@@ -94,13 +94,16 @@ function short(hash: string): string {
  * The text of one diff. `*` on the side being compared means the working tree, and one revision
  * compared with itself means the change it brought, which is what the page asks for when a human opens
  * a commit's own diff: `git diff <hash> <hash>` would answer nothing at all.
+ *
+ * A `*` on the left is the working tree as the base, which git cannot diff from: it is asked for the
+ * diff it can draw and turned round with `-R`, so the text reads in the direction the bar names.
  */
 export async function diffText(repo: string, fromHash: string, toHash: string, filePaths: readonly string[]): Promise<Bounded> {
 	const paths = filePaths.length > 0 ? ["--", ...filePaths] : [];
 	if (toHash === UNCOMMITTED) {
 		return gitTextBounded(repo, ["diff", "--no-color", "--find-renames", fromHash === UNCOMMITTED ? "HEAD" : fromHash, ...paths]);
 	}
-	if (fromHash === UNCOMMITTED) return gitTextBounded(repo, ["diff", "--no-color", "--find-renames", toHash, ...paths]);
+	if (fromHash === UNCOMMITTED) return gitTextBounded(repo, ["diff", "--no-color", "--find-renames", "-R", toHash, ...paths]);
 	if (fromHash === toHash) {
 		// One revision against itself is the commit's own change, so it is compared with its parent; a
 		// root commit has none, and `git show` is the only command that draws the whole tree it added.

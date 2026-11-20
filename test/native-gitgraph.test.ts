@@ -12,7 +12,7 @@
  * table. Nothing here fakes git: a scratch repository from `test-support/git.ts` is the only fixture.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -166,45 +166,51 @@ test("first parents only takes a merge's second line away", () => {
 
 // ---------- what the page asks for ----------
 
-const CLIENT_MODULES = ["actions.js", "details.js", "dom.js", "host.js", "settings.js", "viewer.js"];
+// The read and the writes the page leans on hardest, checked as the page sends them instead of by
+// reading its source for command names: a branch list is answered about the repository named in the
+// request, a rename is the name the next read lists, and a repository this tab no longer has is refused
+// rather than answered with another one. Which commands the menus offer is checked in
+// `gitgraph-actions.test.ts`, against the list those menus are drawn from.
 
-/** Every command name this page can post, read off its own modules and matched to the message table. */
-function commandsThePageSends(): string[] {
-	const source = (file: string): string => readFileSync(new URL(`../public/client/gitgraph/${file}`, import.meta.url), "utf8");
-	const pageWords = new Set(CLIENT_MODULES.flatMap((file) => [...source(file).matchAll(/"([A-Za-z][A-Za-z0-9]*)"/g)].map((match) => match[1])));
-	// The table's own words: the commands it switches on, the sets it answers actions and queries from,
-	// and the commands it refuses. A page word that is none of those is a field name or a label.
-	const table = readFileSync(new URL("../server/git/gitgraph/dispatch.ts", import.meta.url), "utf8");
-	const tableWords = new Set([...table.matchAll(/case "([A-Za-z][A-Za-z0-9]*)"/g)].map((match) => match[1]));
-	for (const block of table.matchAll(/new Set\(\[([\s\S]*?)\]\)/g)) {
-		for (const match of block[1].matchAll(/"([A-Za-z][A-Za-z0-9]*)"/g)) tableWords.add(match[1]);
+test("loadBranches is answered about the repository it names, so a selection moving under it cannot change the answer", async () => {
+	const { treeWithChildCommit, childBranch } = await import("../test-support/git.ts");
+	const repo = realpathSync(scratchRepo());
+	const made = treeWithChildCommit(repo);
+	const board = made.board as unknown as Board;
+	const treePath = realpathSync(made.tree.path);
+	try {
+		// The page selects the folder the workspace opened, and then reads the tree it drew.
+		assert.deepEqual(await dispatch.respond(board, { command: "selectRepo", repo }), []);
+		const named = await one(board, { command: "loadBranches", repo: treePath, showRemoteBranches: true, hiddenRemotes: [] });
+		assert.equal(named.isRepo, true);
+		assert.equal(named.head, childBranch, "the answer belongs to the repository the request names");
+		// The same read with no repository is Libre's own shape: the selected one answers.
+		const selected = await one(board, { command: "loadBranches", showRemoteBranches: true, hiddenRemotes: [] });
+		assert.equal(selected.head, "dev", "a request naming no repository gets the selected one");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
 	}
-	for (const command of Object.keys(dispatch.UNAVAILABLE)) tableWords.add(command);
-	return [...pageWords].filter((word) => tableWords.has(word)).sort();
-}
+});
 
-test("every command the page can send has a handler, and none of them is a refused one", async () => {
-	const sent = commandsThePageSends();
-	// The list is read off the page's source, so a refactor that stops naming a command outright would
-	// quietly shrink it. These are the ones the menus and the details panel reach, varargs or not.
-	for (const command of ["checkoutAndFastForward", "viewDiff", "viewFileAtRevision", "resetFileToRevision", "worktreeChanges", "moveWorktree", "pruneWorktrees", "unstageFiles", "saveRepoState"]) {
-		assert.ok(sent.includes(command), `${command} is offered by the page but was not found in its commands`);
-	}
-	assert.ok(sent.length >= 60, `expected the page to send 60-odd commands, read ${sent.length}`);
-	for (const command of sent) {
-		assert.equal(dispatch.UNAVAILABLE[command], undefined, `the page sends ${command}, which the table refuses`);
-	}
+test("a branch the page renamed is the name the next read lists", async () => {
 	await withRepo(async (board, folder) => {
-		for (const command of sent) {
-			// Two commands the page sends without waiting for an answer (selecting a repository and saving
-			// its settings) legitimately answer nothing; everything else owes one reply.
-			const replies = await dispatch.respond(board, { command, repo: folder, requestId: 1 });
-			for (const reply of replies as Array<Record<string, unknown>>) {
-				assert.equal(reply.command, command);
-				assert.doesNotMatch(String(reply.status ?? ""), /cannot do that yet/, `${command} is offered by the page and has no handler`);
-			}
-			if (!["selectRepo", "saveRepoState"].includes(command)) assert.equal(replies.length, 1, `${command} owes one answer`);
-		}
+		const head = git(folder, "rev-parse", "HEAD");
+		assert.equal((await one(board, { command: "createBranch", repo: folder, branchName: "feat/before", commitHash: head, checkout: false })).status, null);
+		assert.equal((await one(board, { command: "renameBranch", repo: folder, oldName: "feat/before", newName: "feat/after" })).status, null);
+		const listed = await one(board, { command: "loadBranches", repo: folder, showRemoteBranches: true, hiddenRemotes: [] });
+		const names = listed.branches as string[];
+		assert.ok(names.includes("feat/after"), `the renamed branch is listed: ${names.join(", ")}`);
+		assert.ok(!names.includes("feat/before"), "the old name is gone from the list");
+	});
+});
+
+test("loadBranches naming a repository this tab does not have is refused, not answered with another one", async () => {
+	await withRepo(async (board, folder) => {
+		assert.deepEqual(await dispatch.respond(board, { command: "selectRepo", repo: folder }), []);
+		const answer = await one(board, { command: "loadBranches", repo: join(folder, "not-a-checkout"), showRemoteBranches: true, hiddenRemotes: [] });
+		const error = answer.error as { message?: string } | null;
+		assert.match(String(error?.message), /no longer open in this tab/, "the refusal says which state the tab is in");
+		assert.equal(answer.branches, undefined, "and hands over no branch list from the selected repository");
 	});
 });
 

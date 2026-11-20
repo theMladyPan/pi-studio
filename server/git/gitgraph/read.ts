@@ -649,9 +649,13 @@ export async function getUncommittedDetails(repo: string): Promise<ReadResult<Gi
  * The files between two revisions, which is what a code review is a checklist of.
  *
  * `*` on either side means the working tree, because that is the row the page draws for changes nobody
- * has committed and the review may be started from it.
+ * has committed and the review may be started from it. Git can only diff *against* the working tree and
+ * never *from* it, so a comparison whose left side is `*` asks git for the diff it can draw and turns it
+ * round with `-R`: the file a commit added and the tree lacks is then an addition, and the lines the
+ * commit holds are the lines the tree is missing, which is the direction the page drew the sides in.
  */
 export async function getCommitComparison(repo: string, fromHash: string, toHash: string): Promise<ReadResult<GitFileChange[]>> {
+	if (fromHash === UNCOMMITTED && toHash !== UNCOMMITTED) return readFileChanges(["diff", ...CHANGE_ARGS, "-R", toHash], repo);
 	const from = fromHash === UNCOMMITTED ? "HEAD" : fromHash;
 	const to = toHash === UNCOMMITTED ? null : toHash;
 	const args = ["diff", ...CHANGE_ARGS, from, ...(to === null ? [] : [to])];

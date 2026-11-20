@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -189,6 +189,64 @@ test("a second action in one repository is refused while the first is still runn
 */
 		const after = await act(place, { command: "fetchRemotes", repo: place.folder, remote: "origin", prune: false, pruneTags: false });
 		assert.ok(after.status === null || typeof after.status === "string");
+	});
+});
+
+test("Fetch Tags prunes only where the human checked the box and the remote no longer has the tag", async () => {
+	await withRepo(async (place) => {
+		const bare = withRemote(place.folder);
+		commitFile(place.folder, "tagged.txt", "tagged");
+		git(place.folder, "tag", "kept-tag");
+		git(place.folder, "tag", "gone-tag");
+		git(place.folder, "push", "-q", "--tags", "origin");
+		// The remote loses one of the two, which is the state a pruned fetch is for.
+		git(bare, "tag", "-d", "gone-tag");
+		const unchecked = await act(place, { command: "fetchTags", repo: place.folder, remotes: ["origin"], pruneTags: false });
+		assert.equal(unchecked.status, null);
+		assert.deepEqual(tags(place.folder), ["gone-tag", "kept-tag"], "an unchecked prune deletes no tag");
+		const pruned = await act(place, { command: "fetchTags", repo: place.folder, remotes: ["origin"], pruneTags: true });
+		assert.equal(pruned.status, null);
+		assert.deepEqual(tags(place.folder), ["kept-tag"], "the tag the remote still has stays, the one it dropped goes");
+		// No remote named is no fetch and no prune, said in one sentence rather than answered as done.
+		const none = await act(place, { command: "fetchTags", repo: place.folder, remotes: [], pruneTags: true });
+		assert.equal(none.status, "No remotes were selected for fetching tags.");
+		assert.deepEqual(tags(place.folder), ["kept-tag"]);
+	});
+});
+
+/** A checkout and a linked worktree of it, with the board that owns the worktree record. */
+async function withTree(work: (place: Place, treePath: string) => Promise<void>): Promise<void> {
+	const { treeWithChildCommit } = await import("../test-support/git.ts");
+	const repo = realpathSync(scratchRepo());
+	const { board, tree } = treeWithChildCommit(repo);
+	const moved = `${tree.path}-moved`;
+	try {
+		await work({ folder: repo, board: board as unknown as Board }, tree.path);
+	} finally {
+		for (const path of [repo, moved]) rmSync(path, { recursive: true, force: true });
+	}
+}
+
+test("a worktree is locked with the reason the page gave, and unlocked again", async () => {
+	await withTree(async (place, treePath) => {
+		const locked = await act(place, { command: "lockWorktree", repo: place.folder, path: treePath, reason: "held for review" });
+		assert.equal(locked.status, null, `git refused the lock: ${String(locked.status)}`);
+		assert.match(git(place.folder, "worktree", "list", "--porcelain"), /^locked held for review$/m);
+		const unlocked = await act(place, { command: "unlockWorktree", repo: place.folder, path: treePath });
+		assert.equal(unlocked.status, null);
+		assert.doesNotMatch(git(place.folder, "worktree", "list", "--porcelain"), /^locked/m);
+	});
+});
+
+test("a moved worktree is repaired from its new path alone, which is the path the page sends", async () => {
+	await withTree(async (place, treePath) => {
+		const moved = `${treePath}-moved`;
+		renameSync(treePath, moved);
+		const repaired = await act(place, { command: "repairWorktree", repo: place.folder, path: treePath, newPath: moved });
+		assert.equal(repaired.status, null, `git refused the repair: ${String(repaired.status)}`);
+		assert.match(git(place.folder, "worktree", "list", "--porcelain"), new RegExp(`^worktree ${moved}$`, "m"), "the record follows the worktree to where it was moved");
+		const unknown = await act(place, { command: "repairWorktree", repo: place.folder, path: moved, newPath: "" });
+		assert.equal(typeof unknown.status, "string", "a repair with nothing to repair is a sentence, not a git call");
 	});
 });
 
