@@ -20,7 +20,7 @@ import { test } from "node:test";
 const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-native-gitgraph-"));
 process.env.PI_STUDIO_STATE = stateHome;
 
-type Link = { from: number; to: number; tone: number; kind: "pass" | "in" | "out"; uncommitted: boolean };
+type Link = { from: number; to: number; tone: number; kind: "pass" | "in" | "out"; uncommitted: boolean; locked?: boolean };
 type LayoutRow = { lane: number; tone: number; links: Link[]; root: boolean; exits: Array<{ column: number; tone: number; uncommitted: boolean }> };
 type Commit = { hash: string; parentHashes: string[] };
 type Layout = { rows: LayoutRow[]; width: number };
@@ -28,6 +28,7 @@ type Layout = { rows: LayoutRow[]; width: number };
 const graph = (await import(new URL("../public/client/gitgraph/graph.js", import.meta.url).href)) as {
 	layoutGraph: (commits: Commit[], options?: { more?: boolean; firstParentOnly?: boolean }) => Layout;
 	graphWidth: (lanes: number) => number;
+	drawLanes: (row: LayoutRow, width: number, colors: string[], options: { current?: boolean; stash?: boolean; uncommitted?: boolean; angular?: boolean }) => FakeNode;
 };
 const dispatch = await import("../server/git/gitgraph/dispatch.ts");
 const { git, scratchRepo } = await import("../test-support/git.ts");
@@ -85,10 +86,16 @@ test("a commit both parents lead to is one join, not a lane of its own", () => {
 	]);
 	assert.equal(width, 2, "a merge of two branches is two lanes");
 	assert.equal(rows[0].lane, 0);
-	// The merge leaves one line for each parent, the second in the lane beside it.
-	assert.deepEqual(rows[0].links.map(({ to, kind }) => [to, kind]), [[0, "out"], [1, "out"]]);
+	// The merge leaves one line for each parent, each keeping its branch's colour.
+	assert.deepEqual(rows[0].links.map(({ to, kind, tone }) => [to, kind, tone]), [[0, "out", 0], [1, "out", 1]]);
+	// The second branch runs past B in its own column.
+	assert.deepEqual(rows[1].links.filter(({ kind }) => kind === "pass").map(({ from, to, tone }) => [from, to, tone]), [[1, 1, 1]]);
 	// C is drawn in the second lane and its line comes back to the first, where D is already due.
 	assert.equal(rows[2].lane, 1);
+	assert.equal(rows[2].tone, 1, "C's dot wears the second branch's colour");
+	assert.equal(rows[1].tone, 0, "and B's dot keeps the first branch's colour");
+	// The join lands as a line drawn into C's dot, in the second branch's colour.
+	assert.deepEqual(rows[2].links.filter(({ kind }) => kind === "in").map(({ tone }) => tone), [1]);
 	assert.deepEqual(rows[2].links.filter(({ kind }) => kind === "out").map(({ from, to }) => [from, to]), [[1, 0]]);
 	// Once the join is drawn, only the lane D is waiting in is left.
 	assert.deepEqual(rows[2].exits.map(({ column }) => column), [0]);
@@ -107,6 +114,7 @@ test("a root ends its lane, and a second root starts a fresh one", () => {
 	assert.deepEqual(rows[1].links.map(({ kind }) => kind), ["in"], "the root has nothing to continue");
 	assert.deepEqual(rows[1].exits, [], "no lane runs past a root");
 	assert.deepEqual(rows[2].links, [], "a second root is drawn on its own, with no line joining it");
+	assert.equal(rows[2].tone, 0, "the ended branch's colour is handed out again");
 	assert.equal(width, 1);
 });
 
@@ -121,6 +129,22 @@ test("a parent the walk cannot return is drawn only when the walk is cut short",
 	const more = graph.layoutGraph(cut, { more: true });
 	assert.deepEqual(more.rows[1].links.map(({ kind }) => kind), ["in", "out"]);
 	assert.deepEqual(more.rows[1].exits.map(({ column }) => column), [0], "a cut window keeps its continuation");
+});
+
+// The walk is ordered by date, not by shape, so a commit's parent can sit above it. The lane walk
+// only ever goes down, so it cannot join the two, and it must say so instead of looking for the
+// parent forever.
+test("a parent the walk has already passed is left unjoined", () => {
+	// Date order, not shape, puts B above A here. The lanes only ever go down, so no line joins
+	// the two, and the walk must not look for B forever below A.
+	const { rows } = graph.layoutGraph([
+		{ hash: "B", parentHashes: [] },
+		{ hash: "A", parentHashes: ["B"] },
+	]);
+	assert.equal(rows[0].root, true);
+	assert.equal(rows[1].root, false, "A is not a root: it has a parent the table shows");
+	assert.deepEqual(rows[0].links, [], "no line leaves B for A");
+	assert.deepEqual(rows[1].links, [], "and none joins A back up to B");
 });
 
 test("an expanded row leaves the lanes the row after it already had", () => {
@@ -188,6 +212,35 @@ test("an uncommitted row whose commit is not in these rows keeps its gray line t
 	const { rows } = graph.layoutGraph([{ hash: "*", parentHashes: ["B"] }], { more: true });
 	assert.deepEqual(rows[0].links.map(({ kind, uncommitted }) => [kind, uncommitted]), [["out", true]]);
 	assert.deepEqual(rows[0].exits.map(({ column, uncommitted }) => [column, uncommitted]), [[0, true]]);
+});
+
+// The remaining part of the Libre look lives in the drawing, not the lanes: a bend between columns
+// spans most of the row's height and arrives vertical at the dot, and the angular style drops
+// vertically before it runs across unless the line is locked. drawLanes only needs an element
+// factory, so a stub stands in for the document.
+type FakeNode = { tag: string; attrs: Map<string, string>; children: FakeNode[]; style: Record<string, string>; setAttribute(name: string, value: string): void; append(child: FakeNode): void };
+
+function fakeDocument() {
+	const make = (tag: string): FakeNode => ({ tag, attrs: new Map(), children: [], style: {}, setAttribute(name: string, value: string) { this.attrs.set(name, value); }, append(child: FakeNode) { this.children.push(child); } });
+	return { make, createElementNS: (_ns: string, tag: string) => make(tag), createElement: (tag: string) => make(tag) };
+}
+
+test("a bend between lanes spans most of the row, and the angular style bends the way the line is locked", () => {
+	const doc = fakeDocument();
+	(globalThis as unknown as Record<string, unknown>).document = doc;
+	const colors = ["red", "blue"];
+	const row: LayoutRow = { lane: 1, tone: 0, root: false, exits: [], links: [
+		{ from: 0, to: 1, tone: 0, kind: "pass", uncommitted: false, locked: true },
+		{ from: 0, to: 1, tone: 1, kind: "pass", uncommitted: false, locked: false },
+	] };
+	// Lanes start at 16px and step 16px, and the row is 24px high: a full-row bend's control
+	// points sit 80% of the row from each end, as the extension's do.
+	const curved = graph.drawLanes(row, 48, colors, {});
+	const paths = curved.children.filter((child) => child.tag === "path" && !child.attrs.get("class"));
+	assert.deepEqual(paths.map((path) => path.attrs.get("d")), ["M16 0C16 19.2 32 4.8 32 24", "M16 0C16 19.2 32 4.8 32 24"]);
+	const angular = graph.drawLanes(row, 48, colors, { angular: true });
+	const angularPaths = angular.children.filter((child) => child.tag === "path" && !child.attrs.get("class"));
+	assert.deepEqual(angularPaths.map((path) => path.attrs.get("d")), ["M16 0L32 14.9V24", "M16 0V9.1L32 24"]);
 });
 
 // ---------- what the page asks for ----------
