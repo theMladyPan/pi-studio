@@ -90,6 +90,7 @@ A plugin asks the daemon over the same pipe, and each answer is a call into the 
 | `workspace.list` | `{}` | `{ workspaces: [ { id, name, folder, missing, scratch } ] }` |
 | `workspace.read` | `{ workspace }` | `{ workspace, open, cards }` |
 | `cards.note` | `{ workspace, markdown, title?, key?, size?, after? }` | `{ cardId, card, updated?, report? }` |
+| `cards.remove` | `{ workspace, key }` | `{ removed }` — off the board when the problem it carried is gone |
 | `threads.list` | `{ workspace }` | `{ workspace, threads: [ … ] }` |
 | `threads.create` | `{ workspace, title?, mode?, provider?, model?, thinking?, type?, after? }` | `{ workspace, threadId, thread }` |
 | `threads.prompt` | `{ workspace, thread, text, mode? }` | `{ workspace, thread, turn }` |
@@ -101,7 +102,7 @@ folder and never receives one it asked for by path. `cards.note`, `threads.creat
 `threads.stop` write what the human's own routes write, and are refused what those routes refuse. The
 exact params, the events and the refusal codes are documented at the top of `server/plugins/service.ts`.
 
-The shapes of those eight methods, the two events and `initialize` are frozen while the protocol version
+The shapes of those nine methods, the two events and `initialize` are frozen while the protocol version
 is 1: they may gain fields and new methods, but a field may never be removed, renamed or reshaped
 without a protocol 2. Unknown keys on either side are ignored, which is what makes that promise keepable.
 
@@ -173,7 +174,7 @@ staged: it is an example to build from its own source.
 - **Choosing which panel is on screen.** Today every plugin with a panel gets a door, and the newest one
   opened wins the frame. A workspace could remember the panel it was left on, and the board could offer
   one door per workspace instead of one per plugin.
-- **Declaring what a plugin may do.** The daemon answers all eight methods for every plugin. A row could
+- **Declaring what a plugin may do.** The daemon answers all nine methods for every plugin. A row could
   name the ones it wants — read only, notes but no threads — and the daemon would refuse the rest.
 - **Reporting plugins where the other gaps are reported.** `pi-studio doctor` names Node, git and pi. It
   could list the registered plugins, what each one answers, and the rows that did not start.

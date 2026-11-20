@@ -9262,16 +9262,6 @@ function paintShortcuts() {
 const pluginRowsEl = document.getElementById("pluginRows");
 const pluginCountEl = document.getElementById("pluginCount");
 const pluginNote = document.getElementById("plNote");
-const pluginForm = {
-  name: document.getElementById("plName"),
-  command: document.getElementById("plCommand"),
-  args: document.getElementById("plArgs"),
-  place: document.getElementById("plPlace"),
-  title: document.getElementById("plTitle"),
-  entry: document.getElementById("plEntry"),
-  files: document.getElementById("plFiles"),
-  shortcut: document.getElementById("plShortcut"),
-};
 let pluginData = null;
 
 function pluginField(label, value, field, index, placeholder) {
@@ -9508,34 +9498,6 @@ async function loadPluginSettings() {
   paintShortcuts();
   renderPluginSettings();
 }
-
-// ---------- adding a plugin --------------------------------------------
-document.getElementById("plAdd")?.addEventListener("click", () => {
-  const rows = gatherPluginRows();
-  rows.push({
-    name: pluginForm.name.value.trim(),
-    command: pluginForm.command.value.trim(),
-    args: pluginForm.args.value.split(",").map((one) => one.trim()).filter(Boolean),
-    ...(() => {
-      const files = pluginForm.files.value.split(",").map((one) => one.trim()).filter(Boolean);
-      if (!files.length) return {};
-      return {
-        visual: {
-          title: pluginForm.title.value.trim() || pluginForm.name.value.trim(),
-          entry: pluginForm.entry.value.trim(),
-          files,
-          ...(pluginForm.place.value ? { place: pluginForm.place.value } : {}),
-        },
-      };
-    })(),
-    ...(pluginForm.shortcut.value.trim() ? { shortcut: pluginForm.shortcut.value.trim().toLowerCase() } : {}),
-  });
-  if (!rows[rows.length - 1].name || !rows[rows.length - 1].command) {
-    pluginNote.textContent = "a name and a command are needed";
-    return;
-  }
-  void savePluginSettings(rows, "added");
-});
 
 /**
  * Whether a panel of the header is reading the screen. Both of them cover the board, so the letters the

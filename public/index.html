@@ -1639,21 +1639,10 @@
     <details class="cfg-group" id="cfgPlugins">
       <summary><span>plugins</span><span class="cfg-preview" id="pluginCount">none</span></summary>
       <div class="cfg-kids">
-        <p class="cfg-note">A plugin is a program you name in the daemon's own list — nothing is
-        installed, updated or started but what you write here. A plugin declares itself in a `plugin.json`
-        in its own folder; copy the folder into `~/.local/state/pi-studio/plugins/` and it is offered
-        below. A place puts the panel in the left drawers; toolbox leaves it in the toolbox menu.
-        A shortcut is one letter the board does not answer to yet, and it opens the panel.</p>
+        <p class="cfg-note">Install one with <code>pi-studio add &lt;git-url&gt;</code>, then enable it
+        below. A shortcut is one letter the board does not answer to yet, and it opens the panel.</p>
         <div id="pluginRows"></div>
-        <div class="cfg-row is-typed"><span>name</span><input class="cfg-type" id="plName" maxlength="64" spellcheck="false" placeholder="bughound" /></div>
-        <div class="cfg-row is-typed"><span>command</span><input class="cfg-type" id="plCommand" spellcheck="false" placeholder="/absolute/path/to/the/program" /></div>
-        <div class="cfg-row is-typed"><span>args</span><input class="cfg-type" id="plArgs" spellcheck="false" placeholder="--flag value, comma separated" /></div>
-        <div class="cfg-row is-typed"><span>place</span><select class="cfg-type" id="plPlace"><option value="">toolbox</option><option value="drawer">left drawers</option></select></div>
-        <div class="cfg-row is-typed"><span>panel title</span><input class="cfg-type" id="plTitle" maxlength="80" spellcheck="false" placeholder="shown on the door" /></div>
-        <div class="cfg-row is-typed"><span>panel entry</span><input class="cfg-type" id="plEntry" spellcheck="false" placeholder="assets/panel.html" /></div>
-        <div class="cfg-row is-typed"><span>panel files</span><input class="cfg-type" id="plFiles" spellcheck="false" placeholder="assets/panel.html, assets/panel.js, assets/panel.css" /></div>
-        <div class="cfg-row is-typed"><span>shortcut</span><input class="cfg-type" id="plShortcut" maxlength="1" spellcheck="false" placeholder="one letter" /></div>
-        <div class="cfg-prose-actions"><span class="cfg-prose-size" id="plNote" role="status"></span><button type="button" class="cfg-prose-save" id="plAdd">add plugin</button></div>
+        <div class="cfg-prose-actions"><span class="cfg-prose-size" id="plNote" role="status"></span></div>
       </div>
     </details>
   </div>
