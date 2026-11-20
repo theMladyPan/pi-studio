@@ -22,6 +22,16 @@
     <button type="button" id="pause" title="pause or resume watching (p)">pause</button>
     <button type="button" id="copy" title="copy the last log">copy log</button>
   </div>
+  <details class="bh-settings" id="settings">
+    <summary>settings</summary>
+    <div class="bh-actions">
+      <label>interval <input type="number" id="setInterval" min="250" step="250"></label>
+      <label>debounce <input type="number" id="setDebounce" min="0" step="100"></label>
+      <label>timeout <input type="number" id="setTimeout" min="1" step="10"></label>
+      <button type="button" id="saveSettings">save settings</button>
+    </div>
+    <p class="bh-note" id="setNote" role="status"></p>
+  </details>
   <p class="bh-pending" id="pending" hidden></p>
   <pre id="log" aria-live="polite"></pre>
   <script src="panel.js"></script>

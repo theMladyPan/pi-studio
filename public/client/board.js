@@ -47,6 +47,8 @@ document.getElementById("termBtn").addEventListener("click", () => {
 // The plugin panel: one sandboxed frame for the life of the page, the doors the toolbox lists for the
 // plugins that declared a panel, and the one call a panel is allowed to make.
 const pluginPanel = createPluginPanelHost({ workspace });
+/** One plain letter to the panel it opens, as the daemon lists them; set in settings, read by the keys. */
+const pluginShortcuts = new Map();
 
 // ---------- the plugin panel ---------------------------------------------
 /**
@@ -90,6 +92,7 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
   let pane = null;
   let paneFrame = null;
   let paneKey = "";
+  let registeredLetters = [];
   const targetFrame = () => (drawerMode ? paneFrame : frame);
   /** The plugin whose panel is on screen, `""` before a door was ever pressed. */
   let plugin = "";
@@ -277,6 +280,17 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
     }
     const panels = Array.isArray(payload?.plugins) ? payload.plugins : [];
     const mine = panels.filter((panel) => panel && typeof panel.name === "string" && typeof panel.url === "string" && ((panel.place === "drawer") === drawerMode));
+    // A re-list replaces the doors rather than leaving a second set beside them.
+    if (drawerMode) {
+      drawerDoorsEl.replaceChildren();
+      for (const key of Object.keys(pluginDrawerDoors)) {
+        if (key.startsWith("plugin:")) delete pluginDrawerDoors[key];
+      }
+    } else {
+      doors.replaceChildren();
+    }
+    for (const letter of registeredLetters) pluginShortcuts.delete(letter);
+    registeredLetters = [];
     for (const panel of mine) {
       const door = document.createElement("button");
       door.type = "button";
@@ -298,6 +312,10 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
         door.addEventListener("click", () => open(panel));
         doors.append(door);
       }
+      if (typeof panel.shortcut === "string" && /^[a-z]$/.test(panel.shortcut)) {
+        pluginShortcuts.set(panel.shortcut, { panel, drawer: drawerMode });
+        registeredLetters.push(panel.shortcut);
+      }
     }
     if (drawerMode) drawerDoorsEl.hidden = mine.length === 0;
     else doors.hidden = mine.length === 0;
@@ -313,6 +331,7 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
     isOpen: () => (drawerMode ? drawerState.open === paneKey && paneKey !== "" : !drawer.hidden),
     close: () => (drawerMode ? (drawerState.open === paneKey ? closeDrawers() : null) : close()),
     open,
+    relist: listDoors,
   };
 }
 // ---------- the header menus ---------------------------------------------
@@ -9118,6 +9137,7 @@ const SHORTCUTS = [
       { keys: "o", does: "flip the thread order, newest first or oldest first" },
       { keys: "g", does: "roll the git graph down, and press it again to roll it up" },
       { keys: "x", does: "roll the terminal drawer up from the bottom, and press it again to roll it down" },
+      { keys: "one letter per plugin", does: "open that plugin's panel — assigned in settings under plugins" },
       { keys: "t", does: "start a new thread, on a board of threads with no card selected" },
       { keys: "r", does: "reply to the card you are reading" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
@@ -9214,10 +9234,17 @@ const SHORTCUTS = [
   },
 ];
 
-/** The panel, drawn once from that list: a heading per group, then a row of keys beside what it does. */
+/** The panel, drawn once from that list: a heading per group, then a row of keys beside what it does.
+ * A plugin's own letter is a live row: the list is drawn when the settings are read, so the map always
+ * is the map, with the letters the settings page assigned. */
 function paintShortcuts() {
+  const live = [...pluginShortcuts.entries()].map(([letter, hit]) => ({
+    keys: letter,
+    does: `open the ${hit.panel.title || hit.panel.name} plugin, in the ${hit.drawer ? "drawers" : "toolbox"}`,
+  }));
+  const groups = live.length ? [...SHORTCUTS, { group: "plugins", rows: live }] : SHORTCUTS;
   shortcutList.replaceChildren(
-    ...SHORTCUTS.flatMap((group) => [
+    ...groups.flatMap((group) => [
       Object.assign(el("p", "cfg-head"), { textContent: group.group }),
       ...group.rows.map((row) => {
         const line = el("div", "cfg-row");
@@ -9227,6 +9254,207 @@ function paintShortcuts() {
     ]),
   );
 }
+
+// ---------- the plugins in settings --------------------------------------
+// The daemon's registration is the truth; whatever arrives is what the section shows. Saving writes
+// the whole list, and the daemon proves it by the reader before it replaces what it runs, so a row it
+// cannot use saves nothing.
+const pluginRowsEl = document.getElementById("pluginRows");
+const pluginCountEl = document.getElementById("pluginCount");
+const pluginNote = document.getElementById("plNote");
+const pluginForm = {
+  name: document.getElementById("plName"),
+  command: document.getElementById("plCommand"),
+  args: document.getElementById("plArgs"),
+  place: document.getElementById("plPlace"),
+  title: document.getElementById("plTitle"),
+  entry: document.getElementById("plEntry"),
+  files: document.getElementById("plFiles"),
+  shortcut: document.getElementById("plShortcut"),
+};
+let pluginData = null;
+
+function pluginField(label, value, field, index, placeholder) {
+  const row = document.createElement("div");
+  row.className = "cfg-row is-typed";
+  row.append(Object.assign(el("span"), { textContent: label }));
+  const input = el("input", "cfg-type");
+  input.type = "text";
+  input.value = value || "";
+  if (placeholder) input.placeholder = placeholder;
+  if (index !== null) input.dataset.index = String(index);
+  if (field) input.dataset.field = field;
+  row.append(input);
+  return row;
+}
+
+function pluginPlaceSelect(value, index) {
+  const row = document.createElement("div");
+  row.className = "cfg-row is-typed";
+  row.append(Object.assign(el("span"), { textContent: "place" }));
+  const select = el("select", "cfg-type");
+  select.dataset.index = String(index);
+  select.dataset.field = "place";
+  for (const [key, label] of [["", "toolbox"], ["drawer", "left drawers"]]) {
+    const option = el("option");
+    option.value = key;
+    option.textContent = label;
+    if ((value || "") === key) option.selected = true;
+    select.append(option);
+  }
+  row.append(select);
+  return row;
+}
+
+/** One plugin as the section edits it: its name, its command, and the panel and shortcut it declares. */
+function renderPluginSettings() {
+  if (!pluginRowsEl) return;
+  pluginCountEl.textContent = pluginData ? `${pluginData.plugins.length} registered` : "could not read";
+  const nodes = [];
+  if (!pluginData) {
+    nodes.push(Object.assign(el("p", "cfg-note"), { textContent: "could not read the plugin list" }));
+    pluginRowsEl.replaceChildren(...nodes);
+    return;
+  }
+  const roster = new Map((pluginData.roster || []).map((one) => [one.name, one]));
+  for (const problem of pluginData.problems || []) {
+    nodes.push(
+      Object.assign(el("p", "cfg-note"), {
+        textContent: problem.name ? `${problem.name}: ${problem.problem}` : problem.problem,
+      }),
+    );
+  }
+  pluginData.plugins.forEach((row, index) => {
+    const head = document.createElement("div");
+    head.className = "cfg-prose-head";
+    const state = roster.get(row.name);
+    head.append(
+      Object.assign(el("b"), {
+        textContent: `${row.name} · ${state ? (state.running ? `running${state.version ? ` ${state.version}` : ""}` : "not running") : "not running"}${row.shortcut ? ` · ${row.shortcut}` : ""}`,
+      }),
+    );
+    const remove = el("button", "omni-browse");
+    remove.type = "button";
+    remove.textContent = "remove";
+    remove.addEventListener("click", () => void savePluginSettings(gatherPluginRows().filter((_, at) => at !== index), `removed ${row.name}`));
+    head.append(remove);
+    nodes.push(head);
+    nodes.push(pluginField("name", row.name, "name", index));
+    nodes.push(pluginField("command", row.command, "command", index));
+    nodes.push(pluginField("args", (row.args || []).join(", "), "args", index, "--flag value, comma separated"));
+    nodes.push(pluginPlaceSelect(row.visual?.place || "", index));
+    nodes.push(pluginField("panel title", row.visual?.title || "", "title", index));
+    nodes.push(pluginField("panel entry", row.visual?.entry || "", "entry", index));
+    nodes.push(pluginField("panel files", (row.visual?.files || []).join(", "), "files", index));
+    nodes.push(pluginField("shortcut", row.shortcut || "", "shortcut", index, "one letter"));
+  });
+  const save = el("button", "cfg-prose-save");
+  save.type = "button";
+  save.textContent = "save plugins";
+  save.addEventListener("click", () => void savePluginSettings(gatherPluginRows(), "saved"));
+  const actions = document.createElement("div");
+  actions.className = "cfg-prose-actions";
+  actions.append(save);
+  nodes.push(actions);
+  pluginRowsEl.replaceChildren(...nodes);
+}
+
+/** The rows as the form has them, before the daemon is asked to prove them. */
+function gatherPluginRows() {
+  const byIndex = new Map();
+  for (const input of pluginRowsEl.querySelectorAll("input[data-index], select[data-index]")) {
+    const index = Number(input.dataset.index);
+    if (!byIndex.has(index)) byIndex.set(index, {});
+    byIndex.get(index)[input.dataset.field] = input.value;
+  }
+  return [...byIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([_, fields]) => {
+      const row = {
+        name: (fields.name || "").trim(),
+        command: (fields.command || "").trim(),
+        args: (fields.args || "").split(",").map((one) => one.trim()).filter(Boolean),
+      };
+      const files = (fields.files || "").split(",").map((one) => one.trim()).filter(Boolean);
+      if (files.length) {
+        row.visual = {
+          title: (fields.title || "").trim() || row.name,
+          entry: (fields.entry || "").trim(),
+          files,
+          ...(fields.place ? { place: fields.place } : {}),
+        };
+      }
+      const shortcut = (fields.shortcut || "").trim().toLowerCase();
+      if (shortcut) row.shortcut = shortcut;
+      return row;
+    });
+}
+
+async function savePluginSettings(rows, said) {
+  pluginNote.textContent = "";
+  try {
+    const response = await fetch(`/plugins/registry?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plugins: rows }),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      const problems = (body?.problems || []).map((one) => (one.name ? `${one.name}: ` : "") + one.problem);
+      pluginNote.textContent = problems.join("; ") || "the daemon refused the list";
+      return;
+    }
+    pluginData = body;
+    renderPluginSettings();
+    pluginPanel.relist();
+    pluginDrawer.relist();
+    paintShortcuts();
+    pluginNote.textContent = `${said} — the roster restarted without a daemon restart`;
+  } catch (error) {
+    pluginNote.textContent = `could not save: ${error.message || error}`;
+  }
+}
+
+/** The section is read on every open, so the same page always shows the roster as it stands. */
+async function loadPluginSettings() {
+  try {
+    const response = await fetch(`/plugins/registry?${auth}`);
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    pluginData = await response.json();
+  } catch (error) {
+    pluginData = null;
+  }
+  paintShortcuts();
+  renderPluginSettings();
+}
+
+// ---------- adding a plugin --------------------------------------------
+document.getElementById("plAdd")?.addEventListener("click", () => {
+  const rows = gatherPluginRows();
+  rows.push({
+    name: pluginForm.name.value.trim(),
+    command: pluginForm.command.value.trim(),
+    args: pluginForm.args.value.split(",").map((one) => one.trim()).filter(Boolean),
+    ...(() => {
+      const files = pluginForm.files.value.split(",").map((one) => one.trim()).filter(Boolean);
+      if (!files.length) return {};
+      return {
+        visual: {
+          title: pluginForm.title.value.trim() || pluginForm.name.value.trim(),
+          entry: pluginForm.entry.value.trim(),
+          files,
+          ...(pluginForm.place.value ? { place: pluginForm.place.value } : {}),
+        },
+      };
+    })(),
+    ...(pluginForm.shortcut.value.trim() ? { shortcut: pluginForm.shortcut.value.trim().toLowerCase() } : {}),
+  });
+  if (!rows[rows.length - 1].name || !rows[rows.length - 1].command) {
+    pluginNote.textContent = "a name and a command are needed";
+    return;
+  }
+  void savePluginSettings(rows, "added");
+});
 
 /**
  * Whether a panel of the header is reading the screen. Both of them cover the board, so the letters the
@@ -10256,6 +10484,7 @@ configBtn.addEventListener("click", () => {
   // is what it settles on.
   if (boardDoc) renderTree(boardDoc);
   void loadBoardSettings();
+  void loadPluginSettings();
 });
 
 // ---------- the prompt files ----------------------------------------------
@@ -13459,6 +13688,16 @@ document.addEventListener("keydown", (event) => {
     if (letter === "fit") fitAll();
     else toggleDrawer(letter);
     return;
+  }
+  // A plugin's own letter opens its panel, in the drawers or the toolbox as its registration says.
+  if (!event.shiftKey) {
+    const hit = pluginShortcuts.get(event.key.toLowerCase());
+    if (hit) {
+      event.preventDefault();
+      if (hit.drawer) pluginDrawer.open(hit.panel);
+      else pluginPanel.open(hit.panel);
+      return;
+    }
   }
   if (event.shiftKey) return;
   if (event.key === "0") {

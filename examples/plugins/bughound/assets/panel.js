@@ -27,6 +27,11 @@ const runFailedBtn = document.getElementById("runFailed");
 const pauseBtn = document.getElementById("pause");
 const copyBtn = document.getElementById("copy");
 const closeBtn = document.getElementById("close");
+const setIntervalEl = document.getElementById("setInterval");
+const setDebounceEl = document.getElementById("setDebounce");
+const setTimeoutEl = document.getElementById("setTimeout");
+const setNoteEl = document.getElementById("setNote");
+const saveSettingsBtn = document.getElementById("saveSettings");
 
 let pollTimer = 0;
 let pollBusy = false;
@@ -83,6 +88,13 @@ function render(state) {
   const pending = (found.pending || []).slice(0, 8);
   pendingEl.hidden = pending.length === 0;
   if (pending.length) pendingEl.textContent = pending.join("\n");
+  // The settings are the panel's own page of its timings: a poll fills them only while nobody is
+  // typing in them, so a number being edited is never overwritten under the caret.
+  if (state.settings && document.activeElement !== setIntervalEl && document.activeElement !== setDebounceEl && document.activeElement !== setTimeoutEl) {
+    setIntervalEl.value = state.settings.intervalMs;
+    setDebounceEl.value = state.settings.debounceMs;
+    setTimeoutEl.value = state.settings.timeoutS;
+  }
   pauseBtn.textContent = state.paused ? "resume" : "pause";
   runFailedBtn.hidden = !last || last.status === "passed" || last.status === "no_tests";
   void loadLog(state, found);
@@ -153,6 +165,21 @@ pauseBtn.addEventListener("click", async () => {
 });
 copyBtn.addEventListener("click", () => {
   navigator.clipboard?.writeText(logEl.textContent || "").catch(() => {});
+});
+saveSettingsBtn.addEventListener("click", async () => {
+  const params = {};
+  const interval = Number(setIntervalEl.value);
+  const debounce = Number(setDebounceEl.value);
+  const timeout = Number(setTimeoutEl.value);
+  if (Number.isFinite(interval)) params.intervalMs = interval;
+  if (Number.isFinite(debounce)) params.debounceMs = debounce;
+  if (Number.isFinite(timeout)) params.timeoutS = timeout;
+  try {
+    const answer = await ask("set_config", params);
+    setNoteEl.textContent = answer.ok ? `saved: ${answer.settings.intervalMs}ms · ${answer.settings.debounceMs}ms · ${answer.settings.timeoutS}s` : "not saved";
+  } catch (err) {
+    setNoteEl.textContent = err.message;
+  }
 });
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {

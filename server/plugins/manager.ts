@@ -20,7 +20,10 @@ import type { PluginCall, PluginHost } from "./host.ts";
 import type { PluginProblem, PluginRegistry, PluginVisual } from "./registry.ts";
 
 /** One plugin as the daemon holds it. The seam a settings page or a status report reads. */
-export type PluginRoster = { name: string; command: string; version: string; running: boolean; visual?: PluginVisual };
+export type PluginRoster = { name: string; command: string; version: string; running: boolean; visual?: PluginVisual; shortcut?: string };
+
+/** The start this process began with, so the roster can be read and started again without one. */
+let lastOptions: PluginStartOptions | null = null;
 
 export type PluginStartOptions = {
 	/** The registration to read. A test names its own file; the daemon reads its own state folder. */
@@ -72,6 +75,7 @@ export function notifyPlugin(plugin: string, method: string, params?: unknown): 
  * usual. A manager already running is closed first, so there is never more than one of each plugin.
  */
 export async function startPlugins(options: PluginStartOptions = {}): Promise<PluginManager> {
+	lastOptions = options;
 	await stopPlugins();
 	const registry: PluginRegistry = loadPluginRegistry(options.file, options.bundledDir);
 	const log = options.log ?? ((line: string) => process.stderr.write(line));
@@ -120,6 +124,7 @@ export async function startPlugins(options: PluginStartOptions = {}): Promise<Pl
 				// The panel this plugin declared, so the board can offer its door without reading the
 				// registration a second time and disagreeing with what was actually started.
 				...(host.entry.visual ? { visual: host.entry.visual } : {}),
+				...(host.entry.shortcut ? { shortcut: host.entry.shortcut } : {}),
 			})),
 		problems: () => [...problems],
 		close: async () => {
@@ -131,6 +136,15 @@ export async function startPlugins(options: PluginStartOptions = {}): Promise<Pl
 	};
 	current = manager;
 	return manager;
+}
+
+/**
+ * Read the registration again and start everything it names, closing what is running first. It is what
+ * the settings page does after writing it, so a row added or removed takes effect without a daemon
+ * restart, under the same start the daemon began with.
+ */
+export async function reloadPlugins(): Promise<PluginManager> {
+	return startPlugins(lastOptions ?? {});
 }
 
 /**

@@ -42,6 +42,16 @@ export type PluginVisual = {
 	place?: "drawer";
 };
 
+/**
+ * The plain letters the board's own keys already answer to, from `SHORTCUTS` in `public/client/board.js`
+ * (`f` files, `a` activity, `c` cards, `d` source control, `m` map, `n` next new, `o` order, `t` new
+ * thread, `r` reply, `p` pin, `q` close, `g` git graph, `x` terminal, `0` real size, `1`–`4` on a
+ * question). A plugin shortcut is one lowercase letter A plugin takes, and never one of these: a key
+ * that belongs to the board is never also a plugin's, whichever side asks first. Keep this list beside
+ * that one, so the two agree.
+ */
+export const PLUGIN_SHORTCUT_TAKEN = ["f", "a", "c", "d", "m", "n", "o", "t", "r", "p", "q", "g", "x", "0", "1", "2", "3", "4"];
+
 /** One executable the daemon starts: what it is called, and what to run. */
 export type PluginEntry = {
 	name: string;
@@ -52,6 +62,8 @@ export type PluginEntry = {
 	visual?: PluginVisual;
 	/** The folder name of the plugin this install ships, when the row named one instead of a path. */
 	bundled?: string;
+	/** One plain letter that opens this plugin's panel, when the human assigned one in settings. */
+	shortcut?: string;
 };
 
 /** One row of the file that is not a plugin the daemon can start, and why. */
@@ -77,6 +89,7 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE, bundledDir: stri
 	const plugins: PluginEntry[] = [];
 	const problems: PluginProblem[] = [];
 	const seen = new Set<string>();
+	const usedShortcuts = new Set<string>();
 	for (const row of rows) {
 		if (typeof row !== "object" || row === null || Array.isArray(row)) {
 			problems.push({ name: "", problem: "one row is not an object" });
@@ -97,6 +110,23 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE, bundledDir: stri
 		if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string")) {
 			problems.push({ name, problem: "args must be a list of strings" });
 			continue;
+		}
+		// One shortcut answers to one plugin, and a letter the board answers to is never also a plugin's.
+		const shortcut = bag.shortcut;
+		if (shortcut !== undefined) {
+			if (typeof shortcut !== "string" || !/^[a-z]$/.test(shortcut)) {
+				problems.push({ name, problem: "shortcut must be one lowercase letter" });
+				continue;
+			}
+			if (PLUGIN_SHORTCUT_TAKEN.includes(shortcut)) {
+				problems.push({ name, problem: `shortcut ${shortcut} already belongs to the board` });
+				continue;
+			}
+			if (usedShortcuts.has(shortcut)) {
+				problems.push({ name, problem: `shortcut ${shortcut} is already assigned` });
+				continue;
+			}
+			usedShortcuts.add(shortcut);
 		}
 		// A bundled row names a plugin this install ships, and takes its program and its panel from that
 		// folder, so one word is the whole registration.
@@ -119,6 +149,7 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE, bundledDir: stri
 				command: found.command as string,
 				args: [...(args as string[])],
 				...(found.visual ? { visual: found.visual } : {}),
+				...(shortcut !== undefined ? { shortcut: shortcut as string } : {}),
 				bundled: (bag.bundled as string).trim(),
 			});
 			continue;
@@ -139,7 +170,7 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE, bundledDir: stri
 			problems.push({ name, problem: visual.problem });
 			continue;
 		}
-		plugins.push({ name, command, args: [...(args as string[])], ...(visual.visual ? { visual: visual.visual } : {}) });
+		plugins.push({ name, command, args: [...(args as string[])], ...(visual.visual ? { visual: visual.visual } : {}), ...(shortcut !== undefined ? { shortcut: shortcut as string } : {}) });
 	}
 	return { plugins, problems };
 }

@@ -124,6 +124,54 @@ test("a panel that asks for the drawer is read with its place, and one that asks
 	assert.match(bad.problems[0]?.problem ?? "", /visual\.place/);
 });
 
+test("a row's shortcut is one free letter, and a letter twice or the board's is refused", () => {
+	const exe = join(folder("keyed"), "exe");
+	const row = (name: string, shortcut: unknown) => ({ name, command: exe, args: [], shortcut });
+	const { plugins, problems } = read([row("keyed", "b")]);
+	assert.deepEqual(problems, []);
+	assert.equal(plugins[0].shortcut, "b");
+	const clash = read([row("one", "b"), row("two", "b")]);
+	assert.equal(clash.plugins.length, 1, "the second row with the same letter is refused");
+	assert.match(clash.problems[0].problem, /already assigned/);
+	assert.match(read([row("board", "f")]).problems[0].problem, /belongs to the board/);
+	assert.match(read([row("shaped", "bb")]).problems[0].problem, /one lowercase letter/);
+	assert.match(read([row("capital", "B")]).problems[0].problem, /one lowercase letter/);
+});
+
+test("the settings list is read and written through the daemon, and only the human writes it", async () => {
+	const daemon = await boot([exampleRow]);
+	const gone = new Promise<void>((resolve) => daemon.child.once("exit", () => resolve()));
+	try {
+		// What the settings page reads: the row, the running roster beside it, and the letters a
+		// shortcut may not take.
+		const listed = await get(daemon, "/plugins/registry");
+		assert.equal(listed.status, 200);
+		const shown = JSON.parse(listed.body) as { plugins: { name: string }[]; taken: string[] };
+		assert.deepEqual(shown.plugins.map((one) => one.name), ["example-panel"]);
+		assert.ok(shown.taken.includes("f"));
+		// A list the reader cannot use changes nothing: the daemon answers why and keeps what it runs.
+		const refused = await post(daemon, "/plugins/registry", { plugins: [{ name: "broken" }] });
+		assert.equal(refused.status, 400, "a row with no command is not written");
+		assert.match(refused.body, /problems/);
+		const still = await get(daemon, "/plugins/registry");
+		assert.deepEqual((JSON.parse(still.body) as { plugins: { name: string }[] }).plugins.map((one) => one.name), ["example-panel"]);
+		// A usable list replaces the file and restarts the roster under it, with no daemon restart.
+		const written = await post(daemon, "/plugins/registry", { plugins: [{ ...exampleRow, shortcut: "b" }] });
+		assert.equal(written.status, 200, written.body);
+		const reread = (await get(daemon, "/plugins/registry")).body;
+		const after = JSON.parse(reread) as { plugins: { name: string; shortcut?: string }[]; roster: { name: string; running: boolean; shortcut?: string }[] };
+		assert.equal(after.plugins[0].shortcut, "b");
+		assert.deepEqual(after.roster.map((one) => [one.name, one.running, one.shortcut]), [["example-panel", true, "b"]]);
+		// A thread has no route here: writing a row starts whatever it names, so it stays the human's.
+		const thread = { human: false, board: { id: "ws" }, thread: {} };
+		assert.equal(threadRefusal(thread, "GET", "/plugins/registry", "ws"), "a thread may not use that");
+		assert.equal(threadRefusal(thread, "POST", "/plugins/registry", "ws"), "a thread may not use that");
+	} finally {
+		daemon.child.kill("SIGTERM");
+		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);
+	}
+});
+
 // ---------- the three routes, against a daemon ----------
 
 /** One daemon on its own state folder, started the way a human starts it, with these plugins registered. */

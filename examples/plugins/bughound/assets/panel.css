@@ -72,6 +72,15 @@ body {
 
 .bh-pending { margin: 0; padding: 0 12px 6px; color: var(--amber); white-space: pre-wrap; word-break: break-all; }
 
+.bh-settings { border-top: 1px solid var(--border); margin: 0 12px 4px; }
+.bh-settings summary { padding: 8px 0 4px; color: var(--muted); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .6px; cursor: pointer; }
+.bh-settings label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.bh-settings input { width: 6.5em; background: #0d1117; color: var(--accent); border: 1px solid var(--border);
+  border-radius: 5px; padding: 1px 6px; font: 12px var(--mono); outline: none; }
+.bh-note { margin: 0; padding: 0 0 6px; color: var(--muted); }
+.bh-settings .bh-actions { padding: 4px 0 0; }
+
 #log {
   margin: 0 12px 12px;
   padding: 10px 12px;

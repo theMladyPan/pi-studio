@@ -247,17 +247,19 @@ struct Bughound<T: Transport> {
     transport: T,
     next_id: i64,
     stashed: HashMap<String, Result<Value, RpcError>>,
+    settings_path: PathBuf,
     shared: Arc<(Mutex<Shared>, Condvar)>,
     /// Set once the daemon said `shutdown`, or told this plugin something it cannot answer.
     stopping: bool,
 }
 
 impl<T: Transport> Bughound<T> {
-    fn new(transport: T, config: Config) -> Self {
+    fn new(transport: T, config: Config, settings_path: PathBuf) -> Self {
         Self {
             transport,
             next_id: 1,
             stashed: HashMap::new(),
+            settings_path,
             shared: Arc::new((Mutex::new(Shared::new(config)), Condvar::new())),
             stopping: false,
         }
@@ -501,11 +503,47 @@ impl<T: Transport> Bughound<T> {
                     .unwrap_or(workspace);
                 Ok(queue_manual_run(&self.shared, scope, workspace))
             }
+            "set_config" => self.set_config(&inner),
             other => Err(RpcError::new(
                 METHOD_NOT_FOUND,
                 &format!("{other} is not something this panel asks for; it asks for state, log, toggle_pause and run"),
             )),
         }
+    }
+
+    /// The panel's own settings page, the git graph's in miniature: the watch timings it edits are
+    /// written to this plugin's own state file, so they survive the daemon and the plugin together.
+    /// Registration args still win over the file on the next start.
+    fn set_config(&mut self, inner: &Value) -> Result<Value, RpcError> {
+        let interval = inner.get("intervalMs").and_then(Value::as_u64);
+        let debounce = inner.get("debounceMs").and_then(Value::as_u64);
+        let timeout = inner.get("timeoutS").and_then(Value::as_u64);
+        if interval.is_none() && debounce.is_none() && timeout.is_none() {
+            return Err(RpcError::new(INVALID_PARAMS, "set_config asks for intervalMs, debounceMs or timeoutS"));
+        }
+        let (lock, _) = &*self.shared;
+        let mut shared = lock.lock().unwrap();
+        if let Some(value) = interval {
+            shared.config.interval_ms = value.max(250);
+        }
+        if let Some(value) = debounce {
+            shared.config.debounce_ms = value;
+        }
+        if let Some(value) = timeout {
+            shared.config.timeout_s = value.max(1);
+        }
+        let saved = Settings {
+            interval_ms: Some(shared.config.interval_ms),
+            debounce_ms: Some(shared.config.debounce_ms),
+            timeout_s: Some(shared.config.timeout_s),
+        };
+        if let Err(error) = saved.write(&self.settings_path) {
+            eprintln!("bughound: the settings could not be written: {error}");
+            return Err(RpcError::new(-32603, "the settings could not be written"));
+        }
+        drop(shared);
+        wake(&self.shared);
+        Ok(json!({ "ok": true, "settings": settings_view(&self.shared) }))
     }
 
     fn send(&mut self, message: Value) -> io::Result<()> {
@@ -619,10 +657,76 @@ impl Config {
     }
 }
 
+/// What the registration said, before what the panel saved adds to it: the three timings as options,
+/// so a file the panel wrote and an arg the registration gave can be told apart.
+#[derive(Clone, Debug, Default)]
+struct Given {
+    interval_ms: Option<u64>,
+    debounce_ms: Option<u64>,
+    timeout_s: Option<u64>,
+    workspaces: Vec<String>,
+    pytest: Option<String>,
+    pytest_args: Vec<String>,
+    post_failures: bool,
+    settings_path: Option<String>,
+}
+
+/// The timings the panel's settings page last wrote, if it wrote any.
+#[derive(Clone, Debug, Default)]
+struct Settings {
+    interval_ms: Option<u64>,
+    debounce_ms: Option<u64>,
+    timeout_s: Option<u64>,
+}
+
+impl Settings {
+    fn read(path: &Path) -> Settings {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return Settings::default();
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&text) else {
+            return Settings::default();
+        };
+        Settings {
+            interval_ms: value.get("intervalMs").and_then(Value::as_u64),
+            debounce_ms: value.get("debounceMs").and_then(Value::as_u64),
+            timeout_s: value.get("timeoutS").and_then(Value::as_u64),
+        }
+    }
+
+    fn write(&self, path: &Path) -> Result<(), io::Error> {
+        if let Some(folder) = path.parent() {
+            std::fs::create_dir_all(folder)?;
+        }
+        let text = json!({
+            "intervalMs": self.interval_ms,
+            "debounceMs": self.debounce_ms,
+            "timeoutS": self.timeout_s,
+        });
+        std::fs::write(path, format!("{}\n", text))
+    }
+}
+
+/// Where the settings file lives: the daemon's own state folder, unless `--settings` said elsewhere.
+fn default_settings_path() -> PathBuf {
+    if let Some(folder) = std::env::var_os("XDG_STATE_HOME") {
+        return PathBuf::from(folder).join("pi-studio").join("bughound.json");
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".local").join("state").join("pi-studio").join("bughound.json");
+    }
+    std::env::temp_dir().join("bughound.json")
+}
+
 /// Registration `args` as configuration, or why one of them cannot be used. An unknown flag is an
 /// error rather than a guess: the daemon reports it beside the plugins that did start.
+#[allow(dead_code)]
 fn parse_args(args: &[String]) -> Result<Config, String> {
-    let mut config = Config::with_defaults();
+    resolve(parse_given(args)?, None)
+}
+
+fn parse_given(args: &[String]) -> Result<Given, String> {
+    let mut given = Given::default();
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -639,28 +743,61 @@ fn parse_args(args: &[String]) -> Result<Config, String> {
         };
         match flag {
             "--interval-ms" => {
-                config.interval_ms = parse_u64(&value(&mut i)?, flag)?;
+                given.interval_ms = Some(parse_u64(&value(&mut i)?, flag)?);
             }
             "--debounce-ms" => {
-                config.debounce_ms = parse_u64(&value(&mut i)?, flag)?;
+                given.debounce_ms = Some(parse_u64(&value(&mut i)?, flag)?);
             }
             "--timeout-s" => {
-                config.timeout_s = parse_u64(&value(&mut i)?, flag)?;
+                given.timeout_s = Some(parse_u64(&value(&mut i)?, flag)?);
             }
             "--workspace" => {
-                config.workspaces.push(value(&mut i)?);
+                given.workspaces.push(value(&mut i)?);
             }
             "--pytest" => {
-                config.pytest = Some(value(&mut i)?);
+                given.pytest = Some(value(&mut i)?);
             }
             "--pytest-arg" => {
-                config.pytest_args.push(value(&mut i)?);
+                given.pytest_args.push(value(&mut i)?);
             }
-            "--post-failures" => config.post_failures = true,
+            "--settings" => {
+                given.settings_path = Some(value(&mut i)?);
+            }
+            "--post-failures" => given.post_failures = true,
             _ => return Err(format!("unknown argument {flag}")),
         }
         i += 1;
     }
+    Ok(given)
+}
+
+/// Defaults, then what the panel saved, then what the registration said: the last word wins.
+fn resolve(given: Given, saved: Option<Settings>) -> Result<Config, String> {
+    let mut config = Config::with_defaults();
+    if let Some(saved) = saved {
+        if let Some(value) = saved.interval_ms {
+            config.interval_ms = value;
+        }
+        if let Some(value) = saved.debounce_ms {
+            config.debounce_ms = value;
+        }
+        if let Some(value) = saved.timeout_s {
+            config.timeout_s = value;
+        }
+    }
+    if let Some(value) = given.interval_ms {
+        config.interval_ms = value;
+    }
+    if let Some(value) = given.debounce_ms {
+        config.debounce_ms = value;
+    }
+    if let Some(value) = given.timeout_s {
+        config.timeout_s = value;
+    }
+    config.workspaces = given.workspaces;
+    config.pytest = given.pytest;
+    config.pytest_args = given.pytest_args;
+    config.post_failures = given.post_failures;
     if config.interval_ms < 250 {
         config.interval_ms = 250;
     }
@@ -1624,6 +1761,20 @@ fn parse_result(output: &str, exit_code: i32) -> (String, String, Vec<Failure>) 
 
 // ---------- what the panel reads ----------
 
+fn settings_view(hub: &Hub) -> Value {
+    let (lock, _) = &**hub;
+    let shared = lock.lock().unwrap();
+    settings_view_of(&shared)
+}
+
+fn settings_view_of(shared: &Shared) -> Value {
+    json!({
+        "intervalMs": shared.config.interval_ms,
+        "debounceMs": shared.config.debounce_ms,
+        "timeoutS": shared.config.timeout_s,
+    })
+}
+
 fn state_snapshot(hub: &Hub, only: &str) -> Value {
     let (lock, _) = &**hub;
     let shared = lock.lock().unwrap();
@@ -1671,6 +1822,7 @@ fn state_snapshot(hub: &Hub, only: &str) -> Value {
         "intervalMs": shared.config.interval_ms,
         "debounceMs": shared.config.debounce_ms,
         "timeoutS": shared.config.timeout_s,
+        "settings": settings_view_of(&shared),
         "workspaces": rows,
     })
 }
@@ -1933,6 +2085,31 @@ mod tests {
     }
 
     #[test]
+    fn saved_settings_yield_to_the_registration() {
+        let saved = Settings {
+            interval_ms: Some(900),
+            debounce_ms: Some(900),
+            timeout_s: Some(90),
+        };
+        let config = resolve(Given::default(), Some(saved)).unwrap();
+        assert_eq!(config.interval_ms, 900);
+        assert_eq!(config.debounce_ms, 900);
+        assert_eq!(config.timeout_s, 90);
+        let given = Given {
+            interval_ms: Some(3000),
+            ..Given::default()
+        };
+        let saved = Settings {
+            interval_ms: Some(900),
+            debounce_ms: Some(900),
+            timeout_s: Some(90),
+        };
+        let config = resolve(given, Some(saved)).unwrap();
+        assert_eq!(config.interval_ms, 3000, "an arg wins over the file");
+        assert_eq!(config.debounce_ms, 900, "what no arg said still comes from the file");
+    }
+
+    #[test]
     fn a_long_output_keeps_its_head_and_its_tail() {
         let mut text = String::from("first line\n");
         for i in 0..10000 {
@@ -1963,7 +2140,7 @@ mod tests {
             call_frame(5, "visual.request", json!({ "workspace": "ws", "method": "zap", "params": {} })),
             json!({ "jsonrpc": "2.0", "method": "shutdown" }),
         ]);
-        let mut plugin = Bughound::new(script, Config::with_defaults());
+        let mut plugin = Bughound::new(script, Config::with_defaults(), project.0.join("settings.json"));
         plugin.run().unwrap();
         let sent = &plugin.transport.sent;
         let answer = |id: i64| sent.iter().find(|frame| frame.get("id") == Some(&json!(id))).cloned();
@@ -1978,14 +2155,22 @@ mod tests {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let config = match parse_args(&args) {
-        Ok(config) => config,
+    let (config, settings_path) = match parse_given(&args) {
+        Ok(given) => {
+            let path = given
+                .settings_path
+                .clone()
+                .map(PathBuf::from)
+                .unwrap_or_else(default_settings_path);
+            let saved = Settings::read(&path);
+            (resolve(given, Some(saved)).unwrap_or_else(|_| Config::with_defaults()), path)
+        }
         Err(error) => {
             eprintln!("bughound: {error}");
             std::process::exit(2);
         }
     };
-    let mut plugin = Bughound::new(StdioTransport::new(), config);
+    let mut plugin = Bughound::new(StdioTransport::new(), config, settings_path);
     if let Err(error) = plugin.run() {
         // A daemon that has gone away is the ordinary end of a plugin, and worth no fuss.
         if error.kind() != io::ErrorKind::BrokenPipe {

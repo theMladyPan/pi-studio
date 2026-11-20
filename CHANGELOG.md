@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- feat: Give the board a plugins section in its settings panel, so a plugin is registered there instead of by hand-writing the daemon's own file: name, command, arguments, place and shortcut are edited in the panel, the daemon proves the list by its reader before it replaces what it runs, and a save restarts the roster without a daemon restart. One plain letter per plugin opens its panel, never a letter the board already answers to. [t-81baed9a]
+
 - feat: Let a plugin's panel live in the left drawers, by giving its visual the place `"drawer"`: the board draws its pane with the rail's own head and close button, sizes it with the rail grip, and puts its door in the header beside activity and cards, while every other panel still opens in the toolbox as before. [t-81baed9a]
 - feat: Add the optional `bughound` plugin, a Rust background worker that watches a workspace folder for file changes and runs the targeted pytest for a file a test covers, with a left-drawer panel showing the last run, the pending files and the log. It registers by name in the daemon's own `plugins.json` and runs nothing until then. [t-81baed9a]
 
