@@ -62,10 +62,12 @@ const HELPERS: PtyHelper[] = [
 	},
 	{
 		// `socat` takes the size as an option of its own. Its command is one quoted word, so a shell path
-		// with a space in it stays one word; one with a quote in it is the `script` helper's job.
+		// with a space in it stays one word; one with a quote in it is the `script` helper's job. `ctty`
+		// matters: without it the pty is only the shell's stdio, not its controlling terminal, so ^C is
+		// echoed by the line discipline but no SIGINT reaches the foreground command.
 		name: "socat",
 		command: "socat",
-		argv: (shell, size) => ["-", `SYSTEM:'exec "${shell}"',pty,setsid,sigint,sane,tiocswinsz=${size.cols}:${size.rows}`],
+		argv: (shell, size) => ["-", `SYSTEM:'exec "${shell}"',pty,setsid,ctty,sigint,sane,tiocswinsz=${size.cols}:${size.rows}`],
 	},
 ];
 
