@@ -338,7 +338,7 @@ test("curl … | sh installs the pinned release, which then answers --version an
 	// The closing report is read out of the copy just installed, so it describes this machine rather
 	// than the one the installer was built on.
 	assert.match(piped.stdout, /^pi-studio \d+\.\d+\.\d+ at /m, "the install ends with the doctor's report");
-	for (const part of ["node", "git", "pi", "graph"]) assert.match(piped.stdout, new RegExp(`(ok|missing)\\s+${part}`), `the report names ${part}: ${piped.stdout}`);
+	for (const part of ["node", "git", "pi"]) assert.match(piped.stdout, new RegExp(`(ok|missing)\\s+${part}`), `the report names ${part}: ${piped.stdout}`);
 
 	assert.equal(installedVersion(roots), packaged.version);
 	const versionDir = join(roots.installRoot, "versions", JSON.parse(readFileSync(join(roots.installRoot, "install.json"), "utf8")).currentVersionDir);

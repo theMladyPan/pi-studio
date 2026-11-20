@@ -80,9 +80,6 @@ test("the staged tree carries the compiled app, runtime assets, and metadata —
 		"prompts/flows/simple.md",
 		"docs/boss-and-subagents.md",
 		"docs/plugins.md",
-		"plugins/git-history/plugin.json",
-		"plugins/git-history/README.md",
-		"plugins/git-history/assets/history.html",
 		"bin/pi-studio",
 		"package.json",
 		"build.json",
@@ -104,7 +101,8 @@ test("the staged tree carries the compiled app, runtime assets, and metadata —
 		assert.ok(!/(^|\/)(node_modules|test|bench|mockups|site|\.git)(\/|$)/.test(file), `staged tree carries ${file}`);
 	}
 
-	// A plugin is staged as what runs it and what draws it, never as the sources it was built from.
+	// A plugin a package of its own ships is staged as what runs it and what draws it, never as the sources it
+	// was built from. This repository carries none, so the loop below holds vacuously until one is added.
 	for (const file of staged.filter((one) => one.startsWith("plugins/"))) {
 		assert.ok(!/\.(go|mod|sum|rs|toml|lock)$/.test(file), `staged plugin carries a source file: ${file}`);
 		assert.ok(!/(^|\/)dist(\/|$)/.test(file), `staged plugin carries the build folder: ${file}`);

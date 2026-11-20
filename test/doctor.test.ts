@@ -1,9 +1,9 @@
 /**
- * `pi-studio doctor`: the four parts this app leans on, what was found, and the fix for each gap.
+ * `pi-studio doctor`: the three parts this app leans on, what was found, and the fix for each gap.
  *
  * Every case here is staged in a throwaway folder under the OS temp directory and handed to the
- * doctor through the same environment the app reads at run time — PATH, HOME, PI_MANAGED_INSTALL_ROOT,
- * PI_STUDIO_GITGRAPH_DIR — so no test depends on what happens to be installed on this machine.
+ * doctor through the same environment the app reads at run time — PATH, HOME and
+ * PI_MANAGED_INSTALL_ROOT — so no test depends on what happens to be installed on this machine.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -13,7 +13,6 @@ import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { collectReport, formatReport, runDoctor } from "../server/doctor.ts";
-import { clearBundleCache } from "../server/git/gitgraph/vendor.ts";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const launcher = join(root, "bin", "pi-studio");
@@ -48,28 +47,13 @@ function managedPi(base: string): string {
 	return installRoot;
 }
 
-/** A copy of Git Graph Libre: the files the drawer serves, and nothing else. */
-function extension(base: string): string {
-	const dir = join(base, "extensions", "plohnensoftware.git-graph-libre-1.10.0");
-	mkdirSync(join(dir, "media"), { recursive: true });
-	mkdirSync(join(dir, "out"), { recursive: true });
-	mkdirSync(join(dir, "l10n"), { recursive: true });
-	writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "git-graph-libre", version: "1.10.0", publisher: "PlohnenSoftware" }));
-	for (const file of ["web.min.js", "startup.min.js", "diffTab.min.js"]) writeFileSync(join(dir, "out", file), "var stoodInForTheBundle = true;\n");
-	for (const css of ["tokens", "base", "checkbox", "table", "commit-details", "refs", "toolbar", "settings", "dialogs", "dropdown"]) {
-		writeFileSync(join(dir, "media", `${css}.css`), "body { color: #c9d1d9; }\n");
-	}
-	writeFileSync(join(dir, "l10n", "bundle.l10n.json"), "{}\n");
-	return dir;
-}
-
 type Machine = { binDir: string; env: NodeJS.ProcessEnv; restore: () => void };
 
 /**
  * A machine as the app would see it. PATH is replaced outright, so a real git or node on this
  * machine cannot answer for a staged one that is absent, and `node: false` stages none at all.
  */
-function stage(parts: { node?: string | false; git?: boolean; pi?: boolean; graph?: boolean } = {}): Machine {
+function stage(parts: { node?: string | false; git?: boolean; pi?: boolean } = {}): Machine {
 	const base = scratchDir("machine");
 	const binDir = join(base, "bin");
 	const home = join(base, "home");
@@ -81,21 +65,17 @@ function stage(parts: { node?: string | false; git?: boolean; pi?: boolean; grap
 		HOME: home,
 		PATH: binDir,
 		PI_MANAGED_INSTALL_ROOT: join(base, "pi", "agent", "install"),
-		PI_STUDIO_GITGRAPH_DIR: "",
 	};
 	if (parts.pi) env.PI_MANAGED_INSTALL_ROOT = managedPi(base);
-	if (parts.graph) env.PI_STUDIO_GITGRAPH_DIR = extension(base);
 	const saved = { ...process.env };
 	for (const key of Object.keys(process.env)) delete process.env[key];
 	Object.assign(process.env, env);
-	clearBundleCache();
 	return {
 		binDir,
 		env,
 		restore: () => {
 			for (const key of Object.keys(process.env)) delete process.env[key];
 			Object.assign(process.env, saved);
-			clearBundleCache();
 		},
 	};
 }
@@ -124,20 +104,19 @@ function runLauncher(env: NodeJS.ProcessEnv, args: string[] = []): Promise<{ sta
 	});
 }
 
-test("a machine with all four parts is reported whole in one line, and answers zero", (t) => {
-	const machine = stage({ git: true, pi: true, graph: true });
+test("a machine with all three parts is reported whole in one line, and answers zero", (t) => {
+	const machine = stage({ git: true, pi: true });
 	t.after(machine.restore);
 	const report = collectReport();
 	assert.equal(report.ok, true, formatReport(report));
-	assert.deepEqual(report.parts.map((part) => part.part), ["node", "git", "pi", "graph"]);
-	assert.deepEqual(report.parts.map((part) => part.ok), [true, true, true, true]);
+	assert.deepEqual(report.parts.map((part) => part.part), ["node", "git", "pi"]);
+	assert.deepEqual(report.parts.map((part) => part.ok), [true, true, true]);
 	for (const part of report.parts) assert.equal(part.fix, "", `a part that was found carries no fix: ${part.part}`);
 	const text = formatReport(report);
 	assert.match(text, /^pi-studio \d+\.\d+\.\d+ at /m, text);
 	assert.match(text, /node 22\.20\.0/, text);
 	assert.match(text, /git version 2\.48\.1/, text);
 	assert.match(text, /pi at .*cli\.js/, text);
-	assert.match(text, /Git Graph Libre 1\.10\.0/, text);
 	assert.match(text, /everything this copy leans on is here/, text);
 	assert.equal(quietly(() => runDoctor()).status, 0, "a whole machine answers zero");
 });
@@ -147,7 +126,7 @@ test("a bare machine names every missing part and the command that installs it",
 	t.after(machine.restore);
 	const report = collectReport();
 	assert.equal(report.ok, false, "nothing is installed, so nothing can be whole");
-	assert.deepEqual(report.parts.map((part) => part.ok), [false, false, false, false]);
+	assert.deepEqual(report.parts.map((part) => part.ok), [false, false, false]);
 	const text = formatReport(report);
 	assert.match(text, /missing node/, text);
 	assert.match(text, /fix: install an official Node 22\.18 or newer from https:\/\/nodejs\.org/, text);
@@ -155,8 +134,6 @@ test("a bare machine names every missing part and the command that installs it",
 	assert.match(text, /fix: install git: .*dnf install git.*apt install git.*pacman -S git/, text);
 	assert.match(text, /missing pi/, text);
 	assert.match(text, /fix: install pi: curl -fsSL https:\/\/pi\.dev\/install\.sh/, text);
-	assert.match(text, /missing graph/, text);
-	assert.match(text, /PI_STUDIO_GITGRAPH_DIR/, "the drawing's fix names the variable that points at a copy");
 	// Without a Node there is no app to start, and the closing line must not promise a board.
 	assert.match(text, /cannot start until node is there/, text);
 	assert.doesNotMatch(text, /the board still starts/, text);
@@ -164,7 +141,7 @@ test("a bare machine names every missing part and the command that installs it",
 });
 
 test("an old node is reported with what it found and what this copy needs", (t) => {
-	const machine = stage({ node: "20.11.0", git: true, pi: true, graph: true });
+	const machine = stage({ node: "20.11.0", git: true, pi: true });
 	t.after(machine.restore);
 	const report = collectReport();
 	const node = report.parts.find((part) => part.part === "node");
@@ -176,17 +153,8 @@ test("an old node is reported with what it found and what this copy needs", (t) 
 	assert.match(formatReport(report), /node is missing: the pi-studio command cannot start/, "the closing line names the part that stops the start");
 });
 
-test("a machine without the drawing is reported as a board that still starts", (t) => {
-	const machine = stage({ git: true, pi: true });
-	t.after(machine.restore);
-	const report = collectReport();
-	assert.equal(report.ok, false);
-	assert.deepEqual(report.parts.filter((part) => !part.ok).map((part) => part.part), ["graph"]);
-	assert.match(formatReport(report), /graph is missing: the board still starts/, "the graph is the one part the board runs without");
-});
-
 test("the launcher answers doctor, in text and in JSON, and its exit code carries the verdict", async (t) => {
-	const whole = stage({ git: true, pi: true, graph: true });
+	const whole = stage({ git: true, pi: true });
 	t.after(whole.restore);
 	const happy = await runLauncher(whole.env);
 	assert.equal(happy.status, 0, happy.stderr);
@@ -202,6 +170,6 @@ test("the launcher answers doctor, in text and in JSON, and its exit code carrie
 	const json = await runLauncher(bare.env, ["--json"]);
 	const parsed = JSON.parse(json.stdout) as { ok: boolean; parts: Array<{ part: string; ok: boolean; fix: string }> };
 	assert.equal(parsed.ok, false);
-	assert.deepEqual(parsed.parts.map((part) => part.part), ["node", "git", "pi", "graph"]);
+	assert.deepEqual(parsed.parts.map((part) => part.part), ["node", "git", "pi"]);
 	assert.equal(parsed.parts.find((part) => part.part === "git")?.ok, false);
 });

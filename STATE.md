@@ -565,15 +565,18 @@ commit's own account rather than on a check run now, the section below says so.
   redraws on its next roll down, the `open in tab ↗`
   press opens the same page in a tab of its own, `panelUp()` counts the drawer so the board's letters stay out
   of it, and Escape rolls it up before it lets go of the card being read. A board with no folder grows
-  no frame and says it has no repository to draw. What draws the graph is `mhutchie/vscode-git-graph`
-  1.30.x, that extension's own webview, served from the copy already installed under the editor
-  extension folders and never carried in this repository, because its licence allows using it and
-  forbids shipping it or a derivative; `PI_STUDIO_GITGRAPH_DIR` names a copy somewhere else, and a miss
-  is a sentence on the page rather than a blank drawer. `public/client/gitgraph/host.js` supplies the
-  three globals and the `acquireVsCodeApi` an editor would have supplied, and `viewer.js` draws the text
-  where a diff editor used to be. The repository dropdown lists the board's own folder and the trees its
-  threads work in, each checked to be a top level of the same repository before the page may name it, so
-  a branch a thread made is read on the commit that thread wrote. The commit details pane reads one
+  no frame and says it has no repository to draw. What draws the graph is pi-studio's own page and
+  client: `public/gitgraph.html` with `client/gitgraph/gitgraph.css` and `client/gitgraph/host.js`,
+  served by the same rules as every other page and module, so no editor extension is looked for, no
+  vendor copy is served and nothing has to be installed for the graph to draw. A workspace with no
+  repository is a sentence on the page rather than a blank drawer. The page speaks the message protocol
+  of Git Graph Libre and keeps the ids its own client looks up, and `host.js` supplies what an editor
+  would have supplied: the three globals and `acquireVsCodeApi`. The repository dropdown
+  lists the board's own folder and the trees its threads work in, each checked to be a top level of the
+  same repository before the page may name it, so a branch a thread made is read on the commit that
+  thread wrote. A command that names one of them is read against that same list, and `loadBranches`
+  takes the repository the page named so a drawer reading one checkout cannot be answered about another;
+  a page that names none is answered about the selected repository, which is the old behaviour. The commit details pane reads one
   commit with its files and its stats, and the viewer shows a file at a revision, a working file, a
   comparison or a stash, capped at 2 MB and called binary when it holds a NUL. The graph writes as well as
   reads. A branch is created, renamed and deleted, a tag added and deleted, a branch or a commit checked
@@ -596,8 +599,8 @@ commit's own account rather than on a check run now, the section below says so.
   offers what works, because `config.ts`'s visible entries and `dispatch.ts`'s refused commands are
   checked against each other by a test. Checked by `node --check`,
   `bin/check-imports.mjs`, the route tests and `bin/smoke.mjs` against its own daemons: the page's HTTP
-  chain and every static fact the bundle needs. The page itself has not been run in a browser, so what
-  it draws is read from the code.
+  chain and every static fact the page's own client needs. The page itself has not been run in a
+  browser, so what it draws is read from the code.
 - **Persistence**: board saved on a 500 ms debounce and flushed on stop and on a workspace switch;
   a restart reopens the last workspace.
 - `GET /browse` for the composer's file picker. Token gate on every data route (403 without it).
@@ -885,11 +888,6 @@ buttons and the `sure?` arming were seen in a browser. `npm run check` passes on
 
 ## Does not work yet
 
-- The full Git Graph is still the editor's extension, not a bundled viewer: `g` loads
-  `mhutchie/vscode-git-graph` 1.30.x from the copy installed in the editor, so a machine without that
-  extension gets no full graph. Its licence allows using it and forbids shipping
-  it or a derivative, so a viewer of our own is needed rather than a copy; the target for that is
-  https://github.com/PlohnenSoftware/git-graph-libre, and no work on it has started.
 - The release pipeline has never run: `.github/workflows/release.yml` exists and its shell steps are
   syntax-checked, but no version tag has been pushed through it, and no public release has been
   published or installed from, so the download line in the README is a contract rather than a verified
