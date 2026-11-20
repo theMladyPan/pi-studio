@@ -1,0 +1,86 @@
+/* Bughound's panel, drawn in the left drawers' own language: the same mono, the same head, the same
+   buttons as the source control drawer, on the drawer column's own background. A panel is a page of its
+   own with no access to the board around it, so it brings the little it needs; none of the board's CSS
+   reaches in here, and none of this reaches out. */
+:root {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --drawer: #0a0f16;
+  --text: #e6edf3;
+  --muted: #7d8590;
+  --border: #30363d;
+  --border-bright: #3d444d;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --red: #f85149;
+  --amber: #d29922;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+body {
+  margin: 0;
+  background: var(--drawer);
+  color: var(--text);
+  font: 12px var(--mono);
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* The rail-head the board draws for its own drawers: the same padding, the same uppercase word. */
+.rail-head {
+  padding: 8px 12px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.rail-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: 12px var(--mono);
+  padding: 0 2px;
+  line-height: 1;
+}
+.rail-close:hover { color: var(--text); }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.dot.ok { background: var(--green); }
+.dot.bad { background: var(--red); }
+.dot.work { background: var(--amber); }
+
+.bh-meta { padding: 2px 12px 6px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.bh-actions { display: flex; gap: 6px; padding: 0 12px 6px; flex-wrap: wrap; }
+.bh-actions button {
+  font: 12px var(--mono);
+  color: var(--text);
+  background: #161b22;
+  border: 1px solid var(--border-bright);
+  border-radius: 4px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.bh-actions button:hover { border-color: var(--accent); }
+.bh-actions button:disabled { cursor: default; opacity: .45; }
+
+.bh-pending { margin: 0; padding: 0 12px 6px; color: var(--amber); white-space: pre-wrap; word-break: break-all; }
+
+#log {
+  margin: 0 12px 12px;
+  padding: 10px 12px;
+  flex: 1;
+  min-height: 3em;
+  background: #010409;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+}

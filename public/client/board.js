@@ -74,7 +74,8 @@ const pluginPanel = createPluginPanelHost({ workspace });
  * Neither direction carries a token, a cookie or the daemon's address: the frame is same-origin with this
  * page for its own files only, and every request it makes is made here, with this page's own promise.
  */
-function createPluginPanelHost({ workspace }) {
+function createPluginPanelHost({ workspace, mode = "overlay" }) {
+  const drawerMode = mode === "drawer";
   const drawer = document.getElementById("pluginDrawer");
   const scrim = document.getElementById("pluginScrim");
   const frame = document.getElementById("pvFrame");
@@ -82,6 +83,14 @@ function createPluginPanelHost({ workspace }) {
   const noteEl = document.getElementById("pvNote");
   const closeBtn = document.getElementById("pvClose");
   const doors = document.getElementById("pluginDoors");
+  // Drawer mode: the panel lives in the left drawers' column instead of behind the toolbox overlay,
+  // so its frame is made on its first open rather than read from the page.
+  const drawerColumn = document.getElementById("drawers");
+  const drawerDoorsEl = document.getElementById("pluginDrawerDoors");
+  let pane = null;
+  let paneFrame = null;
+  let paneKey = "";
+  const targetFrame = () => (drawerMode ? paneFrame : frame);
   /** The plugin whose panel is on screen, `""` before a door was ever pressed. */
   let plugin = "";
   /** Has the panel's own document loaded, which is when it can hear a greeting. */
@@ -103,8 +112,9 @@ function createPluginPanelHost({ workspace }) {
    * own to name; what keeps a stranger out is the frame's window above, and the secret in every message.
    */
   function say(message) {
-    if (!frame.contentWindow) return;
-    frame.contentWindow.postMessage({ ...message, nonce }, "*");
+    const live = targetFrame();
+    if (!live?.contentWindow) return;
+    live.contentWindow.postMessage({ ...message, nonce }, "*");
   }
 
   /**
@@ -139,8 +149,9 @@ function createPluginPanelHost({ workspace }) {
   function open(panel) {
     if (!panel || typeof panel.url !== "string" || panel.url === "") return;
     closeHeaderMenus();
-    const opening = drawer.hidden;
     plugin = typeof panel.name === "string" ? panel.name : "";
+    if (drawerMode) return openDrawer(panel);
+    const opening = drawer.hidden;
     titleEl.textContent = (typeof panel.title === "string" && panel.title) || plugin || "plugin";
     noteEl.textContent = plugin;
     if (frame.dataset.plugin !== plugin) {
@@ -179,7 +190,8 @@ function createPluginPanelHost({ workspace }) {
   window.addEventListener("message", (event) => {
     // The frame's own window, and a document the sandbox left without an origin: either check alone is
     // reachable, since this page can hold other frames and another site can frame this page.
-    if (!frame.contentWindow || event.source !== frame.contentWindow) return;
+    const live = targetFrame();
+    if (!live?.contentWindow || event.source !== live.contentWindow) return;
     if (event.origin !== "null") return;
     const data = event.data;
     if (!data || typeof data !== "object") return;
@@ -191,10 +203,67 @@ function createPluginPanelHost({ workspace }) {
   });
 
   /**
+   * The panel as one more left drawer: a pane in the drawers' column with the board's own rail-head and
+   * close button under it, sized by the rail grip like files, activity and cards. One pane per plugin,
+   * made on its first open and kept, so its state survives closing the drawer.
+   */
+  function openDrawer(panel) {
+    const key = `plugin:${plugin}`;
+    const paneId = `drawerPlugin-${plugin}`;
+    if (!pane || pane.id !== paneId) {
+      let live = document.getElementById(paneId);
+      if (!live) {
+        live = document.createElement("section");
+        live.className = "drawer plugin-pane";
+        live.id = paneId;
+        live.setAttribute("aria-label", (typeof panel.title === "string" && panel.title) || plugin);
+        live.tabIndex = -1;
+        const head = document.createElement("div");
+        head.className = "rail-head";
+        head.textContent = (typeof panel.title === "string" && panel.title) || plugin;
+        const shut = document.createElement("button");
+        shut.type = "button";
+        shut.className = "rail-close";
+        shut.title = "hide the drawer (esc)";
+        shut.textContent = "«";
+        shut.addEventListener("click", () => closeDrawers());
+        head.append(shut);
+        const inner = document.createElement("iframe");
+        inner.className = "drawer-frame";
+        inner.setAttribute("sandbox", "allow-scripts");
+        inner.title = `${(typeof panel.title === "string" && panel.title) || plugin} plugin panel`;
+        inner.addEventListener("load", () => {
+          if (plugin === "") return;
+          loaded = true;
+          say({ type: "pi-studio.host.hello", plugin });
+        });
+        live.append(head, inner);
+        drawerColumn.insertBefore(live, document.getElementById("railGrip"));
+        DRAWER_NAMES[key] = paneId;
+      }
+      pane = live;
+      paneFrame = live.querySelector("iframe.drawer-frame");
+      paneKey = key;
+    }
+    if (paneFrame.dataset.plugin !== plugin) {
+      nonce = newNonce();
+      loaded = false;
+      paneFrame.dataset.plugin = plugin;
+      paneFrame.src = panel.url;
+    }
+    if (gitDrawer.isOpen()) gitDrawer.close();
+    explorerCore.drawerOpen(drawerState, key);
+    paintDrawers();
+    paneFrame.focus();
+    if (loaded) say({ type: "pi-studio.host.hello", plugin });
+  }
+
+  /**
    * One door per panel the daemon lists, read once: which plugins are installed and running is a fact of its
    * own start, so a panel added while it runs is a door on the next one. The listing is the daemon's answer
    * about the human at the keyboard, and a board no plugin offers a panel to simply keeps its toolbox as it
-   * was.
+   * was. The two hosts each take the panels that are theirs: the toolbox takes every panel without a place,
+   * and the header takes only the ones that asked for the drawers.
    */
   async function listDoors() {
     if (!workspace) return;
@@ -207,24 +276,44 @@ function createPluginPanelHost({ workspace }) {
       return;
     }
     const panels = Array.isArray(payload?.plugins) ? payload.plugins : [];
-    for (const panel of panels) {
-      if (!panel || typeof panel.name !== "string" || typeof panel.url !== "string") continue;
+    const mine = panels.filter((panel) => panel && typeof panel.name === "string" && typeof panel.url === "string" && ((panel.place === "drawer") === drawerMode));
+    for (const panel of mine) {
       const door = document.createElement("button");
       door.type = "button";
-      door.setAttribute("role", "menuitem");
       door.textContent = (typeof panel.title === "string" && panel.title) || panel.name;
-      door.title = `open the ${door.textContent} plugin panel`;
-      door.addEventListener("click", () => open(panel));
-      doors.append(door);
+      if (drawerMode) {
+        const key = `plugin:${panel.name}`;
+        door.setAttribute("aria-controls", `drawerPlugin-${panel.name}`);
+        door.setAttribute("aria-expanded", "false");
+        door.title = `show the ${door.textContent} drawer`;
+        door.addEventListener("click", () => {
+          if (drawerState.open === key) closeDrawers();
+          else open(panel);
+        });
+        pluginDrawerDoors[key] = door;
+        drawerDoorsEl.append(door);
+      } else {
+        door.setAttribute("role", "menuitem");
+        door.title = `open the ${door.textContent} plugin panel`;
+        door.addEventListener("click", () => open(panel));
+        doors.append(door);
+      }
     }
-    doors.hidden = panels.length === 0;
+    if (drawerMode) drawerDoorsEl.hidden = mine.length === 0;
+    else doors.hidden = mine.length === 0;
   }
   void listDoors();
 
-  closeBtn.addEventListener("click", () => close());
-  scrim.addEventListener("click", () => close());
+  if (!drawerMode) {
+    closeBtn.addEventListener("click", () => close());
+    scrim.addEventListener("click", () => close());
+  }
 
-  return { isOpen: () => !drawer.hidden, close };
+  return {
+    isOpen: () => (drawerMode ? drawerState.open === paneKey && paneKey !== "" : !drawer.hidden),
+    close: () => (drawerMode ? (drawerState.open === paneKey ? closeDrawers() : null) : close()),
+    open,
+  };
 }
 // ---------- the header menus ---------------------------------------------
 // Three chips in the header, each opening one menu outside it. A menu that closed while its item held
@@ -5457,6 +5546,8 @@ const THOUGHT_STALL_MS = 3000;
 // rail are the ones these open with, because this is that rail with doors on it.
 const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards", source: "drawerSource" };
 const drawerState = explorerCore.drawers();
+/** The doors in the header for plugins whose panel lives in this column, by drawer name. */
+const pluginDrawerDoors = {};
 // The three doors in the header, read before anything paints them.
 const filesBtn = document.getElementById("filesBtn");
 const activityBtn = document.getElementById("activityBtn");
@@ -5484,7 +5575,7 @@ function paintDrawers() {
     const pane = document.getElementById(id);
     pane.classList.toggle("on", drawerState.open === name);
   }
-  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn };
+  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn, ...pluginDrawerDoors };
   for (const [name, door] of Object.entries(doors)) {
     door.setAttribute("aria-expanded", drawerState.open === name ? "true" : "false");
   }
@@ -5545,6 +5636,9 @@ for (const [name, door] of Object.entries({ files: filesBtn, activity: activityB
     toggleDrawer(name);
   });
 }
+// The header doors for plugins whose panel lives in this column: the same doors as activity and cards,
+// added as the daemon lists them, and painted with the same aria-expanded the drawers keep.
+const pluginDrawer = createPluginPanelHost({ workspace, mode: "drawer" });
 for (const shut of document.querySelectorAll("#drawers .rail-close")) {
   shut.addEventListener("click", () => closeDrawers());
 }

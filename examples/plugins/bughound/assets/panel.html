@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>bughound</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <!--
+    Bughound's page, shown in a frame with no origin of its own. It can reach neither the board around
+    it nor the daemon behind it: every call it makes is one message to the board, which asks the plugin
+    through the daemon. `panel.js` holds that conversation. The board adds the workspace this tab
+    belongs to, so the page never names a folder.
+  -->
+  <div class="rail-head"><span class="dot" id="dot"></span><span id="phase">starting</span>
+    <button type="button" class="rail-close" id="close" title="hide the drawer (esc)">«</button>
+  </div>
+  <div class="bh-meta" id="meta" role="status">waiting for the board</div>
+  <div class="bh-actions">
+    <button type="button" id="runAll" title="run the whole suite now (r)">▶ run all</button>
+    <button type="button" id="runFailed" title="rerun the last failures (f)" hidden>↻ failed</button>
+    <button type="button" id="pause" title="pause or resume watching (p)">pause</button>
+    <button type="button" id="copy" title="copy the last log">copy log</button>
+  </div>
+  <p class="bh-pending" id="pending" hidden></p>
+  <pre id="log" aria-live="polite"></pre>
+  <script src="panel.js"></script>
+</body>
+</html>

@@ -77,7 +77,7 @@ const VISUAL_TYPES: Record<string, string> = {
 const VISUAL_CSP = "sandbox allow-scripts";
 
 /** One panel the board may show: what to call it, and where its frame starts. */
-export type VisualPanel = { name: string; title: string; url: string };
+export type VisualPanel = { name: string; title: string; url: string; place?: "drawer" };
 
 /** Who asked, as `main.ts` decided it. A panel is the human's; a thread has no page to draw in. */
 type Caller = { human?: unknown } | null | undefined;
@@ -96,7 +96,7 @@ function visualRoster(): { name: string; root: string; visual: PluginVisual }[] 
 /** The doors the board draws, one per plugin that has a panel. */
 export function onVisualPanels(res: ServerResponse): void {
 	answer(res, 200, {
-		plugins: visualRoster().map((one) => ({ name: one.name, title: one.visual.title, url: `${VISUAL_PREFIX}${encodeURIComponent(one.name)}/${one.visual.entry}` })),
+		plugins: visualRoster().map((one) => ({ name: one.name, title: one.visual.title, url: `${VISUAL_PREFIX}${encodeURIComponent(one.name)}/${one.visual.entry}`, ...(one.visual.place ? { place: one.visual.place } : {}) })),
 	});
 }
 

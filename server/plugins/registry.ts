@@ -35,6 +35,11 @@ export type PluginVisual = {
 	entry: string;
 	/** Every file this daemon will serve for the panel, and nothing beside them. */
 	files: string[];
+	/**
+	 * Where the board puts the panel: `undefined` puts it behind a door in the toolbox, and `"drawer"`
+	 * puts it in the left drawers' column, beside files, activity and cards, behind a door in the header.
+	 */
+	place?: "drawer";
 };
 
 /** One executable the daemon starts: what it is called, and what to run. */
@@ -199,6 +204,8 @@ function visualOf(command: string, value: unknown): { visual?: PluginVisual; pro
 	if (title === "" || title.length > MAX_VISUAL_TITLE) return { problem: `visual.title must be one line of 1 to ${MAX_VISUAL_TITLE} characters` };
 	const entry = visualPath(bag.entry);
 	if (entry === null) return { problem: "visual.entry must be a relative path inside the plugin's own folder" };
+	const place = bag.place;
+	if (place !== undefined && place !== "drawer") return { problem: "visual.place must be \"drawer\" when it is given" };
 	const rows = bag.files;
 	if (!Array.isArray(rows) || rows.length === 0) return { problem: "visual.files must name at least one file" };
 	const files: string[] = [];
@@ -212,7 +219,7 @@ function visualOf(command: string, value: unknown): { visual?: PluginVisual; pro
 	for (const path of files) {
 		if (resolvePluginFile(root, path) === null) return { problem: `visual file ${path} is not a file inside ${root}` };
 	}
-	return { visual: { title, entry, files } };
+	return { visual: { title, entry, files, ...(place === "drawer" ? { place: "drawer" as const } : {}) } };
 }
 
 /**

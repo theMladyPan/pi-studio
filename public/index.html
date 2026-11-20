@@ -589,6 +589,12 @@
   .rail-head .rail-close { margin-left: auto; background: none; border: none; color: var(--muted);
     cursor: pointer; font: 12px var(--mono); padding: 0 2px; line-height: 1; }
   .rail-head .rail-close:hover { color: var(--text); }
+  /* A plugin's panel inside the drawers column, the same pane every other drawer is: the board draws
+     the rail-head and the close button, and the panel's own page fills the rest. */
+  .drawer.plugin-pane { background: #0d1117; }
+  .drawer.plugin-pane iframe.drawer-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #0d1117; }
+  #pluginDrawerDoors { display: contents; }
+  #pluginDrawerDoors[hidden] { display: none; }
   /* Source control drawer: the message field rides at the top, then the staged list, then the rest.
      A row is a name, its folder, its letter and one button that moves it across. */
   .sc-msg { padding: 8px 10px 4px; display: flex; flex-direction: column; gap: 6px; }
@@ -1576,6 +1582,9 @@
   <!-- The two drawers that stay in the header. One drawer is open at a time, and each door names the key that opens it. -->
   <button id="activityBtn" type="button" aria-controls="drawerActivity" aria-expanded="false" title="show the activity drawer (a)">activity</button>
   <button id="cardsBtn" type="button" aria-controls="drawerCards" aria-expanded="false" title="show the cards drawer (c)">cards</button>
+  <!-- One door per plugin whose panel lives in the left drawers, filled in by board.js. The header's
+       own buttons are the style, so a door stands here exactly like activity and cards do. -->
+  <span id="pluginDrawerDoors" hidden></span>
   <button id="configBtn" title="this board's settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
 </header>
 

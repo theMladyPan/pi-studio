@@ -113,6 +113,17 @@ test("a panel whose title or entry makes no sense is refused rather than half re
 	}
 });
 
+test("a panel that asks for the drawer is read with its place, and one that asks for something else is refused", () => {
+	const exe = join(folder("placed"), "exe");
+	const row = { name: "placed", command: exe, args: [], visual: { title: "placed", entry: "panel.html", files: ["panel.html"], place: "drawer" } };
+	const { plugins, problems } = read([row]);
+	assert.deepEqual(problems, []);
+	assert.deepEqual(plugins, [{ name: "placed", command: exe, args: [], visual: row.visual }]);
+	const bad = read([{ name: "placed", command: exe, args: [], visual: { title: "placed", entry: "panel.html", files: ["panel.html"], place: "sidebar" } }]);
+	assert.deepEqual(bad.plugins, []);
+	assert.match(bad.problems[0]?.problem ?? "", /visual\.place/);
+});
+
 // ---------- the three routes, against a daemon ----------
 
 /** One daemon on its own state folder, started the way a human starts it, with these plugins registered. */
@@ -258,6 +269,22 @@ test("the panels a daemon may show, its files, and the one call a panel makes", 
 		assert.equal((await post(daemon, "/plugins/visual/request?plugin=example-panel", { workspace: "nope", method: "echo" })).status, 400);
 		assert.equal((await post(daemon, "/plugins/visual/request?plugin=plain", { workspace, method: "echo" })).status, 404);
 		assert.equal((await post(daemon, "/plugins/visual/request?plugin=example-panel", { workspace, method: "echo" }, "")).status, 403);
+	} finally {
+		daemon.child.kill("SIGTERM");
+		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);
+	}
+});
+
+test("a panel that asks for the drawer is listed with its place", async () => {
+	const row = { ...exampleRow, name: "example-drawer", visual: { ...exampleRow.visual, place: "drawer" } };
+	const daemon = await boot([row]);
+	const gone = new Promise<void>((resolve) => daemon.child.once("exit", () => resolve()));
+	try {
+		const listed = await listedPanels(daemon);
+		assert.equal(listed.status, 200);
+		assert.deepEqual(JSON.parse(listed.body), {
+			plugins: [{ name: "example-drawer", title: "example panel", url: "/plugins/visual/example-drawer/panel.html", place: "drawer" }],
+		});
 	} finally {
 		daemon.child.kill("SIGTERM");
 		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);

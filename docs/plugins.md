@@ -100,6 +100,11 @@ with that nonce and an id, `pi-studio.visual.result` or `pi-studio.visual.error`
 page names neither a folder nor a plugin. The full shapes are in `docs` at the top of
 `server/routes/plugins.ts` and in the panel example `test-support/plugin-visual/`.
 
+A panel is in the toolbox by default. Giving its `visual` the place `"drawer"` puts it in the left
+drawers' column instead, beside files, activity and cards: the board draws its pane with the rail's own
+head and close button, sizes it with the rail grip, and puts its door in the header with activity and
+cards. The files a drawer panel is served, and the one call it may make, are the same either way.
+
 ## The example plugin
 
 `examples/plugins/scratch-card` is a Rust plugin that writes one note on the scratch board for every run

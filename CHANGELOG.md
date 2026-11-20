@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- feat: Let a plugin's panel live in the left drawers, by giving its visual the place `"drawer"`: the board draws its pane with the rail's own head and close button, sizes it with the rail grip, and puts its door in the header beside activity and cards, while every other panel still opens in the toolbox as before. [t-81baed9a]
+- feat: Add the optional `bughound` plugin, a Rust background worker that watches a workspace folder for file changes and runs the targeted pytest for a file a test covers, with a left-drawer panel showing the last run, the pending files and the log. It registers by name in the daemon's own `plugins.json` and runs nothing until then. [t-81baed9a]
+
 ## [0.6.0] - 2026-11-20
 
 - fix: Make the terminal drawer resizable like the left drawers, by dragging its top edge: the height follows the cursor between a floor and a ceiling, is remembered across reloads, and the shell refits as it grows.
