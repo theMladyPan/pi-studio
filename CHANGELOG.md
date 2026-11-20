@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Show a shell's standard error in the terminal drawer when the shell runs through `socat`, by sending the subprocess's error output to the pty; without that, errors went to a helper pipe the daemon drained away and never reached the drawer. [t-caadf71a]
+
 ## [0.6.0] - 2026-11-20
 
 - fix: Make the terminal drawer resizable like the left drawers, by dragging its top edge: the height follows the cursor between a floor and a ceiling, is remembered across reloads, and the shell refits as it grows.
