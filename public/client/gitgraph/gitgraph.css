@@ -196,7 +196,7 @@ button.confirm { border-color: #9c3a39; }
 .settings-body section { padding: 10px 0; border-top: 1px solid var(--border); }
 .settings-body h3 { color: var(--muted); margin-bottom: 6px; }
 .settings-body label { grid-template-columns: minmax(90px, 1fr) minmax(0, 210px); align-items: center; }
-.remote { padding: 5px 0 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.settings-body .remote { padding: 5px 0 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
 #ggNotice { display: grid; justify-items: center; align-content: center; gap: 6px; min-height: 95vh; padding: 12px; text-align: center; }
 #ggNotice p { overflow-wrap: anywhere; max-width: 60ch; }
 
