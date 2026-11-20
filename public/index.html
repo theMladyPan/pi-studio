@@ -1235,11 +1235,6 @@
   #boardConfig #shortcutList .cfg-row b { flex: none; min-width: 104px; font-size: 12px; }
   #boardConfig #shortcutList .cfg-row span { color: #c9d1d9; white-space: normal; }
   #cfgLocal { display: flex; flex-direction: column; }
-  #boardConfig .cfg-check { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; border-radius: 6px;
-    color: var(--text); font: 12px var(--mono); cursor: pointer; }
-  #boardConfig .cfg-check:hover { background: #161b22; }
-  #boardConfig .cfg-check input { accent-color: var(--accent); cursor: pointer; }
-  #boardConfig .cfg-check .cfg-sub { margin-left: auto; }
   /* The prompt files are plain markdown, so the editor is a list and a textarea: what is saved is what
      the daemon reads on the next thread that starts. */
   #promptEditor { position: fixed; z-index: 2100; top: 46px; right: 374px; display: flex;
@@ -1628,11 +1623,9 @@
      in the whole app. -->
 <div id="boardConfig" hidden role="dialog" aria-label="this board's settings">
   <div id="cfgTree"></div>
-  <!-- The board's own display choice and the map of every key live here, outside the tree the
-       daemon serves, so a re-render of the tree never wipes them. -->
+  <!-- The map of every key lives here, outside the tree the daemon serves, so a re-render of the tree never
+       wipes it. -->
   <div id="cfgLocal">
-    <p class="cfg-head">board view</p>
-    <label class="cfg-check" for="mapToggle"><input type="checkbox" id="mapToggle" checked> <span>overview map</span><span class="cfg-sub">show the small overview map (m)</span></label>
     <details class="cfg-group" id="cfgShortcuts">
       <summary><span>hotkeys</span><span class="cfg-preview">all keyboard shortcuts</span></summary>
       <div class="cfg-kids" id="shortcutList"></div>

@@ -5355,7 +5355,6 @@ const MAP_PAD = 8;
 const MAP_COLOUR = { note: "#7d8590", code: "#d2a8ff", sticky: "#d29922", question: "#db61a2" };
 const mapCanvas = document.getElementById("minimap");
 const mapCtx = mapCanvas.getContext("2d");
-const mapToggle = document.getElementById("mapToggle");
 let mapOn = true;
 let mapQueued = false;
 /** The projection the last paint used, so a press lands where the eye saw the picture. */
@@ -5499,11 +5498,21 @@ mapCanvas.addEventListener("pointerdown", (event) => {
   addEventListener("pointercancel", up);
 });
 
+/**
+ * The switches the page answers for rather than the daemon: a leaf that carries no route to write holds no
+ * value a board could keep, so the page says what it is doing and takes the press. The overview map is the
+ * only one, and `m` is the same press as its row.
+ *
+ * `leaf` is the row drawn for it while the settings panel is open, so the two never disagree about what
+ * the map is doing.
+ */
+const OWN_SWITCHES = {
+  overviewMap: { state: () => mapOn, set: (on) => setMap(on), leaf: null },
+};
+
+/** The map changed, so the row drawn for it says so — unless the panel is closed and no row is drawn. */
 function paintMapBtn() {
-  // The overview map is a checkbox in settings, so it says what the board shows rather than hiding
-  // behind a header button that no longer exists.
-  mapToggle.checked = mapOn;
-  mapToggle.title = mapOn ? "hide the board overview (m)" : "show the board overview (m)";
+  OWN_SWITCHES.overviewMap.leaf?.set();
 }
 
 /**
@@ -5518,9 +5527,8 @@ function setMap(on) {
   if (on) scheduleMap();
 }
 
-paintMapBtn();
+// No row is drawn yet, so there is nothing to paint; the panel reads `mapOn` when it draws one.
 document.body.classList.toggle("map-on", mapOn);
-mapToggle.addEventListener("change", () => setMap(mapToggle.checked));
 // The window rect is measured against the canvas, so the map follows the box it is drawn in:
 // a resized window and a rail that opens, closes or is dragged all land here.
 new ResizeObserver(() => scheduleMap()).observe(viewport);
@@ -9579,6 +9587,8 @@ async function loadBoardSettings() {
     boardDoc = null;
     treeLeaves = [];
     treeGroups = [];
+    // The row drawn for the map went with the tree, so nothing is left holding a stale switch.
+    OWN_SWITCHES.overviewMap.leaf = null;
     const line = el("p", "cfg-failure");
     line.textContent = `could not read this board's settings: ${error.message || error}`;
     cfgTree.replaceChildren(line);
@@ -9723,11 +9733,16 @@ function renderProseLeaf(field) {
   return leaf;
 }
 
-/** One leaf: a label, its value, and the click that changes it. */
+/**
+ * One leaf: a label, its value, and the click that changes it. A switch the page answers for is drawn the
+ * same way and read from the page rather than from the leaf, so it says `on` or `off` like the rest and
+ * keeps saying it when the board's own key turns it.
+ */
 function renderLeaf(field) {
   // A whole text is not a row with a value on its right: it is a box that holds a file, and its own save.
   if (field.type === "prose") return renderProseLeaf(field);
   if (typedLeaf(field)) return renderTypedLeaf(field);
+  const own = OWN_SWITCHES[field.id];
   const row = el("button", "cfg-row");
   row.type = "button";
   row.title = field.help ?? "";
@@ -9735,8 +9750,17 @@ function renderLeaf(field) {
   label.textContent = field.label ?? field.id;
   const value = el("b");
   row.append(label, value);
-  row.addEventListener("click", () => void openLeaf(field, row));
-  const leaf = { field, row, value, set: () => (value.textContent = leafShown(field)) };
+  row.addEventListener("click", () => (own ? own.set(!own.state()) : void openLeaf(field, row)));
+  const leaf = {
+    field,
+    row,
+    value,
+    set: () => {
+      if (own) field.value = own.state();
+      value.textContent = leafShown(field);
+    },
+  };
+  if (own) own.leaf = leaf;
   treeLeaves.push(leaf);
   return leaf;
 }

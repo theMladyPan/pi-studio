@@ -5,11 +5,13 @@ A local daemon that owns pi agents: a workspace is a folder, a thread on its boa
 ## Keyboard shortcuts
 
 The `hotkeys` group in `settings` lists every shortcut. It renders from one list, `SHORTCUTS` in
-`public/client/board.js`, which is the single source of truth for it. The overview map toggle is the
-`mapToggle` checkbox in `settings`.
+`public/client/board.js`, which is the single source of truth for it.
 
-Any change to a shortcut handler must change that same list in the same commit, and the `mapToggle`
-checkbox's title in the same client, which names its own key (`"hide the board overview (m)"`).
+Any change to a shortcut handler must change that same list in the same commit, and the title of the row
+for the `m` key in the same client. That row is the `overviewMap` leaf of the `canvas` group in
+`settings`, drawn beside `dim others`: its leaf carries no route to write, because the map is the
+browser's own session choice and the page answers for it, and its title names its own key
+(`"… looking through on it (m)"`).
 
 ## Branching and merging
 

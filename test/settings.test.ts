@@ -61,6 +61,12 @@ const settingLeaves = leavesOf(document.groups.filter((group) => group.id !== "p
 
 const byId = Object.fromEntries(leavesOf(document.groups).map((field) => [field.id, field]));
 
+/**
+ * The leaves a change goes back through. The overview map is the one with no route in either scope: it is a
+ * session's choice in the browser, so the page answers for it rather than the daemon.
+ */
+const writtenLeaves = settingLeaves.filter((field) => field.id !== "overviewMap");
+
 /** A copy of the tree with the one thing the scopes are allowed to differ in taken out. */
 function withoutWrites(groups: any[]): any[] {
 	return groups.map((group) => ({
@@ -118,7 +124,7 @@ test("the two scopes build one tree, and part only where the prompts belong", ()
 		["STUDIO.md", "AGENTS.md"],
 	);
 	assert.equal(promptGroup(boardDocument).groups, undefined);
-	// Fifteen setting leaves: six for the thread, two for the tools, six for the cards, one for the canvas.
+	// Sixteen setting leaves: six for the thread, two for the tools, six for the cards, two for the canvas.
 	assert.deepEqual(
 		settingLeaves.map((field) => field.id),
 		[
@@ -137,9 +143,10 @@ test("the two scopes build one tree, and part only where the prompts belong", ()
 			"showCharts",
 			"showReferences",
 			"dimOthers",
+			"overviewMap",
 		],
 	);
-	assert.equal(settingLeaves.length, 15);
+	assert.equal(settingLeaves.length, 16);
 	assert.deepEqual(
 		settingLeaves.map((field) => field.label),
 		[
@@ -158,6 +165,7 @@ test("the two scopes build one tree, and part only where the prompts belong", ()
 			"charts",
 			"references",
 			"dim others",
+			"overview map",
 		],
 	);
 	// A setting a later build dropped is not quietly back, and neither is a group nobody draws.
@@ -166,7 +174,9 @@ test("the two scopes build one tree, and part only where the prompts belong", ()
 });
 
 test("every setting leaf of the defaults writes to /defaults, and nothing else", () => {
-	for (const field of settingLeaves) {
+	// The overview map writes nowhere in either scope: it is the browser's own switch, drawn as a row like
+	// any other and answered by the page.
+	for (const field of writtenLeaves) {
 		assert.ok(field.write, `${field.id} has no write`);
 		assert.equal(field.write.route, "/defaults", `${field.id} writes to ${field.write.route}`);
 		// A toggle is flipped where it stands, so it names no picker; everything else opens a list, except
@@ -203,14 +213,14 @@ test("the model leaf splits at the first slash, and one key carries the value ev
 	assert.equal(byId.helperModel.help, "the model that names a thread and drafts a commit message");
 	// `/defaults` reads `thinking`, which is the key the defaults object holds.
 	assert.deepEqual(byId.thinking.write.body, { thinking: "@value" });
-	for (const field of settingLeaves) {
+	for (const field of writtenLeaves) {
 		const keys = Object.keys(field.write.body);
 		if (keys.length !== 1) continue;
 		assert.equal(field.write.body[keys[0]], "@value", `${field.id} sends ${field.write.body[keys[0]]}`);
 	}
 	// The two model leaves are the only leaves that write two keys, so they are the only ones that need the halves.
 	assert.deepEqual(
-		settingLeaves.filter((field) => Object.keys(field.write.body).length !== 1).map((field) => field.id),
+		writtenLeaves.filter((field) => Object.keys(field.write.body).length !== 1).map((field) => field.id),
 		["model", "helperModel"],
 	);
 });
@@ -230,7 +240,7 @@ test("the board's document differs from the defaults' in the route a change goes
 	// The helper model is studio-wide too, so a board's page writes it where it is kept.
 	assert.equal(boardById.helperModel.write.route, "/defaults");
 	assert.deepEqual(boardById.helperModel.write.body, { helperProvider: "@head", helperModel: "@rest" });
-	for (const field of settingLeaves.filter((one) => !["model", "thinking", "editor", "helperModel"].includes(one.id))) {
+	for (const field of writtenLeaves.filter((one) => !["model", "thinking", "editor", "helperModel"].includes(one.id))) {
 		assert.equal(boardById[field.id].write.route, "/config", `${field.id} writes to ${boardById[field.id].write.route}`);
 		assert.deepEqual(boardById[field.id].write.body, field.write.body, `${field.id} changed its body with its route`);
 	}
@@ -285,10 +295,12 @@ test("every leaf carries a value, and the defaults object the caller passed is w
 	assert.equal(byId.showCharts.value, "many");
 	// The lists are the daemon's own, not a copy written out here.
 	assert.deepEqual(byId.thinking.options, THINKING_LEVELS);
-	// `dim others` sits under the canvas in both documents, because the canvas is where it is drawn.
+	// `dim others` and the overview map sit under the canvas in both documents, because the canvas is where
+	// they are drawn: the map is a switch like its neighbour, and only its route is missing.
 	for (const one of [document, boardDocument]) {
 		const canvas = one.groups.find((group) => group.id === "canvas");
-		assert.deepEqual((canvas?.fields ?? []).map((field) => field.id), ["dimOthers"]);
+		assert.deepEqual((canvas?.fields ?? []).map((field) => field.id), ["dimOthers", "overviewMap"]);
+		assert.equal((canvas?.fields ?? [])[1].write, undefined);
 	}
 });
 

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
+import { settingsDocument } from "../server/settings-document.ts";
+
 /**
  * The files explorer's decisions, exercised.
  *
@@ -16,6 +18,18 @@ import { test } from "node:test";
 
 const BOARD = new URL("../public/client/board.js", import.meta.url);
 const HTML = new URL("../public/index.html", import.meta.url);
+
+/** The leaves under the canvas group the settings panel draws, read from the document the daemon serves. */
+function leavesOfCanvas() {
+	const canvas = settingsDocument({
+		scope: "board",
+		values: {},
+		title: "this board",
+		subtitle: "",
+		foot: "",
+	}).groups.find((group) => group.id === "canvas");
+	return canvas?.fields ?? [];
+}
 
 // The shapes the explorer's block deals in, named here once. The page itself carries no types, so these
 // interfaces are the seam between it and this file: every call below is checked against them.
@@ -790,10 +804,12 @@ test("the keys panel says what the keys do, including f as the drawer and shift+
 	assert.ok(board.includes('{ keys: "c", does: "open the cards drawer, and press it again to roll it up" }'));
 	assert.ok(board.includes('{ keys: "shift+f", does: "fit every card on the screen" }'));
 	assert.ok(!board.includes('{ keys: "f", does: "fit every card on the screen" }'), "f no longer claims the fit");
-	// The map toggle still names its own key, which the project's own rule asks for.
-	const html = readFileSync(HTML, "utf8");
-	assert.ok(html.includes('id="mapToggle" checked'));
-	assert.ok(board.includes('mapToggle.title = mapOn ? "hide the board overview (m)"'));
+	// The map row still names its own key, which the project's own rule asks for. It is a leaf of the
+	// canvas group like any other switch, so the key rides in the help the panel shows as the row's title.
+	const map = leavesOfCanvas().find((field) => field.id === "overviewMap");
+	assert.ok(map, "the canvas holds the overview map");
+	assert.match(String(map.help), /\(m\)$/, "the map's help names the key that turns it");
+	assert.ok(board.includes("row.title = field.help ?? \"\""), "a leaf's help is its title");
 });
 
 test("the header chips and the settings hold the map and the hotkeys", () => {
@@ -815,7 +831,7 @@ test("the header chips and the settings hold the map and the hotkeys", () => {
 		for (const id of ids) assert.ok(slice.includes(`id="${id}"`), `#${id} is in #${menu}`);
 	}
 	const settings = html.slice(html.indexOf('id="boardConfig"'), html.indexOf('id="promptEditor"'));
-	for (const id of ["cfgLocal", "mapToggle", "cfgShortcuts", "shortcutList"]) {
+	for (const id of ["cfgLocal", "cfgShortcuts", "shortcutList"]) {
 		assert.ok(settings.includes(`id="${id}"`), `#${id} lives in settings`);
 	}
 	assert.ok(!html.includes('id="shortcutPanel"'), "the standalone shortcuts panel is gone");

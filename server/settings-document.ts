@@ -443,6 +443,16 @@ export function settingsDocument({ scope, values, title, subtitle, foot }: Setti
 						value: values.dimOthers !== false,
 						write: write("dimOthers"),
 					},
+					{
+						id: "overviewMap",
+						label: "overview map",
+						type: "toggle",
+						// Nothing is kept here: the map is the browser's own choice for the session, so the leaf
+						// carries no route to write and the page answers what it is doing. It still arrives as a
+						// leaf, so the row is the same switch as `dim others` beside it.
+						value: true,
+						help: "the small map of the whole board, with the window you are looking through on it (m)",
+					},
 				],
 			},
 			{
