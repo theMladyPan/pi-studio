@@ -131,6 +131,22 @@ test("a parent the walk cannot return is drawn only when the walk is cut short",
 	assert.deepEqual(more.rows[1].exits.map(({ column }) => column), [0], "a cut window keeps its continuation");
 });
 
+// The walk is ordered by date, not by shape, so a commit's parent can sit above it. The lane walk
+// only ever goes down, so it cannot join the two, and it must say so instead of looking for the
+// parent forever.
+test("a parent the walk has already passed is left unjoined", () => {
+	// Date order, not shape, puts B above A here. The lanes only ever go down, so no line joins
+	// the two, and the walk must not look for B forever below A.
+	const { rows } = graph.layoutGraph([
+		{ hash: "B", parentHashes: [] },
+		{ hash: "A", parentHashes: ["B"] },
+	]);
+	assert.equal(rows[0].root, true);
+	assert.equal(rows[1].root, false, "A is not a root: it has a parent the table shows");
+	assert.deepEqual(rows[0].links, [], "no line leaves B for A");
+	assert.deepEqual(rows[1].links, [], "and none joins A back up to B");
+});
+
 test("an expanded row leaves the lanes the row after it already had", () => {
 	const commits: Commit[] = [
 		{ hash: "A", parentHashes: ["B", "C"] },
