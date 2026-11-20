@@ -1,6 +1,7 @@
 /**
- * The plugins a release ships: a registration that names one of them, and the platform executable the
- * daemon picks for it.
+ * The plugins a package of its own ships: a registration that names one of them, and the platform
+ * executable the daemon picks for it. This repository carries no plugin of its own, so every folder here
+ * is a fixture this test makes.
  *
  * A bundled row is one word in `plugins.json` — the name of a folder this install carries — and everything
  * else comes from that folder: the program to run, and the panel its own `plugin.json` declares. It is still
@@ -10,14 +11,12 @@
  * writes a human's records. The bundled folder is this test's own, so no plugin a checkout carries is used.
  */
 import assert from "node:assert/strict";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { after, test } from "node:test";
-import { fileURLToPath } from "node:url";
 import { removeTree } from "../test-support/temp.ts";
 
-const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const root = mkdtempSync(join(tmpdir(), "pi-studio-plugins-bundled-"));
 process.env.PI_STUDIO_STATE = join(root, "state");
 
@@ -164,21 +163,21 @@ test("a registration naming a bundled plugin starts it, and a registration namin
 	assert.equal(readFileSync(marker, "utf8").trim(), "started\nstopped", "the program was told to stop and exited");
 });
 
-// ---------- the plugin a release actually ships ----------
+// ---------- a plugin a package of its own ships ----------
 
-test("the git history plugin a release ships registers in one word and takes its panel from its own manifest", () => {
-	const install = join(root, "install-real", "plugins");
-	mkdirSync(install, { recursive: true });
-	cpSync(join(repo, "plugins", "git-history"), join(install, "git-history"), { recursive: true });
-	const exe = join(install, "git-history", `git-history-${PLATFORM}`);
-	writeFileSync(exe, "#!/bin/sh\nexit 0\n");
-	chmodSync(exe, 0o755);
-	const manifest = JSON.parse(readFileSync(join(install, "git-history", "plugin.json"), "utf8")) as { visual: unknown };
+test("a plugin an install ships registers in one word and takes its panel from its own manifest", () => {
+	// The layout a release stages: one folder under the install's `plugins/`, holding the manifest, the
+	// panel and the executable built for this platform. This repository ships no plugin of its own, so the
+	// folder is a fixture made here rather than a copy of one — the registration reader is the thing under
+	// test, not the contents of a plugin anybody happens to carry.
+	const base = bundled("shipped");
+	const exe = join(base, "shipped", `shipped-${PLATFORM}`);
+	const manifest = JSON.parse(readFileSync(join(base, "shipped", "plugin.json"), "utf8")) as { visual: unknown };
 
-	const { plugins, problems } = read([{ name: "git-history", bundled: "git-history" }], install);
+	const { plugins, problems } = read([{ name: "shipped", bundled: "shipped" }], base);
 	assert.deepEqual(problems, []);
-	assert.deepEqual(plugins, [{ name: "git-history", command: exe, args: [], visual: manifest.visual, bundled: "git-history" }]);
+	assert.deepEqual(plugins, [{ name: "shipped", command: exe, args: [], visual: manifest.visual, bundled: "shipped" }]);
 
 	// A daemon whose registration names nothing starts nothing, even when this install ships a plugin.
-	assert.deepEqual(loadPluginRegistry(join(root, "no-such-file.json"), install), { plugins: [], problems: [] });
+	assert.deepEqual(loadPluginRegistry(join(root, "no-such-file.json"), base), { plugins: [], problems: [] });
 });

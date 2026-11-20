@@ -4,9 +4,10 @@
  *
  * The reader is tested with no daemon at all, because what it refuses — a path that leaves the plugin's
  * folder, a file that is a link, an entry that was never declared — is a decision about a document, not
- * about a request. The three routes are tested against a daemon started the way a human starts one, with
- * the real plugin process from `test-support/plugin-visual` behind them, so what is proved is the whole
- * path: the registration, the frame's files, and the answer a panel's call comes back with.
+ * about a request. The routes are tested against a daemon started the way a human starts one, with the
+ * real plugin process from `test-support/plugin-visual` behind them, so what is proved is the whole
+ * path: the registration, the frame's files, and the answer a panel's call comes back with. Those files
+ * are served to a frame that carries no credential, which is why every read of one asks for none.
  *
  * The state folder is a throwaway one, set before any daemon module is imported, so no human's workspace
  * is read and none is written.
@@ -193,34 +194,49 @@ test("the panels a daemon may show, its files, and the one call a panel makes", 
 		assert.deepEqual(JSON.parse(listed.body), {
 			plugins: [{ name: "example-panel", title: "example panel", url: "/plugins/visual/example-panel/panel.html" }],
 		});
-		// Nobody at the keyboard gets the list, and a panel is one of the things a thread may not reach.
+		// Nobody at the keyboard gets the list, and a panel is one of the things a thread may not reach: the
+		// roster names the doors and the one call a panel makes, and both are the human's alone.
 		assert.equal((await get(daemon, "/plugins/visual", "")).status, 403);
-		assert.equal(threadRefusal({ human: false, board: { id: workspace }, thread: {} }, "POST", "/plugins/visual/request", workspace), "a thread may not use that");
+		// The path is folded before it is routed, so the trailing slash reaches the same door and the same refusal.
+		assert.equal((await get(daemon, "/plugins/visual/", "")).status, 403);
+		const thread = { human: false, board: { id: workspace }, thread: {} };
+		assert.equal(threadRefusal(thread, "GET", "/plugins/visual", workspace), "a thread may not use that");
+		assert.equal(threadRefusal(thread, "POST", "/plugins/visual/request", workspace), "a thread may not use that");
 
-		// The entry document, sandboxed by the daemon as well as by the frame that shows it.
-		const page = await get(daemon, "/plugins/visual/example-panel/panel.html");
+		// The entry document, sandboxed by the daemon as well as by the frame that shows it. Every read here
+		// carries no credential at all, because that is what the frame's own reads carry: the document has an
+		// opaque origin, so `SameSite=Strict` keeps the session cookie out of the style and the script it asks
+		// for, and a panel served only to a caller arrives as a page with no style and no script.
+		const page = await get(daemon, "/plugins/visual/example-panel/panel.html", "");
 		assert.equal(page.status, 200);
 		assert.match(page.type, /text\/html/);
 		assert.equal(page.csp, "sandbox allow-scripts");
 		assert.match(page.body, /example panel/);
 		// The script and the style the entry loads, from the same list of files.
-		assert.match((await get(daemon, "/plugins/visual/example-panel/panel.js")).type, /javascript/);
-		assert.match((await get(daemon, "/plugins/visual/example-panel/panel.css")).type, /text\/css/);
-		// Everything beside them is not served: a file that exists and was never declared, a path that leaves
-		// the folder however it is spelled, and a file of a plugin that declared no panel.
-		assert.equal((await get(daemon, "/plugins/visual/example-panel/README.md")).status, 404);
-		assert.equal((await get(daemon, "/plugins/visual/example-panel/../panel-plugin.mjs")).status, 404);
-		assert.equal((await get(daemon, "/plugins/visual/example-panel/%2e%2e%2fpanel-plugin.mjs")).status, 404);
-		assert.equal((await get(daemon, "/plugins/visual/plain/panel.html")).status, 404);
-
-		// The board's own credential is the cookie the printed link leaves, and that is what a panel's frame
-		// carries: the files are served on the strength of it, with no token in the address at all.
-		const landed = await fetch(`${daemon.base}/?token=${daemon.token}`, { redirect: "manual" });
-		const cookie = (landed.headers.get("set-cookie") ?? "").split(";")[0];
-		assert.notEqual(cookie, "", "the printed link leaves a session cookie");
-		const framed = await fetch(`${daemon.base}/plugins/visual/example-panel/panel.html`, { headers: { cookie } });
-		assert.equal(framed.status, 200);
-		assert.match(await framed.text(), /example panel/);
+		const script = await get(daemon, "/plugins/visual/example-panel/panel.js", "");
+		assert.equal(script.status, 200);
+		assert.match(script.type, /javascript/);
+		const style = await get(daemon, "/plugins/visual/example-panel/panel.css", "");
+		assert.equal(style.status, 200);
+		assert.match(style.type, /text\/css/);
+		// A token in the address changes nothing about these bytes: they are the same for a tab that has one.
+		assert.equal((await get(daemon, "/plugins/visual/example-panel/panel.html")).status, 200);
+		// Everything beside them is refused with no credential in hand: a file that exists and was never
+		// declared, a path that leaves the folder however it is spelled, a plugin that declared no panel, a
+		// plugin this daemon does not run, and a name or a file that is not spelled at all.
+		for (const refused of [
+			"/plugins/visual/example-panel/README.md",
+			"/plugins/visual/example-panel/../panel-plugin.mjs",
+			"/plugins/visual/example-panel/%2e%2e%2fpanel-plugin.mjs",
+			"/plugins/visual/example-panel/panel.html%00.css",
+			"/plugins/visual/plain/panel.html",
+			"/plugins/visual/nobody/panel.html",
+			"/plugins/visual/%zz/panel.html",
+			"/plugins/visual/example-panel",
+			"/plugins/visual/example-panel/",
+		]) {
+			assert.equal((await get(daemon, refused, "")).status, 404, refused);
+		}
 
 		// One call, answered by the plugin with the workspace the daemon resolved rather than one a page named.
 		// The plugin echoes the envelope it was handed, so the whole of what reached it is visible here.

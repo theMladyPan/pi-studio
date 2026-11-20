@@ -2,12 +2,12 @@
  * `pi-studio doctor`: what this copy needs to be whole, what was found on this machine, and the fix
  * for each part that is not there.
  *
- * Four parts sit outside this app, and each one goes dark on its own when it is missing: the Node
- * that runs the app, git for every repository feature, the pi that every thread is started with, and
- * the drawing the git drawer borrows from an installed editor extension. They were checked in three
- * places — the installer's warnings, the drawer's own page, and the browser console — and none of
- * them was the place a human looks after installing. This is that place: one list, the same wording
- * for the installer and for the command, and the exact command that closes each gap.
+ * Three parts sit outside this app, and each one goes dark on its own when it is missing: the Node
+ * that runs the app, git for every repository feature, and the pi that every thread is started with.
+ * They were checked in three places — the installer's warnings, the page that needed them, and the
+ * browser console — and none of them was the place a human looks after installing. This is that
+ * place: one list, the same wording for the installer and for the command, and the exact command
+ * that closes each gap.
  *
  * It answers with a report rather than printing as it goes, because both callers want it: the
  * launcher prints it, and the installer prints the very same report after it writes the copy.
@@ -17,12 +17,11 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { piCli } from "./child/pi-cli.ts";
-import { findBundle } from "./git/gitgraph/vendor.ts";
 import { programOnPath, REPO_DIR } from "./paths.ts";
 
 /** One part of the machine this app leans on, and what to do when it is not there. */
 export type DoctorPart = {
-	/** The name the report prints, one word: `node`, `git`, `pi`, `graph`. */
+	/** The name the report prints, one word: `node`, `git`, `pi`. */
 	part: string;
 	ok: boolean;
 	/** What was found, in one line, in words a human reads once. */
@@ -160,21 +159,9 @@ function piPart(): DoctorPart {
 	return { part: "pi", ok: true, detail: `pi at ${short(found)}`, fix: "" };
 }
 
-/**
- * The drawing the git drawer borrows. It is the one part that is genuinely optional: the board runs
- * without it and only the full graph stays dark. The finder already answers with the guidance for
- * the case it hit — no extension, one too new, files it cannot read — so that answer is the fix, and
- * the detail says only which state was found.
- */
-function graphPart(): DoctorPart {
-	const bundle = findBundle();
-	if (bundle.ok) return { part: "graph", ok: true, detail: `Git Graph Libre ${bundle.version} from ${short(bundle.dir)}`, fix: "" };
-	return { part: "graph", ok: false, detail: "no copy of the extension the git drawer draws with", fix: bundle.reason };
-}
-
 /** Every part, in the order the report prints them: what starts the app, then what it uses. */
 export function collectReport(): DoctorReport {
-	const parts = [nodePart(), gitPart(), piPart(), graphPart()];
+	const parts = [nodePart(), gitPart(), piPart()];
 	return { ok: parts.every((part) => part.ok), version: appVersion(), root: REPO_DIR, parts };
 }
 

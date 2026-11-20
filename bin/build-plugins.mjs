@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /**
- * Cross-build the plugins a release ships, so installing one needs no Go and no Rust on the machine.
+ * Cross-build the Go plugin executables a package of pi-studio ships, so installing one needs no Go on the
+ * machine.
  *
  *   node bin/build-plugins.mjs [--out <dir>] [--go <path>]
  *
- * Every folder under `plugins/` that holds a `go.mod` is built once per platform below and written to
+ * This repository carries no plugin of its own, so a plain checkout has nothing here to build: the tool is
+ * how a package that adds one under `plugins/` turns its Go source into the files an install runs. Every
+ * folder under `plugins/` that holds a `go.mod` is built once per platform below and written to
  * `<out>/<plugin>/<plugin>-<platform>`, `--out` defaulting to `plugins/<plugin>/dist`. `bin/package-release.mjs`
  * copies those files into the staged tree beside the plugin's `plugin.json` and its panel, where the daemon
  * looks for `<plugin>-<platform>` when a registration names the plugin instead of a path.

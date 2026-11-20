@@ -19,8 +19,10 @@
  * and only a plugin that declared a panel can be asked through it: the executable of a plugin without one
  * has no door a browser can knock on.
  *
- * Only the human at the keyboard may use any of the three. A thread has its own token and no page to draw,
- * and the routes are outside `THREAD_ROUTES` for the same reason every other board route is.
+ * Only the human at the keyboard may list the doors or make a call. A thread has its own token and no page
+ * to draw, and both routes are outside `THREAD_ROUTES` for the same reason every other board route is. A
+ * panel's files are the one exception, and it is `main.ts` that serves them before the caller check: the
+ * frame that loads them has an opaque origin, so not even the human's own cookie reaches them.
  */
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";

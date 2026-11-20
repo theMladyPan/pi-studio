@@ -1,11 +1,11 @@
 /**
  * The words the Git Graph page and this daemon say to each other.
  *
- * The page is mhutchie's own `out.min.js`, so every name here is its name and cannot be renamed for
- * taste: `heads`, `stash.untrackedFilesHash`, `moreCommitsAvailable`, `refreshId`, all of it. What the
- * page sends is checked before git is asked anything, which is why the request side is a union with
- * every command spelled out — a command that arrives with a field this module could not read is a
- * command that answers a reason instead of running.
+ * The page is pi-studio's own, written against the message protocol of Git Graph Libre, so every name
+ * here is that protocol's name and cannot be renamed for taste: `heads`, `stash.untrackedFilesHash`,
+ * `moreCommitsAvailable`, `refreshId`, all of it. What the page sends is checked before git is asked
+ * anything, which is why the request side is a union with every command spelled out — a command that
+ * arrives with a field this module could not read is a command that answers a reason instead of running.
  */
 import {
 	COMMIT_ORDERS,

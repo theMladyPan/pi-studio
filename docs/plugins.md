@@ -29,7 +29,6 @@ as you, with your privileges, and it is never installed, updated or started by a
 ```json
 {
   "plugins": [
-    { "name": "git-history", "bundled": "git-history" },
     { "name": "scratch-card", "command": "/absolute/path/to/pi-studio-scratch-card", "args": [] }
   ]
 }
@@ -43,9 +42,9 @@ as you, with your privileges, and it is never installed, updated or started by a
 - `bundled` — the name of a plugin this install ships, under `plugins/` beside the app. The program and
   the panel come from that folder, so this is the whole row. A row may carry `bundled` or `command`, not
   both, and a bundled row takes no `visual` of its own. The daemon runs
-  `plugins/<name>/<name>-<platform>` when the release built one for this machine (for example
-  `git-history-linux-x64`), and otherwise `plugins/<name>/<name>`, which is a binary built in place in a
-  checkout.
+  `plugins/<name>/<name>-<platform>` when the package built one for this machine (for example
+  `example-panel-linux-x64`), and otherwise `plugins/<name>/<name>`, which is a binary built in place in a
+  checkout. This repository ships no plugin of its own, so a row here is normally a `command` row.
 - `args` — a list of strings, passed as they are. Nothing in it becomes another command.
 - `visual` — optional, and only on a `command` row: the panel the board may show for this plugin. See
   below.
@@ -88,9 +87,12 @@ The daemon sends two notifications, to the plugins that asked for that type:
 
 A plugin with a `visual` gets a door in the board's toolbox. Pressing it loads the plugin's own page into
 a frame sandboxed with `allow-scripts` and no `allow-same-origin`, so the document has an opaque origin:
-no cookie, no storage, no request of its own. The daemon serves only the files the panel declared, each
+no cookie, no storage, and no call of its own. The daemon serves only the files the panel declared, each
 one relative to the plugin's folder and each one a plain file there, and looking a request up in that
-list rather than joining a path.
+list rather than joining a path. Those files are served without asking for a credential, because a
+document with an opaque origin has none to send: what they hold is a page, a script and a style, never a
+workspace's data. The list of doors and the one call a panel makes are the human's, and need the session
+the printed link left.
 
 The page and the board trade five messages: `pi-studio.host.hello` with a nonce, `pi-studio.visual.request`
 with that nonce and an id, `pi-studio.visual.result` or `pi-studio.visual.error` with the same id, and
@@ -98,21 +100,11 @@ with that nonce and an id, `pi-studio.visual.result` or `pi-studio.visual.error`
 page names neither a folder nor a plugin. The full shapes are in `docs` at the top of
 `server/routes/plugins.ts` and in the panel example `test-support/plugin-visual/`.
 
-## The two plugins here
-
-`plugins/git-history` draws a workspace's git history: compact rows, connected lanes, branch and tag
-labels, and a details pane with a commit's files and one file's patch. It is written in Go, runs `git`
-read-only with fixed arguments, deadlines and output budgets, and never writes to a repository.
-
-```sh
-cd plugins/git-history
-go test ./...                 # history, lanes, paging, patches, the pipe, the handshake
-go build -o git-history .     # a binary beside plugin.json, which is what a checkout registers
-node scripts/e2e.mjs          # the built binary on real repositories, with a fake daemon
-```
+## The example plugin
 
 `examples/plugins/scratch-card` is a Rust plugin that writes one note on the scratch board for every run
-that ends there. It is the example that proves a language other than Go works against the same protocol.
+that ends there. It is the worked example of the protocol from a language other than Go, and it carries
+the exact registration, the methods it calls and what it refuses to do.
 
 ```sh
 cd examples/plugins/scratch-card
@@ -120,21 +112,29 @@ cargo build --release
 cargo test
 ```
 
-Each has its own README with the exact registration, the methods it calls and what it refuses to do.
+Its own README is the walk-through; the two check scripts beside it run the built binary against a fake
+daemon and against the daemon's own service layer.
 
-## What a release ships
+The tests in this repository use fixtures rather than a shipped plugin: `test-support/plugin-visual/` is
+a panel plugin with a page, a script and a style, and `test/plugins-bundled.test.ts` builds the layout a
+package ships in a throwaway folder. Nothing in `plugins/` is needed to run the board or its checks.
 
-An installed release carries `plugins/git-history` with its manifest, its panel and a prebuilt executable
-for Linux and macOS on x86_64 and arm64, so enabling it needs no Go toolchain:
+## What a package of pi-studio may ship
+
+A package can add one folder per plugin under `plugins/`: a `plugin.json`, the panel's files, and the
+executables built for each platform. An install then enables it with one row and needs no toolchain for
+it:
 
 ```json
-{ "plugins": [{ "name": "git-history", "bundled": "git-history" }] }
+{ "plugins": [{ "name": "example-panel", "bundled": "example-panel" }] }
 ```
 
-`npm run build:plugins` cross-builds those four files (`bin/build-plugins.mjs`), and `npm run package`
-stages them from `plugins/*/dist/` into the archive beside the plugin's manifest. They stay in the single
+`npm run build:plugins` cross-builds the executables of any plugin folder holding a `go.mod`
+(`bin/build-plugins.mjs`), and a plugin in another language brings its own build step. `npm run build`
+stages `plugins/<name>/` into the tree an install copies: the manifest, the panel and every built file
+from `plugins/<name>/dist/`. They stay in the single
 platform-neutral tarball; the daemon picks the file that matches the machine. The Rust example is not
-shipped: it is an example to build from its source.
+staged: it is an example to build from its own source.
 
 ## Next steps
 
@@ -143,9 +143,8 @@ shipped: it is an example to build from its source.
   one door per workspace instead of one per plugin.
 - **Declaring what a plugin may do.** The daemon answers all eight methods for every plugin. A row could
   name the ones it wants — read only, notes but no threads — and the daemon would refuse the rest.
-- **Reporting plugins where the other gaps are reported.** `pi-studio doctor` names Node, git, pi and the
-  git drawer's copy. It could list the registered plugins, what each one answers, and the rows that did
-  not start.
+- **Reporting plugins where the other gaps are reported.** `pi-studio doctor` names Node, git and pi. It
+  could list the registered plugins, what each one answers, and the rows that did not start.
 - **A helper for the registration.** Writing `plugins.json` by hand is the whole install step for a
   bundled plugin. A `pi-studio plugins` command could list the shipped ones and write the row.
 - **Per-plugin settings.** A row can carry `args`, and nothing else about a plugin's own configuration
