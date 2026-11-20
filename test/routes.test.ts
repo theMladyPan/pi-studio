@@ -1652,8 +1652,15 @@ describe("routes", { concurrency: 8 }, () => {
 			if (frame.type === "compact") {
 				// A "die" file is a child that exits without answering, which the board must not wait out.
 				if (existsSync(flag("die"))) process.exit(0);
-				writeFileSync(flag("compacted"), "1");
-				say({ type: "response", command: "compact", success: true, data: { summary: "a shorter conversation", tokensBefore: 150000, estimatedTokensAfter: 32000 } });
+				// A "slowcompact" file delays the summary, which is the window a message is sent in.
+				const answer = () => {
+					writeFileSync(flag("compacted"), "1");
+					say({ type: "response", command: "compact", success: true, data: { summary: "a shorter conversation", tokensBefore: 150000, estimatedTokensAfter: 32000 } });
+				};
+				if (existsSync(flag("slowcompact"))) {
+					unlinkSync(flag("slowcompact"));
+					setTimeout(answer, 600);
+				} else answer();
 			}
 			if (frame.type === "prompt") {
 				// A slash command is a prompt frame too, and pi answers it with what it did rather than with a run:
@@ -2236,6 +2243,58 @@ describe("routes", { concurrency: 8 }, () => {
 			const throughNote = await postTo(daemon, board.id, "/compact", { cardId: note.cardId });
 			assert.equal(throughNote.status, 200, throughNote.body);
 			assert.equal(JSON.parse(throughNote.body).threadId, threadId);
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
+		}
+	});
+
+	test("a message sent during a compaction waits in the queue and goes when it ends", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-compact-queue-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-compact-queue-work-"));
+		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+		const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+		try {
+			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+			const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" })).status, 200);
+			// The run has to be over and its child gone: a compaction starts a child rather than interrupting one.
+			for (let tries = 0; tries < 100; tries++) {
+				const thread = await threadState(daemon, board.id, threadId);
+				if (thread && thread.status === "idle" && thread.live === false) break;
+				await new Promise((done) => setTimeout(done, 50));
+			}
+			// The summary takes a moment, which is the window the next message is sent in.
+			writeFileSync(join(dirname(stub.envFile), "slowcompact"), "1");
+			const compacting = postTo(daemon, board.id, "/compact", { cardId: threadId });
+			for (let tries = 0; tries < 100 && !framesOf(stub).some((frame: any) => frame.type === "compact"); tries++) {
+				await new Promise((done) => setTimeout(done, 25));
+			}
+			assert.ok(framesOf(stub).some((frame: any) => frame.type === "compact"), "no compact frame reached the child");
+			// A steer has no run to join while the child summarises, so it waits like a queued message.
+			const sent = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "and this during the summary", mode: "steer" });
+			assert.equal(sent.status, 200, sent.body);
+			const at = JSON.parse(sent.body).turn as number;
+			const waiting = await threadState(daemon, board.id, threadId);
+			assert.equal(waiting.status, "idle", "a message during a compaction broke the thread");
+			assert.equal(waiting.turns[at].status, "queued", "a message sent during a compaction was not queued");
+			assert.equal(waiting.queued.length, 1);
+			assert.equal(framesOf(stub).filter((frame: any) => frame.type === "prompt").length, 1, "the child was given a message still waiting on the summary");
+			const compacted = await compacting;
+			assert.equal(compacted.status, 200, compacted.body);
+			// The summary ends and the waiting message goes: one turn answered, not a stopped thread.
+			let settled = null;
+			for (let tries = 0; tries < 200; tries++) {
+				settled = await threadState(daemon, board.id, threadId);
+				if (settled?.status === "idle" && (settled?.turns ?? []).every((turn: any) => turn.status === "answered")) break;
+				await new Promise((done) => setTimeout(done, 50));
+			}
+			assert.equal(settled?.turns?.[at]?.status, "answered", "the message queued during the compaction never went");
+			assert.equal(settled?.queued?.length, 0);
+			const frames = framesOf(stub);
+			const compactAt = frames.findIndex((frame: any) => frame.type === "compact");
+			const secondPrompt = frames.findIndex((frame: any, index: number) => frame.type === "prompt" && index > compactAt);
+			assert.ok(secondPrompt > compactAt, "the queued message went before the summary ended");
 		} finally {
 			daemon.child.kill();
 			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);

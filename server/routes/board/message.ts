@@ -10,6 +10,7 @@ import { runtimeDefaults } from "../../workspaces.ts";
 import { card, update, updateCard } from "../../bus.ts";
 import { acceptedImages, promptImages, thumbImages, threadError } from "../../cards.ts";
 import { prompt } from "../../child/run.ts";
+import { isCompacting } from "../../waiters.ts";
 import { chipSections, MAX_CHIPS } from "./chips.ts";
 
 
@@ -181,12 +182,18 @@ export async function messageOnBoard(board, body) {
 	const holding = askedCard && thread.hidden ? askedCard : null;
 	let target = null;
 	let index;
+	// A compaction in flight is a busy thread too, even though no run is answering: the child is
+	// summarising and would refuse a prompt, so a message in that window waits in the queue and goes
+	// when the summary ends, the way one behind a run waits for it to settle.
+	const running = thread.status === "running";
+	const compactingNow = isCompacting(thread);
 	if (holding) {
 		holding.turns = holding.turns ?? [];
-		// A steer joins the run in flight, so the turn is already being acted on.
+		// A steer joins the run in flight, so the turn is already being acted on. A steer during a
+		// compaction has no run to join, so it waits like any queued message.
 		holding.turns.push({
 			text: said.slice(0, 4000),
-			status: mode === "steer" ? "sent" : "queued",
+			status: mode === "steer" && running ? "sent" : "queued",
 			mode,
 			at: Date.now(),
 			...(thumbs.length ? { images: thumbs } : {}),
@@ -197,7 +204,7 @@ export async function messageOnBoard(board, body) {
 	} else {
 		thread.turns.push({
 			text: said.slice(0, 4000),
-			status: mode === "steer" ? "sent" : "queued",
+			status: mode === "steer" && running ? "sent" : "queued",
 			mode,
 			at: Date.now(),
 			...(thumbs.length ? { images: thumbs } : {}),
@@ -207,7 +214,6 @@ export async function messageOnBoard(board, body) {
 		target = { turn: index };
 		update(board, thread);
 	}
-	const running = thread.status === "running";
 	if (running && mode === "steer") {
 		// A steer joins the run in flight instead of waiting behind it.
 		try {
@@ -220,7 +226,7 @@ export async function messageOnBoard(board, body) {
 		} catch (error) {
 			threadError(board, thread, `could not steer the child: ${error.message}`);
 		}
-	} else if (running) {
+	} else if (running || compactingNow) {
 		// The card quote is kept beside the words the human typed, so a message still waiting can be
 		// rewritten without losing what the child needs to know about the card it is about.
 		// The pictures wait with the words: a run that has not read them yet is not told about them twice.

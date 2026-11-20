@@ -13304,8 +13304,9 @@ async function sendMessage(inst = activeComposer) {
       // A fork answers in its own card, so the caret follows the answer instead of staying behind.
       focusThread(made.id);
     }
-    // With no run in flight the message is being sent, not queued behind one.
-    sayHint(inst, metaRunning !== true ? "sent" : inst.sendMode === "steer" ? "steered" : "queued");
+    // With no run in flight the message is being sent, not queued behind one. A compaction in flight
+    // in this field queues it the same way, so the line says so rather than claiming it went.
+    sayHint(inst, inst.compacting ? "queued · waits for the compaction" : metaRunning !== true ? "sent" : inst.sendMode === "steer" ? "steered" : "queued");
     // The footer says where the message went when that is not simply this card: a fork is answered in a
     // new card, and a message about another card is worth naming.
     if (sentFork && made?.id) footNote(`a new thread answers ↳ ${cardName(sentFork)}`);
