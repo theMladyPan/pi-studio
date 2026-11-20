@@ -10,10 +10,10 @@ export function layoutGraph(commits, { more = false, firstParentOnly = false } =
 		const lane = incoming < 0 ? vacant(pending) : incoming;
 		const tone = incoming < 0 ? freeTone(pending) : pending[incoming].tone;
 		const links = pending.flatMap((entry, column) => entry && column !== incoming
-			? [{ from: column, to: column, tone: entry.tone, kind: "pass" }]
+			? [{ from: column, to: column, tone: entry.tone, uncommitted: entry.uncommitted, kind: "pass" }]
 			: []);
 		if (incoming >= 0) {
-			links.push({ from: lane, to: lane, tone, kind: "in" });
+			links.push({ from: lane, to: lane, tone, uncommitted: pending[incoming].uncommitted, kind: "in" });
 			pending[lane] = null;
 		}
 
@@ -26,13 +26,13 @@ export function layoutGraph(commits, { more = false, firstParentOnly = false } =
 			let to = pending.findIndex((entry) => entry?.hash === parent);
 			if (to < 0) {
 				to = order === 0 ? lane : vacant(pending);
-				pending[to] = { hash: parent, tone: order === 0 ? tone : freeTone(pending, tone) };
+				pending[to] = { hash: parent, tone: order === 0 ? tone : freeTone(pending, tone), uncommitted: hash === "*" };
 			}
 			links.push({ from: lane, to, tone: pending[to].tone, kind: "out", uncommitted: hash === "*" });
 		}
 		while (pending.length && !pending.at(-1)) pending.pop();
 		width = Math.max(width, lane + 1, pending.length);
-		rows.push({ lane, tone, links, root: !parentHashes.some(Boolean), exits: pending.flatMap((p, column) => p ? [{ column, tone: p.tone }] : []) });
+		rows.push({ lane, tone, links, root: !parentHashes.some(Boolean), exits: pending.flatMap((p, column) => p ? [{ column, tone: p.tone, uncommitted: p.uncommitted }] : []) });
 	}
 	return { rows, width };
 }
@@ -63,7 +63,7 @@ function svgNode(name, attributes) {
 
 export function drawLanes(row, width, colors, { current, stash, uncommitted, angular }) {
 	const half = ROW_HEIGHT / 2;
-	const svg = svgNode("svg", { class: "lanes", width, height: ROW_HEIGHT, "aria-hidden": true });
+	const svg = svgNode("svg", { class: "lanes", width, height: ROW_HEIGHT, viewBox: `0 0 ${width} ${ROW_HEIGHT}`, preserveAspectRatio: "none", "aria-hidden": true });
 	for (const { from, to, tone, kind, uncommitted: dirty } of row.links) {
 		const x = laneX(from), end = laneX(to);
 		const startY = kind === "out" ? half : 0, endY = kind === "in" ? half : ROW_HEIGHT;
@@ -87,11 +87,11 @@ export function drawLanes(row, width, colors, { current, stash, uncommitted, ang
 }
 
 export function extendLanes(exits, colors) {
-	return exits.map(({ column, tone }) => {
+	return exits.map(({ column, tone, uncommitted }) => {
 		const line = document.createElement("span");
 		line.className = "lane-extension";
 		line.style.left = `${laneX(column) - 1}px`;
-		line.style.backgroundColor = colors[tone % colors.length];
+		line.style.backgroundColor = uncommitted ? "var(--muted)" : colors[tone % colors.length];
 		return line;
 	});
 }

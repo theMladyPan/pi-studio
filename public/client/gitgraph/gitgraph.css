@@ -102,7 +102,7 @@ input[type="search"] { min-width: 0; }
 .commit { height: 24px; cursor: pointer; scroll-margin-top: calc(var(--toolbar-height, 0px) + 32px); }
 .commit td { height: 24px; padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .commit td.col-graph { padding: 0; position: relative; }
-.lanes { display: block; position: absolute; top: 0; left: 0; pointer-events: none; }
+.lanes { display: block; position: absolute; top: 0; left: 0; height: 100%; pointer-events: none; }
 .lanes path { fill: none; stroke-width: 1.8; }
 .lanes path.lane-shadow { stroke: var(--bg); stroke-width: 4; }
 .commit:hover td, .commit:focus-visible td { background: var(--card-head); }
@@ -120,7 +120,7 @@ input[type="search"] { min-width: 0; }
   height: 18px; padding: 0 5px; border: 1px solid var(--border-bright); border-radius: 4px;
   background: color-mix(in srgb, var(--lane) 12%, var(--bg)); color: var(--text);
 }
-.ref-group { display: inline-flex; flex: none; border: 1px solid var(--border-bright); border-radius: 4px; }
+.ref-group { display: inline-flex; flex: none; height: 18px; align-items: center; border: 1px solid var(--border-bright); border-radius: 4px; }
 .ref-group .ref { border: 0; height: 16px; min-height: 16px; border-radius: 0; }
 .ref-group .alias { border-left: 1px solid var(--border-bright); color: var(--muted); font-style: italic; }
 .ref.tag { color: var(--amber); }
