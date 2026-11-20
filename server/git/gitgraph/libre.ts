@@ -1,11 +1,12 @@
 /**
- * The wire between the Git Graph Libre page and this daemon.
+ * The wire between the Git Graph page and this daemon.
  *
- * The page is Libre's `web.min.js`, so every name here is its name and cannot be renamed for taste:
- * `viewState`, `loadCommits`, `commitDetails`, `requestId`, all of it. What the page sends is
- * checked before git is asked anything, which is why the request side is broad and every command
- * the daemon answers is spelled out — a command that arrives with a field this module could not
- * read is a command that answers a reason instead of running.
+ * The names here are the protocol's, so none of them can be renamed for taste: `viewState`,
+ * `loadCommits`, `commitDetails`, `requestId`, all of it. The page is pi-studio's own and written
+ * against those names, so a name changed here is a page that asks for a command nobody answers. What
+ * the page sends is checked before git is asked anything, which is why the request side is broad and
+ * every command the daemon answers is spelled out — a command that arrives with a field this module
+ * could not read is a command that answers a reason instead of running.
  */
 import { isHash, isOneOf, isRefName, isRemoteName, isRemoteUrl, isRepoRoot, isRevision, isStashSelector, repoPath } from "./validate.ts";
 

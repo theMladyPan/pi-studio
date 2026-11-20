@@ -258,7 +258,7 @@ test("--version works in the source clone and in a staged copy", async () => {
 	// the app entry: a specifier left as TypeScript would answer with a module-not-found instead.
 	const stagedDoctor = await run(process.execPath, [join(staged, "bin", "pi-studio"), "doctor"]);
 	assert.match(stagedDoctor.stdout, /^pi-studio \d+\.\d+\.\d+ at /m, stagedDoctor.stdout + stagedDoctor.stderr);
-	for (const part of ["node", "git", "pi", "graph"]) assert.match(stagedDoctor.stdout, new RegExp(`(ok|missing)\\s+${part}`), stagedDoctor.stdout);
+	for (const part of ["node", "git", "pi"]) assert.match(stagedDoctor.stdout, new RegExp(`(ok|missing)\\s+${part}`), stagedDoctor.stdout);
 });
 
 test("install stages a versioned copy, switches current and the launcher, and leaves the source alone", async (t) => {

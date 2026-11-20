@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, posix, relative, sep } from "node:path";
 import { test, after, before } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -80,9 +80,6 @@ test("the staged tree carries the compiled app, runtime assets, and metadata —
 		"prompts/flows/simple.md",
 		"docs/boss-and-subagents.md",
 		"docs/plugins.md",
-		"plugins/git-history/plugin.json",
-		"plugins/git-history/README.md",
-		"plugins/git-history/assets/history.html",
 		"bin/pi-studio",
 		"package.json",
 		"build.json",
@@ -104,7 +101,8 @@ test("the staged tree carries the compiled app, runtime assets, and metadata —
 		assert.ok(!/(^|\/)(node_modules|test|bench|mockups|site|\.git)(\/|$)/.test(file), `staged tree carries ${file}`);
 	}
 
-	// A plugin is staged as what runs it and what draws it, never as the sources it was built from.
+	// A plugin a package of its own ships is staged as what runs it and what draws it, never as the sources it
+	// was built from. This repository carries none, so the loop below holds vacuously until one is added.
 	for (const file of staged.filter((one) => one.startsWith("plugins/"))) {
 		assert.ok(!/\.(go|mod|sum|rs|toml|lock)$/.test(file), `staged plugin carries a source file: ${file}`);
 		assert.ok(!/(^|\/)dist(\/|$)/.test(file), `staged plugin carries the build folder: ${file}`);
@@ -147,6 +145,58 @@ test("the staged tree carries the compiled app, runtime assets, and metadata —
 		assert.equal(identity.tag, `v${sourcePkg.version}`);
 	} else {
 		assert.equal(identity.custom, true, "a build that is not a clean official tag must read custom");
+	}
+});
+
+/**
+ * The Git Graph page, the modules it loads and the assets they reach for, all out of one build.
+ *
+ * A page that draws nothing after an install is the quietest packaging failure there is: every file is
+ * valid on its own and the source tree serves them all, so only the archive shows the one path that was
+ * never copied. This walks the staged page to the last module and the last font, and pins the retirement
+ * of the pages that came before it, because a release that quietly carried one of those back would be a
+ * second Git page nobody chose.
+ */
+test("the staged tree carries the Git Graph page, the modules it loads and the assets they reach for", () => {
+	const out = sharedBuild();
+	const staged = new Set(filesUnder(out).map((file) => relative(out, file).split(sep).join("/")));
+	const page = readFileSync(join(out, "public", "gitgraph.html"), "utf8");
+
+	for (const file of ["public/gitgraph.html", "public/client/gitgraph/host.js", "public/client/gitgraph/gitgraph.css"]) {
+		assert.ok(staged.has(file), `staged tree is missing ${file}`);
+	}
+
+	// What the page itself names, resolved the way the daemon's static rules resolve a URL: the host module
+	// is what draws the page, and the stylesheet is what gives it its lanes.
+	const named = [...page.matchAll(/\b(?:src|href)="(\/[^"]+)"/g)].map(([, url]) => url);
+	assert.ok(named.includes("/client/gitgraph/host.js"), `the page loads no host module: ${named.join(", ")}`);
+	assert.ok(named.includes("/client/gitgraph/gitgraph.css"), `the page loads no stylesheet: ${named.join(", ")}`);
+	for (const url of named) assert.ok(staged.has(`public${url}`), `the page asks for ${url}, which the archive does not carry`);
+
+	// Every module the host reaches, to any depth, and every asset the stylesheet reaches for.
+	const checked = new Set<string>();
+	const queue = ["public/client/gitgraph/host.js"];
+	while (queue.length) {
+		const file = queue.pop() as string;
+		if (checked.has(file)) continue;
+		checked.add(file);
+		for (const [, specifier] of readFileSync(join(out, file), "utf8").matchAll(/\bfrom\s*["']([^"']+)["']/g)) {
+			const resolved = specifier.startsWith("/") ? `public${specifier}` : posix.join(posix.dirname(file), specifier);
+			assert.ok(staged.has(resolved), `${file} imports ${specifier}, which the archive does not carry as ${resolved}`);
+			queue.push(resolved);
+		}
+	}
+	assert.ok(checked.size > 1, `the host module was the only module read: ${[...checked].join(", ")}`);
+	for (const [, url] of readFileSync(join(out, "public/client/gitgraph/gitgraph.css"), "utf8").matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/g)) {
+		assert.ok(staged.has(`public${url}`), `the stylesheet reaches for ${url}, which the archive does not carry`);
+	}
+
+	// The borrowed extension's page and the failed `git-history` plugin are retired, so no part of either may
+	// ride along: a release carries this app's own page and no second one beside it.
+	for (const file of staged) {
+		assert.ok(!/(^|\/)(web\.min\.js|base\.css)$/.test(file), `staged tree carries a retired Git Graph asset: ${file}`);
+		assert.ok(!file.startsWith("public/client/gitgraph/vendor/"), `staged tree carries the retired vendor folder: ${file}`);
+		assert.ok(!file.startsWith("plugins/git-history/"), `staged tree carries the retired git-history plugin: ${file}`);
 	}
 });
 

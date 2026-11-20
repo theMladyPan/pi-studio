@@ -43,7 +43,7 @@ and tag, and an older release never replaces a newer installed copy.
 
 Node 22.18 or newer has to be on that machine already, and the installer stops without it. `git` and
 the `pi` CLI are what threads need, so the run ends with a report of what the board still cannot do:
-the four parts it leans on, what was found, and the command that installs what was not. It ships none
+the three parts it leans on, what was found, and the command that installs what was not. It ships none
 of them and installs no npm packages. A release is compiled JavaScript, so the Node you have does not
 have to read TypeScript.
 
@@ -53,10 +53,9 @@ pi-studio doctor
 
 That report stays a command of its own, so it can be asked again after anything changes on the
 machine, and its exit code is 1 while something is missing: a setup script can ask the same question
-without reading the English. `--json` prints the same report as data. The four parts are the Node a
-shell would start the command with, git for the repository features, the pi install a thread is started
-from, and the drawing the git drawer borrows — the only one the board runs without, with just
-the full graph staying dark.
+without reading the English. `--json` prints the same report as data. The three parts are the Node a
+shell would start the command with, git for the repository features, and the pi install a thread is
+started from. The graph needs none of them to be found: its page and its client are part of the app.
 
 ### From a checkout
 
@@ -167,15 +166,13 @@ drawn in a frame sandboxed away from the board. It runs as you and is handed no 
 starts one only when you name it in `~/.local/state/pi-studio/plugins.json`: nothing is installed,
 downloaded or asked for, and a folder you open can never register one.
 
-An installed release carries `git-history`, which draws a workspace's git history in a panel, with
-prebuilt executables for Linux and macOS. Enabling it is one row:
+The repository ships no plugin of its own: a row names an executable you already have, or a plugin
+folder an install of your own carries. A panel a plugin puts on the board is served by the daemon from
+the files that plugin declared, in a frame with no origin of its own.
 
-```json
-{ "plugins": [{ "name": "git-history", "bundled": "git-history" }] }
-```
-
-`docs/plugins.md` has the protocol, the methods a plugin may call and the rules for a panel, and
-`examples/plugins/scratch-card` is the same system written in Rust.
+`docs/plugins.md` has the protocol, the methods a plugin may call, the rules for a panel and how a
+package that ships one is staged, and `examples/plugins/scratch-card` is the whole system written in
+Rust.
 
 ## From another computer
 
@@ -241,15 +238,16 @@ waiting behind it.
 worktree on a branch of its own.
 
 **The whole graph is a drawer away.** In a repository, `g` on the board rolls that repository down over
-it as the full graph: every branch, every commit, the commit details pane and the diff. What draws it is [Git Graph Libre](https://github.com/PlohnenSoftware/git-graph-libre)
-(PlohnenSoftware, AGPL-3.0-or-later), the extension's own webview, loaded from the copy already installed
-in your VS Code and never shipped from here. `PI_STUDIO_GITGRAPH_DIR` points the daemon at a copy somewhere
-else. When the drawing is missing the drawer says so in a sentence on the page, rather than staying blank,
-and the rest of the board keeps working.
+it as the full graph: every branch, every commit, the commit details pane and the diff. The page and its
+client are pi-studio's own, in `public/gitgraph.html` and `public/client/gitgraph/`, so nothing has to be
+installed for it and nothing is read out of an editor. A workspace with no repository gets a sentence on
+the page instead of a blank drawer, and the rest of the board keeps working.
 
-Git Graph Libre descends from [Git Graph](https://github.com/mhutchie/vscode-git-graph) by Michael
-Hutchison, which pi-studio used earlier. The full provenance, the MIT lineage and the contributors of
-Libre are recorded in their `NOTICE.md` and `LICENSE` files; this paragraph is a thank-you, not a licence.
+It speaks the message protocol of [Git Graph Libre](https://github.com/PlohnenSoftware/git-graph-libre)
+(PlohnenSoftware, AGPL-3.0-or-later), which in turn descends from
+[Git Graph](https://github.com/mhutchie/vscode-git-graph) by Michael Hutchison — the shape of every
+command and reply here, and the graph the board draws, come from that lineage. The code is pi-studio's
+own; this paragraph is a thank-you, not a licence.
 
 **A boss thread** spawns children instead of working. It decides what the work needs — on `auto` the
 steps are its own, and a flow a human pinned is a recipe it follows — and gives each child one role;
@@ -291,13 +289,13 @@ server/           the daemon, one module per subject
   cards.ts        the wire shape of a card; bus.ts the fan-out to every open tab
   child/          the `pi` child: its argv, its prompts, its output, its turns
   git/            the repository
-    gitgraph/     the answers the Git Graph page asks for: its dispatch, its reads, its bundle
+    gitgraph/     the answers the Git Graph page asks for: its dispatch, its reads, its writes
   worktrees/      making a thread's worktree, naming its branch, retiring it
   paths.ts        every path and the JSON io; types.ts the shapes that cross a boundary
 public/           the board client: index.html with its styles, welcome.html for the crossroads
   client/         board.js, and beside it mermaid 11.17.2 and Chart.js 4.6.1, MIT, fetched the
                   first time a card carries a fence they draw
-  gitgraph.html   the graph page a tab or the drawer loads, its host script and viewer under
+  gitgraph.html   the graph page a tab or the drawer loads, its client modules under
                   client/gitgraph/, and the drawer the board rolls down (client/git-drawer.js)
 bridge/           the extension a child loads so a thread can draw on its board
 bin/pi-studio     the launcher: `--version`, `update`, `uninstall`, then the daemon

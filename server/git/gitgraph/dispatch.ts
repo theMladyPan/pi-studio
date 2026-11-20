@@ -1,12 +1,12 @@
 /**
- * One message from the Git Graph Libre page, and every answer it earns.
+ * One message from the Git Graph page, and every answer it earns.
  *
- * The page is Libre's bundle: it posts one command per click and waits for a
- * reply carrying the same command name, sometimes with a `requestId` it
- * compares before it will draw the answer at all. This module is the
- * extension's message switch, minus everything that needed an editor or a
- * child process. Every answer is an array, and a failure is a reply too,
- * never a rejected promise, so the route always answers.
+ * The page posts one command per click and waits for a reply carrying the same
+ * command name, sometimes with a `requestId` it compares before it will draw the
+ * answer at all: those names are Libre's protocol, which this page speaks. This
+ * module is that protocol's message switch, minus everything that needed an
+ * editor or a child process. Every answer is an array, and a failure is a reply
+ * too, never a rejected promise, so the route always answers.
  */
 import { parseLibreRequest, queryError, UNCOMMITTED } from "./libre.ts";
 import type { LibreRequest } from "./libre.ts";
@@ -137,7 +137,7 @@ export async function respond(board: DispatchBoard, raw: unknown): Promise<Reply
 		const named = request.repo;
 		const entry = named !== undefined ? repos.get(named) : undefined;
 		if (named !== undefined && !repos.has(named)) {
-			const QUERY = new Set(["loadCommits", "loadRepoInfo", "commitDetails", "commitComparison", "tagDetails", "uncommittedDetails", "searchCommits", "commitSignatures", "remoteTags", "branchPushDefaults", "worktreeStatus", "worktreeChanges", "resolveRef"]);
+			const QUERY = new Set(["loadBranches", "loadCommits", "loadRepoInfo", "commitDetails", "commitComparison", "tagDetails", "uncommittedDetails", "searchCommits", "commitSignatures", "remoteTags", "branchPushDefaults", "worktreeStatus", "worktreeChanges", "resolveRef"]);
 			if (QUERY.has(request.command)) return [{ command: request.command, requestId: request.requestId ?? 0, repo: named, error: queryError("That repository is no longer open in this tab.") }];
 			return [{ command: request.command, status: "That repository is no longer open in this tab." }];
 		}
@@ -186,9 +186,12 @@ async function answer(board: DispatchBoard, request: LibreRequest, paths: string
 			return [{ command: "loadRepoInfo", requestId: request.requestId ?? 0, repoInfo: info, error: null }];
 		}
 		case "loadBranches": {
-			const repo = lastActiveRepo(board, paths) ?? "";
-			// Libre's loadBranches names no repo: it asks about the selected one. Use last active, falling back to first.
-			const active = stateFor(board).lastActiveRepo && repos.has(stateFor(board).lastActiveRepo as string) ? stateFor(board).lastActiveRepo as string : repo;
+			// Libre's own loadBranches names no repo and asks about the selected one, so a page written against
+			// it keeps working: the last active repository answers, falling back to the first. Our page sends the
+			// repository it drew, which is checked against the same allowlist as every other command and used as
+			// it is — a tab that reads one repository's branches while another drawer moves `selectRepo` under it
+			// must not be handed the branches of the wrong checkout.
+			const active = entry?.path ?? lastActiveRepo(board, paths) ?? "";
 			if (!active) return [{ command: "loadBranches", requestId: request.requestId ?? 0, branches: [], head: null, hard: bool(f, "hard"), isRepo: false, error: queryError("no repository"), worktrees: [], upstreams: {} }];
 			const showRemote = bool(f, "showRemoteBranches", true);
 			const hidden = arr(f, "hiddenRemotes");
@@ -326,7 +329,9 @@ async function answer(board: DispatchBoard, request: LibreRequest, paths: string
 			if ("view" in answerView) {
 				return [{ command, success: true, view: answerView.view } as Reply];
 			}
-			return [{ command, success: false } as Reply];
+			// A view git could not draw still says what git said, so the page can show that sentence instead
+			// of its own guess at what went wrong.
+			return [{ command, success: false, error: queryError(answerView.error) } as Reply];
 		}
 		case "setTemporaryLanguage":
 			return [];

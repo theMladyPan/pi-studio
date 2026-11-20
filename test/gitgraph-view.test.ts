@@ -195,6 +195,27 @@ test(
 const abbrev = (hash: string) => hash.slice(0, 7);
 
 test(
+	"a diff whose left side is the working tree reads in the direction the bar names",
+	withRepo(async (repo) => {
+		writeFileSync(join(repo, "readme.md"), "hello\nrewritten\n");
+		const head = git(repo, "rev-parse", "HEAD");
+		// The bar says `Working Tree ↔ <hash>`, so the text is the change from what is on disk to what the
+		// commit holds: the commit's line is the one added back, and the editor's line is the one removed.
+		const reversed = await textOf(await diffText(repo, UNCOMMITTED, head, ["readme.md"]));
+		assert.match(reversed, /^\+and another line$/m);
+		assert.match(reversed, /^-rewritten$/m);
+		// The other way round is unchanged: with the tree on the right, the diff still runs towards it.
+		const forward = await textOf(await diffText(repo, head, UNCOMMITTED, ["readme.md"]));
+		assert.match(forward, /^-and another line$/m);
+		assert.match(forward, /^\+rewritten$/m);
+		const view = await viewDiff(repo, UNCOMMITTED, head, "readme.md", "readme.md", "M");
+		assert.ok("view" in view, "a diff the page asked for by that base is text");
+		assert.equal(view.view.title, `readme.md (Working Tree ↔ ${abbrev(head)})`);
+		assert.match(view.view.content, /^\+and another line$/m);
+	}),
+);
+
+test(
 	"the bar of a commit's own diff names its parent on the left and the caret that says so",
 	withRepo(async (repo) => {
 		const head = git(repo, "rev-parse", "HEAD");

@@ -277,6 +277,39 @@ test(
 );
 
 test(
+	"a comparison whose base is the working tree is the reverse of the diff git draws from a commit",
+	withHistory(async (repo) => {
+		// The commit holds a file the tree no longer has, and the tree holds one the commit never had. With the
+		// working tree on the left, the first of those reads as an addition and the second as a deletion: the
+		// change somebody sees going from what is on disk to what was committed.
+		git(repo, "rm", "-q", "renamed.md");
+		writeFileSync(join(repo, "in-the-tree.txt"), "the tree's own\n");
+		git(repo, "add", "in-the-tree.txt");
+		const head = git(repo, "rev-parse", "HEAD");
+		const forward = await getCommitComparison(repo, head, UNCOMMITTED);
+		assert.ok(forward.ok, forward.ok ? "" : forward.error);
+		assert.deepEqual(
+			forward.value.map((change) => [change.type, change.newFilePath]),
+			[
+				["M", "b.txt"],
+				["A", "in-the-tree.txt"],
+				["D", "renamed.md"],
+			],
+		);
+		const reversed = await getCommitComparison(repo, UNCOMMITTED, head);
+		assert.ok(reversed.ok, reversed.ok ? "" : reversed.error);
+		assert.deepEqual(
+			reversed.value.map((change) => [change.type, change.newFilePath]),
+			[
+				["M", "b.txt"],
+				["D", "in-the-tree.txt"],
+				["A", "renamed.md"],
+			],
+		);
+	}),
+);
+
+test(
 	"an annotated tag is read from the tag, a lightweight one from its commit",
 	withHistory(async (repo) => {
 		const annotated = await getTagDetails(repo, "v1");

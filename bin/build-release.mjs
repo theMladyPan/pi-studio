@@ -34,12 +34,14 @@
  * silent official release. No timestamp is recorded, so the same source produces the same
  * `build.json` bytes.
  *
- * No Node binary, node_modules, tests, or user data are staged. Git Graph stays external.
+ * No Node binary, node_modules, tests, or user data are staged. The Git Graph page and its client ride in
+ * `public/` with everything else, so no editor extension is needed for it.
  *
- * A plugin's Go and Rust sources stay behind: what a staged tree carries is the manifest, the panel and the
- * built executables, so an installed copy runs the plugin without a toolchain. That makes the plugin build a
- * step before this one (`npm run build:plugins`); without it the folder is staged with no executable for the
- * platform, and this says so rather than shipping a plugin that cannot start.
+ * A plugin a package of its own adds under `plugins/` is staged as what runs it and what draws it: the
+ * manifest, the panel and the built executables, never its Go or Rust sources. That makes the plugin build a
+ * step before this one (`npm run build:plugins`) for a package that ships one; without it the folder is
+ * staged with no executable for the platform, and this says so rather than shipping a plugin that cannot
+ * start. This repository carries no plugin of its own, so the loop finds nothing here.
  */
 import { execFileSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
