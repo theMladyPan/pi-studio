@@ -9,8 +9,10 @@
 # `installFromDir`). It never runs npm, git or sudo, never edits your shell profile, and never touches
 # a state folder, a source clone, Node or pi.
 #
-# Only POSIX sh, curl, tar and an external Node >= 22.18 are used. Node, git and pi are checked;
-# missing ones are reported with guidance instead of being installed for you.
+# Only POSIX sh, curl, tar and an external Node >= 22.18 are used. What the app needs beyond that
+# is not installed here either: the run ends with the report `pi-studio doctor` prints, naming each
+# missing part and the command that closes it, so nothing has to be found out later from a drawer
+# that stays dark.
 #
 # Environment (all optional):
 #   PI_STUDIO_INSTALL_ROOT       where versions live (default: $XDG_DATA_HOME/pi-studio, else
@@ -100,6 +102,16 @@ try {
 	if (!onPath.includes(result.binDir)) {
 		console.log("pi-studio: " + result.binDir + " is not on PATH, so the pi-studio command will not be found. Add it yourself, for example: export PATH=\"" + result.binDir + ":$PATH\"");
 	}
+	// The closing report, read out of the copy just installed: the same list `pi-studio doctor`
+	// prints, so a human sees what the app still cannot do while the install is fresh, instead of
+	// finding out one dark drawer at a time. Reading it here rather than from this file keeps the
+	// installer from carrying a second, drifting copy of the checks.
+	try {
+		const doctor = await import(pathToFileURL(join(result.versionDir, "server", "doctor.js")).href);
+		console.log(doctor.formatReport(doctor.collectReport()));
+	} catch {
+		console.log("pi-studio: run pi-studio doctor for what else this copy still needs");
+	}
 } catch (error) {
 	console.error(error.message);
 	process.exit(1);
@@ -108,10 +120,6 @@ try {
 
 say() {
 	printf '%s\n' "pi-studio: $*"
-}
-
-warn() {
-	printf '%s\n' "pi-studio: $*" >&2
 }
 
 die() {
@@ -137,6 +145,9 @@ Install roots come from the environment: PI_STUDIO_INSTALL_ROOT, PI_STUDIO_BIN_D
 PI_STUDIO_STATE, and PI_STUDIO_RELEASE_BASE_URL for a test download base.
 
 After installing, run: pi-studio
+
+The run ends with a report of what the app still needs; pi-studio doctor prints the same report
+again at any time.
 EOF
 }
 
@@ -218,15 +229,6 @@ check_node() {
 	die "Node >= $PI_STUDIO_MIN_NODE_MAJOR.$PI_STUDIO_MIN_NODE_MINOR is required, and $(command -v node) is $node_version. Put an official Node build ahead of it on PATH (a distribution build often cannot run pi-studio even when the version passes), then run this again. Nothing was installed."
 }
 
-check_requirements() {
-	if ! command -v git >/dev/null 2>&1; then
-		warn "git is not on PATH. The board's git features need it: install git from https://git-scm.com/downloads and reopen your shell. Installing pi-studio anyway."
-	fi
-	if ! command -v pi >/dev/null 2>&1; then
-		warn "pi is not on PATH. pi-studio starts the pi coding agent for every thread, so threads cannot run until pi is installed and on PATH. Installing pi-studio anyway."
-	fi
-}
-
 download() {
 	# download <url> <destination>
 	if ! curl -fsSL --proto-redir '=https' --connect-timeout 15 --max-time 300 --retry 2 --retry-delay 1 -o "$2" "$1"; then
@@ -305,7 +307,6 @@ main() {
 	check_version
 	resolve_release_base
 	check_node
-	check_requirements
 
 	archive_name="pi-studio-$PI_STUDIO_VERSION.tar.gz"
 	release_url="$release_base/v$PI_STUDIO_VERSION"

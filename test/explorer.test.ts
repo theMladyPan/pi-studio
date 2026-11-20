@@ -91,6 +91,7 @@ type ExCore = {
 		renaming?: boolean,
 	): string;
 	editTarget(entry: { dir?: boolean; link?: boolean } | null | undefined): string;
+	previewKind(path: unknown): string;
 	pressAgain(held: { path: string; at: number }, path: string, now: number): { repeated: boolean; next: { path: string; at: number } };
 	selectKeep(sel: ExSelection, known: Set<string>): string[];
 	rebasePath(path: string, from: string, to: string): string;
@@ -722,6 +723,30 @@ test("a landed save is read from the text as it stands, not from the text that w
 	assert.deepEqual(core.saveStatus(true), { text: "unsaved changes", tone: "dirty" });
 });
 
+// ---------------------------------------------------------------- previews
+
+test("a path opens as the kind its last extension names, and everything else is text", () => {
+	for (const ext of ["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico"]) {
+		assert.equal(core.previewKind(`shots/pic.${ext}`), "image", ext);
+	}
+	assert.equal(core.previewKind("drawings/diagram.svg"), "svg");
+	assert.equal(core.previewKind("docs/report.pdf"), "pdf");
+	for (const ext of ["mp3", "wav", "ogg", "oga", "opus", "m4a", "aac", "flac"]) {
+		assert.equal(core.previewKind(`sound/clip.${ext}`), "audio", ext);
+	}
+	assert.equal(core.previewKind("notes.md"), "markdown");
+	assert.equal(core.previewKind("notes.markdown"), "markdown");
+	assert.equal(core.previewKind("page.html"), "html");
+	assert.equal(core.previewKind("page.htm"), "html");
+	// The name's own case and folders are not part of the kind, and the last extension wins.
+	assert.equal(core.previewKind("Shots/PIC.PNG"), "image");
+	assert.equal(core.previewKind("archive.tar.pdf"), "pdf");
+	assert.equal(core.previewKind("a/b\\c\\song.MP3"), "audio", "a backslash is a separator too");
+	for (const path of ["README", "src/main.ts", "data.bin", ".png", "notes.", "dir.with.dots/file", "", "photo.tiff", "movie.mp4"]) {
+		assert.equal(core.previewKind(path), "text", path || "(empty)");
+	}
+});
+
 // ---------------------------------------------------------------- the page
 
 test("the three drawers and the tree exist in the page, and the old picker is gone", () => {
@@ -733,6 +758,11 @@ test("the three drawers and the tree exist in the page, and the old picker is go
 	// line and the two buttons that are its whole keyboard-free interface.
 	assert.ok(html.includes('id="exEditor" hidden role="dialog" aria-modal="true"'), "#exEditor is a modal dialog");
 	for (const id of ["exEditorTitle", "exEditorBody", "exEditorStatus", "exEditorSave", "exEditorClose"]) {
+		assert.ok(html.includes(`id="${id}"`), `#${id} is in the page`);
+	}
+	// The drawing a previewable file opens in, the toggle a markdown or html file carries, and the
+	// press that opens that drawing in a tab of its own.
+	for (const id of ["exViewBody", "exViewToggle", "exViewSource", "exViewPreview", "exViewOpen"]) {
 		assert.ok(html.includes(`id="${id}"`), `#${id} is in the page`);
 	}
 	for (const gone of ['id="picker"', 'id="pickList"', 'id="pickFilter"', 'id="pickHidden"', 'id="railOpen"']) {

@@ -4,12 +4,12 @@
  * that brings one back.
  */
 import { liveTurn, stopStream } from "../../child/run.ts";
-import { broadcast, card, closedCards, nudgeWelcome, resync, update, updateCard } from "../../bus.ts";
+import { broadcast, card, closedCards, nudgeWelcome, resync, threadSettled, update, updateCard } from "../../bus.ts";
 import { CHILD_CLOSE_DELAY_MS, MAX_PUT_AWAY_CHILDREN } from "../../limits.ts";
 import { MAX_PLAIN_CARDS, putAwayByBoard, scheduleSave } from "../../store.ts";
 import { ownedCards, refreshOwned } from "./message.ts";
 import { answer, fail, readJson } from "../../http.ts";
-import { field } from "./thread.ts";
+import { field, refusal } from "./thread.ts";
 import { randomUUID } from "node:crypto";
 import { cleanBoard, clearBoard, plainCardFor, stopQueue, sweepTrees } from "../../cards.ts";
 import { existsSync, unlinkSync } from "node:fs";
@@ -123,6 +123,9 @@ export function killChild(board, thread) {
 	scheduleSave(board);
 	// A killed child is the end of its run, so whoever waits on it stops waiting.
 	finished(thread);
+	// A plugin subscribed to the board's events hears this run end the way it hears any other. A child
+	// killed between two runs ended none, so there is nothing to announce.
+	if (turn) threadSettled(board, thread, turn);
 	return true;
 }
 
@@ -205,7 +208,9 @@ function hideClosedCard(board, thread) {
  * Both places count the one shape `putAwayByBoard` describes — a child the board put away — so a thread the
  * human started or closed by hand is never read as room, however many rows the rail draws with it. Only a
  * child the board put away is retired: a thread that still owns a card is drawn through it, and one that is
- * not idle is still working, so each of those is passed over rather than read as room.
+ * not idle is still working, so each of those is passed over rather than read as room. A trimmed child's
+ * tree is swept the way a closed thread's is: spent work goes at once, and a tree holding unmerged work
+ * stays for leftovers to name, instead of lingering with no thread left to answer for it.
  */
 function trimPutAway(board) {
 	const away = [...board.threads.values()].filter(putAwayByBoard);
@@ -223,6 +228,9 @@ function trimPutAway(board) {
 		board.children.delete(old.id);
 		board.threads.delete(old.id);
 	}
+	// The trimmed threads are gone, so their trees are no longer live: retire the spent ones in place and
+	// leave a tree holding unmerged work standing, rather than leaving every such folder behind.
+	sweepTrees(board);
 }
 
 
@@ -457,15 +465,33 @@ export async function onUndo(req, res, board) {
 
 
 export async function onStop(req, res, board) {
-	// A card stops its own thread; no card stops every running thread, which is what the bottom bar of a one-session board asks for.
 	const body = (await readJson(req, res)) ?? {};
+	let stopped;
+	try {
+		stopped = stopOnBoard(board, body);
+	} catch (error) {
+		return void fail(res, error.status ?? 500, error.message);
+	}
+	answer(res, 200, stopped);
+}
+
+
+
+/**
+ * Ask a run to give up, and answer the threads it was asked of.
+ *
+ * It is the service behind `POST /stop` and behind the `threads.stop` a plugin calls: a card stops its
+ * own thread, and no card stops every running thread, which is what the bottom bar of a one-session
+ * board asks for. A refusal throws with the status the route would have answered.
+ */
+export function stopOnBoard(board, body) {
 	const asked = body?.cardId ? threadForRuntime(board, field(body.cardId, 100)) : undefined;
 	const running = asked
 		? asked.status === "running"
 			? [asked]
 			: []
 		: [...board.threads.values()].filter((thread) => thread.status === "running");
-	if (!running.length) return void fail(res, 409, asked ? "this thread has no run in progress" : "no run in progress");
+	if (!running.length) throw refusal(409, asked ? "this thread has no run in progress" : "no run in progress");
 	for (const thread of running) {
 		// A child still starting has no run to abort, so the request is kept for its first turn.
 		thread.abortWanted = true;
@@ -476,7 +502,7 @@ export async function onStop(req, res, board) {
 			// A child already gone has nothing to abort.
 		}
 	}
-	answer(res, 200, { stopped: running.map((thread) => thread.id) });
+	return { stopped: running.map((thread) => thread.id) };
 }
 
 

@@ -284,6 +284,8 @@ test("package writes the tarball, its checksum and the pinned installer under th
 		"bin/pi-studio",
 		"bin/runtime.mjs",
 		"bin/manage.mjs",
+		"server/doctor.js",
+		"server/child/pi-cli.js",
 		"package.json",
 		"build.json",
 	];
@@ -333,6 +335,10 @@ test("curl … | sh installs the pinned release, which then answers --version an
 	assert.equal(piped.status, 0, piped.stderr || piped.stdout);
 	assert.match(piped.stdout, new RegExp(`done: pi-studio ${packaged.version.replaceAll(".", "\\.")} is installed`));
 	assert.match(piped.stdout, /is not on PATH/, "a missing local bin folder is reported, never added for you");
+	// The closing report is read out of the copy just installed, so it describes this machine rather
+	// than the one the installer was built on.
+	assert.match(piped.stdout, /^pi-studio \d+\.\d+\.\d+ at /m, "the install ends with the doctor's report");
+	for (const part of ["node", "git", "pi"]) assert.match(piped.stdout, new RegExp(`(ok|missing)\\s+${part}`), `the report names ${part}: ${piped.stdout}`);
 
 	assert.equal(installedVersion(roots), packaged.version);
 	const versionDir = join(roots.installRoot, "versions", JSON.parse(readFileSync(join(roots.installRoot, "install.json"), "utf8")).currentVersionDir);

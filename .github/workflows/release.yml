@@ -100,6 +100,15 @@ jobs:
           identity="$(tar -xzOf "$tarball" "$top/build.json")"
           grep -q '"official": true' <<< "$identity" || { echo "::error::the packaged build is not an official build of $VERSION"; exit 1; }
           grep -qF "\"version\": \"$VERSION\"" <<< "$identity" || { echo "::error::the packaged build names another version than $VERSION"; exit 1; }
+          # A plugin folder is staged as what runs it and what draws it: a manifest, its panel and the
+          # executables built for each platform, never the sources or the build folder they came from. A
+          # package of its own may ship one; this repository ships none, so the rule is checked in general.
+          if grep -Eq '^[^/]+/plugins/[^/]+/dist/' <<< "$listing"; then
+            echo "::error::$tarball carries a plugin's dist folder"; exit 1
+          fi
+          if grep -Eq '^[^/]+/plugins/[^/]+\.(go|mod|sum|rs|toml|lock)$' <<< "$listing"; then
+            echo "::error::$tarball carries a plugin's source files"; exit 1
+          fi
           # The release notes are the dated changelog section for this version, and there is no
           # fallback: the heading must carry a real YYYY-MM-DD calendar date, the section must
           # hold notes, and a bullet that still names the thread that wrote it has not been

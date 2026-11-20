@@ -74,12 +74,35 @@ function noteReport(markdown, width) {
 
 
 
-export async function onNote(req, res, board) {
-	const body = await readJson(req, res);
-	if (!body) return;
+/**
+ * What a note body says, or why the board will not draw it. Both callers read it, so the size rule and
+ * the emptiness rule are one rule rather than one per way in.
+ */
+function noteText(body) {
 	const markdown = typeof body.markdown === "string" ? body.markdown : "";
-	if (!markdown.trim()) return void fail(res, 400, "empty note");
-	if (markdown.length > MAX_NOTE_CHARS) return void fail(res, 413, `a note holds at most ${MAX_NOTE_CHARS} characters`);
+	if (!markdown.trim()) return { status: 400, message: "empty note" };
+	if (markdown.length > MAX_NOTE_CHARS) return { status: 413, message: `a note holds at most ${MAX_NOTE_CHARS} characters` };
+	return { markdown };
+}
+
+
+
+/**
+ * Write a note on a board: a fresh card, or a revision of the one its `key` names.
+ *
+ * It is the service behind `POST /card/note`, and behind the `cards.note` a plugin calls, so an agent
+ * stepping through a job revises one note instead of stacking a copy of it, whichever way it came in.
+ * The answer is the route's payload. A note the board will not draw throws, with the status the route
+ * would have answered, so a caller with no response to write still says what went wrong.
+ */
+export function noteOnBoard(board, body) {
+	const text = noteText(body);
+	if (!text.markdown) {
+		const refused = new Error(text.message);
+		refused.status = text.status;
+		throw refused;
+	}
+	const markdown = text.markdown;
 	const title = field(body.title);
 	const key = field(body.key);
 	// The form the card is drawn in and what it builds on: a size nobody names is ignored, and an `after`
@@ -107,8 +130,7 @@ export async function onNote(req, res, board) {
 		if (rect) held.rect = rect;
 		broadcast(board, { type: "update", card: plainCardFor(held, board) });
 		scheduleSave(board);
-		answer(res, 200, { cardId: held.id, card: plainCardFor(held, board), updated: true, ...(report ? { report } : {}) });
-		return;
+		return { cardId: held.id, card: plainCardFor(held, board), updated: true, ...(report ? { report } : {}) };
 	}
 	makeRoom(board);
 	const note = {
@@ -127,7 +149,21 @@ export async function onNote(req, res, board) {
 	board.cards.set(note.id, note);
 	broadcast(board, { type: "card", card: plainCardFor(note, board) });
 	scheduleSave(board);
-	answer(res, 200, { cardId: note.id, card: plainCardFor(note, board), ...(report ? { report } : {}) });
+	return { cardId: note.id, card: plainCardFor(note, board), ...(report ? { report } : {}) };
+}
+
+
+
+export async function onNote(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	let written;
+	try {
+		written = noteOnBoard(board, body);
+	} catch (error) {
+		return void fail(res, error.status ?? 500, error.message);
+	}
+	answer(res, 200, written);
 }
 
 

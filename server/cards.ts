@@ -326,7 +326,7 @@ export function cleanBoard(board) {
 
 
 
-/** New: the same workspace and the same settings, with nothing on the board. */
+/** New: the same workspace and the same settings, with nothing on the board. The trees go with the threads, but only a tree whose work is provably elsewhere is retired: a kept tree stays where leftovers can name it, rather than vanishing with the board. */
 export function clearBoard(board) {
 	// A `!` command running in this board's folder is part of what is being thrown away: left running, it
 	// writes its output file back where the file was and its note onto the board nobody is looking at.
@@ -344,6 +344,10 @@ export function clearBoard(board) {
 	board.activity = [];
 	board.askers.clear();
 	board.trash = [];
+	// Every thread is gone, so no tree is live any more: the sweep retires the spent ones in place and
+	// leaves a tree holding unmerged work standing, which is what leftovers reads. Without this, emptying
+	// the board left every folder on disk with no thread left to sweep it.
+	sweepTrees(board);
 	scheduleSave(board);
 }
 

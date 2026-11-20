@@ -18,7 +18,7 @@ import { closedCards } from "./bus.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
 import { onDefaults, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
-import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRead, onFileRename, onFileWrite, onFilesList } from "./routes/board/files.ts";
+import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead, onFileRename, onFileWrite, onFilesList } from "./routes/board/files.ts";
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
@@ -34,10 +34,13 @@ import { onSkill } from "./routes/board/skill.ts";
 import { onCardPdf } from "./routes/board/pdf.ts";
 import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onThreadCollect, onUndo } from "./routes/board/lifecycle.ts";
 import { onShell } from "./routes/board/shell.ts";
-import { onGitInit, onGitMsg, onGitPage, onGitVendor } from "./routes/gitgraph.ts";
+import { onGitInit, onGitMsg, onGitPage } from "./routes/gitgraph.ts";
+import { onVisualFile, onVisualPanels, onVisualRequest, VISUAL_PREFIX } from "./routes/plugins.ts";
 import { onCommand } from "./routes/board/command.ts";
 import { onSourceControlCommit, onSourceControlConflict, onSourceControlContinue, onSourceControlDiff, onSourceControlDiscard, onSourceControlFileAtHead, onSourceControlIgnore, onSourceControlMessage, onSourceControlResolve, onSourceControlStage, onSourceControlStatus, onSourceControlUnstage } from "./routes/board/source-control.ts";
 import { attachTerminal, stopAllTerminals, terminalSize } from "./terminal.ts";
+import { startPlugins, stopPlugins } from "./plugins/manager.ts";
+import { createPluginService } from "./plugins/service.ts";
 import { commandList, forMenu } from "./commands.ts";
 import { workdirOf } from "./worktrees/make.ts";
 import { migrateLegacyGlobalState } from "./state-storage.ts";
@@ -372,17 +375,23 @@ export const server = createServer((req, res) => {
 				serveStatic(res, "index.html", "text/html; charset=utf-8");
 				return;
 			}
-			// The Git Graph page and the bundle it runs are here rather than behind the caller check for one
-			// reason: neither carries data. The page is the same document for every workspace, and the vendor
-			// bytes are the human's own installed extension — what a tab does with them is asked for at
-			// `/git/init` and `/git/msg`, and both of those are behind the token.
+			// The Git Graph page and its own client modules are here rather than behind the caller check for one
+			// reason: neither carries data. The page is the same document for every workspace, and the modules are
+			// served by the `/client` rule above; what a tab does with them is asked for at `/git/init` and
+			// `/git/msg`, and both of those are behind the token.
 			if (/^\/git\/[0-9a-f]{6,64}\/?$/.test(url.pathname)) {
 				onGitPage(res);
 				return;
 			}
-			const vendor = /^\/gitgraph\/vendor\/([a-z0-9._-]+)$/.exec(url.pathname);
-			if (vendor) {
-				onGitVendor(res, vendor[1]);
+			// A panel is a page the daemon serves to a frame that has no origin of its own, and a document with
+			// an opaque origin has no cookie of this daemon to send: `SameSite=Strict` keeps the session out of
+			// the style and the script the page asks for, so a panel behind the caller check arrives as a page
+			// with no style and no script. Its bytes are here for the same reason the Git Graph page's are — the
+			// files a plugin declared carry no workspace data — and what is served is a lookup in that list of
+			// files, never a path joined to a folder. The roster that names the doors and the one call a panel
+			// makes stay below, behind the caller check: what a panel may ask for is still the human's alone.
+			if (url.pathname.startsWith(VISUAL_PREFIX)) {
+				onVisualFile(res, url.pathname);
 				return;
 			}
 		}
@@ -522,6 +531,14 @@ export const server = createServer((req, res) => {
 			const board = boardFrom(url, res);
 			if (!board) return;
 			await onFileRead(url, res, board);
+			return;
+		}
+		// The viewer's read: the same file as itself, for the browser to draw. A GET and its HEAD, like
+		// `/files/read`, so `threadRefusal` keeps it to the human; the bytes are streamed, with ranges.
+		if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/files/raw") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onFileRaw(req, url, res, board);
 			return;
 		}
 		// The programs a `!` command can name. It is a GET like `/browse`, so `threadRefusal` keeps it to
@@ -733,7 +750,21 @@ export const server = createServer((req, res) => {
 			);
 			return;
 		}
+		// The panels a plugin may put on this board, and the one call a panel makes. They name no board of
+		// their own, because a panel belongs to the daemon rather than to a folder, and they sit behind the
+		// caller check like every other data route because a panel is the human's to see. The files a panel is
+		// made of are not here: they are served above, before this check, for the reason kept beside them.
+		if (req.method === "GET" && url.pathname === "/plugins/visual") {
+			onVisualPanels(res);
+			return;
+		}
 		if (req.method === "POST") {
+			// One call a panel's frame makes. The plugin is the one whose panel is on screen, and the
+			// workspace is resolved here from this daemon's own list, so a page never names a folder.
+			if (url.pathname === "/plugins/visual/request") {
+				await onVisualRequest(req, res, url, caller);
+				return;
+			}
 			const routing = {
 				"/thread": onThread,
 				"/thread/spawn": onThreadSpawn,
@@ -853,12 +884,40 @@ server.on("upgrade", (req, socket, head) => {
 	else startLiveStream(req, socket, head);
 });
 
+/** Set once the daemon is on its way out, so a second signal does not flush and close everything twice. */
+let stopping = false;
+
+/** The plugin start in flight. `start()` sets it, and a signal waits on it before it leaves. */
+let pluginsUp: Promise<unknown> = Promise.resolve();
+
+/**
+ * Stop every plugin, including one still on its way up, and answer once they are gone.
+ *
+ * A start in flight is in no manager yet — the roster is held only once every handshake is answered —
+ * so closing what `pluginManager()` holds would close nothing and leave that plugin behind a daemon
+ * that had already gone. Both waits carry their own clock, the handshake's and the close's, so this
+ * settles on its own; nothing here is raced against a timer, because a timer that fired first is
+ * exactly what would strand the process it was waiting for.
+ */
+async function stopPluginsOnExit() {
+	await pluginsUp;
+	await stopPlugins();
+}
+
 export function shutdown() {
+	if (stopping) return;
+	stopping = true;
 	// What the debounce still holds is the last thing the human did, so it goes to disk first.
 	for (const board of boards.values()) flushBoard(board);
 	stopAllTerminals();
 	for (const board of boards.values()) for (const child of board.children.values()) child.kill("SIGKILL");
-	server.close(() => process.exit(0));
+	// A plugin is a process this daemon started, so it is asked to stop before the daemon goes and the
+	// exit waits for it. The clock below is the end of that wait: a plugin that ignores `shutdown` is
+	// left to the operating system rather than keeping a stopped daemon alive.
+	const plugins = stopPluginsOnExit();
+	server.close(() => {
+		void plugins.finally(() => process.exit(0));
+	});
 	// A socket that will not close must not keep a stopped daemon alive.
 	setTimeout(() => process.exit(0), 1000).unref();
 }
@@ -970,14 +1029,26 @@ export function start() {
 		console.error(`pi-studio: ${error.message}`);
 		process.exit(1);
 	}
-	// A stopped daemon must not leave its shells behind: they are spawned detached, so a
-	// plain exit would orphan them. Stop them and go: the boards' own shutdown flushes
-	// nothing on a signal today, and the tests kill their daemons the same way.
-	const stopTerminals = () => {
+	// A stopped daemon must not leave its shells behind: they are spawned detached, so a plain exit
+	// would orphan them. A plugin is a process this daemon started too, so it is asked to stop and the
+	// exit waits for it, however slowly it was coming up. The boards are left as they are: a signal does
+	// not flush, so a caller that stops a daemon and then deletes the folder it served is not racing a
+	// write. `shutdown` is the explicit way out that flushes first.
+	const stop = () => {
+		if (stopping) return;
+		stopping = true;
 		stopAllTerminals();
-		process.exit(0);
+		void stopPluginsOnExit().finally(() => process.exit(0));
 	};
-	process.on("SIGTERM", stopTerminals);
-	process.on("SIGINT", stopTerminals);
+	process.on("SIGTERM", stop);
+	process.on("SIGINT", stop);
 	startListening(Number(process.env.PI_STUDIO_PORT) || lastPort(), host);
+	// The plugins the human registered start after the socket is open, so a plugin that never answers its
+	// handshake delays nothing the human is waiting for. Each start is its own: one that fails is a line
+	// on stderr and the rest of the roster runs. Nothing is started before this call, and nothing here
+	// writes into a workspace. The caller catches, so `pluginsUp` is a promise that always settles.
+	const service = createPluginService();
+	pluginsUp = startPlugins({ onRequest: (call) => service.handle(call), closeTimeoutMs: 400 }).catch((error) =>
+		console.error(`pi-studio: the plugins could not be started: ${error.message}`),
+	);
 }

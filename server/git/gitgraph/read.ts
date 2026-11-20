@@ -1,10 +1,11 @@
 /**
  * Everything the Git Graph page reads out of a repository, answered in the page's own words.
  *
- * The page is Libre's bundle, so nothing here may invent a field name or a shape: what leaves this
- * module is `protocol.ts` and nothing else. Every read goes through `gitText`, which is where a prompt,
- * a pager, a hang and a runaway print are already answered, and every read answers a value or a
- * sentence rather than throwing — the caller is a route whose reply has to be sent either way.
+ * The page is pi-studio's own, written against Libre's message protocol, so nothing here may invent a
+ * field name or a shape: what leaves this module is `protocol.ts` and nothing else. Every read goes
+ * through `gitText`, which is where a prompt, a pager, a hang and a runaway print are already answered,
+ * and every read answers a value or a sentence rather than throwing — the caller is a route whose reply
+ * has to be sent either way.
  *
  * Two decisions shape the parsing. Each command asks git for the whole answer in one run with a format
  * string carrying its own separators (`0x1f` between fields, `0x00` after a record), because a commit
@@ -649,9 +650,13 @@ export async function getUncommittedDetails(repo: string): Promise<ReadResult<Gi
  * The files between two revisions, which is what a code review is a checklist of.
  *
  * `*` on either side means the working tree, because that is the row the page draws for changes nobody
- * has committed and the review may be started from it.
+ * has committed and the review may be started from it. Git can only diff *against* the working tree and
+ * never *from* it, so a comparison whose left side is `*` asks git for the diff it can draw and turns it
+ * round with `-R`: the file a commit added and the tree lacks is then an addition, and the lines the
+ * commit holds are the lines the tree is missing, which is the direction the page drew the sides in.
  */
 export async function getCommitComparison(repo: string, fromHash: string, toHash: string): Promise<ReadResult<GitFileChange[]>> {
+	if (fromHash === UNCOMMITTED && toHash !== UNCOMMITTED) return readFileChanges(["diff", ...CHANGE_ARGS, "-R", toHash], repo);
 	const from = fromHash === UNCOMMITTED ? "HEAD" : fromHash;
 	const to = toHash === UNCOMMITTED ? null : toHash;
 	const args = ["diff", ...CHANGE_ARGS, from, ...(to === null ? [] : [to])];

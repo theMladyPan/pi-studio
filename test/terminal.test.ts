@@ -11,14 +11,17 @@ import type { TerminalEvent } from "../server/terminal.ts";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 
-/** Whether the pty helper this daemon relies on is on this machine at all. */
+/** Whether a pty helper this daemon can use is on this machine at all. */
 function helperHere(): boolean {
-	try {
-		execFileSync("which", ["script"], { stdio: "ignore" });
-		return true;
-	} catch {
-		return false;
+	for (const helper of ["script", "socat"]) {
+		try {
+			execFileSync("which", [helper], { stdio: "ignore" });
+			return true;
+		} catch {
+			// The next one may be here; a machine with neither is covered by its own case below.
+		}
 	}
+	return false;
 }
 
 test("a size is clamped to cells a pty can hold, or the default", () => {
@@ -30,23 +33,24 @@ test("a size is clamped to cells a pty can hold, or the default", () => {
 });
 
 test("a shell is born in the folder, in a pty, and answers typed keys", async (t) => {
-	if (!helperHere()) return t.skip("no `script` helper on this machine");
+	if (!helperHere()) return t.skip("no `script` or `socat` helper on this machine");
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-terminal-"));
 	const workspaceId = `terminal-test-${Date.now()}`;
 	const seen: TerminalEvent[] = [];
 	const handle = attachTerminal(workspaceId, folder, (event) => seen.push(event));
 	try {
 		handle.resize({ cols: 111, rows: 33 });
-		handle.write("pwd; tty; echo hello-terminal\n");
+		handle.write("pwd; tty; stty size; echo hello-terminal\n");
 		const deadline = Date.now() + 10_000;
 		let text = "";
 		while (Date.now() < deadline) {
 			text = seen.filter((event) => event.type === "output").map((event) => (event as { data: string }).data).join("");
-			if (text.includes("hello-terminal") && text.includes("/dev/pts/")) break;
+			if (text.includes("hello-terminal") && text.includes("/dev/pts/") && text.includes("33 111")) break;
 			await new Promise((done) => setTimeout(done, 50));
 		}
 		assert.match(text, /hello-terminal/, "the typed command ran");
 		assert.match(text, /\/dev\/pts\//, "the shell's stdout is a pty, not a pipe");
+		assert.match(text, /33 111/, "the pty is born at the size the drawer measured");
 		assert.ok(text.includes(folder) || text.includes("pi-studio-terminal-"), "the shell works in the workspace folder");
 	} finally {
 		handle.detach();
@@ -54,8 +58,65 @@ test("a shell is born in the folder, in a pty, and answers typed keys", async (t
 	}
 });
 
+test("Ctrl+C interrupts a foreground command", async (t) => {
+	if (!helperHere()) return t.skip("no `script` or `socat` helper on this machine");
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-terminal-"));
+	const workspaceId = `terminal-test-ctrlc-${Date.now()}`;
+	const seen: TerminalEvent[] = [];
+	const handle = attachTerminal(workspaceId, folder, (event) => seen.push(event));
+	try {
+		handle.resize({ cols: 80, rows: 24 });
+		handle.write("sleep 30; echo should-not-print\n");
+		await new Promise((done) => setTimeout(done, 1_000));
+		handle.write("\u0003");
+		await new Promise((done) => setTimeout(done, 500));
+		handle.write("echo $((12345+67890))\n");
+		const deadline = Date.now() + 10_000;
+		let text = "";
+		while (Date.now() < deadline) {
+			text = seen.filter((event) => event.type === "output").map((event) => (event as { data: string }).data).join("");
+			if (/80235\r?\n/.test(text)) break;
+			await new Promise((done) => setTimeout(done, 50));
+		}
+		assert.match(text, /80235\r?\n/, "the next command ran promptly after Ctrl+C");
+		assert.doesNotMatch(text, /\r?\nshould-not-print/, "the interrupted command did not finish");
+	} finally {
+		handle.write("exit\n");
+		await new Promise((done) => setTimeout(done, 300));
+		handle.detach();
+		stopTerminal(workspaceId);
+	}
+});
+
+test("a machine with no pty helper says what to install, and reports no exit", async () => {
+	const folder = mkdtempSync(join(tmpdir(), "pi-studio-terminal-"));
+	const workspaceId = `terminal-test-no-helper-${Date.now()}`;
+	const seen: TerminalEvent[] = [];
+	const before = process.env.PATH;
+	// An empty PATH is a machine with no helper on it: the board is told why, in words a human can act on.
+	process.env.PATH = mkdtempSync(join(tmpdir(), "pi-studio-empty-path-"));
+	const handle = attachTerminal(workspaceId, folder, (event) => seen.push(event));
+	try {
+		handle.resize({ cols: 80, rows: 24 });
+		const deadline = Date.now() + 5_000;
+		while (Date.now() < deadline && !seen.some((event) => event.type === "error")) await new Promise((done) => setTimeout(done, 20));
+		const reason = seen.find((event) => event.type === "error") as { data: string } | undefined;
+		assert.ok(reason, "the attached tab hears why no shell started");
+		assert.match(reason.data, /install util-linux/, "the reason names what closes the gap");
+		assert.equal(
+			seen.some((event) => event.type === "exit"),
+			false,
+			"a shell that never started reports no exit, so the drawer keeps the reason on screen",
+		);
+	} finally {
+		process.env.PATH = before;
+		handle.detach();
+		stopTerminal(workspaceId);
+	}
+});
+
 test("a tab that attaches to a running shell hears its scrollback", async (t) => {
-	if (!helperHere()) return t.skip("no `script` helper on this machine");
+	if (!helperHere()) return t.skip("no `script` or `socat` helper on this machine");
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-terminal-"));
 	const workspaceId = `terminal-test-replay-${Date.now()}`;
 	const first: TerminalEvent[] = [];
@@ -84,7 +145,7 @@ test("a tab that attaches to a running shell hears its scrollback", async (t) =>
 
 /** One daemon on its own state folder, started the way a human starts it. */
 test("an emptied board's shell ends, and the old handle cannot revive it", async (t) => {
-	if (!helperHere()) return t.skip("no `script` helper on this machine");
+	if (!helperHere()) return t.skip("no `script` or `socat` helper on this machine");
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-terminal-"));
 	const workspaceId = `terminal-test-clear-${Date.now()}`;
 	const seen: TerminalEvent[] = [];
@@ -141,7 +202,7 @@ async function boot(folder: string) {
 }
 
 test("the terminal socket is refused without a token and answers a human", async (t) => {
-	if (!helperHere()) return t.skip("no `script` helper on this machine");
+	if (!helperHere()) return t.skip("no `script` or `socat` helper on this machine");
 	const folder = mkdtempSync(join(tmpdir(), "pi-studio-terminal-"));
 	const daemon = await boot(folder);
 	try {

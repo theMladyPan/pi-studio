@@ -1,243 +1,78 @@
 <!doctype html>
 <!--
-	A Git Graph Libre page that runs in a browser tab instead of an editor panel.
+	pi-studio native Git Graph page, rendered in the board's top drawer or its own tab.
 
-	Everything inside #topBar and #content is the contract Libre's `web.min.js`
-	expects, and nothing else is: the bundle builds every row it draws, so the
-	ids below are the ones it looks up. The panel that the bundle would ask an
-	editor to open — a diff, a file at a revision — is drawn by this page
-	instead, in #ggViewer.
-
-	The bundle is not served from here. It is the human's own copy of the
-	git-graph-libre extension, read out of their VS Code install by the daemon,
-	AGPL-3.0-or-later, borrowed never shipped. This page supplies the two
-	things an editor would have supplied: the graph colours, as variables on
-	<body> where the bundle reads them, and `acquireVsCodeApi`, which
-	/client/gitgraph/host.js installs before the bundle is parsed.
+	The page speaks directly to `/git/init` and `/git/msg` using pi-studio's own client
+	modules under `/client/gitgraph/` and needs no external editor extension. Diffs and
+	files at a revision open inside `#ggViewer` using the board's shared diff table and
+	read-only text surface.
 -->
 <html lang="en">
 	<head>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1">
-		<title>Git Graph Libre</title>
+		<title>pi · git graph</title>
 		<link rel="icon" href="/favicon.svg">
-		<link rel="stylesheet" href="/gitgraph/vendor/tokens.css">
-		<link rel="stylesheet" href="/gitgraph/vendor/base.css">
-		<link rel="stylesheet" href="/gitgraph/vendor/checkbox.css">
-		<link rel="stylesheet" href="/gitgraph/vendor/table.css">
-		<link rel="stylesheet" href="/gitgraph/vendor/commit-details.css">
-		<link rel="stylesheet" href="/gitgraph/vendor/refs.css">
-		<link rel="stylesheet" href="/gitgraph/vendor/toolbar.css">
-		<link rel="stylesheet" href="/gitgraph/vendor/settings.css">
-		<link rel="stylesheet" href="/gitgraph/vendor/dialogs.css">
-		<link rel="stylesheet" href="/gitgraph/vendor/dropdown.css">
-		<style>
-			:root {
-				--vscode-editor-background: #0d1117;
-				--vscode-editor-foreground: #c9d1d9;
-				--vscode-foreground: #c9d1d9;
-				--vscode-descriptionForeground: #8b949e;
-				--vscode-dropdown-background: #161b22;
-				--vscode-dropdown-foreground: #c9d1d9;
-				--vscode-dropdown-listBackground: #161b22;
-				--vscode-dropdown-border: #30363d;
-				--vscode-menu-background: #161b22;
-				--vscode-menu-foreground: #c9d1d9;
-				--vscode-menu-border: #30363d;
-				--vscode-menu-selectionBackground: #1f6feb;
-				--vscode-menu-selectionForeground: #ffffff;
-				--vscode-menu-separatorBackground: #30363d;
-				--vscode-input-background: #010409;
-				--vscode-input-foreground: #c9d1d9;
-				--vscode-input-border: #30363d;
-				--vscode-input-placeholderForeground: #8b949e;
-				--vscode-list-hoverBackground: #21262d;
-				--vscode-list-hoverForeground: #c9d1d9;
-				--vscode-list-activeSelectionBackground: #1f6feb;
-				--vscode-list-activeSelectionForeground: #ffffff;
-				--vscode-focusBorder: #1f6feb;
-				--vscode-toolbar-hoverBackground: #21262d;
-				--vscode-button-background: #21262d;
-				--vscode-button-hoverBackground: #30363d;
-				--vscode-button-foreground: #c9d1d9;
-				--vscode-button-secondaryBackground: #21262d;
-				--vscode-button-secondaryForeground: #c9d1d9;
-				--vscode-button-secondaryHoverBackground: #30363d;
-				--vscode-editorWidget-background: #161b22;
-				--vscode-editorWidget-foreground: #c9d1d9;
-				--vscode-editorWidget-border: #30363d;
-				--vscode-editorHoverWidget-background: #161b22;
-				--vscode-editorHoverWidget-foreground: #c9d1d9;
-				--vscode-editorHoverWidget-border: #30363d;
-				--vscode-widget-border: #30363d;
-				--vscode-widget-shadow: rgb(1 4 9 / 0.8);
-				--vscode-panel-border: #30363d;
-				--vscode-sideBar-background: #0d1117;
-				--vscode-textCodeBlock-background: #161b22;
-				--vscode-icon-foreground: #cccccc;
-				--vscode-checkbox-background: #010409;
-				--vscode-checkbox-border: #30363d;
-				--vscode-checkbox-foreground: #c9d1d9;
-				--vscode-errorForeground: #f85149;
-				--vscode-progressBar-background: #1f6feb;
-				--vscode-inputValidation-errorBackground: #490c0c;
-				--vscode-inputValidation-errorBorder: #f85149;
-				--vscode-gitDecoration-addedResourceForeground: #3fb950;
-				--vscode-gitDecoration-modifiedResourceForeground: #d29922;
-				--vscode-gitDecoration-deletedResourceForeground: #f85149;
-				--vscode-gitDecoration-renamedResourceForeground: #58a6ff;
-				--vscode-editor-font-family: 'SFMono-Regular', Consolas, monospace;
-				--vscode-testing-iconPassed: #3fb950;
-				--vscode-testing-iconFailed: #f85149;
-				--vscode-charts-green: #3fb950;
-				--vscode-charts-yellow: #d29922;
-			}
-			body {
-				--git-graph-font-size: 13px;
-				--git-graph-row-height: 24px;
-				--ngg-reveal-highlight: oklch(90% 0.25 150 / 0.42);
-				--git-graph-color0: #58a6ff;
-				--git-graph-color1: #f778ba;
-				--git-graph-color2: #3fb950;
-				--git-graph-color3: #d29922;
-				--git-graph-color4: #bc8cff;
-				--git-graph-color5: #f85149;
-				--git-graph-color6: #39d2c0;
-				--git-graph-color7: #ff9b57;
-				--git-graph-color8: #a5d84e;
-				--git-graph-color9: #e879f9;
-				--git-graph-color10: #79c0ff;
-				--git-graph-color11: #8b6cff;
-			}
-			[data-color="0"] { --git-graph-color: var(--git-graph-color0); }
-			[data-color="1"] { --git-graph-color: var(--git-graph-color1); }
-			[data-color="2"] { --git-graph-color: var(--git-graph-color2); }
-			[data-color="3"] { --git-graph-color: var(--git-graph-color3); }
-			[data-color="4"] { --git-graph-color: var(--git-graph-color4); }
-			[data-color="5"] { --git-graph-color: var(--git-graph-color5); }
-			[data-color="6"] { --git-graph-color: var(--git-graph-color6); }
-			[data-color="7"] { --git-graph-color: var(--git-graph-color7); }
-			[data-color="8"] { --git-graph-color: var(--git-graph-color8); }
-			[data-color="9"] { --git-graph-color: var(--git-graph-color9); }
-			[data-color="10"] { --git-graph-color: var(--git-graph-color10); }
-			[data-color="11"] { --git-graph-color: var(--git-graph-color11); }
-			html, body { height: 100%; margin: 0; }
-			body { background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif; }
-			#ggNotice { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.6em; padding: 2em; text-align: center; }
-			#ggNotice[hidden] { display: none; }
-			#ggNoticeTitle { margin: 0; font-size: 1.2em; font-weight: 600; }
-			#ggNoticeDetail { margin: 0; max-width: 46em; color: #8b949e; line-height: 1.5; }
-			#ggViewer { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; }
-			#ggViewer[hidden] { display: none; }
-			.ggViewerBackdrop { position: absolute; inset: 0; background: rgba(1, 4, 9, 0.72); }
-			.ggViewerPanel { position: relative; display: flex; flex-direction: column; min-height: 0; margin: 3vh 4vw; flex: 1; border: 1px solid #30363d; border-radius: 6px; background: #0d1117; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55); overflow: hidden; }
-			.ggViewerBar { display: flex; align-items: center; gap: 0.8em; padding: 0.5em 0.8em; border-bottom: 1px solid #30363d; background: #161b22; }
-			.ggViewerTitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-			.ggViewerFlags { color: #d29922; font-size: 0.9em; }
-			.ggViewerBar button { font: inherit; color: #c9d1d9; background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 0.15em 0.7em; cursor: pointer; }
-			.ggViewerBar button:hover { border-color: #1f6feb; }
-			.ggViewerBar button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 1px; }
-			.ggViewerBody { flex: 1; min-height: 0; overflow: auto; }
-			.ggViewerTable { border-collapse: collapse; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 12px; line-height: 1.5; width: 100%; }
-			.ggViewerTable td { padding: 0 0.6em; white-space: pre; vertical-align: top; }
-			.ggViewerNum { width: 1%; color: #484f58; text-align: right; user-select: none; background: #010409; }
-			.ggViewerLine_added { color: #3fb950; background: rgba(63, 185, 80, 0.1); }
-			.ggViewerLine_removed { color: #f85149; background: rgba(248, 81, 73, 0.1); }
-			.ggViewerLine_hunk { color: #79c0ff; }
-			.ggViewerLine_meta { color: #8b949e; }
-			.ggViewerEmpty { padding: 1.2em; color: #8b949e; }
-			.ggViewerText { display: flex; height: 100%; min-height: 0; }
-			.tp { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: #0d1117; }
-			.tp > .tp-code, .tp > .tp-input { position: absolute; inset: 0; box-sizing: border-box; width: 100%; height: 100%; margin: 0; border: 0; padding: 0.6em 0.8em; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 12px; line-height: 1.5; tab-size: 4; white-space: pre; overflow: auto; scrollbar-gutter: stable; }
-			.tp > .tp-code { overflow: hidden; color: #c9d1d9; pointer-events: none; }
-			.tp > .tp-code code { font: inherit; }
-			.tp > .tp-input { color: transparent; background: transparent; resize: none; outline: none; -webkit-text-fill-color: transparent; }
-			.tp > .tp-input[readonly] { caret-color: transparent; }
-			.tp > .tp-input::selection { background: rgba(56, 139, 253, 0.4); }
-			.tp .k { color: #ff7b72; }
-			.tp .s { color: #a5d6ff; }
-			.tp .c { color: #8b949e; font-style: italic; }
-			.tp .f { color: #d2a8ff; }
-			.tp .n2 { color: #79c0ff; }
-			/* The toolbar icons are Codicon glyphs, the same font the files drawer loads
-		   in index.html, drawn at the 16px the vendor toolbar gives its SVGs. */
-			@font-face { font-family: codicon; font-display: block; src: url("/explorer/codicon.ttf") format("truetype"); }
-			.codicon { font-family: codicon; font-style: normal; font-weight: normal; font-size: 16px; line-height: 1; display: inline-block; text-align: center; }
-			.codicon-search::before { content: "\ea6d"; }
-			.codicon-history::before { content: "\ea82"; }
-			.codicon-chevron-up::before { content: "\eab7"; }
-			.codicon-chevron-down::before { content: "\eab4"; }
-			.codicon-close::before { content: "\ea76"; }
-			.codicon-target::before { content: "\ebf8"; }
-			.codicon-arrow-down::before { content: "\ea9a"; }
-			.codicon-arrow-up::before { content: "\eaa1"; }
-			.codicon-source-control::before { content: "\ea68"; }
-			.codicon-gear::before { content: "\eaf8"; }
-			.codicon-refresh::before { content: "\eb37"; }
-		</style>
+		<link rel="stylesheet" href="/client/gitgraph/gitgraph.css">
 	</head>
 	<body>
 		<div id="topBar" hidden>
-			<section id="statusStrip" class="statusStrip" role="status" aria-label="Git Graph status" aria-live="polite" aria-atomic="true" aria-busy="false" data-state="ready" data-engine="off">
-				<span id="statusSummary" class="statusSummary" tabindex="0">
+			<section id="statusStrip" class="statusStrip" role="status" aria-label="Git Graph status" aria-live="polite" aria-atomic="true" aria-busy="false" data-state="ready">
+				<span id="statusSummary" class="statusSummary">
 					<span id="statusIndicator" class="statusIndicator" aria-hidden="true"></span>
 					<span id="statusText">Ready</span>
-					<span id="statusEngineNote" class="statusEngineNote"></span>
-					<span id="statusEngineOffNote" class="statusEngineNote"></span>
 				</span>
-				<span id="statusVersion" class="statusVersion" title="Version"><span id="gitVersion"></span></span>
 			</section>
 			<div id="stashListSlot"></div>
 			<header id="controls" class="gitGraphToolbar" role="toolbar" aria-label="Git Graph controls">
-				<span id="repoControl" class="toolbarGroup" title="Repo">
+				<div id="repoControl" class="toolbarGroup" title="Repository">
 					<span class="toolbarLabel unselectable">Repo</span>
 					<div id="repoSelect" class="dropdown"></div>
-				</span>
-				<span id="branchControl" class="toolbarGroup" title="Branches">
+				</div>
+				<div id="branchControl" class="toolbarGroup" title="Branches">
 					<span class="toolbarLabel unselectable">Branches</span>
 					<div id="branchSelect" class="dropdown"></div>
-				</span>
-				<span id="authorControl" class="toolbarGroup" title="Authors">
+				</div>
+				<div id="authorControl" class="toolbarGroup" title="Authors">
 					<span class="toolbarLabel unselectable">Authors</span>
 					<div id="authorSelect" class="dropdown"></div>
-				</span>
-				<span id="tagControl" class="toolbarGroup" title="Tags">
+				</div>
+				<div id="tagControl" class="toolbarGroup" title="Tags">
 					<span class="toolbarLabel unselectable">Tags</span>
 					<div id="tagSelect" class="dropdown"></div>
-				</span>
+				</div>
 				<label id="showRemoteBranchesControl" class="toolbarCheckbox">
 					<input type="checkbox" id="showRemoteBranchesCheckbox" value="1" checked>
-					<span>Show Remote Branches</span>
+					<span>Remote branches</span>
 				</label>
 				<span id="findControl" class="toolbarFind" hidden>
-					<input id="findInput" class="toolbarFindInput" type="search" aria-label="Find Commits" placeholder="Find commits" autocomplete="off" spellcheck="false">
+					<input id="findInput" class="toolbarFindInput" type="search" aria-label="Find commits" placeholder="Find commits…" autocomplete="off" spellcheck="false">
 					<span id="findMatchCount" class="toolbarFindCount" aria-live="polite"></span>
-					<button id="findSearchHistoryBtn" class="toolbarIconButton" type="button" title="Search History" aria-label="Search History"><span class="toolbarIcon codicon codicon-history" aria-hidden="true"></span></button>
-					<button id="findPreviousBtn" class="toolbarIconButton" type="button" title="Find Previous" aria-label="Find Previous"><span class="toolbarIcon codicon codicon-chevron-up" aria-hidden="true"></span></button>
-					<button id="findNextBtn" class="toolbarIconButton" type="button" title="Find Next" aria-label="Find Next"><span class="toolbarIcon codicon codicon-chevron-down" aria-hidden="true"></span></button>
-					<button id="findClearBtn" class="toolbarIconButton" type="button" title="Clear" aria-label="Clear"><span class="toolbarIcon codicon codicon-close" aria-hidden="true"></span></button>
+					<button id="findSearchHistoryBtn" class="toolbarIconButton" type="button" title="Search full history" aria-label="Search full history"><span class="toolbarIcon codicon codicon-history" aria-hidden="true"></span></button>
+					<button id="findPreviousBtn" class="toolbarIconButton" type="button" title="Previous match (Shift+Enter)" aria-label="Previous match"><span class="toolbarIcon codicon codicon-chevron-up" aria-hidden="true"></span></button>
+					<button id="findNextBtn" class="toolbarIconButton" type="button" title="Next match (Enter)" aria-label="Next match"><span class="toolbarIcon codicon codicon-chevron-down" aria-hidden="true"></span></button>
+					<button id="findClearBtn" class="toolbarIconButton" type="button" title="Clear find (Esc)" aria-label="Clear find"><span class="toolbarIcon codicon codicon-close" aria-hidden="true"></span></button>
 				</span>
 				<span class="toolbarActions">
-					<button id="findBtn" class="toolbarIconButton" type="button" title="Find Commits" aria-label="Find Commits"><span class="toolbarIcon codicon codicon-search" aria-hidden="true"></span></button>
-					<button id="blinkHeadBtn" class="toolbarIconButton" type="button" title="Locate Head" aria-label="Locate Head"><span class="toolbarIcon codicon codicon-target" aria-hidden="true"></span></button>
-					<button id="fetchBtn" class="toolbarIconButton" type="button" title="Fetch" aria-label="Fetch" hidden><span class="toolbarIcon codicon codicon-arrow-down" aria-hidden="true"></span></button>
-					<button id="pushTagsBtn" class="toolbarIconButton" type="button" title="Push All Tags" aria-label="Push All Tags" hidden><span class="toolbarIcon codicon codicon-arrow-up" aria-hidden="true"></span></button>
-					<button id="worktreesBtn" class="toolbarIconButton" type="button" title="Worktrees" aria-label="Worktrees" hidden><span class="toolbarIcon codicon codicon-source-control" aria-hidden="true"></span></button>
-					<button id="settingsBtn" class="toolbarIconButton" type="button" title="Settings" aria-label="Settings"><span class="toolbarIcon codicon codicon-gear" aria-hidden="true"></span></button>
-					<button id="refreshBtn" class="toolbarIconButton" type="button" title="Refresh" aria-label="Refresh"><span class="toolbarIcon codicon codicon-refresh" aria-hidden="true"></span></button>
+					<button id="findBtn" class="toolbarIconButton" type="button" title="Find commits (Ctrl+F)" aria-label="Find commits"><span class="toolbarIcon codicon codicon-search" aria-hidden="true"></span></button>
+					<button id="blinkHeadBtn" class="toolbarIconButton" type="button" title="Locate HEAD (Ctrl+H)" aria-label="Locate HEAD"><span class="toolbarIcon codicon codicon-target" aria-hidden="true"></span></button>
+					<button id="fetchBtn" class="toolbarIconButton" type="button" title="Fetch from remotes" aria-label="Fetch" hidden><span class="toolbarIcon codicon codicon-arrow-down" aria-hidden="true"></span></button>
+					<button id="pushTagsBtn" class="toolbarIconButton" type="button" title="Push all tags" aria-label="Push all tags" hidden><span class="toolbarIcon codicon codicon-arrow-up" aria-hidden="true"></span></button>
+					<button id="settingsBtn" class="toolbarIconButton" type="button" title="Repository &amp; graph settings" aria-label="Settings"><span class="toolbarIcon codicon codicon-gear" aria-hidden="true"></span></button>
+					<button id="refreshBtn" class="toolbarIconButton" type="button" title="Refresh (Ctrl+R)" aria-label="Refresh"><span class="toolbarIcon codicon codicon-refresh" aria-hidden="true"></span></button>
 				</span>
 			</header>
 		</div>
-		<div id="settingsWidgetBacking" hidden></div>
-		<aside id="settingsWidget" role="dialog" aria-modal="true" tabindex="-1" aria-label="Settings" hidden></aside>
-		<div id="content" hidden>
-			<div id="commitGraph"></div>
+
+		<dialog id="settingsWidget" aria-label="Repository settings"></dialog>
+
+		<main id="commitGraph" hidden>
 			<div id="commitTable"></div>
-		</div>
+		</main>
 		<div id="footer"></div>
-		<ul id="contextMenu" role="menu"></ul>
-		<div id="dialogBacking"></div>
-		<div id="dialog"></div>
+
+		<div id="contextMenu" role="menu" popover="auto"></div>
+		<dialog id="dialog" aria-labelledby="ggDialogTitle"></dialog>
 
 		<div id="ggViewer" hidden>
 			<div class="ggViewerBackdrop"></div>
@@ -255,6 +90,7 @@
 		<div id="ggNotice" hidden>
 			<h2 id="ggNoticeTitle"></h2>
 			<p id="ggNoticeDetail"></p>
+			<button id="ggRetry" type="button">Retry</button>
 		</div>
 
 		<script type="module" src="/client/gitgraph/host.js"></script>

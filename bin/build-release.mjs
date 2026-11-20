@@ -19,6 +19,9 @@
  *   server.js, server/<dirs>/*.js  compiled app, same relative paths as the sources
  *   public/, bridge/, prompts/  copied verbatim (browser assets, child extension, prompts)
  *   docs/boss-and-subagents.md  the one runtime document, at the path flow-diagrams reads
+ *   docs/plugins.md             how an installed copy is given a plugin, which is one registration
+ *   plugins/<name>/             a plugin this install ships: plugin.json, its panel and its README, plus
+ *                                 every executable `npm run build:plugins` built for a platform
  *   bin/pi-studio               staged copy of the launcher, pointed at server.js
  *   bin/runtime.mjs, bin/manage.mjs  lifecycle helpers the launcher imports (no server code)
  *   package.json                name/version/type/bin/engines only; no dependencies at all
@@ -31,10 +34,17 @@
  * silent official release. No timestamp is recorded, so the same source produces the same
  * `build.json` bytes.
  *
- * No Node binary, node_modules, tests, or user data are staged. Git Graph stays external.
+ * No Node binary, node_modules, tests, or user data are staged. The Git Graph page and its client ride in
+ * `public/` with everything else, so no editor extension is needed for it.
+ *
+ * A plugin a package of its own adds under `plugins/` is staged as what runs it and what draws it: the
+ * manifest, the panel and the built executables, never its Go or Rust sources. That makes the plugin build a
+ * step before this one (`npm run build:plugins`) for a package that ships one; without it the folder is
+ * staged with no executable for the platform, and this says so rather than shipping a plugin that cannot
+ * start. This repository carries no plugin of its own, so the loop finds nothing here.
  */
 import { execFileSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -76,6 +86,36 @@ function buildIdentity(version) {
 	};
 }
 
+/**
+ * The plugins this install ships, staged so a registration can name one: each plugin's manifest and its panel's
+ * files, plus every executable built for a platform. The sources they were built from are left behind, and so
+ * is a binary built in the plugin's own folder for the machine that built the release.
+ *
+ * A release has to carry the executables, and it is `npm run build:plugins` that builds them: a staging run
+ * without them stages the plugin's files and says which plugin has no executable yet.
+ */
+function stagePlugins(out) {
+	const base = join(root, "plugins");
+	if (!existsSync(base)) return;
+	for (const entry of readdirSync(base, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const from = join(base, entry.name);
+		if (!existsSync(join(from, "plugin.json"))) continue;
+		const to = join(out, "plugins", entry.name);
+		mkdirSync(to, { recursive: true });
+		cpSync(join(from, "plugin.json"), join(to, "plugin.json"));
+		if (existsSync(join(from, "README.md"))) cpSync(join(from, "README.md"), join(to, "README.md"));
+		if (existsSync(join(from, "assets"))) cpSync(join(from, "assets"), join(to, "assets"), { recursive: true });
+		const dist = join(from, "dist");
+		const built = existsSync(dist) ? readdirSync(dist).sort() : [];
+		for (const file of built) {
+			cpSync(join(dist, file), join(to, file));
+			chmodSync(join(to, file), 0o755);
+		}
+		if (built.length === 0) console.log(`pi-studio: staged plugin ${entry.name} with no executable; run \`npm run build:plugins\` before packaging a release`);
+	}
+}
+
 function main() {
 	const out = outDir();
 	if (out === root || out === "/") throw new Error(`build-release: refusing to build into ${out}`);
@@ -94,12 +134,17 @@ function main() {
 	// Runtime assets verbatim: the relative layout is load-bearing (see server/paths.ts).
 	for (const dir of ["public", "bridge", "prompts"]) cpSync(join(root, dir), join(out, dir), { recursive: true });
 	mkdirSync(join(out, "docs"), { recursive: true });
-	cpSync(join(root, "docs", "boss-and-subagents.md"), join(out, "docs", "boss-and-subagents.md"));
+	for (const doc of ["boss-and-subagents.md", "plugins.md"]) cpSync(join(root, "docs", doc), join(out, "docs", doc));
+	stagePlugins(out);
 
 	// Staged launcher only; the source bin/pi-studio keeps pointing at server.ts for dev.
 	// The launcher imports its lifecycle helpers by relative path, so the staged tree must
-	// carry them too; the source-only install entry (bin/install.mjs) stays out.
-	const launcher = readFileSync(join(root, "bin", "pi-studio"), "utf8").replaceAll("server.ts", "server.js");
+	// carry them too; the source-only install entry (bin/install.mjs) stays out. The doctor the
+	// launcher reaches for is compiled like the rest of the app, so its specifier is the second
+	// rewrite: both name a module the staged tree holds as JavaScript.
+	const launcher = readFileSync(join(root, "bin", "pi-studio"), "utf8")
+		.replaceAll("server.ts", "server.js")
+		.replaceAll("server/doctor.ts", "server/doctor.js");
 	mkdirSync(join(out, "bin"), { recursive: true });
 	writeFileSync(join(out, "bin", "pi-studio"), launcher);
 	chmodSync(join(out, "bin", "pi-studio"), 0o755);

@@ -5,33 +5,21 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { BRANCH_COLOURS } from "../server/git/gitgraph/config.ts";
 import { STATE_VERSION, workspaceId } from "../server/paths.ts";
 import { ensureWorktree } from "../server/worktrees/make.ts";
 import { git, scratchRepo } from "../test-support/git.ts";
 
 /**
- * The four routes, reached the way a browser reaches them: a real daemon, a real token and a real
- * folder. What they cannot show is the bundle itself, so a stand-in extension is written to a temporary
- * folder and pointed at with `PI_STUDIO_GITGRAPH_DIR` — the same door a human who keeps their copy
- * somewhere else uses.
+ * The three routes, reached the way a browser reaches them: a real daemon, a real token and a real
+ * folder. The page is pi-studio's own document and its own client modules, so nothing here needs an
+ * installed editor extension: a workspace with a repository is all a tab needs to draw.
+ *
+ * Two assertions describe the page the frontend delivers — the stylesheet and script it names, and
+ * the ids its client reads. They wait for that page to land: `public/gitgraph.html` and
+ * `public/client/gitgraph/` are written on their own branch, and this file is where the contract
+ * between the two halves is stated. The routes behind them are proven independently of it.
  */
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
-
-/** A folder that looks like an installed git-graph-libre 1.10.0, holding the webview files it serves. */
-function fakeExtension() {
-	const dir = mkdtempSync(join(tmpdir(), "pi-studio-gitgraph-ext-"));
-	mkdirSync(join(dir, "media"), { recursive: true });
-	mkdirSync(join(dir, "out"), { recursive: true });
-	mkdirSync(join(dir, "l10n"), { recursive: true });
-	writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "git-graph-libre", version: "1.10.0", publisher: "PlohnenSoftware" }));
-	writeFileSync(join(dir, "out", "web.min.js"), "var stoodInForTheBundle = true;\n");
-	writeFileSync(join(dir, "out", "startup.min.js"), "var s = 1;\n");
-	writeFileSync(join(dir, "out", "diffTab.min.js"), "var d = 1;\n");
-	for (const css of ["tokens.css", "base.css", "checkbox.css", "table.css", "commit-details.css", "refs.css", "toolbar.css", "settings.css", "dialogs.css", "dropdown.css"]) writeFileSync(join(dir, "media", css), "body { color: #c9d1d9; }\n");
-	writeFileSync(join(dir, "l10n", "bundle.l10n.json"), "{}\n");
-	return dir;
-}
 
 type Daemon = { child: { kill: () => void }; base: string; token: string };
 
@@ -82,8 +70,7 @@ async function openWorkspace(daemon: Daemon, folder: string): Promise<string> {
 }
 
 test("the page is served with the headers a framed view needs", async () => {
-	const extension = fakeExtension();
-	const daemon = await boot({ PI_STUDIO_GITGRAPH_DIR: extension });
+	const daemon = await boot();
 	try {
 		const folder = scratchRepo();
 		const board = await openWorkspace(daemon, folder);
@@ -97,26 +84,34 @@ test("the page is served with the headers a framed view needs", async () => {
 		for (const rule of ["default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data:", "connect-src 'self'", "frame-ancestors 'self'"]) {
 			assert.ok(csp.includes(rule), `the policy must hold ${rule}: ${csp}`);
 		}
-		// The bundle stops silently without these, so they are part of the contract rather than of taste.
-		for (const id of ["topBar", "statusStrip", "statusText", "statusVersion", "controls", "repoControl", "repoSelect", "branchControl", "branchSelect", "authorSelect", "tagSelect", "showRemoteBranchesCheckbox", "findBtn", "blinkHeadBtn", "fetchBtn", "refreshBtn", "content", "commitGraph", "commitTable", "footer", "contextMenu", "dialog", "settingsWidget", "stashListSlot", "ggNotice", "ggViewer", "ggViewerTitle", "ggViewerBody"]) {
-			assert.ok(page.body.includes(`id="${id}"`), `the page must hold #${id}`);
-		}
-		assert.ok(page.body.includes('src="/client/gitgraph/host.js"'), "the page runs one script of ours");
-		assert.ok(page.body.includes('href="/gitgraph/vendor/base.css"'), "and the bundle's stylesheet");
-		assert.ok(page.body.includes('href="/gitgraph/vendor/tokens.css"'), "and the bundle's tokens");
 		assert.ok(page.body.includes('href="/favicon.svg"'), "and the mark, so a tab does not 404 for one");
-		// The twelve graph colours are drawn before any script runs, so the page repeats the daemon's list.
-		for (const colour of BRANCH_COLOURS) assert.ok(page.body.includes(colour), `the page must carry the graph colour ${colour}`);
 		rmSync(folder, { recursive: true, force: true });
 	} finally {
 		daemon.child.kill();
-		rmSync(extension, { recursive: true, force: true });
+	}
+});
+
+// Waits for the page the frontend branch delivers: the entry document names its own client modules,
+// which is what replaces the retired vendor bundle, and carries the ids that client looks up.
+test("the page names its own stylesheet and script, and carries the ids its client reads", async () => {
+	const daemon = await boot();
+	try {
+		const folder = scratchRepo();
+		const board = await openWorkspace(daemon, folder);
+		const page = await get(daemon, `/git/${board}`);
+		assert.ok(page.body.includes('href="/client/gitgraph/gitgraph.css"'), "the page names its own stylesheet");
+		assert.ok(page.body.includes('src="/client/gitgraph/host.js"'), "the page names its own entry script");
+		for (const id of ["topBar", "commitGraph", "commitTable", "repoSelect", "ggViewer", "ggViewerTitle", "ggViewerBody"]) {
+			assert.ok(page.body.includes(`id="${id}"`), `the page must hold #${id}`);
+		}
+		rmSync(folder, { recursive: true, force: true });
+	} finally {
+		daemon.child.kill();
 	}
 });
 
 test("the page carries no inline script, which is what the policy forbids", async () => {
-	const extension = fakeExtension();
-	const daemon = await boot({ PI_STUDIO_GITGRAPH_DIR: extension });
+	const daemon = await boot();
 	try {
 		const folder = scratchRepo();
 		const board = await openWorkspace(daemon, folder);
@@ -125,39 +120,36 @@ test("the page carries no inline script, which is what the policy forbids", asyn
 		rmSync(folder, { recursive: true, force: true });
 	} finally {
 		daemon.child.kill();
-		rmSync(extension, { recursive: true, force: true });
 	}
 });
 
+// Also waits for the delivered page: the rule that serves a client module is what this proves, and
+// only the page's own list of names says which modules that is.
 test("every file the page names is served, so nothing it needs is a 404", async () => {
-	const extension = fakeExtension();
-	const daemon = await boot({ PI_STUDIO_GITGRAPH_DIR: extension });
+	const daemon = await boot();
 	try {
 		const folder = scratchRepo();
 		const board = await openWorkspace(daemon, folder);
 		const page = await get(daemon, `/git/${board}`);
 		const named = [...page.body.matchAll(/(?:src|href)="([^"]+)"/g)].map((match) => match[1]);
 		assert.ok(named.includes("/client/gitgraph/host.js"), `the page names its script: ${named.join(", ")}`);
+		assert.ok(named.includes("/client/gitgraph/gitgraph.css"), `the page names its stylesheet: ${named.join(", ")}`);
 		for (const path of named) {
-			// The client module graph is a second hop: host.js imports the viewer, and a module that
-			// resolves to a 404 leaves the page silent with nothing but a console line.
 			const answered = await get(daemon, path);
 			assert.equal(answered.status, 200, `${path} must be served`);
 		}
-		for (const path of ["/client/gitgraph/host.js", "/client/gitgraph/viewer.js"]) {
-			const module = await get(daemon, path);
-			assert.match(module.type, /javascript/);
-		}
+		const script = await get(daemon, "/client/gitgraph/host.js");
+		assert.match(script.type, /javascript/);
+		const style = await get(daemon, "/client/gitgraph/gitgraph.css");
+		assert.match(style.type, /text\/css/);
 		rmSync(folder, { recursive: true, force: true });
 	} finally {
 		daemon.child.kill();
-		rmSync(extension, { recursive: true, force: true });
 	}
 });
 
 test("init refuses a caller without a token and answers a signed-in one with the view state", async () => {
-	const extension = fakeExtension();
-	const daemon = await boot({ PI_STUDIO_GITGRAPH_DIR: extension });
+	const daemon = await boot();
 	try {
 		const folder = scratchRepo();
 		const board = await openWorkspace(daemon, folder);
@@ -166,7 +158,7 @@ test("init refuses a caller without a token and answers a signed-in one with the
 		const init = await get(daemon, `/git/init?token=${daemon.token}&workspace=${board}`);
 		assert.equal(init.status, 200);
 		const payload = JSON.parse(init.body);
-		assert.equal(payload.available, true);
+		assert.equal(payload.available, true, payload.reason);
 		assert.equal(payload.reason, null);
 		assert.equal(payload.viewState.lastActiveRepo, realpathSync(folder));
 		assert.equal(payload.viewState.fetchAvatars, false, "no avatar is fetched on a human's behalf");
@@ -174,25 +166,9 @@ test("init refuses a caller without a token and answers a signed-in one with the
 		assert.equal(paths.length, 1);
 		assert.equal(paths[0], realpathSync(folder));
 		assert.equal(payload.viewState.repos[paths[0]].displayName, folder.split("/").pop(), "a repository nobody renamed is labelled by its folder");
-		assert.equal(payload.version, "1.10.0");
-		rmSync(folder, { recursive: true, force: true });
-	} finally {
-		daemon.child.kill();
-		rmSync(extension, { recursive: true, force: true });
-	}
-});
-
-test("init says why a tab cannot draw, and never fails the request", async () => {
-	const daemon = await boot({ PI_STUDIO_GITGRAPH_DIR: join(tmpdir(), "pi-studio-no-extension-here") });
-	try {
-		const folder = scratchRepo();
-		const board = await openWorkspace(daemon, folder);
-		const init = await get(daemon, `/git/init?token=${daemon.token}&workspace=${board}`);
-		assert.equal(init.status, 200);
-		const payload = JSON.parse(init.body);
-		assert.equal(payload.available, false);
-		assert.match(payload.reason, /PI_STUDIO_GITGRAPH_DIR/);
-		assert.equal(payload.viewState, null);
+		// Nothing on this machine has to be installed for the page to draw, so there is no bundle version
+		// to name: the slot is answered, and it is empty for every tab.
+		assert.equal(payload.version, null);
 		rmSync(folder, { recursive: true, force: true });
 	} finally {
 		daemon.child.kill();
@@ -200,50 +176,39 @@ test("init says why a tab cannot draw, and never fails the request", async () =>
 });
 
 test("a workspace that is not a repository is told so rather than shown an empty graph", async () => {
-	const extension = fakeExtension();
-	const daemon = await boot({ PI_STUDIO_GITGRAPH_DIR: extension });
+	const daemon = await boot();
 	try {
 		const plain = mkdtempSync(join(tmpdir(), "pi-studio-gitgraph-plain-"));
 		const board = await openWorkspace(daemon, plain);
 		const init = await get(daemon, `/git/init?token=${daemon.token}&workspace=${board}`);
+		assert.equal(init.status, 200);
 		const payload = JSON.parse(init.body);
 		assert.equal(payload.available, false);
 		assert.match(payload.reason, /no repository/);
+		assert.equal(payload.viewState, null);
 		rmSync(plain, { recursive: true, force: true });
 	} finally {
 		daemon.child.kill();
-		rmSync(extension, { recursive: true, force: true });
 	}
 });
 
-test("the bundle's two files are served from the installed copy, and nothing else is", async () => {
-	const extension = fakeExtension();
-	const daemon = await boot({ PI_STUDIO_GITGRAPH_DIR: extension });
+test("the retired vendor route is gone, and no path under it is served", async () => {
+	const daemon = await boot();
 	try {
-		// No token on purpose: these bytes carry no data, and the page fetches them before it is signed in.
-		const script = await get(daemon, "/gitgraph/vendor/web.min.js");
-		assert.equal(script.status, 200);
-		assert.match(script.type, /javascript/);
-		assert.equal(script.headers.get("cache-control"), "no-store");
-		assert.match(script.body, /stoodInForTheBundle/);
-		const style = await get(daemon, "/gitgraph/vendor/base.css");
-		assert.equal(style.status, 200);
-		assert.match(style.type, /text\/css/);
-		// A path that is not one of the two is not a vendor path at all, so it falls through to the token
-		// check; with a token it reaches the route, which refuses it by name rather than by path.
-		const elsewhere = await get(daemon, `/gitgraph/vendor/%2e%2e%2fweb.min.js?token=${daemon.token}`);
-		assert.equal(elsewhere.status, 404, "a path that escapes the bundle folder is refused before anything is read");
-		const madeUp = await get(daemon, `/gitgraph/vendor/not-a-bundle.js?token=${daemon.token}`);
-		assert.equal(madeUp.status, 404);
+		// The files a borrowed extension used to provide are not this daemon's to serve any more, so every
+		// spelling of that path is an unknown route: with a token it is the route table's 404, and without
+		// one it is the caller check's 403.
+		assert.equal((await get(daemon, "/gitgraph/vendor/web.min.js")).status, 403);
+		assert.equal((await get(daemon, `/gitgraph/vendor/web.min.js?token=${daemon.token}`)).status, 404);
+		assert.equal((await get(daemon, `/gitgraph/vendor/base.css?token=${daemon.token}`)).status, 404);
+		assert.equal((await get(daemon, `/gitgraph/vendor/%2e%2e%2fweb.min.js?token=${daemon.token}`)).status, 404);
 	} finally {
 		daemon.child.kill();
-		rmSync(extension, { recursive: true, force: true });
 	}
 });
 
 test("one message is answered with its replies, and refused without the token", async () => {
-	const extension = fakeExtension();
-	const daemon = await boot({ PI_STUDIO_GITGRAPH_DIR: extension });
+	const daemon = await boot();
 	try {
 		const folder = scratchRepo();
 		const board = await openWorkspace(daemon, folder);
@@ -268,12 +233,10 @@ test("one message is answered with its replies, and refused without the token", 
 		rmSync(folder, { recursive: true, force: true });
 	} finally {
 		daemon.child.kill();
-		rmSync(extension, { recursive: true, force: true });
 	}
 });
 
 test("a board with a worktree offers the dropdown two repositories, and the tree is labelled by its branch and its thread", async () => {
-	const extension = fakeExtension();
 	const state = mkdtempSync(join(tmpdir(), "pi-studio-gitgraph-two-"));
 	const folder = scratchRepo();
 	// The tree a thread works in, made the way the daemon makes one: `ensureWorktree` on a plain board,
@@ -301,7 +264,7 @@ test("a board with a worktree offers the dropdown two repositories, and the tree
 			threads: [{ id: thread.id, title: thread.title, at: Date.now(), turns: [] }],
 		}),
 	);
-	const daemon = await boot({ PI_STUDIO_GITGRAPH_DIR: extension }, state);
+	const daemon = await boot({}, state);
 	try {
 		const board = await openWorkspace(daemon, folder);
 		assert.equal(board, boardId, "a folder keeps its identity, which is how the board file was found");
@@ -327,16 +290,28 @@ test("a board with a worktree offers the dropdown two repositories, and the tree
 		assert.equal(replies[0].command, "loadRepos");
 		assert.equal(replies[0].repos[paths[1]].displayName, "feat/drawer · the drawer's tree", "the message route labels the tree exactly as the init route did");
 		assert.equal(replies[0].repos[paths[0]].displayName, folder.split("/").pop(), "and the folder by its own name, so the two routes agree on every entry");
-		// This is what makes the dropdown exist at all, and it is the bundle's decision rather than this
-		// daemon's: `loadRepos` in the installed `media/out.min.js` sets the `singleRepo` class on
-		// `#controls` from `Object.keys(repos).length === 1`, and the toolbar stylesheet carries
-		// `.singleRepo #repoControl{display:none;}`. With two keys the class is not set and `#repoControl`
-		// is drawn. Unverified in a browser from here: that is the bundle's code, and this daemon only
-		// answers the two keys.
+		// The branch list follows the repository the page names, and only that one: a drawer that reads one
+		// checkout while another selects a different repository in the dropdown must not be answered about
+		// the wrong tree. Without a name it falls back to the selected repository, which is the folder here.
+		const named = await post(daemon, `/git/msg?workspace=${board}`, { command: "loadBranches", requestId: 9, repo: paths[1], showRemoteBranches: false });
+		const namedReply = (JSON.parse(named.body) as Array<Record<string, unknown>>)[0];
+		assert.equal(namedReply.command, "loadBranches");
+		assert.equal(namedReply.requestId, 9);
+		assert.equal(namedReply.isRepo, true);
+		assert.equal(namedReply.head, "feat/drawer", "the branches are the named tree's");
+		const unnamed = await post(daemon, `/git/msg?workspace=${board}`, { command: "loadBranches", requestId: 10, showRemoteBranches: false });
+		const unnamedReply = (JSON.parse(unnamed.body) as Array<Record<string, unknown>>)[0];
+		assert.equal(unnamedReply.head, "dev", "a page that names no repository is answered about the selected one");
+		// A path this board does not list is refused with the query shape, so the page drops the answer rather
+		// than drawing branches of a checkout the tab never opened.
+		const refused = await post(daemon, `/git/msg?workspace=${board}`, { command: "loadBranches", requestId: 11, repo: "/nowhere-at-all" });
+		const refusedReply = (JSON.parse(refused.body) as Array<Record<string, unknown>>)[0];
+		assert.equal(refusedReply.requestId, 11);
+		assert.equal((refusedReply.error as { message: string }).message, "That repository is no longer open in this tab.");
+		assert.equal(refusedReply.branches, undefined, "and no branches of a checkout the tab never opened are named");
 	} finally {
 		daemon.child.kill();
 		rmSync(folder, { recursive: true, force: true });
 		rmSync(state, { recursive: true, force: true });
-		rmSync(extension, { recursive: true, force: true });
 	}
 });

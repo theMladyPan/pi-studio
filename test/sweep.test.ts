@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { test } from "node:test";
-import { cleanBoard, sweepTrees } from "../server/cards.ts";
-import { closeThread, onClose, onUndo } from "../server/routes/board/lifecycle.ts";
+import { cleanBoard, clearBoard, sweepTrees } from "../server/cards.ts";
+import { autoCloseChild, closeThread, onClose, onUndo } from "../server/routes/board/lifecycle.ts";
+import { CHILD_CLOSE_DELAY_MS, MAX_PUT_AWAY_CHILDREN } from "../server/limits.ts";
 import { ensureWorktree } from "../server/worktrees/make.ts";
 
 const git = (folder: string, ...args: string[]) =>
@@ -278,6 +279,88 @@ test("clean still answers with the same three fields, and sweeps a dead thread's
 		assert.equal(result.trees.length, 1, `the dead thread's tree was not swept: ${JSON.stringify(result.trees)}`);
 		assert.equal(result.trees[0].removed, true);
 		assert.equal(existsSync(tree.path), false);
+		unschedule(board);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a cleared board retires the tree whose work is integrated", () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const { thread, tree } = treeWithBranch(board, "clear-1", "feat/clear");
+		board.threads.set(thread.id, { id: thread.id, title: thread.title, at: Date.now(), turns: [], status: "idle" });
+		// The work is in `dev` through a merge commit, so nothing of it lives only in this tree.
+		git(repo, "merge", "--no-ff", "-m", "merge feat/clear", "feat/clear");
+
+		clearBoard(board);
+		assert.equal(board.threads.size, 0, "the board is not empty after a clear");
+		assert.equal(existsSync(tree.path), false, "the spent folder is still on disk after a clear");
+		assert.equal(board.trees.length, 0, "the board still holds the tree it retired");
+		unschedule(board);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a cleared board keeps a tree with unmerged work", () => {
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const { thread, tree } = treeWithBranch(board, "clear-2", "feat/clear-2");
+		board.threads.set(thread.id, { id: thread.id, title: thread.title, at: Date.now(), turns: [], status: "idle" });
+
+		clearBoard(board);
+		assert.equal(board.threads.size, 0, "the board is not empty after a clear");
+		assert.ok(existsSync(tree.path), "a tree holding unmerged work was deleted by a clear");
+		assert.equal(board.trees.length, 1, "the board forgot a tree it kept");
+		unschedule(board);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("trimming put-away children sweeps the trimmed child's spent tree", (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const repo = scratchRepo();
+	try {
+		const board = scratchBoard(repo);
+		const parent: any = { id: "master-1", title: "master", status: "idle", turns: [], queued: [], at: Date.now() };
+		board.threads.set(parent.id, parent);
+		// The oldest put-away child holds the only tree, and its work is in `dev` through a merge commit.
+		const { tree } = treeWithBranch(board, "old-0", "feat/trimmed");
+		git(repo, "merge", "--no-ff", "-m", "merge feat/trimmed", "feat/trimmed");
+		for (let at = 0; at <= MAX_PUT_AWAY_CHILDREN; at += 1) {
+			const filed: any = {
+				id: `old-${at}`,
+				title: "a child from yesterday",
+				status: "idle",
+				parentThread: "master-1",
+				hidden: true,
+				closedAt: 1_000 + at,
+				turns: [],
+			};
+			if (at === 0) filed.worktree = tree;
+			board.threads.set(filed.id, filed);
+		}
+		const child: any = {
+			id: "child-1",
+			title: "a child",
+			status: "idle",
+			parentThread: "master-1",
+			depth: 1,
+			at: Date.now(),
+			turns: [{ text: "look at it", status: "answered", reply: "it is fine", at: Date.now() }],
+			queued: [],
+		};
+		board.threads.set(child.id, child);
+		autoCloseChild(board, child);
+		t.mock.timers.tick(CHILD_CLOSE_DELAY_MS);
+		assert.equal(child.hidden, true);
+		assert.equal(board.threads.get("old-0"), undefined, "the child put away first is still on the board");
+		assert.equal(existsSync(tree.path), false, "the trimmed child's spent folder is still on disk");
+		assert.deepEqual(board.trees, [], "the board still holds the tree it retired");
 		unschedule(board);
 	} finally {
 		rmSync(repo, { recursive: true, force: true });

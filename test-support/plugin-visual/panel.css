@@ -1,0 +1,53 @@
+/* The example panel's own styles. A panel is a page of its own with no access to the board around it, so
+   it brings the little it needs; none of the board's CSS reaches in here, and none of this reaches out. */
+:root {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --text: #c9d1d9;
+  --muted: #8b949e;
+  --border: #30363d;
+}
+
+body {
+  margin: 0;
+  padding: 18px 22px;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.note {
+  margin: 0 0 14px;
+  color: var(--muted);
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: #161b22;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: #484f58;
+}
+
+pre {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  min-height: 3em;
+  background: #010409;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

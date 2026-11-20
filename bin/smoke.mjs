@@ -183,15 +183,18 @@ async function main() {
 	// only takes /client/[a-z0-9/_-]+\.js, and a 404 here is a card that silently stays empty.
 	const diagram = await get(one, "/client/mermaid-min.js");
 	said(diagram.status === 200 && diagram.type.includes("javascript"), "GET /client/mermaid-min.js serves the diagram renderer", `${diagram.status} ${diagram.type}`);
-	// The Git Graph view: a page, the three globals behind it, the bundle's bytes and the message route.
-	// The page and the bundle are static, so they are reached without the token; the two data routes are
-	// behind it like every other route that reads this machine.
+	// The Git Graph view: a page, its own client modules, the three globals behind it and the message
+	// route. The page and the modules are static, so they are reached without the token; the two data
+	// routes are behind it like every other route that reads this machine. Nothing on this machine has
+	// to be installed for the page to draw, so there is no bundle to look for and no bundle route.
 	const gitGraph = await get(one, `/git/${opened.board.id}`);
 	said(
-		gitGraph.status === 200 && gitGraph.type.includes("text/html") && gitGraph.body.includes('id="topBar"') && gitGraph.body.includes('id="content"'),
+		gitGraph.status === 200 && gitGraph.type.includes("text/html") && gitGraph.body.includes('id="topBar"'),
 		"GET /git/<id> serves the Git Graph page",
 		`${gitGraph.status} ${gitGraph.type}`,
 	);
+	const gitHost = await get(one, "/client/gitgraph/host.js");
+	said(gitHost.status === 200 && gitHost.type.includes("javascript"), "and the page's own client module is served", `${gitHost.status} ${gitHost.type}`);
 	const gitInit = await get(one, `/git/init?token=${one.token}&workspace=${opened.board.id}`);
 	const gitInitBody = JSON.parse(gitInit.body || "{}");
 	said(
@@ -199,12 +202,10 @@ async function main() {
 		"GET /git/init says whether a tab can draw a graph, and why not when it cannot",
 		`${gitInit.status} ${gitInitBody.available ? "available" : String(gitInitBody.reason).slice(0, 70)}`,
 	);
-	// Whatever this machine has installed: a bundle or the sentence that says why there is none. Neither
-	// may be a 500, which is what a route that fails to read the extension folder would answer.
-	const vendor = await get(one, "/gitgraph/vendor/web.min.js");
-	said(vendor.status === 200 || vendor.status === 404, "GET /gitgraph/vendor/web.min.js answers the bundle or says it is missing", `${vendor.status}`);
-	const notABundle = await get(one, `/gitgraph/vendor/not-a-bundle.js?token=${one.token}`);
-	said(notABundle.status === 404, "and a vendor path that is not one of the bundle files is refused", `${notABundle.status}`);
+	// The route that served a borrowed extension's files is retired, so nothing answers under it: a 404
+	// with a token is the route table saying it does not know the path.
+	const retiredVendor = await get(one, `/gitgraph/vendor/web.min.js?token=${one.token}`);
+	said(retiredVendor.status === 404, "GET /gitgraph/vendor/ is no route at all any more", `${retiredVendor.status}`);
 	// One message from the page, answered with an array of replies. `loadRepos` needs no repository, so
 	// this passes on a board whose folder is the smoke run's own state folder.
 	const message = await get(one, `/git/msg?token=${one.token}&workspace=${opened.board.id}`, {

@@ -9,6 +9,10 @@
  *
  * The screen is drawn by the vendored terminal library (`Terminal` and the `FitAddon`), loaded as
  * plain scripts before the board module, the way the git graph's page carries its own bundle.
+ *
+ * Its height is the user's furniture, the way the left rail's width is: a drag on the top edge
+ * sets the `--term` property, the shell refits through the same observer that fits it on open,
+ * and the height is remembered so a reload rolls it up at the height it was left.
  */
 
 /** One drawer, for the whole life of the page. `typingSomewhere` comes from the board rather than a
@@ -23,6 +27,56 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
   const closeBtn = document.getElementById("tdClose");
   const statusEl = document.getElementById("tdStatus");
   const workspaceLabel = document.getElementById("tdWorkspace");
+  const grip = document.getElementById("termGrip");
+  const root = document.documentElement;
+
+  // The drawer is the user's furniture: its height survives a reload, the way the rail's width
+  // does. The floor is the height the drawer always kept at minimum; the ceiling is the rail's,
+  // and never more than the screen can hold with the header still visible.
+  const TERM_MIN = 220;
+  const TERM_MAX = 720;
+
+  function termHeight(px) {
+    const viewport = typeof window !== "undefined" && Number.isFinite(window.innerHeight) ? window.innerHeight : 0;
+    const ceiling = viewport > 0 ? Math.max(TERM_MIN, Math.min(TERM_MAX, Math.floor(viewport * 0.85))) : TERM_MAX;
+    const height = Math.max(TERM_MIN, Math.min(ceiling, Math.round(px)));
+    if (root?.style) root.style.setProperty("--term", `${height}px`);
+    try {
+      localStorage.setItem("board.termHeight", String(height));
+    } catch {}
+    return height;
+  }
+
+  // The last height the drawer was left at, restored before anything is drawn.
+  try {
+    const saved = Number(localStorage.getItem("board.termHeight")) || 0;
+    if (saved) termHeight(saved);
+  } catch {}
+
+  // Drag handle, the rail grip on its side: press on the top edge, drag up or down, and the
+  // drawer follows the cursor. The observer on the host refits the shell as it grows, so no
+  // size is told to the daemon here the way it is at connect.
+  if (grip) {
+    let dragging = false;
+    grip.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      dragging = true;
+      grip.setPointerCapture?.(event.pointerId);
+      document.body.classList.add("term-resizing");
+      event.preventDefault();
+    });
+    grip.addEventListener("pointermove", (event) => {
+      if (dragging && typeof window !== "undefined" && Number.isFinite(window.innerHeight)) termHeight(window.innerHeight - event.clientY);
+    });
+    const stop = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove("term-resizing");
+      if (grip.hasPointerCapture?.(event.pointerId)) grip.releasePointerCapture(event.pointerId);
+    };
+    grip.addEventListener("pointerup", stop);
+    grip.addEventListener("pointercancel", stop);
+  }
 
   /** The bar names the board the way a human knows it, as the git drawer's bar does. */
   function setName(name) {
@@ -39,6 +93,9 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
   let socket = null;
   /** What had the focus before the drawer took it, so rolling down puts it back. */
   let back = null;
+  /** Why the shell never started, when it did not. The drawer stays up to let it be read, and the
+   * next roll up is a fresh socket rather than a reconnect to a shell that refused. */
+  let failed = "";
 
   // A board with no folder of its own has no workspace to run in, so the drawer says that in the
   // space the terminal would have used rather than opening a socket that cannot answer.
@@ -51,6 +108,8 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
 
   function said(text) {
     statusEl.textContent = text || "";
+    // The bar is one line, so a long reason is cut on screen and read in full on hover.
+    statusEl.title = text || "";
   }
 
   /** The body class is the whole animation, and the button says which way it now stands. */
@@ -84,6 +143,7 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
   function connect() {
     if (!workspace) return;
     if (socket && socket.readyState <= WebSocket.OPEN) return;
+    failed = "";
     const scheme = location.protocol === "https:" ? "wss:" : "ws:";
     socket = new WebSocket(`${scheme}//${location.host}/terminal?workspace=${encodeURIComponent(workspace)}`);
     socket.addEventListener("open", () => {
@@ -106,13 +166,24 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
         // The shell is gone — Ctrl+D, or `exit` typed at the prompt. The drawer rolls
         // down rather than sitting on a dead prompt, and the socket closes with it,
         // so the next roll up connects a fresh shell. An exit that arrives while
-        // the drawer is already down still closes the socket.
+        // the drawer is already down still closes the socket. A shell that never
+        // started did not exit, though: its reason stays on the bar with the drawer up.
         socket.close();
-        close();
-      } else if (message.type === "error") said(message.data);
+        if (!failed) close();
+      } else if (message.type === "error") {
+        // No shell could be made — this machine has no pty helper, or the helper refused. The
+        // drawer stays up to say why, and the socket closes so the next roll up starts a new
+        // shell instead of writing into one that cannot answer.
+        failed = message.data;
+        said(failed);
+        socket.close();
+        // A dead screen would keep the keyboard and eat the `x` that rolls the drawer down, so the
+        // bar's own button takes it: the letter that closes the drawer stays a letter of the board.
+        if (closeBtn.offsetParent !== null) closeBtn.focus();
+      }
     });
     socket.addEventListener("close", () => {
-      said("terminal disconnected");
+      if (!failed) said("terminal disconnected");
     });
   }
 

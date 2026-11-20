@@ -1,5 +1,5 @@
 /**
- * What the Git Graph Libre view remembers for one workspace, and how it is written down.
+ * What the Git Graph page remembers for one workspace, and how it is written down.
  * Lives in one file per workspace beside the board, is written on a debounce, and is read back
  * defensively, because the file is the one thing a human can edit while the daemon runs.
  */

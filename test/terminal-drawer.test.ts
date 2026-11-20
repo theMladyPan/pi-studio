@@ -30,6 +30,8 @@ class FakeElement {
 	classList = {
 		toggle: (name: string, on: boolean) => (on ? this.classes.add(name) : this.classes.delete(name)),
 		contains: (name: string) => this.classes.has(name),
+		add: (name: string) => void this.classes.add(name),
+		remove: (name: string) => void this.classes.delete(name),
 	};
 
 	setAttribute(name: string, value: string) {
@@ -61,26 +63,38 @@ class FakeElement {
 	}
 }
 
-type Page = { elements: Map<string, FakeElement>; body: FakeElement };
+type Page = { elements: Map<string, FakeElement>; body: FakeElement; style: Map<string, string>; store: Map<string, string> };
 
 /** The board's page, as much of it as the drawer looks at. */
 function standInPage(): Page {
-	const ids = ["termDrawer", "termHost", "termBtn", "tdClose", "tdStatus", "tdWorkspace"];
+	const ids = ["termDrawer", "termHost", "termBtn", "tdClose", "tdStatus", "tdWorkspace", "termGrip"];
 	const elements = new Map(ids.map((id) => [id, new FakeElement()]));
 	const body = new FakeElement();
+	const style = new Map<string, string>();
+	const store = new Map<string, string>();
 	Object.assign(globalThis, {
 		document: {
 			body,
 			activeElement: null,
+			documentElement: { style: { setProperty: (name: string, value: string) => void style.set(name, value) } },
 			getElementById: (id: string) => elements.get(id) ?? null,
 			createElement: () => new FakeElement(),
 		},
+		localStorage: {
+			getItem: (key: string) => store.get(key) ?? null,
+			setItem: (key: string, value: string) => void store.set(key, value),
+		},
 		// The drawer asks whether what had the focus is an `Element`, so the name has to exist.
 		Element: FakeElement,
-		window: { addEventListener: () => {} },
+		window: { addEventListener: () => {}, innerHeight: 1000 },
 		location: { protocol: "http:", host: "127.0.0.1" },
 	});
-	return { elements, body };
+	return { elements, body, style, store };
+}
+
+/** One pointer event on an element, as the grip's listeners take it. */
+function fire(el: FakeElement, type: string, event: Record<string, unknown>) {
+	for (const { type: held, fn } of el.listeners) if (held === type) (fn as (e: Record<string, unknown>) => void)(event);
 }
 
 /** The module, loaded once with the stand-in page already in place. */
@@ -123,6 +137,35 @@ test("one press rolls the drawer up and the next rolls it down", async () => {
 	assert.equal(drawer.isOpen(), false, "and the next rolls it down");
 	assert.equal(body.classList.contains("term-open"), false);
 	assert.equal(btn.getAttribute("aria-expanded"), "false");
+});
+
+test("dragging the top edge resizes the drawer, clamped, and remembers the height", async () => {
+	const { elements, body, style, store } = standInPage();
+	const grip = elements.get("termGrip")!;
+	const drawer = await drawerFor("b08b6688eaf9");
+	assert.equal(drawer.isOpen(), false);
+	// Press on the top edge and drag up: a 1000px screen with the cursor 300px from the top
+	// leaves a 700px drawer.
+	fire(grip, "pointerdown", { button: 0, pointerId: 1, preventDefault: () => {} });
+	assert.equal(body.classList.contains("term-resizing"), true, "the drag holds the board's resize cursor");
+	fire(grip, "pointermove", { clientY: 300 });
+	assert.equal(style.get("--term"), "700px");
+	assert.equal(store.get("board.termHeight"), "700", "the height is remembered, the way the rail's width is");
+	// Past the ceiling the drawer stops at 720, and past the floor at 220.
+	fire(grip, "pointermove", { clientY: 50 });
+	assert.equal(style.get("--term"), "720px");
+	fire(grip, "pointermove", { clientY: 950 });
+	assert.equal(style.get("--term"), "220px");
+	fire(grip, "pointerup", { pointerId: 1 });
+	assert.equal(body.classList.contains("term-resizing"), false, "letting go ends the drag");
+});
+
+test("a height the drawer was left at is restored on the next board", async () => {
+	const { style, store } = standInPage();
+	store.set("board.termHeight", "500");
+	const drawer = await drawerFor("b08b6688eaf9");
+	assert.equal(drawer.isOpen(), false);
+	assert.equal(style.get("--term"), "500px");
 });
 
 test("closing does not give the keyboard to a hidden toolbox button", async () => {
@@ -244,6 +287,52 @@ test("a shell that ends rolls the drawer down, and the next roll up opens a new 
 		assert.equal(drawer.isOpen(), true);
 		assert.equal(FakeWebSocket.instances.length, 2, "the second roll up connects anew");
 		assert.notEqual(FakeWebSocket.instances[1], socket);
+	} finally {
+		delete (globalThis as Record<string, unknown>).Terminal;
+		delete (globalThis as Record<string, unknown>).FitAddon;
+		delete (globalThis as Record<string, unknown>).WebSocket;
+	}
+});
+
+test("a shell that could not start keeps the drawer up with its reason", async () => {
+	const { elements, body } = standInPage();
+	const status = elements.get("tdStatus")!;
+	FakeWebSocket.instances = [];
+	Object.assign(globalThis, {
+		Terminal: FakeTerminal,
+		FitAddon: { FitAddon: FakeFit },
+		WebSocket: FakeWebSocket,
+	});
+	try {
+		const drawer = await drawerFor("b08b6688eaf9");
+		drawer.open();
+		assert.equal(drawer.isOpen(), true);
+		const socket = FakeWebSocket.instances[0];
+		socket.fire("open");
+
+		// This machine has no pty helper: the daemon says so, and the drawer stays up to be read
+		// rather than rolling down over the reason it was told.
+		const reason = "this machine has no terminal helper, so no shell can start";
+		socket.fire("message", { data: JSON.stringify({ type: "error", data: reason }) });
+		assert.equal(drawer.isOpen(), true, "the drawer keeps the reason on screen");
+		assert.equal(body.classList.contains("term-open"), true);
+		assert.equal(status.textContent, reason);
+		assert.equal(status.title, reason, "the whole reason is there to hover, past the bar's cut");
+		assert.equal(elements.get("tdClose")!.focused, true, "the bar's button takes the keyboard a dead screen would eat");
+		assert.equal(socket.readyState, 3, "the refused socket closes, so the next roll up can start fresh");
+
+		// The daemon's socket closes behind that answer, and the bar keeps the reason rather than
+		// replacing it with a disconnection nobody can act on.
+		socket.fire("message", { data: JSON.stringify({ type: "exit", code: null }) });
+		assert.equal(drawer.isOpen(), true, "a shell that never started did not exit");
+		assert.equal(status.textContent, reason);
+
+		// The next roll up connects anew and starts from a quiet bar.
+		drawer.close();
+		drawer.open();
+		assert.equal(FakeWebSocket.instances.length, 2, "the failed socket is not reused");
+		FakeWebSocket.instances[1].fire("open");
+		assert.equal(status.textContent, "");
 	} finally {
 		delete (globalThis as Record<string, unknown>).Terminal;
 		delete (globalThis as Record<string, unknown>).FitAddon;
