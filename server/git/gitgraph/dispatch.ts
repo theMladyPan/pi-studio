@@ -329,7 +329,9 @@ async function answer(board: DispatchBoard, request: LibreRequest, paths: string
 			if ("view" in answerView) {
 				return [{ command, success: true, view: answerView.view } as Reply];
 			}
-			return [{ command, success: false } as Reply];
+			// A view git could not draw still says what git said, so the page can show that sentence instead
+			// of its own guess at what went wrong.
+			return [{ command, success: false, error: queryError(answerView.error) } as Reply];
 		}
 		case "setTemporaryLanguage":
 			return [];

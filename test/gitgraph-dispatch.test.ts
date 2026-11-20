@@ -95,6 +95,22 @@ test("commit details and tag details answer in the Libre shape", async () => {
 	assert.equal((tag.tagDetails as { tagName: string }).tagName, "a-tag");
 });
 
+test("a view git cannot draw answers success false together with the sentence git gave", async () => {
+	// A hash this repository has never held: `git show` says so, and that sentence is what the page shows
+	// instead of its own guess at what went wrong.
+	const missing = "0123456789".repeat(4);
+	const refused = await one({ command: "viewFileAtRevision", repo, commitHash: missing, filePath: "readme.md" });
+	assert.equal(refused.success, false);
+	const error = refused.error as { message: string } | null;
+	assert.ok(error && typeof error.message === "string", `the failure carries git's own sentence: ${JSON.stringify(refused)}`);
+	assert.match(error.message, /invalid object name|bad object|unknown revision|fatal/i);
+	// A view git can draw is answered as it was: still success, still the text.
+	const head = git(repo, "rev-parse", "HEAD");
+	const drawn = await one({ command: "viewFileAtRevision", repo, commitHash: head, filePath: "readme.md" });
+	assert.equal(drawn.success, true);
+	assert.ok(drawn.view, "a view that works still arrives in full");
+});
+
 test("the repository dropdown is answered with a state per repository and the one to open on", async () => {
 	state.stateFor(board).repos[repo] = { ...state.DEFAULT_REPO_STATE, displayName: "renamed by the page" };
 	state.stateFor(board).lastActiveRepo = repo;
