@@ -39,6 +39,9 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
   let socket = null;
   /** What had the focus before the drawer took it, so rolling down puts it back. */
   let back = null;
+  /** Why the shell never started, when it did not. The drawer stays up to let it be read, and the
+   * next roll up is a fresh socket rather than a reconnect to a shell that refused. */
+  let failed = "";
 
   // A board with no folder of its own has no workspace to run in, so the drawer says that in the
   // space the terminal would have used rather than opening a socket that cannot answer.
@@ -51,6 +54,8 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
 
   function said(text) {
     statusEl.textContent = text || "";
+    // The bar is one line, so a long reason is cut on screen and read in full on hover.
+    statusEl.title = text || "";
   }
 
   /** The body class is the whole animation, and the button says which way it now stands. */
@@ -84,6 +89,7 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
   function connect() {
     if (!workspace) return;
     if (socket && socket.readyState <= WebSocket.OPEN) return;
+    failed = "";
     const scheme = location.protocol === "https:" ? "wss:" : "ws:";
     socket = new WebSocket(`${scheme}//${location.host}/terminal?workspace=${encodeURIComponent(workspace)}`);
     socket.addEventListener("open", () => {
@@ -106,13 +112,24 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
         // The shell is gone — Ctrl+D, or `exit` typed at the prompt. The drawer rolls
         // down rather than sitting on a dead prompt, and the socket closes with it,
         // so the next roll up connects a fresh shell. An exit that arrives while
-        // the drawer is already down still closes the socket.
+        // the drawer is already down still closes the socket. A shell that never
+        // started did not exit, though: its reason stays on the bar with the drawer up.
         socket.close();
-        close();
-      } else if (message.type === "error") said(message.data);
+        if (!failed) close();
+      } else if (message.type === "error") {
+        // No shell could be made — this machine has no pty helper, or the helper refused. The
+        // drawer stays up to say why, and the socket closes so the next roll up starts a new
+        // shell instead of writing into one that cannot answer.
+        failed = message.data;
+        said(failed);
+        socket.close();
+        // A dead screen would keep the keyboard and eat the `x` that rolls the drawer down, so the
+        // bar's own button takes it: the letter that closes the drawer stays a letter of the board.
+        if (closeBtn.offsetParent !== null) closeBtn.focus();
+      }
     });
     socket.addEventListener("close", () => {
-      said("terminal disconnected");
+      if (!failed) said("terminal disconnected");
     });
   }
 
