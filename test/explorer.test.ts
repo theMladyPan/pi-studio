@@ -139,7 +139,7 @@ type ExCore = {
 	drawerToggle(state: { open: string }, name: string): { open: string };
 	escapeTarget(open: Record<string, boolean | undefined>): string;
 	boardLetter(key: string, flags?: { shift?: boolean; typing?: boolean; panel?: boolean; surface?: boolean }): string;
-	conflictHunks(text: string): { index: number; start: number; end: number; ours: string[]; theirs: string[]; base: string[] | null }[];
+	conflictHunks(text: string): { index: number; start: number; end: number; startLine: number; endLine: number; ours: string[]; theirs: string[]; base: string[] | null }[];
 	conflictAccept(text: string, index: number, choice: string): string;
 	copyText(text: string, ports: ExPorts): Promise<unknown>;
 	icon(theme: unknown, entry: { name: string; dir?: boolean }): ExIcon | null;
@@ -835,6 +835,8 @@ test("conflict hunks are read with their two sides, and accepting one rewrites o
 	const text = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\nafter\n";
 	const hunks = core.conflictHunks(text);
 	assert.equal(hunks.length, 1);
+	assert.equal(hunks[0].startLine, 2, "the opening marker's line, 1-based");
+	assert.equal(hunks[0].endLine, 6, "the closing marker's line, 1-based");
 	assert.deepEqual(hunks[0].ours, ["ours"]);
 	assert.deepEqual(hunks[0].theirs, ["theirs"]);
 	assert.equal(core.conflictAccept(text, 0, "current"), "before\nours\nafter\n");

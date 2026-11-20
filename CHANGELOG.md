@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- feat: Tint each side of a merge conflict block in the merge editor — the marker lines in red, the current side in blue, the incoming side in green and a diff3 base in amber — so every block reads at a glance, and make each hunk's label jump to and select its block for immediate navigation. [t-b67dbd44]
+
 - fix: Print the workspace path in the files drawer header instead of only the folder's name, shortened to `~` inside the home folder and left as the full path outside it, so the drawer names the folder that is actually open. [t-f4c279f1]
 - fix: Refuse `npm run check` up front with the installing command in the message when the tree's own dev dependency is missing, so a fresh worktree does not sail past the guard and fail 29 tests deep in the install suite. [t-f4c279f1]
 

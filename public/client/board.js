@@ -1180,9 +1180,10 @@ function exBoardLetter(key, { shift = false, typing = false, panel = false, surf
 
 // ---------- conflict hunks ------------------------------------------------
 /**
- * One unresolved hunk in a marked file: where the whole block stands in the text, and the two
- * sides it holds. The parser reads ordinary markers and the diff3 base section, and refuses a
- * block that never closes, so an acceptance never replaces the wrong lines.
+ * One unresolved hunk in a marked file: where the whole block stands in the text — by offset for an
+ * acceptance and by `startLine`/`endLine` (1-based, inclusive) for the merge editor's tinted blocks —
+ * and the two sides it holds. The parser reads ordinary markers and the diff3 base section, and
+ * refuses a block that never closes, so an acceptance never replaces the wrong lines.
  */
 function exConflictHunks(text) {
   const lines = String(text ?? "").split("\n");
@@ -1226,7 +1227,7 @@ function exConflictHunks(text) {
       if (j < lines.length) closed = true;
     }
     if (!closed) return hunks;
-    hunks.push({ index: hunks.length, start: offsets[start], end: offsets[j] + lines[j].length + 1, ours, theirs, base });
+    hunks.push({ index: hunks.length, start: offsets[start], end: offsets[j] + lines[j].length + 1, ours, theirs, base, startLine: start + 1, endLine: j + 1 });
     i = j + 1;
   }
   return hunks;
@@ -11874,6 +11875,7 @@ async function exGet(path) {
 async function exEditOpen(path, target = "edit") {
   exConflict = null;
   exConflictBar.hidden = true;
+  exEditorPreview.setHighlights([]);
   exViewClear();
   exEditorKind = explorerCore.previewKind(path);
   exEditorMode = "source";
@@ -11966,6 +11968,7 @@ function exEditClose() {
   if (exEditorEl.hidden) return;
   exConflict = null;
   exConflictBar.hidden = true;
+  exEditorPreview.setHighlights([]);
   exViewClear();
   exEditorKind = "text";
   exEditorSaveBtn.hidden = false;
@@ -12026,16 +12029,46 @@ function exConflictSay(text, bad = false) {
   exConflictNote.classList.toggle("bad", bad);
 }
 
+/**
+ * The tinted blocks for one hunk, derived from its line span and side lengths: the two marker lines
+ * and the separator wear `marker`, the current side `ours`, the incoming `theirs`, a diff3 base `base`.
+ */
+function exConflictRanges(hunk) {
+  const ranges = [{ from: hunk.startLine, to: hunk.startLine, kind: "marker" }];
+  const oursFrom = hunk.startLine + 1;
+  const oursTo = hunk.startLine + hunk.ours.length;
+  if (hunk.ours.length) ranges.push({ from: oursFrom, to: oursTo, kind: "ours" });
+  let line = oursTo + 1;
+  if (hunk.base) {
+    ranges.push({ from: line, to: line, kind: "marker" });
+    line += 1;
+    if (hunk.base.length) ranges.push({ from: line, to: line + hunk.base.length - 1, kind: "base" });
+    line += hunk.base.length;
+  }
+  ranges.push({ from: line, to: line, kind: "marker" });
+  line += 1;
+  if (hunk.theirs.length) ranges.push({ from: line, to: line + hunk.theirs.length - 1, kind: "theirs" });
+  ranges.push({ from: hunk.endLine, to: hunk.endLine, kind: "marker" });
+  return ranges;
+}
+
 /** The hunk rows, re-read from the text as it stands: after every acceptance and every edit. */
 function exConflictPaint() {
   if (!exConflict) return;
   const text = exEditorPreview.getText();
   const hunks = explorerCore.conflictHunks(text);
+  exEditorPreview.setHighlights(hunks.flatMap(exConflictRanges));
   exConflictHunksEl.replaceChildren(
     ...hunks.map((hunk) => {
       const row = el("div", "ex-conflict-hunk");
-      const label = el("span", "hk");
+      const label = el("button", "hk hk-jump");
+      label.type = "button";
       label.textContent = `hunk ${hunk.index + 1}`;
+      label.title = "jump to this block";
+      label.addEventListener("click", () => {
+        exEditorPreview.revealRange(hunk.startLine, hunk.endLine);
+        exEditorPreview.focus();
+      });
       row.append(label);
       for (const [choice, word] of [["current", "accept current"], ["incoming", "accept incoming"], ["both", "accept both"]]) {
         const button = el("button");
