@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Make the terminal drawer resizable like the left drawers, by dragging its top edge: the height follows the cursor between a floor and a ceiling, is remembered across reloads, and the shell refits as it grows. [t-81baed9a]
+
 - fix: Give the terminal drawer a shell on a machine whose util-linux has no `script`, by falling back to `socat`, and keep the drawer on screen with the reason when no pty helper exists at all, instead of rolling down over the message before it can be read. [t-caadf71a]
 - fix: Emptying the board now sweeps the trees its threads worked in, so spent worktrees leave with the board instead of lingering on disk with no thread left to retire them; trees holding unmerged work stay for leftovers to name. The same sweep runs when the put-away cap drops a child. [t-e855512f]
 - fix: Make the branch you are on stand out in the git graph, drawn in bold on a wash of its own lane colour, so finding your own branch no longer means reading every pill in the row. [t-5cc9963c]
