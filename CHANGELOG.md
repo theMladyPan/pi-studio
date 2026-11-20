@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - fix: Show a shell's standard error in the terminal drawer when the shell runs through `socat`, by sending the subprocess's error output to the pty; without that, errors went to a helper pipe the daemon drained away and never reached the drawer. [t-caadf71a]
+- fix: Drop the five design drafts of the home screen and its settings page, now that the chosen shelf layout lives in the app; nothing served or shipped them, and they stay readable in the history. [t-77d05e0c]
 
 ## [0.6.0] - 2026-11-20
 
