@@ -56,6 +56,46 @@ test("a turn comes back as the file says, and a steer the daemon stopped keeps i
 	assert.equal(old.turns[0].status, "stopped");
 });
 
+test("a steer kept on its run's turn survives a save, and an older board's steer turn folds onto the turn it joined", () => {
+	// A steer that joined a live run is kept on the turn that run answered, ahead of its reply, so a
+	// save and a reload keep it there.
+	const turn = {
+		text: "the first words",
+		status: "answered",
+		mode: "queue",
+		at: now,
+		reply: "the stub answered",
+		steers: [{ text: "and this instead", at: now + 1, images: [{ thumb: "data:image/png;base64,AA==", mimeType: "image/png" }] }],
+	};
+	const restored = restoredThread({ id: "t12", title: "x", at: now, turns: [savedTurn(turn)] }, "/tmp/folder")!;
+	assert.equal(restored.turns.length, 1);
+	assert.equal(restored.turns[0].steers?.[0]?.text, "and this instead");
+	assert.deepEqual(restored.turns[0].steers?.[0]?.images, [{ thumb: "data:image/png;base64,AA==", mimeType: "image/png" }]);
+	assert.equal(restored.turns[0].reply, "the stub answered");
+
+	// A board written before that kept each steer as a turn of its own after the turn it joined, so
+	// it was drawn below the reply it helped shape. Reading it folds it back onto that turn.
+	const legacy = restoredThread(
+		{
+			id: "t13",
+			title: "x",
+			at: now,
+			turns: [
+				{ text: "the first words", status: "answered", mode: "queue", at: now, reply: "the stub answered" },
+				{ text: "and this instead", status: "sent", mode: "steer", at: now + 1 },
+				{ text: "and this too", status: "sent", mode: "steer", at: now + 2 },
+			],
+		},
+		"/tmp/folder",
+	)!;
+	assert.equal(legacy.turns.length, 1, "the legacy steer turns were left after the answer");
+	assert.deepEqual(
+		legacy.turns[0].steers?.map((steer: any) => steer.text),
+		["and this instead", "and this too"],
+	);
+	assert.equal(legacy.turns[0].reply, "the stub answered");
+});
+
 test("a boss comes back as a boss, with the flow it was running", () => {
 	// The mode is what stops a boss doing the work itself, so a restart that dropped it would hand a
 	// boss the write tool and a task it was told to delegate.

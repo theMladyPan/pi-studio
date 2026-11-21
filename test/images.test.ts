@@ -184,6 +184,24 @@ test("a steer carries its pictures to the child, and one waiting behind a run ke
 	assert.equal(sent.type, "steer");
 	assert.deepEqual(sent.images, [{ type: "image", data: PIXEL, mimeType: "image/png" }]);
 
+	// A steer into a run that names its turn is kept on that turn, thumbnails only, ahead of its
+	// reply — not appended as a turn after the answer it shaped.
+	const answering = {
+		...idleThread(),
+		id: "4444dddd",
+		status: "running",
+		answering: { turn: 0 },
+		turns: [{ text: "the first words", status: "sent", mode: "queue", at: 1, streaming: true }],
+	};
+	const joined = boardWith(answering);
+	const steered = request({ cardId: answering.id, text: "this instead", mode: "steer", images: [png()] });
+	await onMessage(steered.req, steered.res, joined.board);
+	assert.equal(steered.res.status, 200, steered.res.body);
+	assert.equal(answering.turns.length, 1, "the steer was appended as a turn after the run's turn");
+	assert.equal(answering.turns[0].steers?.[0]?.text, "this instead");
+	assert.deepEqual(answering.turns[0].steers[0].images, [{ thumb: `data:image/png;base64,${PIXEL}`, mimeType: "image/png" }]);
+	assert.equal(JSON.parse(joined.written[0]).type, "steer");
+
 	// The same message behind a run that is already answering waits with its pictures, because nothing has
 	// read them yet: the queue is what the next prompt is built from.
 	const queued = { ...idleThread(), id: "3333cccc", status: "running" };

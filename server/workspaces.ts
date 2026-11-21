@@ -25,6 +25,7 @@ import { spawnSync } from "node:child_process";
  * @property {"queue"|"steer"} mode
  * @property {number} at
  * @property {string} [reply] the answer: the last message of the run, and nothing else
+ * @property {{text: string, at: number, images?: {thumb: string, mimeType?: string}[]}[]} [steers] words steered into the run this turn answers, in the order they arrived, drawn ahead of its reply
  * @property {string[]} [interim] what the run said before it called a tool, one paragraph a message
  */
 

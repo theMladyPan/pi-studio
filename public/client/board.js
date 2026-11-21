@@ -2832,6 +2832,24 @@ function shotRow(images) {
   return row;
 }
 
+/**
+ * Words steered into a run while it was going, drawn on the turn the run answers — between what it
+ * said on the way and its answer, because that is where they were read: ahead of the reply they
+ * helped shape, never below it as a follow-up nobody answered.
+ */
+function steerNode(steer) {
+  const wrap = el("div", "turn-steer");
+  const label = el("span", "turn-steer-label");
+  label.textContent = "steered into the run";
+  wrap.appendChild(label);
+  const words = el("div", "turn-steer-q");
+  words.textContent = steer.text || "";
+  wrap.appendChild(words);
+  const shots = shotRow(steer.images);
+  if (shots) wrap.appendChild(shots);
+  return wrap;
+}
+
 /** One follow-up exchange: your question, what happened to it, then the answer. */
 function turnNode(entry, turn, index) {
   const wrap = el("div", `turn ${turn.status || "queued"}`);
@@ -2858,6 +2876,8 @@ function turnNode(entry, turn, index) {
   // What the run said on the way, above the answer: one block each, ruled apart, muted. It draws
   // nothing at all on a run that answered in one message.
   wrap.appendChild(el("div", "turn-interim"));
+  // What was steered into the run, in the order it arrived, ahead of the answer it shaped.
+  for (const steer of Array.isArray(turn.steers) ? turn.steers : []) wrap.appendChild(steerNode(steer));
   // Always there, even before the answer has a word: an empty one draws nothing, and having it
   // from the start means a growing answer is one element to fill, not a node to add.
   wrap.appendChild(el("div", "turn-a note-body"));
@@ -3023,6 +3043,7 @@ function turnShape(turn) {
     // The pictures arrive from a fresh parse of every broadcast, so the array is a new one each time and
     // only its value says whether the turn changed.
     JSON.stringify(turn.images ?? null),
+    JSON.stringify(turn.steers ?? null),
     turn.error,
     notes.length,
     notes.join("\u0000"),

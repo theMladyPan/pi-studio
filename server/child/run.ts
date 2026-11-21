@@ -164,7 +164,7 @@ export function prompt(board, thread, text, target = null, images = [], said = t
 	}
 	const message = wireText(thread, text);
 	// The turn this run answers, named here and not at the moment it is sent: a steer that joins the run
-	// is the newest turn, and a message sent again after a provider error has to land back on the words
+	// is kept on this turn, and a message sent again after a provider error has to land back on the words
 	// that are being repeated.
 	const answers = target ?? (thread.turns.length ? { turn: thread.turns.length - 1 } : null);
 	// The pictures ride beside the words, as pi's RPC takes them: the base64 and the type it is.
@@ -304,7 +304,7 @@ export function beginRun(board, thread, target = null) {
 	// asked for it. That is a card's turn when a hidden child answers for a card, and one of the
 	// thread's own turns otherwise — by index, because a queue can hold more than one message.
 	// A caller that names no target means the turn it has just made, and it is pinned by index here: a
-	// steer that joins the run while it is live is the newest turn, and a run that followed the newest
+	// steer that joins the run while it is live is kept on this turn, and a run that followed the newest
 	// would write its answer into the steer and leave the task's own turn with nothing.
 	thread.answering = target ?? (thread.turns.length ? { turn: thread.turns.length - 1 } : null);
 	const { turn, card: held } = liveTurn(board, thread);

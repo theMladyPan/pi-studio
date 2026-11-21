@@ -2072,7 +2072,7 @@ describe("routes", { concurrency: 8 }, () => {
 		}
 	});
 
-	test("a run that read a steer keeps the steer's own words, and the answer stays on the run's turn", async () => {
+	test("a run that read a steer keeps the steer's words on its own turn, ahead of the answer", async () => {
 		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-steer-spent-"));
 		const folder = mkdtempSync(join(tmpdir(), "pi-studio-steer-spent-work-"));
 		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
@@ -2099,9 +2099,12 @@ describe("routes", { concurrency: 8 }, () => {
 			const card = await seen.until(threadId, (shown) => shown.status === "answered");
 			assert.equal(card.turns[0].status, "answered", "the run's own turn kept no answer");
 			assert.equal(card.turns[0].reply, "the stub answered");
-			assert.equal(card.turns[at].status, "sent", "the steer the run read was relabelled as stopped");
-			assert.equal(card.turns[at].mode, "steer");
-			assert.equal(card.turns[at].reply, undefined, "the steer took the run's answer");
+			// The steer joined this run, so its words live on the turn the run answered, ahead of the
+			// reply — as a turn of its own after that reply it would read as an unanswered follow-up.
+			assert.equal(at, 0, "the steer was given a turn of its own after the run's turn");
+			assert.equal(card.turns.length, 1, "the steer was appended after the answer it shaped");
+			assert.equal(card.turns[0].steers?.length, 1, "the steer's words were not kept");
+			assert.equal(card.turns[0].steers[0].text, "and this instead");
 		} finally {
 			tab?.stop();
 			daemon.child.kill();
@@ -2170,11 +2173,13 @@ describe("routes", { concurrency: 8 }, () => {
 			const report = JSON.parse(answered.body);
 			assert.equal(report.status, "done", `a run that answered was reported as ${report.status}`);
 			assert.equal(report.output, "the stub answered", "the report took the steer's words instead of the answer");
-			// Where the words landed is the other half of the report being right: the steer took nothing.
+			// Where the words landed is the other half of the report being right: the steer is kept on
+			// the turn the run answered, ahead of its reply, and took nothing of its own.
 			const child = await threadState(daemon, board.id, childId);
 			assert.equal(child.turns[0].status, "answered");
 			assert.equal(child.turns[0].reply, "the stub answered", "the steer took the run's answer");
-			assert.equal(child.turns[1].status, "sent");
+			assert.equal(child.turns.length, 1, "the steer was appended after the answer it shaped");
+			assert.equal(child.turns[0].steers?.[0]?.text, "and this instead");
 
 			// A child that said nothing has no answering turn to report, so it is a run that stopped.
 			writeFileSync(join(flags, "cut"), "1");
