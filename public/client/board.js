@@ -14289,10 +14289,10 @@ function applyMeta(meta) {
   terminalDrawer.setName(meta.workspace?.name);
   const sess = document.getElementById("sess");
   sess.innerHTML = "";
-  sess.append("board of ");
   const name = document.createElement("b");
   name.textContent = folder;
   sess.append(name);
+  sess.append(" board");
   // A second daemon answering here says so in the header: the tab title is not always on screen.
   if (meta.instance) {
     const which = document.createElement("span");
