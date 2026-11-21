@@ -4,7 +4,7 @@
  */
 import { answer, fail, readJson } from "../../http.ts";
 import { cardIndex } from "./index.ts";
-import { cardPreamble, field, refusal } from "./thread.ts";
+import { cardPreamble, field, refusal, threadPreamble } from "./thread.ts";
 import { randomUUID } from "node:crypto";
 import { runtimeDefaults } from "../../workspaces.ts";
 import { card, update, updateCard } from "../../bus.ts";
@@ -94,10 +94,11 @@ export async function messageOnBoard(board, body) {
 	const mode = body.mode === "steer" ? "steer" : "queue";
 	const asked = typeof body.cardId === "string" ? body.cardId : "";
 	const fork = body.fork === true;
-	// The cards a message names beside the one it answers. Each is quoted into the prompt below, so one
-	// message can put several artifacts in front of the agent at once: a note it wrote, a source it read,
-	// and the question it is answering. A thread card is not a card of this map — it is the thread that
-	// reads the message — so naming one simply adds nothing.
+	// What a message names beside the one it answers. Each is quoted into the prompt below, so one message
+	// can put several things in front of the agent at once: a note it wrote, a source it read, a question
+	// it is answering, and a thread whose last turns matter. A thread that already answered on this card
+	// holds its conversation in its own session, so it only needs the card; a named thread is quoted last
+	// turns and all, bounded, so a message can point at it.
 	const named = [
 		...(new Set(Array.isArray(body.refs) ? body.refs.filter((id) => typeof id === "string" && id) : [])),
 	]
@@ -125,9 +126,13 @@ export async function messageOnBoard(board, body) {
 	// What the message names, in the order the human named it: the agent reads the same words the board
 	// shows, and the card it is asked about comes first.
 	const naming = named
-		.map((id) => board.cards.get(id))
+		.map((id) => {
+			const held = board.cards.get(id);
+			if (held) return cardPreamble(held, false);
+			const heldThread = board.threads.get(id);
+			return heldThread ? threadPreamble(heldThread) : "";
+		})
 		.filter(Boolean)
-		.map((held) => cardPreamble(held, false))
 		.join("");
 	if (!thread) {
 		// Two shapes, and only one of them is drawn. A card nobody answers for gets a hidden child: the
@@ -230,7 +235,7 @@ export async function messageOnBoard(board, body) {
 		// The card quote is kept beside the words the human typed, so a message still waiting can be
 		// rewritten without losing what the child needs to know about the card it is about.
 		// The pictures wait with the words: a run that has not read them yet is not told about them twice.
-		thread.queued.push({ message, text: said, preamble, skills: chipped.sections, target, ...(images.length ? { images } : {}) });
+		thread.queued.push({ message, text: said, preamble, naming, skills: chipped.sections, target, ...(images.length ? { images } : {}) });
 	} else {
 		prompt(board, thread, message, target, images, said);
 	}
@@ -293,9 +298,10 @@ export async function onMessageEdit(req, res, board) {
 	if (!thread) return void fail(res, 409, "no such thread");
 	if (!entry) return void fail(res, 409, "that message is not waiting: the child has it");
 	entry.text = text.slice(0, 4000);
-	// Only the human's own words change: the card quote the message was queued with stays as it was. The
-	// board section is built again, so a message rewritten after a card was added still names that card.
-	entry.message = boardSections(board, entry.preamble ?? "", "", entry.text, entry.skills ?? "");
+	// Only the human's own words change: the card and thread quotes the message was queued with stay as
+	// they were. The board section is built again, so the message keeps what it named until the child
+	// reads it.
+	entry.message = boardSections(board, entry.preamble ?? "", entry.naming ?? "", entry.text, entry.skills ?? "");
 	const turn = queuedTurn(board, thread, target);
 	if (turn) turn.text = entry.text;
 	showQueue(board, thread, target);

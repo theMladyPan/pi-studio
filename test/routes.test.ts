@@ -2481,12 +2481,13 @@ describe("routes", { concurrency: 8 }, () => {
 			const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
 			const first = JSON.parse((await postTo(daemon, board.id, "/card/note", { markdown: "the first artifact", key: "named-first", threadRoot: threadId })).body);
 			const second = JSON.parse((await postTo(daemon, board.id, "/card/note", { markdown: "the second artifact", key: "named-second", threadRoot: threadId })).body);
+			const otherThreadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
 
-			// The field lives in the thread's own card, and the cards it names travel beside it: that is the
+			// The field lives in the thread's own card, and the things it names travel beside it: that is the
 			// shape a message typed about several artifacts arrives in.
 			const asked = await postTo(daemon, board.id, "/message", {
 				cardId: threadId,
-				refs: [first.cardId, second.cardId, "no-such-card"],
+				refs: [first.cardId, second.cardId, otherThreadId, "no-such-card"],
 				text: "compare these two",
 			});
 			assert.equal(asked.status, 200, asked.body);
@@ -2495,6 +2496,7 @@ describe("routes", { concurrency: 8 }, () => {
 			const prompt = framesOf(stub).filter((frame: any) => frame.type === "prompt")[0].message;
 			assert.match(prompt, /The card says: the first artifact/, "the first card the message named was not quoted");
 			assert.match(prompt, /The card says: the second artifact/, "the second card the message named was not quoted");
+			assert.match(prompt, /board reply · thread/, "the thread the message named was not quoted");
 			assert.match(prompt, /compare these two/, "the words the human typed did not reach the child");
 			// A card that is not on the board is passed over rather than refusing the message.
 			assert.doesNotMatch(prompt, /no-such-card/, "an unknown reference reached the child");
