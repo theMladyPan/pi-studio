@@ -3969,19 +3969,38 @@ function startCardDrag(card, event) {
       void saveLayout(spot.entry.id, rect);
     }
   };
+  // A press the browser cancels — a gesture, a touch scroll — must take the drag back: the cards where
+  // they were and the mark off the field, so nothing is left waiting for a release that never comes.
+  const cancel = () => {
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", up);
+    removeEventListener("pointercancel", cancel);
+    over?.root.classList.remove("dropping");
+    over = null;
+    for (const spot of from) {
+      spot.card.classList.remove("dragging");
+      spot.card.style.left = `${spot.x}px`;
+      spot.card.style.top = `${spot.y}px`;
+    }
+    scheduleMap();
+    scheduleArrows();
+  };
   addEventListener("pointermove", move);
   addEventListener("pointerup", up);
+  addEventListener("pointercancel", cancel);
 }
 
 /**
  * The message field under a point, if a dragged card has just been let go over one. The dragged cards
- * follow the pointer, so the field is the first thing under it that none of them covers.
+ * follow the pointer, so the field is the first thing under it that none of them covers: the first hit
+ * that is not a dragged card decides, and anything behind it — another card, the canvas — means there is
+ * no drop here.
  */
 function composerUnder(x, y) {
   for (const hit of document.elementsFromPoint(x, y)) {
     if (hit.closest(".card.dragging")) continue;
     const root = hit.closest(".composer");
-    if (root) return composers.get(root.dataset.composer ?? "") ?? null;
+    return root ? composers.get(root.dataset.composer ?? "") ?? null : null;
   }
   return null;
 }
@@ -5084,18 +5103,26 @@ function refreshXrefs() {
     // and a markdown note's links are in the body. A link may be in either.
     for (const link of record.card.querySelectorAll(".xref")) {
       const key = String(link.dataset.key ?? "");
-      const known = keys.has(key.toLowerCase());
-      // A link that names its board is answered there, and this board cannot say whether the card is
-      // still on it, so it is neither marked dead nor promised.
-      const other = known ? null : otherBoardKey(key);
-      link.classList.toggle("stale", !known && !other);
-      link.title = known
-        ? `jump to ${key}`
-        : other
-          ? `open ${other.key} on the board of ${other.board}`
-          : `${key} is not on this board: that card was closed or never written`;
+      paintXref(link, key, keys.has(key.toLowerCase()));
     }
   }
+}
+
+/**
+ * Draw one link's standing against the workspaces that are known. A key carrying a `/` is a link to
+ * another board only when some board answers to the part before the slash, so a link to a card of this
+ * board — or to one that has gone — still reads dead. A link to another board is answered there, and
+ * this board cannot say whether the card is still on it, so it is neither marked dead nor promised.
+ */
+function paintXref(link, key, known) {
+  const other = known ? null : otherBoardKey(key);
+  const aboard = Boolean(other && namedWorkspaces.has(other.board.toLowerCase()));
+  link.classList.toggle("stale", !known && !aboard);
+  link.title = known
+    ? `jump to ${key}`
+    : aboard
+      ? `open ${other.key} on the board of ${other.board}`
+      : `${key} is not on this board: that card was closed or never written`;
 }
 
 /**
@@ -5112,11 +5139,29 @@ function otherBoardKey(key) {
 
 /** The workspaces the daemon knows, read once: a board page is not the crossroads, so it has no list. */
 let knownWorkspaces = null;
+/** What a workspace may be named by: its id, its name, its folder, all lowercased. */
+let namedWorkspaces = new Set();
 function loadWorkspaces() {
   knownWorkspaces ??= fetch("/workspaces", { cache: "no-store" })
     .then((response) => (response.ok ? response.json() : null))
-    .then((payload) => (Array.isArray(payload?.workspaces) ? payload.workspaces : []))
-    .catch(() => []);
+    .then((payload) => {
+      const list = Array.isArray(payload?.workspaces) ? payload.workspaces : [];
+      namedWorkspaces = new Set(
+        list.flatMap((one) =>
+          [one.id, one.name, one.folder].map((value) => String(value ?? "").toLowerCase()).filter(Boolean),
+        ),
+      );
+      // Links were drawn before the workspaces were known, and one naming a board read dead until now.
+      refreshXrefs();
+      return list;
+    })
+    // A refused read is not a list: the next click asks again, so one refused read takes no later ones.
+    .catch(() => {
+      knownWorkspaces = null;
+      throw new Error("the workspaces could not be read");
+    });
+  // A refused read leaves nobody waiting on it, and the click that asked for it has already gone.
+  knownWorkspaces.catch(() => {});
   return knownWorkspaces;
 }
 async function workspaceNamed(name) {
@@ -5140,7 +5185,11 @@ async function jumpToOtherBoard(board, key) {
     return true;
   }
   // A link may name the board the reader is already on, and then the card is simply here.
-  if (found.id === workspace && jumpToKeyLocal(key)) return true;
+  if (found.id === workspace) {
+    if (jumpToKeyLocal(key)) return true;
+    footNote(`“${key}” is not on this board`, true);
+    return true;
+  }
   const url = `/w/${found.id}?jump=${encodeURIComponent(key)}`;
   // A tab the browser refused leaves the reader where they were, so the board is gone to in this one.
   if (!window.open(url, "_blank", "noopener")) location.assign(url);
