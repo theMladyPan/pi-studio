@@ -106,6 +106,12 @@
         aria-label="Filter workspaces or enter a folder path to open"
       />
       <span id="omniModeBadge" class="omni-mode" hidden>open path ↵</span>
+      <select id="sortSelect" class="omni-sort" aria-label="Sort workspaces" title="Sort the list">
+        <option value="recent">recent first</option>
+        <option value="oldest">oldest first</option>
+        <option value="name-asc">name A→Z</option>
+        <option value="name-desc">name Z→A</option>
+      </select>
       <button type="button" class="omni-browse" id="browseBtn" title="Pick a folder with the machine's own dialog (POST /pick-folder)">
         browse…
       </button>

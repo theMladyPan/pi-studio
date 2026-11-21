@@ -322,3 +322,21 @@ test("plugins are handled on the crossroads settings page, and the board setting
 	assert.ok(toolbar.includes('"rescan"'), "the rescan button lives in the toolbar above the plugin rows");
 	assert.ok(welcomeJs.includes("const rendered = [pluginToolbar()];"), "the toolbar is drawn before the read is checked, so rescan survives an unreadable list");
 });
+
+/**
+ * The shelf sorts its rows in the browser: the daemon always answers newest first, and the order
+ * the human picks — by name or by last touch — is a view choice kept in this browser, not a
+ * rewrite of the saved list.
+ */
+test("the shelf offers sorting by name and by last access, kept in the browser", () => {
+	const welcome = readFileSync(new URL("../public/welcome.html", import.meta.url), "utf8");
+	assert.ok(welcome.includes('id="sortSelect"'), "the omnibar holds the sort control");
+	for (const mode of ["recent", "oldest", "name-asc", "name-desc"]) {
+		assert.ok(welcome.includes(`value="${mode}"`), `the sort control offers ${mode}`);
+	}
+	const welcomeJs = readFileSync(new URL("../public/welcome.js", import.meta.url), "utf8");
+	assert.ok(welcomeJs.includes("function sortedWorkspaces()"), "the rows are ordered by one function");
+	assert.ok(welcomeJs.includes("sortedWorkspaces().map(rowFor)"), "the list renders in the chosen order");
+	assert.ok(welcomeJs.includes("lastActivity?.at ?? workspace.openedAt"), "last access reads the row's own age");
+	assert.ok(welcomeJs.includes("localStorage.setItem(SORT_KEY"), "the chosen order is kept between visits");
+});

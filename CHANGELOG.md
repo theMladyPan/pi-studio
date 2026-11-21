@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- feat: Sort the crossroads workspaces with a dropdown in the omnibar — recent first, oldest first, name A→Z or name Z→A — so the list can be scanned by name or by last touch instead of only newest first; the choice is kept in the browser and scratch stays at the top. [t-8df44528]
 - feat: Remove a workspace from the crossroads list with a two-press `remove` button on its row, so a folder that is gone from disk — or one you simply no longer want listed — can be forgotten without hand-editing the state file; the folder and its board files stay on disk, the scratch row cannot be removed, and a board with a thread still running is refused until it settles. [t-8df44528]
 - refactor: Fold the git and terminal drawers onto one shared sliding drawer and their bars, grips and slides onto one set of drawer furniture, with no change to look or motion; the strips across the board carry the same sheet shadow the sheets already did. [t-c892c0ac]
 

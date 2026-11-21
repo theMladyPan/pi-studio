@@ -11,6 +11,8 @@
 
   /** Where the human left the settings tree, one entry per dotted group path. */
   const COLLAPSE_KEY = "pi-studio.settings.collapsed.v1";
+  /** How the shelf orders its rows: recent, oldest, name-asc or name-desc. */
+  const SORT_KEY = "pi-studio.welcome.sort.v1";
   /** Unsaved prompt text, one entry per field id: the page is reloaded far more often than it is closed. */
   const DRAFTS_KEY = "pi-studio.welcome.drafts.v1";
   /** How long a keystroke's draft waits before the store is written; a human types next faster than this. */
@@ -28,6 +30,7 @@
     omni: document.getElementById("omniInput"),
     modeBadge: document.getElementById("omniModeBadge"),
     browse: document.getElementById("browseBtn"),
+    sort: document.getElementById("sortSelect"),
     pathRow: document.getElementById("pathActionRow"),
     pathLabel: document.getElementById("pathActionLabel"),
     pathText: document.getElementById("pathActionText"),
@@ -189,6 +192,38 @@
   /** @type {any[]} */
   let workspaces = [];
   let selectedId = null;
+  /** How the shelf orders its rows, kept between visits like the settings tree. */
+  const SORT_MODES = ["recent", "oldest", "name-asc", "name-desc"];
+  let sortMode = (() => {
+    try {
+      const saved = localStorage.getItem(SORT_KEY);
+      return SORT_MODES.includes(saved) ? saved : "recent";
+    } catch {
+      return "recent";
+    }
+  })();
+
+  /** When a row was last touched: its last activity, else when its folder was opened — the row's own age. */
+  function lastTouched(workspace) {
+    return workspace.lastActivity?.at ?? workspace.openedAt ?? 0;
+  }
+
+  /**
+   * The rows in the chosen order. Scratch stays first in every order: it is the throwaway row, not
+   * one of the projects being sorted. Name ties break by folder, so the order is stable.
+   */
+  function sortedWorkspaces() {
+    const scratch = workspaces.filter((workspace) => workspace.scratch);
+    const rest = workspaces.filter((workspace) => !workspace.scratch);
+    if (sortMode === "name-asc" || sortMode === "name-desc") {
+      const direction = sortMode === "name-asc" ? 1 : -1;
+      rest.sort((a, b) => direction * a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.folder.localeCompare(b.folder));
+    } else {
+      const direction = sortMode === "recent" ? -1 : 1;
+      rest.sort((a, b) => direction * (lastTouched(a) - lastTouched(b)) || a.folder.localeCompare(b.folder));
+    }
+    return [...scratch, ...rest];
+  }
   /** The daemon's own words for the last refusal, shown on the path line until the next keystroke. */
   let pathError = "";
   /** Set when the workspace list could not be read: the empty shelf says so rather than lying. */
@@ -530,7 +565,7 @@
     const focused = document.activeElement?.dataset?.id && (document.activeElement.classList.contains("ws-empty") || document.activeElement.classList.contains("ws-remove")) ? document.activeElement.dataset.id : "";
     workspaces = Array.isArray(list) ? list : [];
     listError = "";
-    nodes.list.replaceChildren(...workspaces.map(rowFor));
+    nodes.list.replaceChildren(...sortedWorkspaces().map(rowFor));
     if (focused) nodes.list.querySelector(`.ws-empty[data-id="${focused}"], .ws-remove[data-id="${focused}"]`)?.focus();
     paintBrand();
     applyFilter();
@@ -1812,6 +1847,18 @@
   nodes.door.addEventListener("click", () => showView("settings"));
   nodes.back.addEventListener("click", () => showView("shelf"));
   nodes.browse.addEventListener("click", () => void browse());
+  nodes.sort.value = sortMode;
+  nodes.sort.addEventListener("change", () => {
+    if (!SORT_MODES.includes(nodes.sort.value)) return;
+    sortMode = nodes.sort.value;
+    try {
+      localStorage.setItem(SORT_KEY, sortMode);
+    } catch {
+      // A browser that refuses storage still sorts for this visit.
+    }
+    // Rebuild the rows in the new order; the filter and selection ride along.
+    adopt(workspaces);
+  });
   nodes.omni.addEventListener("input", () => {
     // Typing clears the last refusal: the human is already answering it.
     pathError = "";
@@ -1853,6 +1900,8 @@
     if (view !== "shelf") return;
 
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      // The sort dropdown owns its arrows: they change the order, not the selection.
+      if (document.activeElement === nodes.sort) return;
       const visible = [...nodes.list.children].filter((row) => !row.hidden);
       if (!visible.length) return;
       event.preventDefault();
@@ -1869,7 +1918,7 @@
     if (event.key === "Enter") {
       const active = document.activeElement;
       // Buttons own their own Enter: browse… must not also open a board.
-      if (active === nodes.browse) return;
+      if (active === nodes.browse || active === nodes.sort) return;
       if (active === nodes.omni || active === document.body || active?.classList.contains("ws-row")) {
         event.preventDefault();
         actOnEnter();

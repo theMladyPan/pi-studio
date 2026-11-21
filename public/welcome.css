@@ -1018,6 +1018,27 @@ body[data-view="settings"] #settingsView {
   flex: none;
 }
 
+.omni-sort {
+  background: var(--raised);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  padding: 4px 6px;
+  font: 11.5px/1.2 var(--mono);
+  color: var(--dim);
+  cursor: pointer;
+  flex: none;
+}
+
+.omni-sort:hover {
+  color: var(--text);
+  border-color: #3a424e;
+}
+
+.omni-sort:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .omni-browse:hover {
   border-color: #3a424e;
   color: var(--text);
