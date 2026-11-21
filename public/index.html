@@ -600,15 +600,32 @@
      the rail-head and the close button, and the panel's own page fills the rest. */
   .drawer.plugin-pane { background: #0d1117; }
   .drawer.plugin-pane iframe.drawer-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #0d1117; }
-  /* The same pane on the other edges: one fixed strip per edge, so `display:flex` needs its own
-     `[hidden]` rule the way the rail's head does. One pane per strip is up at a time. */
+  /* The same pane on the other edges: one fixed strip per edge, always in the document and rolled by
+     `transform` and `visibility` the terminal drawer's way, so a strip slides like a drawer and its pane
+     keeps its size and its page while it is shut. The open class is `dock-on`, written by the paint that
+     rolls the strip up and down. One pane per strip is up at a time. */
   #drawersRight, #pluginDockTop, #pluginDockBottom {
     position: fixed; z-index: 1500; display: flex; flex-direction: column;
-    background: #0a0f16; font: 12px var(--mono); overflow: hidden; }
-  #drawersRight[hidden], #pluginDockTop[hidden], #pluginDockBottom[hidden] { display: none; }
-  #drawersRight { top: 44px; right: 0; bottom: 0; width: var(--rail); border-left: 1px solid var(--border); }
-  #pluginDockTop { top: 44px; left: 0; right: 0; height: var(--term); border-bottom: 1px solid var(--border-bright); }
-  #pluginDockBottom { left: 0; right: 0; bottom: 0; height: var(--term); border-top: 1px solid var(--border-bright); }
+    background: #0a0f16; font: 12px var(--mono); overflow: hidden;
+    visibility: hidden;
+    transition: transform 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms; }
+  #drawersRight.dock-on, #pluginDockTop.dock-on, #pluginDockBottom.dock-on {
+    transform: none; visibility: visible;
+    transition: transform 170ms cubic-bezier(.2,.9,.25,1); }
+  #drawersRight { top: 44px; right: 0; bottom: 0; width: var(--rail); border-left: 1px solid var(--border);
+    transform: translateX(100%); }
+  #pluginDockTop { top: 44px; left: 0; right: 0; height: var(--term); border-bottom: 1px solid var(--border-bright);
+    transform: translateY(-100%); }
+  #pluginDockBottom { left: 0; right: 0; bottom: 0; height: var(--term); border-top: 1px solid var(--border-bright);
+    transform: translateY(100%); }
+  /* The rail grip, on its side, for the strips that stand across the board: six invisible pixels on the
+     open edge that turn into a line under the cursor, the terminal drawer's grip for these. */
+  .dock-grip { position: absolute; left: 0; right: 0; height: 6px; z-index: 2;
+    cursor: row-resize; background: transparent; }
+  .dock-grip:hover, body.dock-resizing .dock-grip { background: var(--accent-dim); }
+  body.dock-resizing { cursor: row-resize; user-select: none; }
+  #pluginDockBottom .dock-grip { top: -3px; }
+  #pluginDockTop .dock-grip { bottom: -3px; }
   #drawersRight > .drawer, #pluginDockTop > .drawer, #pluginDockBottom > .drawer {
     display: none; flex: 1; min-height: 0; flex-direction: column; }
   #drawersRight > .drawer.on, #pluginDockTop > .drawer.on, #pluginDockBottom > .drawer.on { display: flex; }
@@ -1589,7 +1606,7 @@
   @media (prefers-reduced-motion: reduce) {
     .card.fresh, .card.flash, header .live.working b, .act.running .dot, .composer .ctx-btn.hot::after { animation: none; }
     /* A roll down with no motion: the class still decides what is visible, it just arrives at once. */
-    #gitDrawer, #gitScrim, #drawers { transition: none; }
+    #gitDrawer, #gitScrim, #drawers, #drawersRight, #pluginDockTop, #pluginDockBottom { transition: none; }
   }
 </style>
 </head>
@@ -1743,9 +1760,9 @@
      sits in one of these, with its own pane per plugin, made on its first open and kept, the way the left
      drawers' plugin panes are. The width follows the rail's and the height is the terminal drawer's, so
      the furniture the human already sized sizes these too. Board.js fills and shows them. -->
-<div id="drawersRight" hidden></div>
-<div id="pluginDockTop" hidden></div>
-<div id="pluginDockBottom" hidden></div>
+<div id="drawersRight"></div>
+<div id="pluginDockTop"><div class="dock-grip" id="dockGripTop" aria-hidden="true"></div></div>
+<div id="pluginDockBottom"><div class="dock-grip" id="dockGripBottom" aria-hidden="true"></div></div>
 
 <!-- Where the field of a board with a single session behind it lives. A board of threads has none:
      every thread card carries its own field, built from the template below. -->
