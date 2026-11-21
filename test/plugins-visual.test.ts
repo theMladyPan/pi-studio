@@ -160,7 +160,7 @@ test("a row's position pick wins over the manifest, and only sits on a drawer pa
 	const picked = fileWith({ name: "picked", installed: "picked", args: [], position: "bottom" });
 	assert.deepEqual(picked.problems, []);
 	assert.equal(picked.plugins[0].position, "bottom");
-	assert.equal(picked.plugins[0].visual?.position, "bottom", "the pick wins over the manifest's any");
+	assert.equal(picked.plugins[0].visual?.position, "any", "the pick rides beside the manifest's ask, not inside it");
 	const asAsked = fileWith({ name: "picked", installed: "picked", args: [] });
 	assert.equal(asAsked.plugins[0].visual?.position, "any", "no pick keeps the manifest's any");
 	assert.equal("position" in asAsked.plugins[0], false);
@@ -520,6 +520,38 @@ test("a panel that asks for the drawer is listed with its place", async () => {
 		assert.deepEqual(JSON.parse(listed.body), {
 			plugins: [{ name: "example-drawer", title: "example panel", url: "/plugins/visual/example-drawer/panel.html", place: "drawer" }],
 		});
+	} finally {
+		daemon.child.kill("SIGTERM");
+		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);
+	}
+});
+
+test("a saved pick beats the manifest's any on the board's list, and settings still reads the ask", async () => {
+	const path = join(state, "plugins", "anyone");
+	mkdirSync(path, { recursive: true });
+	writeFileSync(join(path, "anyone"), readFileSync(join(example, "panel-plugin.mjs")));
+	chmodSync(join(path, "anyone"), 0o755);
+	writeFileSync(join(path, "plugin.json"), JSON.stringify({
+		name: "anyone",
+		version: "1.2.3",
+		protocol: 1,
+		title: "any one",
+		visual: { entry: "panel.html", files: ["panel.html", "panel.js", "panel.css"], place: "drawer", position: "any" },
+	}));
+	for (const file of ["panel.html", "panel.js", "panel.css"]) {
+		writeFileSync(join(path, file), readFileSync(join(example, file)));
+	}
+	const daemon = await boot([{ name: "anyone", installed: "anyone", args: [], position: "top" }]);
+	const gone = new Promise<void>((resolve) => daemon.child.once("exit", () => resolve()));
+	try {
+		const listed = await listedPanels(daemon);
+		assert.equal(listed.status, 200);
+		assert.deepEqual(JSON.parse(listed.body), {
+			plugins: [{ name: "anyone", title: "any one", url: "/plugins/visual/anyone/panel.html", place: "drawer", position: "top" }],
+		});
+		const registered = JSON.parse((await get(daemon, "/plugins/registry")).body) as { plugins: { name: string; position?: string; visual?: { position?: string } }[] };
+		assert.equal(registered.plugins[0].position, "top");
+		assert.equal(registered.plugins[0].visual?.position, "any", "settings reads the ask beside the pick");
 	} finally {
 		daemon.child.kill("SIGTERM");
 		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);

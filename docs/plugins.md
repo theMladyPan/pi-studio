@@ -147,11 +147,14 @@ Which edge the drawer sits on is `visual.position`, and it only means something 
   width, so the furniture the human already sized sizes these too.
 - `"any"` says the plugin takes any edge and names none. The edge is then the one its registration's
   row `position` names — one of `"bottom"`, `"top"`, `"left"` or `"right"`, in settings — or the left
-  when that is not written either. A row that names a folder never rewrites the manifest: its `position`
-  only ever picks.
+  when that is not written either. A row `position` picks over any `visual.position`, an explicit edge
+  included. The pick wins over the ask; it never rewrites the manifest.
 - A `visual.position` written with no place, or an edge the board cannot draw, is a problem on the row
   at read time, not a move to another edge: a plugin never learns of a newer side by being silently put
-  somewhere else. The same goes for a row `position` on a panel with no drawer place.
+  somewhere else. The same goes for a row `position` on a panel with no drawer place. New sides travel on
+  a protocol minor, so an older daemon refuses them with its protocol message instead. And if a manifest
+  later drops its drawer place while a pick is saved, the row is refused until the next settings save
+  drops that pick.
 
 ## The example plugin
 

@@ -17,7 +17,7 @@ import { PluginFailure, startPlugin } from "./host.ts";
 import { PLUGIN_UNAVAILABLE } from "./protocol.ts";
 import { loadPluginRegistry } from "./registry.ts";
 import type { PluginCall, PluginHost } from "./host.ts";
-import type { PluginProblem, PluginRegistry, PluginVisual } from "./registry.ts";
+import type { PluginProblem, PluginRegistry, PluginVisual, PluginVisualSide } from "./registry.ts";
 
 /** One plugin as the daemon holds it. The seam a settings page or a status report reads. */
 export type PluginRoster = {
@@ -27,6 +27,8 @@ export type PluginRoster = {
 	running: boolean;
 	visual?: PluginVisual;
 	shortcut?: string;
+	/** The edge the human picked in settings, beside the manifest's ask. */
+	position?: PluginVisualSide;
 	/** Registered but not yet spawned: a lazy plugin that waits for its first panel request. */
 	dormant?: boolean;
 };
@@ -190,8 +192,11 @@ export async function startPlugins(options: PluginStartOptions = {}): Promise<Pl
 				version: host.info.version,
 				running: host.running(),
 				// The panel this plugin declared, so the board can offer its door without reading the
-				// registration a second time and disagreeing with what was actually started.
+				// registration a second time and disagreeing with what was actually started. The
+				// settings pick rides beside it, rather than inside it, for the same reason it does in
+				// the registry: the ask and the pick stay two truths until the board's list merges them.
 				...(host.entry.visual ? { visual: host.entry.visual } : {}),
+				...(host.entry.position ? { position: host.entry.position as PluginVisualSide } : {}),
 				...(host.entry.shortcut ? { shortcut: host.entry.shortcut } : {}),
 				...(dormant.has(host.entry.name) ? { dormant: true } : {}),
 			})),

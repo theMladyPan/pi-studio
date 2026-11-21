@@ -89,7 +89,10 @@ function visualRoster(): { name: string; root: string; visual: PluginVisual; sho
 		// A plugin that failed to start has no page to ask, so its door is not offered either. A dormant
 		// one keeps its door: the page is served from disk, and the first request starts the process.
 		if ((!one.running && !one.dormant) || !one.visual) continue;
-		panels.push({ name: one.name, root: dirname(one.command), visual: one.visual, ...(one.shortcut ? { shortcut: one.shortcut } : {}) });
+		// The settings pick wins over the manifest's ask here and only here: the registry and the
+		// roster keep the two apart so settings can show both, and the board sees the one edge.
+		const visual = one.position !== undefined ? { ...one.visual, position: one.position } : one.visual;
+		panels.push({ name: one.name, root: dirname(one.command), visual, ...(one.shortcut ? { shortcut: one.shortcut } : {}) });
 	}
 	return panels;
 }

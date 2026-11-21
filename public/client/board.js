@@ -5917,7 +5917,11 @@ function paintDocks() {
     dock.hidden = dockState[side] === "";
     for (const pane of dock.querySelectorAll(".plugin-pane")) pane.classList.toggle("on", dockState[side] === `plugin:${pane.id.slice("drawerPlugin-".length)}`);
   }
-  for (const [key, door] of Object.entries(pluginDrawerDoors)) door.setAttribute("aria-expanded", dockState[door.dataset.side] === key ? "true" : "false");
+  for (const [key, door] of Object.entries(pluginDrawerDoors)) {
+    // A left door belongs to the left column, not to these strips: `paintDrawers` speaks for it.
+    if (!(door.dataset.side in DOCK_NAMES)) continue;
+    door.setAttribute("aria-expanded", dockState[door.dataset.side] === key ? "true" : "false");
+  }
 }
 
 /** Roll every dock down; a side rolls only that one. */
@@ -5925,6 +5929,11 @@ function closeDocks(side) {
   if (side) dockState[side] = "";
   else for (const key of Object.keys(dockState)) dockState[key] = "";
   paintDocks();
+}
+
+/** Whether any dock strip is up. It stands where the terminal strip stands in the panel checks: a strip over the board holds the letters, the left column does not. */
+function dockOpen() {
+  return Boolean(dockState.bottom || dockState.top || dockState.right);
 }
 /** The doors in the header for plugins whose panel lives in this column, by drawer name. */
 const pluginDrawerDoors = {};
@@ -9707,7 +9716,7 @@ function paintShortcuts() {
  * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too, and so does
  * a plugin's panel, whose page is the only thing the keyboard can reach while it is down.
  */
-const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || pluginDrawer.isOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen();
+const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || dockOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen();
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
@@ -13765,7 +13774,7 @@ function exOpenSurfaces() {
     git: gitDrawer.isOpen(),
     plugin: pluginPanel.isOpen(),
     terminal: terminalDrawer.isOpen(),
-    drawer: Boolean(drawerState.open) || pluginDrawer.isOpen(),
+    drawer: Boolean(drawerState.open) || dockOpen(),
     card: Boolean(document.querySelector(".card.active")) || selectedIds.size > 0,
   };
 }

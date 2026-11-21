@@ -67,11 +67,6 @@ export type PluginVisual = {
 	position?: PluginVisualPosition;
 };
 
-/** Which edge the board draws a panel on, once the plugin's `any` and its missing position are settled. */
-export function pluginDrawerSide(visual: PluginVisual): PluginVisualSide {
-	const position = visual.position;
-	return position === "bottom" || position === "top" || position === "right" ? position : "left";
-}
 
 /**
  * The plain letters the board's own keys already answer to, from `SHORTCUTS` in `public/client/board.js`
@@ -239,19 +234,21 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE, bundledDir: stri
 				continue;
 			}
 			// The pick sits on a drawer panel and nowhere else: a position with no drawer place is a
-			// problem on the row, the same as a `visual.position` without its place is on a manifest.
+			// problem on the row, the same as a `visual.position` without its place is on a manifest. It
+			// is kept beside the manifest's ask rather than folded into it, so settings can keep
+			// showing what the plugin asked (often `"any"`) beside the pick that wins, and only the
+			// board's list merges the two.
 			if (pick.position !== undefined && found.visual?.place !== "drawer") {
 				problems.push({ name, problem: 'position needs a panel with visual.place "drawer"' });
 				continue;
 			}
-			const visual = found.visual && pick.position !== undefined ? { ...found.visual, position: pick.position } : found.visual;
 			plugins.push({
 				name,
 				command: found.command as string,
 				// A row that says nothing about args takes the manifest's: `args: []` written on purpose
 				// is still args: [], because a reader cannot tell the two apart afterwards and must not guess.
 				args: bag.args === undefined ? [...(found.manifest?.args ?? [])] : [...(args as string[])],
-				...(visual ? { visual } : {}),
+				...(found.visual ? { visual: found.visual } : {}),
 				...(shortcut !== undefined ? { shortcut: shortcut as string } : {}),
 				...(pick.position !== undefined ? { position: pick.position } : {}),
 				...(found.version ? { version: found.version } : {}),
@@ -280,8 +277,7 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE, bundledDir: stri
 			problems.push({ name, problem: 'position needs a panel with visual.place "drawer"' });
 			continue;
 		}
-		const picked = visual.visual && pick.position !== undefined ? { ...visual.visual, position: pick.position } : visual.visual;
-		plugins.push({ name, command, args: [...(args as string[])], ...(picked ? { visual: picked } : {}), ...(shortcut !== undefined ? { shortcut: shortcut as string } : {}), ...(pick.position !== undefined ? { position: pick.position } : {}) });
+		plugins.push({ name, command, args: [...(args as string[])], ...(visual.visual ? { visual: visual.visual } : {}), ...(shortcut !== undefined ? { shortcut: shortcut as string } : {}), ...(pick.position !== undefined ? { position: pick.position } : {}) });
 	}
 	return { plugins, problems };
 }
