@@ -55,6 +55,27 @@
 
     <div class="settings-tree" id="settingsTree" role="region" aria-label="Settings groups" tabindex="-1"></div>
 
+    <!-- Plugins are handled here, on the crossroads, and not on any board: one registration for the
+         whole studio. Outside the tree the daemon serves, so a redraw of the tree never wipes it. -->
+    <div class="cfg-local" id="cfgLocal">
+      <details class="cfg-group" id="cfgPlugins" data-depth="0">
+        <summary class="cfg-summary">
+          <div class="cfg-sum-left">
+            <span class="cfg-caret" aria-hidden="true">▸</span>
+            <span class="cfg-label">plugins</span>
+            <span class="cfg-inline-help">install, enable and assign shortcuts</span>
+          </div>
+          <div class="cfg-sum-right"><span class="cfg-folded-preview" id="pluginCount">none</span></div>
+        </summary>
+        <div class="cfg-body">
+          <p class="cfg-note">Install one with <code>pi-studio add &lt;git-url&gt;</code>, then enable it
+          below. A shortcut is one letter no board answers to yet, and it opens the panel.</p>
+          <div id="pluginRows"></div>
+          <div class="cfg-prose-actions"><span class="cfg-prose-size" id="plNote" role="status"></span></div>
+        </div>
+      </details>
+    </div>
+
     <footer class="shelf-foot">
       <div class="foot-keys">
         <span><kbd>Tab</kbd> navigate</span>

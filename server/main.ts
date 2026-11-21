@@ -743,8 +743,9 @@ export const server = createServer((req, res) => {
 					// The editor is one program for the whole studio, so a board's page reads it from the defaults
 					// rather than from its own config, where a copy taken at birth would go stale.
 					values: boardSettingsValues(activeConfig(board), activeHomeDefaults()),
-					title: "this board",
-					subtitle: `${board.name} · ${board.folder}`,
+					title: "Board specific settings",
+					// No subtitle on a board's document: the panel floats over its own board and names no folder.
+					subtitle: "",
 					foot: "new threads only · a run in flight is untouched",
 				}),
 			);
