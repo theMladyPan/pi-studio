@@ -175,6 +175,7 @@ export function detailPanel(ctx, state, prefs, changePref) {
 	});
 
 	if (!state.info) return elt("p", { className: "detail-content muted" }, "Loading details…");
+	const stageLabel = (staging, count) => `${staging ? "Staging" : "Unstaging"} ${count} file${count === 1 ? "" : "s"}`;
 	const dirty = state.hash === "*";
 	const prefKey = dirty ? "flatUncommitted" : "flatFiles";
 	const listMode = Boolean(prefs[prefKey]);
@@ -182,7 +183,7 @@ export function detailPanel(ctx, state, prefs, changePref) {
 		let dragging = null;
 		for (const section of ["staged", "unstaged"]) {
 			const rows = state.info[section];
-			const move = (paths) => ctx.write(section === "staged" ? "unstageFiles" : "stageFiles", { filePaths: paths }, null, section === "staged" ? `Unstaging ${paths.length} file${paths.length === 1 ? "" : "s"}` : `Staging ${paths.length} file${paths.length === 1 ? "" : "s"}`);
+			const move = (paths) => ctx.write(section === "staged" ? "unstageFiles" : "stageFiles", { filePaths: paths }, null, stageLabel(section !== "staged", paths.length));
 			const drag = (node, paths) => {
 				node.addEventListener("dragstart", (event) => {
 					event.stopPropagation();
@@ -207,7 +208,7 @@ export function detailPanel(ctx, state, prefs, changePref) {
 			}, listMode, state.folders, section, drag);
 			panes.append(makePane(section, `${section === "staged" ? "Staged" : "Unstaged"} (${rows.length})`, elt("div", { className: "detail-content" }, files), state, onToggle, () => {
 				if (!dragging || dragging.section === section) return;
-				ctx.write(section === "staged" ? "stageFiles" : "unstageFiles", { filePaths: dragging.paths }, null, section === "staged" ? `Staging ${dragging.paths.length} file${dragging.paths.length === 1 ? "" : "s"}` : `Unstaging ${dragging.paths.length} file${dragging.paths.length === 1 ? "" : "s"}`).catch(ctx.fail);
+				ctx.write(section === "staged" ? "stageFiles" : "unstageFiles", { filePaths: dragging.paths }, null, stageLabel(section === "staged", dragging.paths.length)).catch(ctx.fail);
 				dragging = null;
 			}));
 		}

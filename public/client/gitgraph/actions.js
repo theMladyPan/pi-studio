@@ -115,7 +115,7 @@ export async function checkoutRef(ctx, ref) {
 	const make = () => modal(`Track ${name}`, field("branchName", "New local branch name", local === branch ? "" : branch, required), "Create and check out", (form) => {
 		const branchName = value(form, "branchName");
 		if (ctx.localBranches.has(branchName)) throw new Error(`${branchName} already exists.`);
-		return ctx.write("checkoutBranch", { branchName, remoteBranch: name }, null, `Checking out ${name}`);
+		return ctx.write("checkoutBranch", { branchName, remoteBranch: name }, null, `Checking out ${branchName}`);
 	});
 	if (!local) return make();
 	const held = heldBy(ctx, local);
