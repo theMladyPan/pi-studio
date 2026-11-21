@@ -1,17 +1,9 @@
 # pi-studio
 
-A local daemon that owns pi agents: a workspace is a folder, a thread on its board is an agent.
-
-## Keyboard shortcuts
-
-The `hotkeys` group in `settings` lists every shortcut. It renders from one list, `SHORTCUTS` in
-`public/client/board.js`, which is the single source of truth for it.
-
-Any change to a shortcut handler must change that same list in the same commit, and the title of the row
-for the `m` key in the same client. That row is the `overviewMap` leaf of the `canvas` group in
-`settings`, drawn beside `dim others`: its leaf carries no route to write, because the map is the
-browser's own session choice and the page answers for it, and its title names its own key
-(`"… looking through on it (m)"`).
+The goal of this project is to provide a paradigm shift interfacing AI agents. Instead of obsolete chat
+windows, this studio should provide infinity dashboard, a place to store artefacts while dealing with 
+multiple problems. The Goal is to offload the short term memory burden during multitasking (serving 
+prompts and decisions to multiple agents) to the board.
 
 ## Branching and merging
 
@@ -101,8 +93,11 @@ The human step-by-step for cutting and publishing a release lives in `docs/relea
 - Recheck the version and release tags at release time. If `dev` has already released the work
   your bullet would describe, do not add a duplicate entry.
 
-## Notes
+## Rules and notes
 - this application is visual element based wrapper on pi.dev harness. There is no point to make it 
   screen-reader accessible. Do not bother. 
 - if there is component that is similar and can be reused - REUSE IT. Ask user if there are corners
   to cut do decide how.
+- things like keyboard shortcuts, visual elements, settings often already have a place in codebase.
+  When adding new, scan codebase and TRY TO FIT the new thing into existing codebase, or unify them.
+  Ask user if not trivial how to dedupe, unify or compromise.
