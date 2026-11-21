@@ -322,6 +322,8 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
     }
     if (drawerMode) drawerDoorsEl.hidden = mine.length === 0;
     else doors.hidden = mine.length === 0;
+    // The letters the map teaches are these doors' letters, so a re-list repaints the map with them.
+    paintShortcuts();
   }
   void listDoors();
 
@@ -9443,6 +9445,7 @@ const configBtn = document.getElementById("configBtn");
 const configPanel = document.getElementById("boardConfig");
 const shortcutList = document.getElementById("shortcutList");
 const cfgTree = document.getElementById("cfgTree");
+const cfgFoot = document.getElementById("cfgFoot");
 // The document the panel is drawn from, and what was drawn from it: every leaf in document order, and
 // every group with the leaves under it, so a config that arrives repaints all of them.
 let boardDoc = null;
@@ -9712,8 +9715,8 @@ function refreshSettings() {
   void loadBoardSettings();
 }
 
-/** The whole panel: the groups, and the one line under them. The head and the foot live outside the
- * tree — the head is drawn by the page and the foot below the hotkeys — so a redraw never moves either. */
+/** The whole panel: the groups, and the one line under them. The footnote lives outside the tree, below
+ * the hotkeys, so a redraw of the tree never moves it. */
 function renderTree(doc) {
   treeLeaves = [];
   treeGroups = [];
@@ -9725,9 +9728,11 @@ function renderTree(doc) {
   }
   for (const group of doc.groups ?? []) nodes.push(renderGroup(group, "").fold);
   cfgTree.replaceChildren(...nodes);
-  const foot = document.getElementById("cfgFoot");
-  if (foot) foot.textContent = doc.foot || "";
+  if (cfgFoot) cfgFoot.textContent = doc.foot || "";
   paintConfig();
+  // The map is painted here as well as when the plugin doors list: opening the panel after the doors
+  // arrived must still show their letters, and the load-time paint ran while the map was empty.
+  paintShortcuts();
 }
 
 /** One group: a `<details>` whose leaves come first and whose own groups follow, to any depth. */

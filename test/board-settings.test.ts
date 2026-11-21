@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { boardSettingsValues, settingsDocument } from "../server/settings-document.ts";
@@ -289,4 +290,28 @@ test("the text editor leaf reads the studio's value, because a board keeps no co
 	const [nameProvider, ...nameRest] = NAME_MODEL.split("/");
 	assert.equal(helperOf({ helperProvider: "github-copilot", helperModel: "gemini-4-argon" }), "github-copilot/gemini-4-argon");
 	assert.equal(helperOf({}), `${nameProvider}/${nameRest.join("/")}`);
+});
+
+/**
+ * Plugins live on the crossroads settings page, not on any board: the board panel carries the hotkeys
+ * and the footnote only, so a reintroduction of the editor there would be a second registration page.
+ */
+test("plugins are handled on the crossroads settings page, and the board settings keep only hotkeys and the foot", () => {
+	const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+	const settings = html.slice(html.indexOf('id="boardConfig"'), html.indexOf('id="promptEditor"'));
+	assert.ok(!settings.includes('id="cfgPlugins"'), "the board settings hold no plugins section");
+	assert.ok(!settings.includes('id="pluginRows"'), "the board settings hold no plugin rows");
+	assert.ok(settings.includes('id="cfgShortcuts"'), "the hotkeys section stays on the board");
+	assert.ok(settings.indexOf('id="cfgShortcuts"') < settings.indexOf('id="cfgFoot"'), "the footnote sits below the hotkeys");
+	const welcome = readFileSync(new URL("../public/welcome.html", import.meta.url), "utf8");
+	assert.ok(welcome.includes('id="cfgPlugins"'), "the crossroads settings hold the plugins section");
+	assert.ok(welcome.includes('id="pluginRows"'), "the crossroads settings hold the plugin rows");
+	const board = readFileSync(new URL("../public/client/board.js", import.meta.url), "utf8");
+	assert.ok(!board.includes("/plugins/registry"), "the board client no longer edits the plugin registration");
+	// The hotkeys map is repainted when the tree renders: the plugin doors list asynchronously, after
+	// the load-time paint ran with an empty map, and the old plugin loader was that repaint.
+	const renderTree = board.slice(board.indexOf("function renderTree"), board.indexOf("function renderGroup"));
+	assert.ok(renderTree.includes("paintShortcuts()"), "rendering the settings repaints the hotkeys map");
+	const welcomeJs = readFileSync(new URL("../public/welcome.js", import.meta.url), "utf8");
+	assert.ok(welcomeJs.includes("await loadPluginSettings()"), "a save on the crossroads re-reads the registration, so the offered folders stay");
 });

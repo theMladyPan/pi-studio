@@ -744,6 +744,7 @@ export const server = createServer((req, res) => {
 					// rather than from its own config, where a copy taken at birth would go stale.
 					values: boardSettingsValues(activeConfig(board), activeHomeDefaults()),
 					title: "Board specific settings",
+					// No subtitle on a board's document: the panel floats over its own board and names no folder.
 					subtitle: "",
 					foot: "new threads only · a run in flight is untouched",
 				}),

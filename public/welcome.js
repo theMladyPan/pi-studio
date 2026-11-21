@@ -1543,8 +1543,9 @@
         nodes.pluginNote.textContent = problems.join("; ") || "the daemon refused the list";
         return;
       }
-      pluginData = body;
-      renderPluginSettings();
+      // The POST answer carries no `available` list, so the section is read again: rendering the
+      // answer would drop the folders offered for enabling until the settings page was left and re-entered.
+      await loadPluginSettings();
       nodes.pluginNote.textContent = `${said} — the roster restarted without a daemon restart`;
     } catch (error) {
       nodes.pluginNote.textContent = `could not save: ${error.message || error}`;
