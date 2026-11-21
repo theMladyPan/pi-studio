@@ -16,7 +16,7 @@ import { boardSettingsValues, settingsDocument } from "./settings-document.ts";
 import { boardMeta, cardsFor } from "./cards.ts";
 import { closedCards } from "./bus.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
-import { onDefaults, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults } from "./routes/crossroads.ts";
+import { onDefaults, onForgetWorkspace, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
 import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead, onFileRename, onFileWrite, onFilesList } from "./routes/board/files.ts";
 import { rowWithThought } from "./thought.ts";
@@ -493,6 +493,12 @@ export const server = createServer((req, res) => {
 		}
 		if (req.method === "POST" && url.pathname === "/workspace") {
 			await onOpenWorkspace(req, res);
+			return;
+		}
+		// Forget one row from the crossroads list: the entry only, never the folder. Not in
+		// `THREAD_ROUTES`, so a child cannot reach it and only the human at the keyboard can remove it.
+		if (req.method === "POST" && url.pathname === "/workspace/forget") {
+			await onForgetWorkspace(req, res);
 			return;
 		}
 		// The scratch row's empty press: the files and the cards, with the settings kept. It is not in

@@ -2995,6 +2995,41 @@ describe("routes", { concurrency: 8 }, () => {
 		}
 	});
 
+	test("forgetting a workspace takes only its list entry, and the scratch row cannot be forgotten", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-forget-"));
+		const project = mkdtempSync(join(tmpdir(), "pi-studio-forget-project-"));
+		const missing = mkdtempSync(join(tmpdir(), "pi-studio-forget-missing-"));
+		const daemon = await boot(stateHome);
+		try {
+			assert.equal((await post(daemon, "/workspace", { folder: project })).status, 200);
+			assert.equal((await post(daemon, "/workspace", { folder: missing })).status, 200);
+			const missingReal = realpathSync(missing);
+			// The folder goes after it was opened: the row the crossroads cannot open any more.
+			await removeTree(missing);
+			const rows = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces;
+			const gone = rows.find((row: any) => row.folder === missingReal);
+			assert.equal(gone.missing, true);
+			assert.equal((await post(daemon, "/workspace/forget", { id: "nope" })).status, 404);
+			assert.equal((await post(daemon, "/workspace/forget", { id: rows[0].id })).status, 403, "the scratch row was forgotten");
+
+			const forgotten = await post(daemon, "/workspace/forget", { id: gone.id });
+			assert.equal(forgotten.status, 200);
+			assert.equal(JSON.parse(forgotten.body).removed, true);
+			const after = JSON.parse((await get(daemon, `/workspaces?token=${daemon.token}`)).body).workspaces;
+			assert.ok(!after.some((row: any) => row.id === gone.id), "the forgotten row is still on the list");
+			assert.ok(after.some((row: any) => row.folder === realpathSync(project)), "a kept row went with it");
+			// The file agrees, so a restart does not bring the row back.
+			const written = JSON.parse(readFileSync(join(stateHome, "workspaces.json"), "utf8"));
+			assert.ok(!written.workspaces.some((row: any) => row.id === gone.id), "the forgotten row is still in the file");
+
+			// The project itself is untouched: forgetting a row deletes nothing on disk.
+			assert.ok(existsSync(project), "forgetting deleted the folder");
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, project]) await removeTree(gone);
+		}
+	});
+
 	// ---------- the session cookie -----------------------------------------------
 
 	/** Trades the printed link for a cookie, the way a browser does, and hands back its `name=value` pair. */
