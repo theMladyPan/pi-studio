@@ -55,10 +55,10 @@ export function bindDragHeight(grip, { bodyClass, resolvePx }) {
  * One sliding drawer for the whole life of the page: the shown flag, the inert shut state, the body
  * class that is the whole animation, the header button that says which way it stands, and the focus
  * return (a remembered element that is gone or hidden is no place to put the keyboard, so the owning
- * button takes it instead). `beforeOpen`, `afterOpen` and `beforeClose` hold what is each drawer's own:
- * which src it loads, which shell it connects, which page it focuses.
+ * button takes it instead). `beforeOpen` and `afterOpen` hold what is each drawer's own: which src it
+ * loads, which shell it connects, which page it focuses.
  */
-export function createSlidingDrawer({ drawer, btn, bodyClass, openTitle, shutTitle, beforeOpen, afterOpen, beforeClose }) {
+export function createSlidingDrawer({ drawer, btn, bodyClass, openTitle, shutTitle, beforeOpen, afterOpen }) {
   let shown = false;
   /** What had the focus before the drawer took it, so rolling the other way puts it back. */
   let back = null;
@@ -85,7 +85,6 @@ export function createSlidingDrawer({ drawer, btn, bodyClass, openTitle, shutTit
   function close() {
     if (!shown) return;
     shown = false;
-    beforeClose?.();
     drawer.inert = true;
     paint();
     // A remembered `body` is no place to put the keyboard, so the button that owns the key takes it

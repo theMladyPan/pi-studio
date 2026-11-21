@@ -101,7 +101,6 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
     },
   });
 
-  const open = sliding.open;
   const close = sliding.close;
 
   /**

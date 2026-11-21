@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- refactor: Fold the git and terminal drawers onto one shared sliding drawer and their bars, grips and slides onto one set of drawer furniture, with no change to look or motion; the strips across the board carry the same sheet shadow the sheets already did. [t-c892c0ac]
 
 - feat: Let a drawer panel sit on any edge: a plugin's `visual.position` — `"bottom"`, `"top"`, `"right"`, `"left"` or `"any"` — puts its drawer across the bottom, under the header, on the right, or on the left as before when it is left out, and `"any"` takes the one edge its registration picks in settings. A position with no drawer place, and a side the board cannot draw, are refused at read time rather than moved to another edge. [t-c892c0ac]
 - fix: Let a drawer strip roll like the terminal drawer: a bottom, top or right panel slides in and out with its pane riding the slide, carries its own drag handle on the open edge sizing the shared height, answers its own letter twice so a second press rolls it down, leaves the board letters working while it stands, and no longer takes the keyboard into its page when it opens. [t-c892c0ac]

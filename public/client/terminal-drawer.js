@@ -184,7 +184,6 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
     return true;
   }
 
-  const open = sliding.open;
   const close = sliding.close;
 
   /**
