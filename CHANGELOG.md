@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- feat: Simplify a board's settings panel and handle plugins on the crossroads: the panel now heads `Board specific settings` and names no board or folder, the line about new threads sits below the hotkeys under a hairline, and plugins — registering, enabling and assigning shortcuts — are handled on the crossroads settings page instead of on any board. [t-496f7a81]
+
 ## [0.7.0] - 2026-11-21
 
 - feat: Name the action in the status strip while a Git action runs in the graph drawer — for example `Merge dev into the current branch…` or `Push branch main…` — instead of the generic `Git action running…`, so a long push, fetch or merge says what it is doing.

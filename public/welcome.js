@@ -43,6 +43,9 @@
     foldAll: document.getElementById("toggleAllGroupsBtn"),
     tree: document.getElementById("settingsTree"),
     settingsReadout: document.getElementById("settingsFootReadout"),
+    pluginRows: document.getElementById("pluginRows"),
+    pluginCount: document.getElementById("pluginCount"),
+    pluginNote: document.getElementById("plNote"),
   };
 
   const el = (tag, cls, text) => {
@@ -1315,6 +1318,251 @@
     }
   }
 
+  // ---------- the plugins, handled here on the crossroads -----------------
+  //
+  // One registration for the whole studio, edited on this page and not on any board: a board lists the
+  // panels it may open at load, so a change lands on the next open of a board. The daemon's
+  // registration is the truth; whatever arrives is what the section shows. Saving writes the whole
+  // list, and the daemon proves it by the reader before it replaces what it runs, so a row it cannot
+  // use saves nothing.
+  let pluginData = null;
+
+  function pluginField(label, value, field, index, placeholder) {
+    const row = document.createElement("div");
+    row.className = "cfg-row is-typed";
+    row.append(Object.assign(el("span"), { textContent: label }));
+    const input = el("input", "cfg-type");
+    input.type = "text";
+    input.value = value || "";
+    if (placeholder) input.placeholder = placeholder;
+    if (index !== null) input.dataset.index = String(index);
+    if (field) input.dataset.field = field;
+    row.append(input);
+    return row;
+  }
+
+  function pluginPlaceSelect(value, index) {
+    const row = document.createElement("div");
+    row.className = "cfg-row is-typed";
+    row.append(Object.assign(el("span"), { textContent: "place" }));
+    const select = el("select", "cfg-type");
+    select.dataset.index = String(index);
+    select.dataset.field = "place";
+    for (const [key, label] of [["", "toolbox"], ["drawer", "left drawers"]]) {
+      const option = el("option");
+      option.value = key;
+      option.textContent = label;
+      if ((value || "") === key) option.selected = true;
+      select.append(option);
+    }
+    row.append(select);
+    return row;
+  }
+
+  /** One plugin as the section edits it: its name, its command, and the panel and shortcut it declares. */
+  function renderPluginSettings() {
+    const pluginRowsEl = nodes.pluginRows;
+    if (!pluginRowsEl) return;
+    const available = pluginData?.available || [];
+    nodes.pluginCount.textContent = pluginData
+      ? `${pluginData.plugins.length} registered${available.length ? ` · ${available.length} available` : ""}`
+      : "could not read";
+    const rendered = [];
+    if (!pluginData) {
+      rendered.push(Object.assign(el("p", "cfg-note"), { textContent: "could not read the plugin list" }));
+      pluginRowsEl.replaceChildren(...rendered);
+      return;
+    }
+    const roster = new Map((pluginData.roster || []).map((one) => [one.name, one]));
+    const stateOf = (state) => (state ? (state.running ? `running${state.version ? ` ${state.version}` : ""}` : state.dormant ? "starts on open" : "not running") : "not running");
+    for (const problem of pluginData.problems || []) {
+      rendered.push(
+        Object.assign(el("p", "cfg-note"), {
+          textContent: problem.name ? `${problem.name}: ${problem.problem}` : problem.problem,
+        }),
+      );
+    }
+    pluginData.plugins.forEach((row, index) => {
+      const head = document.createElement("div");
+      head.className = "cfg-prose-head";
+      head.append(
+        Object.assign(el("b"), {
+          textContent: `${row.name} · ${stateOf(roster.get(row.name))}${row.shortcut ? ` · ${row.shortcut}` : ""}`,
+        }),
+      );
+      const remove = el("button", "omni-browse");
+      remove.type = "button";
+      remove.textContent = "remove";
+      remove.addEventListener("click", () => void savePluginSettings(gatherPluginRows().filter((_, at) => at !== index), `removed ${row.name}`));
+      head.append(remove);
+      rendered.push(head);
+      // A row that names a folder takes everything else from that folder's plugin.json, so it shows
+      // only what a row of its own can decide — its name, its args and its shortcut. The command, the
+      // panel and the place belong to the manifest and are never rewritten by this form.
+      rendered.push(pluginField("name", row.name, "name", index));
+      if (row.installed || row.bundled) {
+        rendered.push(
+          Object.assign(el("p", "cfg-note"), {
+            textContent: `the command, the panel and the place come from the ${row.installed ? "installed" : "shipped"} plugin.json`,
+          }),
+        );
+      } else {
+        rendered.push(pluginField("command", row.command, "command", index));
+      }
+      rendered.push(pluginField("args", (row.args || []).join(", "), "args", index, "--flag value, comma separated"));
+      if (!(row.installed || row.bundled)) {
+        rendered.push(pluginPlaceSelect(row.visual?.place || "", index));
+        rendered.push(pluginField("panel title", row.visual?.title || "", "title", index));
+        rendered.push(pluginField("panel entry", row.visual?.entry || "", "entry", index));
+        rendered.push(pluginField("panel files", (row.visual?.files || []).join(", "), "files", index));
+      }
+      rendered.push(pluginField("shortcut", row.shortcut || "", "shortcut", index, "one letter"));
+    });
+    // What is on disk that nobody registered, offered to enable: a plugin the human copied into the
+    // plugins folder declares itself, so enabling it is one click and the row takes its defaults.
+    if (available.length || (pluginData.unavailable || []).length) {
+      const head = document.createElement("div");
+      head.className = "cfg-prose-head";
+      head.append(Object.assign(el("b"), { textContent: "available in the plugins folder" }));
+      const rescan = el("button", "omni-browse");
+      rescan.type = "button";
+      rescan.textContent = "rescan";
+      rescan.addEventListener("click", () => void loadPluginSettings());
+      head.append(rescan);
+      rendered.push(head);
+      for (const one of available) {
+        // Two lines, not one: the title keeps its ellipsis one line, and the description wraps under it
+        // rather than stretching the row past the page — a long span here used to clip the panel.
+        const head = document.createElement("div");
+        head.className = "cfg-prose-head";
+        head.append(Object.assign(el("b"), { textContent: `${one.title} · ${one.version}` }));
+        const enable = el("button", "omni-browse");
+        enable.type = "button";
+        enable.textContent = "enable";
+        enable.addEventListener("click", () => void enablePlugin(one));
+        head.append(enable);
+        rendered.push(head);
+        const preview = [
+          one.defaults.place === "drawer" ? "left drawers" : "toolbox",
+          one.start === "lazy" ? "starts on open" : "starts on boot",
+          one.defaults.shortcut ? `shortcut ${one.defaults.shortcut}` : null,
+          one.description,
+        ].filter(Boolean).join(" · ");
+        if (preview) {
+          rendered.push(Object.assign(el("p", "cfg-note"), { textContent: preview }));
+        }
+      }
+      for (const one of pluginData.unavailable || []) {
+        const head = document.createElement("div");
+        head.className = "cfg-prose-head";
+        head.append(Object.assign(el("b"), { textContent: `${one.folder} · ${one.source}` }));
+        rendered.push(head);
+        rendered.push(Object.assign(el("p", "cfg-note"), { textContent: one.problem }));
+      }
+    }
+    const save = el("button", "cfg-prose-save");
+    save.type = "button";
+    save.textContent = "save plugins";
+    save.addEventListener("click", () => void savePluginSettings(gatherPluginRows(), "saved"));
+    const actions = document.createElement("div");
+    actions.className = "cfg-prose-actions";
+    actions.append(save);
+    rendered.push(actions);
+    pluginRowsEl.replaceChildren(...rendered);
+  }
+
+  /**
+   * One click registers a plugin the human installed: the row takes the manifest's defaults, and the
+   * suggested shortcut only when it is still free — a taken one is the human's to reassign, never a
+   * guess the daemon makes for them.
+   */
+  async function enablePlugin(one) {
+    const rows = gatherPluginRows();
+    const taken = new Set(pluginData.taken || []);
+    for (const row of rows) if (row.shortcut) taken.add(row.shortcut);
+    const suggested = one.defaults.shortcut;
+    const free = suggested && !taken.has(suggested);
+    rows.push({
+      name: one.name,
+      [one.source]: one.folder,
+      args: one.defaults.args || [],
+      ...(free ? { shortcut: suggested } : {}),
+    });
+    await savePluginSettings(rows, suggested && !free ? `enabled without the default shortcut — ${suggested} is taken; set another above` : "enabled");
+  }
+
+  /** The rows as the form has them, before the daemon is asked to prove them. */
+  function gatherPluginRows() {
+    const byIndex = new Map();
+    for (const input of nodes.pluginRows.querySelectorAll("input[data-index], select[data-index]")) {
+      const index = Number(input.dataset.index);
+      if (!byIndex.has(index)) byIndex.set(index, {});
+      byIndex.get(index)[input.dataset.field] = input.value;
+    }
+    return [...byIndex.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([index, fields]) => {
+        // A row that names a folder keeps naming it: saving must never turn it into a command row,
+        // which would spawn it eagerly and pin it to a path the manifest no longer owns.
+        const named = (pluginData.plugins || [])[index];
+        const row = {
+          name: (fields.name || "").trim(),
+          args: (fields.args || "").split(",").map((one) => one.trim()).filter(Boolean),
+        };
+        if (named?.installed) row.installed = named.installed;
+        if (named?.bundled) row.bundled = named.bundled;
+        if (!named?.installed && !named?.bundled) {
+          row.command = (fields.command || "").trim();
+          const files = (fields.files || "").split(",").map((one) => one.trim()).filter(Boolean);
+          if (files.length) {
+            row.visual = {
+              title: (fields.title || "").trim() || row.name,
+              entry: (fields.entry || "").trim(),
+              files,
+              ...(fields.place ? { place: fields.place } : {}),
+            };
+          }
+        }
+        const shortcut = (fields.shortcut || "").trim().toLowerCase();
+        if (shortcut) row.shortcut = shortcut;
+        return row;
+      });
+  }
+
+  async function savePluginSettings(rows, said) {
+    nodes.pluginNote.textContent = "";
+    try {
+      const response = await fetch("/plugins/registry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plugins: rows }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        const problems = (body?.problems || []).map((one) => (one.name ? `${one.name}: ` : "") + one.problem);
+        nodes.pluginNote.textContent = problems.join("; ") || "the daemon refused the list";
+        return;
+      }
+      pluginData = body;
+      renderPluginSettings();
+      nodes.pluginNote.textContent = `${said} — the roster restarted without a daemon restart`;
+    } catch (error) {
+      nodes.pluginNote.textContent = `could not save: ${error.message || error}`;
+    }
+  }
+
+  /** The section is read on every open of the settings page, so it always shows the roster as it stands. */
+  async function loadPluginSettings() {
+    try {
+      const response = await fetch("/plugins/registry");
+      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+      pluginData = await response.json();
+    } catch (error) {
+      pluginData = null;
+    }
+    renderPluginSettings();
+  }
+
   // ---------- the two views ------------------------------------------------
 
   function showView(next) {
@@ -1331,6 +1579,7 @@
     paintBrand();
     if (settings) {
       void loadDocument().then(() => nodes.tree.focus());
+      void loadPluginSettings();
       return;
     }
     nodes.omni.focus();

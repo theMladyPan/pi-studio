@@ -312,6 +312,116 @@ body[data-view="settings"] .shelf-stage {
   gap: 6px;
 }
 
+/* The plugins section, outside the tree the daemon serves: one registration for the whole studio,
+   handled on the crossroads and not on any board. It keeps its own scroll so a long list never
+   pushes the tree or the footer off the page. */
+.cfg-local {
+  flex: none;
+  max-height: 45%;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.cfg-note {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.cfg-note code {
+  font-family: var(--mono);
+  color: var(--dim);
+}
+
+/* One plugin row: a label and the input beside it, the way a settings leaf reads. */
+.cfg-row {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 8px;
+  margin: 0 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-2);
+}
+
+.cfg-row > span {
+  color: var(--muted);
+  font: 11px/1.2 var(--mono);
+  white-space: nowrap;
+  flex: none;
+  min-width: 86px;
+}
+
+.cfg-type {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  padding: 4px 7px;
+  font: 11.5px/1.2 var(--mono);
+  outline: none;
+}
+
+.cfg-type:focus {
+  border-color: var(--accent);
+}
+
+.cfg-prose-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.cfg-prose-head b {
+  color: var(--dim);
+  font: 11px/1.2 var(--mono);
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cfg-prose-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.cfg-prose-size {
+  color: var(--muted);
+  font: 10.5px/1.2 var(--mono);
+}
+
+.cfg-prose-save {
+  background: var(--raised);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  padding: 4px 9px;
+  font: 11px/1.2 var(--mono);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.cfg-prose-save:hover {
+  border-color: var(--accent);
+}
+
+.cfg-prose-save:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* Collapsible group node at any depth */
 .cfg-group {
   border: 1px solid var(--border);

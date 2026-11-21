@@ -38,8 +38,8 @@ const config = {
 const document = settingsDocument({
 	scope: "board",
 	values: config,
-	title: "this board",
-	subtitle: "pi-studio · /home/stanke/projekty/pi-studio",
+	title: "Board specific settings",
+	subtitle: "",
 	foot: "new threads only · a run in flight is untouched",
 });
 
@@ -68,9 +68,9 @@ const writtenLeaves = settingLeaves.filter((field) => field.id !== "overviewMap"
 test("the document is five groups in the order the panel draws them", () => {
 	assert.equal(document.version, 1);
 	assert.equal(document.scope, "board");
-	assert.equal(document.title, "this board");
-	// A subtitle saying which board this is, so a tab on two of them can tell them apart.
-	assert.equal(document.subtitle, "pi-studio · /home/stanke/projekty/pi-studio");
+	assert.equal(document.title, "Board specific settings");
+	// No subtitle: the panel is headed "Board specific settings" and names no board or folder.
+	assert.equal(document.subtitle, "");
 	assert.equal(document.foot, "new threads only · a run in flight is untouched");
 	assert.deepEqual(
 		document.groups.map((group) => group.id),
@@ -263,8 +263,8 @@ test("the text editor leaf reads the studio's value, because a board keeps no co
 				settingsDocument({
 					scope: "board",
 					values: boardSettingsValues(config, studio),
-					title: "this board",
-					subtitle: "pi-studio · /home/stanke/projekty/pi-studio",
+					title: "Board specific settings",
+					subtitle: "",
 					foot: "new threads only · a run in flight is untouched",
 				}).groups,
 			).map((field) => [field.id, field]),
@@ -276,8 +276,8 @@ test("the text editor leaf reads the studio's value, because a board keeps no co
 				settingsDocument({
 					scope: "board",
 					values: boardSettingsValues(config, studio),
-					title: "this board",
-					subtitle: "pi-studio · /home/stanke/projekty/pi-studio",
+					title: "Board specific settings",
+					subtitle: "",
 					foot: "new threads only · a run in flight is untouched",
 				}).groups,
 			).map((field) => [field.id, field]),

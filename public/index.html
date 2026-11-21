@@ -1213,6 +1213,9 @@
   #boardConfig .cfg-prose-save:disabled { opacity: .45; cursor: default; }
   #boardConfig .cfg-prose-save:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   #boardConfig .cfg-note { margin: 8px 4px 0; color: var(--muted); font: 11px/1.5 var(--mono); }
+  /* The one line under the panel, under a hairline, below the hotkeys: when a change lands. */
+  #boardConfig .cfg-foot { margin: 8px 4px 0; padding: 8px 8px 0; border-top: 1px solid #1b2029; color: var(--muted); font: 11px/1.5 var(--mono); }
+  #boardConfig .cfg-foot:empty { display: none; }
   #cfgTree { display: flex; flex-direction: column; }
   #boardConfig .cfg-sub { margin: -3px 8px 4px; color: var(--muted); font: 10.5px var(--mono); }
   /* A group is a folder: a marker, its name, and — while it is folded — one line summing its leaves. */
@@ -1598,7 +1601,7 @@
   <!-- One door per plugin whose panel lives in the left drawers, filled in by board.js. The header's
        own buttons are the style, so a door stands here exactly like activity and cards do. -->
   <span id="pluginDrawerDoors" hidden></span>
-  <button id="configBtn" title="this board's settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
+  <button id="configBtn" title="board specific settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
 </header>
 
 <!-- The header's menus live outside the header, whose overflow would clip them. One is open at a
@@ -1638,25 +1641,19 @@
 <!-- The board's own configuration, drawn from the document `/settings/board` serves: the daemon owns
      the shape, and every leaf here opens the picker the composer uses, so there is one list of models
      in the whole app. -->
-<div id="boardConfig" hidden role="dialog" aria-label="this board's settings">
+<div id="boardConfig" hidden role="dialog" aria-label="board specific settings">
   <div id="cfgTree"></div>
   <!-- The map of every key lives here, outside the tree the daemon serves, so a re-render of the tree never
-       wipes it. -->
+       wipes it. Plugins are not here: they are handled on the crossroads settings page. -->
   <div id="cfgLocal">
     <details class="cfg-group" id="cfgShortcuts">
       <summary><span>hotkeys</span><span class="cfg-preview">all keyboard shortcuts</span></summary>
       <div class="cfg-kids" id="shortcutList"></div>
     </details>
-    <details class="cfg-group" id="cfgPlugins">
-      <summary><span>plugins</span><span class="cfg-preview" id="pluginCount">none</span></summary>
-      <div class="cfg-kids">
-        <p class="cfg-note">Install one with <code>pi-studio add &lt;git-url&gt;</code>, then enable it
-        below. A shortcut is one letter the board does not answer to yet, and it opens the panel.</p>
-        <div id="pluginRows"></div>
-        <div class="cfg-prose-actions"><span class="cfg-prose-size" id="plNote" role="status"></span></div>
-      </div>
-    </details>
   </div>
+  <!-- The one line under the panel, below the hotkeys and under a hairline: when a change lands. It lives
+       outside the tree the daemon serves, so it stays put when the tree is redrawn. -->
+  <p class="cfg-foot" id="cfgFoot"></p>
 </div>
 
 <div id="promptEditor" hidden role="dialog" aria-label="prompt files">
