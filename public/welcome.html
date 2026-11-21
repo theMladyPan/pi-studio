@@ -53,6 +53,9 @@
       </div>
     </div>
 
+    <!-- One scroll for the whole page: the tree and the plugins section below it ride the same
+         scrollbar, so the page reads as one list rather than two boxes. -->
+    <div class="settings-scroll">
     <div class="settings-tree" id="settingsTree" role="region" aria-label="Settings groups" tabindex="-1"></div>
 
     <!-- Plugins are handled here, on the crossroads, and not on any board: one registration for the
@@ -74,6 +77,7 @@
           <div class="cfg-prose-actions"><span class="cfg-prose-size" id="plNote" role="status"></span></div>
         </div>
       </details>
+    </div>
     </div>
 
     <footer class="shelf-foot">
