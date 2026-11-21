@@ -113,6 +113,21 @@ test("a merge makes a commit, and a squash merge stages without committing", asy
 	});
 });
 
+test("a conflicting merge says what conflicted, not that git could not run", async () => {
+	await withRepo(async (place) => {
+		// Git prints a merge conflict on stdout, so a stderr-only reply would be empty.
+		git(place.folder, "checkout", "-q", "-b", "feat/side");
+		commitFile(place.folder, "readme.md", "side value");
+		git(place.folder, "checkout", "-q", "dev");
+		commitFile(place.folder, "readme.md", "dev value");
+		const refused = await act(place, { command: "mergeBranch", repo: place.folder, branchName: "feat/side", createNewCommit: true, squash: false, noCommit: false, noVerify: false });
+		assert.equal(typeof refused.status, "string", `expected a failure sentence, got ${JSON.stringify(refused.status)}`);
+		assert.match(String(refused.status), /CONFLICT/, String(refused.status));
+		assert.match(String(refused.status), /readme\.md/, String(refused.status));
+		assert.match(String(refused.status), /Automatic merge failed/, String(refused.status));
+	});
+});
+
 test("a cherry-pick commits, and a revert undoes one", async () => {
 	await withRepo(async (place) => {
 		git(place.folder, "checkout", "-q", "-b", "feat/pick");

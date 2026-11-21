@@ -80,9 +80,18 @@ async function request(command, fields = {}) {
 		method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ command, ...fields }),
 	});
 	const reply = answers.find((message) => message.command === command) ?? {};
-	if (reply.error) throw new Error(reply.error.message || reply.error);
-	if (typeof reply.status === "string") throw new Error(reply.status);
+	if (reply.error) return fail(reply.error.message || reply.error, command, fields);
+	if (typeof reply.status === "string") return fail(reply.status, command, fields);
 	return reply;
+}
+
+function fail(message, command, fields) {
+	const error = new Error(message);
+	// The dialog shows git's words first, then asks the helper once beside them.
+	errno.gitCommand = command;
+	errno.gitRepo = fields?.repo ?? null;
+	errno.gitDetails = message;
+	throw error;
 }
 
 function status(message, state = "ready") {

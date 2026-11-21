@@ -16,6 +16,7 @@ import { diffText, openFile, untrackedDiff, viewDiffWithWorkingFile, viewFileAtR
 import { reposFor } from "./repos.ts";
 import type { RepoBoardLike, RepoEntry } from "./repos.ts";
 import { runLibreAction } from "./actions.ts";
+import { explainGitError } from "./explain.ts";
 import { gitText } from "../exec.ts";
 
 // ---------- board ----------
@@ -350,6 +351,15 @@ async function answer(board: DispatchBoard, request: LibreRequest, paths: string
 			const repo = str(f, "repo");
 			const cfg = await getRepoConfig(repo, []);
 			return [{ command: "exportRepoConfig", status: cfg.ok ? null : cfg.error }];
+		}
+		case "explainGitError": {
+			// One sentence beside git's own words, asked once. The dialog names no repository
+			// for this, so the call runs in the daemon's folder with no tools; git's output
+			// alone is the question, and its path is not part of the answer.
+			const details = str(f, "details").slice(0, 8000);
+			const forCommand = typeof f.forCommand === "string" && f.forCommand ? String(f.forCommand).slice(0, 120) : "";
+			const explanation = await explainGitError(details, forCommand || undefined, entry?.path ? { folder: entry.path } : {});
+			return [{ command, explanation }];
 		}
 		default: {
 			// Action commands: answer a single status string.

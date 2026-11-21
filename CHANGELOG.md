@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- feat: Show the git command's own output when it fails in the graph drawer — a merge conflict now names the files it clashed on instead of only `git could not run: git merge` — and, beside it, one plain sentence from the helper model asking for nothing more than what happened and what to do next. [t-f86474d0]
 - feat: Show the pi-studio logo in the top-left of the board instead of the word `pi`, and name the workspace label `<workspace> board` instead of `board of <workspace>`, so the header reads as the workspace's own board. [t-4b4fa58d]
 - feat: Simplify a board's settings panel and handle plugins on the crossroads: the panel now heads `Board specific settings` and names no board or folder, the line about new threads sits below the hotkeys under a hairline, and plugins — registering, enabling and assigning shortcuts — are handled on the crossroads settings page instead of on any board. [t-496f7a81]
 

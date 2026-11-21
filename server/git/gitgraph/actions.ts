@@ -20,7 +20,7 @@
  * same index lock.
  */
 import { runGit } from "../exec.ts";
-import type { GitExecKind } from "../exec.ts";
+import type { GitExecKind, GitExecResult } from "../exec.ts";
 import type { GitGraphRequest } from "./protocol.ts";
 import type { RepoEntry } from "./repos.ts";
 
@@ -43,8 +43,32 @@ const RESET_FLAG: Record<ResetMode, string> = { soft: "--soft", mixed: "--mixed"
 
 // ---------- running one command ----------
 
+/** How much of what git said one failure may carry into the dialog. */
+export const DETAIL_CHARS = 8000;
+
 /**
- * One git command, and the sentence git used if it failed.
+ * What git printed for one failed run, as the dialog reads it.
+ *
+ * A merge conflict is printed on stdout, not stderr (`Auto-merging…`, `CONFLICT…`,
+ * `Automatic merge failed…`), so reading stderr alone drops the reason and leaves the
+ * bare `git could not run: git merge`. Both streams are joined here, trimmed, and
+ * capped so a verbose remote cannot flood the page.
+ */
+export function failureDetails(result: GitExecResult, args: readonly string[]): string {
+	const verb = args[0] ?? "";
+	const lines: string[] = [];
+	const stdout = result.stdout.toString("utf8").trim();
+	const stderr = result.stderr.trim();
+	if (stdout) lines.push(stdout);
+	if (stderr) lines.push(stderr);
+	const shown = lines.join("\n").slice(0, DETAIL_CHARS);
+	if (result.timedOut) return shown ? `git did not answer in time:\n${shown}` : "git did not answer in time";
+	if (result.truncated) return shown ? `git printed more than this view will read:\n${shown}` : "git printed more than this view will read";
+	return shown || `git could not run: git ${verb}`.trim();
+}
+
+/**
+ * One git command, and everything git printed if it failed.
  *
  * `kind` decides the timeout rather than the danger: a write to a checkout gets thirty seconds and a
  * command that talks to a remote gets two minutes, because a remote is the slow half and a killed push
@@ -52,17 +76,14 @@ const RESET_FLAG: Record<ResetMode, string> = { soft: "--soft", mixed: "--mixed"
  */
 async function gitWrite(repo: string, args: readonly string[], kind: GitExecKind = "write"): Promise<string | null> {
 	const result = await runGit(repo, args, { kind });
-	if (result.ok) return null;
-	if (result.timedOut) return "git did not answer in time";
-	if (result.truncated) return "git printed more than this view will read";
-	return result.stderr || `git could not run: git ${args[0] ?? ""}`;
+	return result.ok ? null : failureDetails(result, args);
 }
 
-/** How many parents a commit has, or the sentence explaining that git cannot tell us. */
+/** How many parents a commit has, or what git said when it could not tell us. */
 async function parentCount(repo: string, commit: string): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
 	const result = await runGit(repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", commit], { kind: "read" });
 	if (!result.ok) {
-		return { ok: false, error: result.timedOut ? "git did not answer in time" : result.stderr || "git could not read that commit" };
+		return { ok: false, error: failureDetails(result, ["rev-list"]) || "git could not read that commit" };
 	}
 	const words = result.stdout.toString("utf8").trim().split(/\s+/).filter((word) => word.length > 0);
 	// The first word is the commit itself; everything after it is a parent.
@@ -343,10 +364,7 @@ function libreMoves(command: string, fields: Record<string, unknown>): boolean {
 const libreRunning = new Map<string, Promise<string | null>>();
 async function libreGitWrite(repo: string, args: readonly string[], kind: "read" | "write" | "network" = "write"): Promise<string | null> {
 	const result = await runGit(repo, args, { kind });
-	if (result.ok) return null;
-	if (result.timedOut) return "git did not answer in time";
-	if (result.truncated) return "git printed more than this view will read";
-	return result.stderr || `git could not run: git ${args[0] ?? ""}`;
+	return result.ok ? null : failureDetails(result, args);
 }
 
 /**
@@ -460,7 +478,7 @@ async function librePerform(repo: string, command: string, f: Record<string, unk
 		case "dropCommit": {
 			const hash = str(f, "commitHash");
 			const parents = await runGit(repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", hash], { kind: "read" });
-			if (!parents.ok) return parents.stderr || "git could not read that commit";
+			if (!parents.ok) return failureDetails(parents, ["rev-list"]) || "git could not read that commit";
 			const words = parents.stdout.toString("utf8").trim().split(/\s+/).filter(Boolean);
 			if (words.length - 1 > 1) return "a merge commit cannot be dropped: it is where two histories join";
 			return libreGitWrite(repo, ["rebase", "--onto", `${hash}^`, "--end-of-options", hash]);

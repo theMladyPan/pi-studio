@@ -107,7 +107,35 @@ export function modal(title, children, submitLabel = null, submit = null, danger
 }
 
 export function showError(error) {
-	modal("Git Graph", elt("p", { className: "error" }, error?.message ?? String(error)));
+	const details = error?.gitDetails ?? error?.message ?? String(error);
+	const help = elt("p", { className: "git-help", "aria-live": "polite" }, "Asking the helper for one sentence…");
+	const dialog = $("dialog");
+	modal("Git Graph", [
+		elt("p", { className: "error" }, "Git did not finish. What git said:"),
+		elt("pre", { className: "git-details error" }, details),
+		help,
+	]);
+	// One call, after the words are on screen: the helper fills in beside them and
+	// a silent failure leaves them alone. Closing the dialog abandons the answer.
+	void (async () => {
+		const workspace = /^\/git\/([a-f0-9]{6,64})\/?$/.exec(location.pathname)?.[1];
+		if (!workspace) { help.hidden = true; return; }
+		try {
+			const res = await fetch(`/git/msg?workspace=${encodeURIComponent(workspace)}`, {
+				method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" },
+				body: JSON.stringify({ command: "explainGitError", details, forCommand: error?.gitCommand ?? "", repo: error?.gitRepo ?? undefined }),
+			});
+			if (!res.ok) { help.hidden = true; return; }
+			const answers = await res.json();
+			const reply = answers.find((message) => message.command === "explainGitError") ?? {};
+			const sentence = typeof reply.explanation === "string" ? reply.explanation.trim() : "";
+			if (!dialog.open || !help.isConnected) return;
+			if (sentence) { help.textContent = `Help: ${sentence}`; help.hidden = false; }
+			else help.hidden = true;
+		} catch {
+			if (help.isConnected) help.hidden = true;
+		}
+	})();
 }
 
 /** Definition tuples are only used by Git command dialogs. */
