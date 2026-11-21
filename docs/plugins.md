@@ -133,10 +133,28 @@ with that nonce and an id, `pi-studio.visual.result` or `pi-studio.visual.error`
 page names neither a folder nor a plugin. The full shapes are in `docs` at the top of
 `server/routes/plugins.ts` and in the panel example `test-support/plugin-visual/`.
 
-A panel is in the toolbox by default. Giving its `visual` the place `"drawer"` puts it in the left
-drawers' column instead, beside files, activity and cards: the board draws its pane with the rail's own
-head and close button, sizes it with the rail grip, and puts its door in the header with activity and
-cards. The files a drawer panel is served, and the one call it may make, are the same either way.
+A panel is in the toolbox by default. Giving its `visual` the place `"drawer"` puts it in a drawer instead,
+behind a door in the header instead of the toolbox menu: the board draws its pane with the rail's own
+head and close button, sizes it with the rail grip, and the files a drawer panel is served, and the one
+call it may make, are the same either way.
+
+Which edge the drawer sits on is `visual.position`, and it only means something on a drawer panel:
+
+- `visual.position` left out, or `"left"`, puts it in the left drawers' column, beside files, activity
+  and cards, the way a drawer panel has always worked.
+- `"bottom"`, `"top"` and `"right"` put it in a strip across the bottom, a strip under the header, and a
+  column on the right. A bottom or top strip is the terminal drawer's height, a right column is the rail's
+  width, so the furniture the human already sized sizes these too.
+- `"any"` says the plugin takes any edge and names none. The edge is then the one its registration's
+  row `position` names — one of `"bottom"`, `"top"`, `"left"` or `"right"`, in settings — or the left
+  when that is not written either. A row `position` picks over any `visual.position`, an explicit edge
+  included. The pick wins over the ask; it never rewrites the manifest.
+- A `visual.position` written with no place, or an edge the board cannot draw, is a problem on the row
+  at read time, not a move to another edge: a plugin never learns of a newer side by being silently put
+  somewhere else. The same goes for a row `position` on a panel with no drawer place. New sides travel on
+  a protocol minor, so an older daemon refuses them with its protocol message instead. And if a manifest
+  later drops its drawer place while a pick is saved, the row is refused until the next settings save
+  drops that pick.
 
 ## The example plugin
 

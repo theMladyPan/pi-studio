@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- feat: Let a drawer panel sit on any edge: a plugin's `visual.position` — `"bottom"`, `"top"`, `"right"`, `"left"` or `"any"` — puts its drawer across the bottom, under the header, on the right, or on the left as before when it is left out, and `"any"` takes the one edge its registration picks in settings. A position with no drawer place, and a side the board cannot draw, are refused at read time rather than moved to another edge. [t-c892c0ac]
 - feat: Show the git command's own output when it fails in the graph drawer — a merge conflict now names the files it clashed on instead of only `git could not run: git merge` — and, beside it, one plain sentence from the helper model asking for nothing more than what happened and what to do next. [t-f86474d0]
 - feat: Fold each plugin on the crossroads settings page into its own collapsible row, so the section opens as a list of names and states and only the plugin being edited shows its fields, and keep rescan above the list where it is always reachable, even with no folder offered for enabling or while a plugin is open. [t-347dbd48]
 - feat: Show the pi-studio logo in the top-left of the board instead of the word `pi`, and name the workspace label `<workspace> board` instead of `board of <workspace>`, so the header reads as the workspace's own board. [t-4b4fa58d]

@@ -600,6 +600,22 @@
      the rail-head and the close button, and the panel's own page fills the rest. */
   .drawer.plugin-pane { background: #0d1117; }
   .drawer.plugin-pane iframe.drawer-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #0d1117; }
+  /* The same pane on the other edges: one fixed strip per edge, so `display:flex` needs its own
+     `[hidden]` rule the way the rail's head does. One pane per strip is up at a time. */
+  #drawersRight, #pluginDockTop, #pluginDockBottom {
+    position: fixed; z-index: 1500; display: flex; flex-direction: column;
+    background: #0a0f16; font: 12px var(--mono); overflow: hidden; }
+  #drawersRight[hidden], #pluginDockTop[hidden], #pluginDockBottom[hidden] { display: none; }
+  #drawersRight { top: 44px; right: 0; bottom: 0; width: var(--rail); border-left: 1px solid var(--border); }
+  #pluginDockTop { top: 44px; left: 0; right: 0; height: var(--term); border-bottom: 1px solid var(--border-bright); }
+  #pluginDockBottom { left: 0; right: 0; bottom: 0; height: var(--term); border-top: 1px solid var(--border-bright); }
+  #drawersRight > .drawer, #pluginDockTop > .drawer, #pluginDockBottom > .drawer {
+    display: none; flex: 1; min-height: 0; flex-direction: column; }
+  #drawersRight > .drawer.on, #pluginDockTop > .drawer.on, #pluginDockBottom > .drawer.on { display: flex; }
+  #drawersRight > .drawer.plugin-pane iframe.drawer-frame,
+  #pluginDockTop > .drawer.plugin-pane iframe.drawer-frame,
+  #pluginDockBottom > .drawer.plugin-pane iframe.drawer-frame {
+    flex: 1; min-height: 0; width: 100%; border: 0; background: #0d1117; }
   #pluginDrawerDoors { display: contents; }
   #pluginDrawerDoors[hidden] { display: none; }
   /* Source control drawer: the message field rides at the top, then the staged list, then the rest.
@@ -1722,6 +1738,14 @@
   </section>
   <div id="railGrip" title="drag to resize"></div>
 </div>
+
+<!-- The plugin drawers on the other three edges: a panel that asked for the bottom, the top or the right
+     sits in one of these, with its own pane per plugin, made on its first open and kept, the way the left
+     drawers' plugin panes are. The width follows the rail's and the height is the terminal drawer's, so
+     the furniture the human already sized sizes these too. Board.js fills and shows them. -->
+<div id="drawersRight" hidden></div>
+<div id="pluginDockTop" hidden></div>
+<div id="pluginDockBottom" hidden></div>
 
 <!-- Where the field of a board with a single session behind it lives. A board of threads has none:
      every thread card carries its own field, built from the template below. -->

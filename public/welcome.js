@@ -1360,15 +1360,65 @@
     const select = el("select", "cfg-type");
     select.dataset.index = String(index);
     select.dataset.field = "place";
-    for (const [key, label] of [["", "toolbox"], ["drawer", "left drawers"]]) {
+    for (const [key, label] of [["", "toolbox"], ["drawer", "drawer"]]) {
       const option = el("option");
       option.value = key;
       option.textContent = label;
       if ((value || "") === key) option.selected = true;
       select.append(option);
     }
+    // The edge only means something on a drawer: a toolbox panel has no edge to sit on.
+    select.addEventListener("change", () => {
+      const position = select.closest(".cfg-body")?.querySelector(`select[data-field="position"][data-index="${index}"]`);
+      if (position) position.disabled = select.value !== "drawer";
+    });
     row.append(select);
     return row;
+  }
+
+  function pluginPositionSelect(value, index, isDrawer) {
+    const row = document.createElement("div");
+    row.className = "cfg-row is-typed";
+    row.append(Object.assign(el("span"), { textContent: "position" }));
+    const select = el("select", "cfg-type");
+    select.dataset.index = String(index);
+    select.dataset.field = "position";
+    for (const [key, label] of [["", "left (default)"], ["left", "left"], ["bottom", "bottom"], ["top", "top"], ["right", "right"], ["any", "any"]]) {
+      const option = el("option");
+      option.value = key;
+      option.textContent = label;
+      if ((value || "") === key) option.selected = true;
+      select.append(option);
+    }
+    select.disabled = !isDrawer;
+    select.title = "which edge the drawer sits on; left is the default, any lets this pick decide";
+    row.append(select);
+    return row;
+  }
+
+  function pluginPickSelect(value, index) {
+    const row = document.createElement("div");
+    row.className = "cfg-row is-typed";
+    row.append(Object.assign(el("span"), { textContent: "position" }));
+    const select = el("select", "cfg-type");
+    select.dataset.index = String(index);
+    select.dataset.field = "position";
+    for (const [key, label] of [["", "as the plugin asks"], ["left", "left"], ["bottom", "bottom"], ["top", "top"], ["right", "right"]]) {
+      const option = el("option");
+      option.value = key;
+      option.textContent = label;
+      if ((value || "") === key) option.selected = true;
+      select.append(option);
+    }
+    select.title = "the edge to draw this plugin's panel on; for a panel that takes any edge, this is the pick";
+    row.append(select);
+    return row;
+  }
+
+  function positionWords(position) {
+    if (!position || position === "left") return "left drawer";
+    if (position === "any") return "drawer · any edge";
+    return `${position} drawer`;
   }
 
   /** A button that lives in a plugin's summary: it acts, and never folds the row it sits in. */
@@ -1453,8 +1503,10 @@
     }
     pluginData.plugins.forEach((row, index) => {
       // A row that names a folder takes everything else from that folder's plugin.json, so it shows
-      // only what a row of its own can decide — its name, its args and its shortcut. The command, the
-      // panel and the place belong to the manifest and are never rewritten by this form.
+      // only what a row of its own can decide — its name, its args, its shortcut and the edge its
+      // panel is drawn on. The command, the panel and the place belong to the manifest and are
+      // never rewritten by this form; the edge is the row's own, because a plugin that says `any`
+      // names no edge and settings has to.
       const fromFolder = Boolean(row.installed || row.bundled);
       const body = [pluginField("name", row.name, "name", index)];
       if (fromFolder) {
@@ -1463,12 +1515,24 @@
             textContent: `the command, the panel and the place come from the ${row.installed ? "installed" : "shipped"} plugin.json`,
           }),
         );
+        if (row.visual?.place === "drawer") {
+          const asks = row.visual.position || "left";
+          body.push(
+            Object.assign(el("p", "cfg-note"), {
+              textContent: asks === "any"
+                ? "this panel takes any edge: pick the edge it is drawn on, or leave it and it is drawn on the left"
+                : `this panel sits in the ${positionWords(asks)}`,
+            }),
+          );
+          body.push(pluginPickSelect(row.position || "", index));
+        }
       } else {
         body.push(pluginField("command", row.command, "command", index));
       }
       body.push(pluginField("args", (row.args || []).join(", "), "args", index, "--flag value, comma separated"));
       if (!fromFolder) {
         body.push(pluginPlaceSelect(row.visual?.place || "", index));
+        body.push(pluginPositionSelect(row.visual?.position || "", index, row.visual?.place === "drawer"));
         body.push(pluginField("panel title", row.visual?.title || "", "title", index));
         body.push(pluginField("panel entry", row.visual?.entry || "", "entry", index));
         body.push(pluginField("panel files", (row.visual?.files || []).join(", "), "files", index));
@@ -1493,7 +1557,7 @@
       rendered.push(head);
       for (const one of available) {
         const preview = [
-          one.defaults.place === "drawer" ? "left drawers" : "toolbox",
+          one.defaults.place === "drawer" ? positionWords(one.defaults.position || "left") : "toolbox",
           one.start === "lazy" ? "starts on open" : "starts on boot",
           one.defaults.shortcut ? `shortcut ${one.defaults.shortcut}` : null,
           one.description,
@@ -1563,6 +1627,9 @@
         };
         if (named?.installed) row.installed = named.installed;
         if (named?.bundled) row.bundled = named.bundled;
+        // The edge a human picked for a folder row: one of the four sides, or nothing when they left
+        // it as the plugin asks. It is written only for a folder row with a drawer panel.
+        if ((named?.installed || named?.bundled) && named?.visual?.place === "drawer" && fields.position) row.position = fields.position;
         if (!named?.installed && !named?.bundled) {
           row.command = (fields.command || "").trim();
           const files = (fields.files || "").split(",").map((one) => one.trim()).filter(Boolean);
@@ -1572,6 +1639,8 @@
               entry: (fields.entry || "").trim(),
               files,
               ...(fields.place ? { place: fields.place } : {}),
+              // An edge with no drawer place is refused by the daemon, so it is written only on one.
+              ...(fields.place === "drawer" && fields.position ? { position: fields.position } : {}),
             };
           }
         }

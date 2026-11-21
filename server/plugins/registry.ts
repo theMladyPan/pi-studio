@@ -33,6 +33,14 @@ export const PLUGINS_DIR = join(STATE_DIR, "plugins");
  */
 export const BUNDLED_DIR = join(REPO_DIR, "plugins");
 
+/** The edges a drawer panel may sit on, as a plugin may declare them: one side, or any of the four. */
+export const PLUGIN_VISUAL_POSITIONS = ["any", "bottom", "top", "left", "right"] as const;
+export type PluginVisualPosition = (typeof PLUGIN_VISUAL_POSITIONS)[number];
+
+/** The four concrete edges a drawer can be drawn on. The pick a human saves in settings is always one of these. */
+export const PLUGIN_VISUAL_SIDES = ["bottom", "top", "left", "right"] as const;
+export type PluginVisualSide = (typeof PLUGIN_VISUAL_SIDES)[number];
+
 /**
  * The panel a plugin may put on a board: the document a frame loads, and every file that frame may
  * fetch, each named relative to the plugin's own folder — the one its executable sits in.
@@ -46,10 +54,19 @@ export type PluginVisual = {
 	files: string[];
 	/**
 	 * Where the board puts the panel: `undefined` puts it behind a door in the toolbox, and `"drawer"`
-	 * puts it in the left drawers' column, beside files, activity and cards, behind a door in the header.
+	 * puts it in a drawer behind a door in the header. A drawer sits on `position`, or on the left when
+	 * `position` is not written, which is what every drawer panel written before `position` did.
 	 */
 	place?: "drawer";
+	/**
+	 * Which edge the drawer sits on. `undefined` means the left, as a drawer panel always has; `none` of
+	 * the values is read without `place: "drawer"`, and a value the board cannot draw is a problem on
+	 * the row rather than a move to another edge. `"any"` says the plugin takes any edge, and the edge
+	 * is the one its registration's `position` names, or the left when that is not written either.
+	 */
+	position?: PluginVisualPosition;
 };
+
 
 /**
  * The plain letters the board's own keys already answer to, from `SHORTCUTS` in `public/client/board.js`
@@ -75,6 +92,12 @@ export type PluginEntry = {
 	installed?: string;
 	/** One plain letter that opens this plugin's panel, when the human assigned one in settings. */
 	shortcut?: string;
+	/**
+	 * The edge the human picked for this plugin in settings, when they picked one. It wins over the
+	 * manifest's `visual.position`, and it is the whole point of a plugin that says `"any"`: the plugin
+	 * names no edge, and settings names one of the four.
+	 */
+	position?: PluginVisualSide;
 	/** The plugin's own version, from its manifest; for display before its process has ever run. */
 	version?: string;
 	/**
@@ -114,7 +137,7 @@ export type AvailablePlugin = {
 	title: string;
 	description: string;
 	start: "eager" | "lazy";
-	defaults: { args: string[]; shortcut?: string; place?: "drawer" };
+	defaults: { args: string[]; shortcut?: string; place?: "drawer"; position?: PluginVisualPosition };
 };
 
 /** A folder the settings page shows but cannot offer, and why. */
@@ -182,6 +205,15 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE, bundledDir: stri
 			}
 			usedShortcuts.add(shortcut);
 		}
+		// The edge a human picked for this plugin in settings. It is a pick, so it is one of the four
+		// sides and never `"any"`: a plugin that says `"any"` names no edge, and this is the one that
+		// does. It is kept on the row so a settings page can show what was picked, and it wins over
+		// the manifest's `visual.position` below and beside a command row's `visual.position`.
+		const pick = positionPickOf(bag.position);
+		if (pick.problem !== undefined) {
+			problems.push({ name, problem: pick.problem });
+			continue;
+		}
 		// A bundled row names a plugin this install ships, and takes its program and its panel from that
 		// folder, so one word is the whole registration. An installed row is the same one word for the
 		// folder the human put in `~/.local/state/pi-studio/plugins/`.
@@ -201,6 +233,15 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE, bundledDir: stri
 				problems.push({ name, problem: found.problem });
 				continue;
 			}
+			// The pick sits on a drawer panel and nowhere else: a position with no drawer place is a
+			// problem on the row, the same as a `visual.position` without its place is on a manifest. It
+			// is kept beside the manifest's ask rather than folded into it, so settings can keep
+			// showing what the plugin asked (often `"any"`) beside the pick that wins, and only the
+			// board's list merges the two.
+			if (pick.position !== undefined && found.visual?.place !== "drawer") {
+				problems.push({ name, problem: 'position needs a panel with visual.place "drawer"' });
+				continue;
+			}
 			plugins.push({
 				name,
 				command: found.command as string,
@@ -209,6 +250,7 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE, bundledDir: stri
 				args: bag.args === undefined ? [...(found.manifest?.args ?? [])] : [...(args as string[])],
 				...(found.visual ? { visual: found.visual } : {}),
 				...(shortcut !== undefined ? { shortcut: shortcut as string } : {}),
+				...(pick.position !== undefined ? { position: pick.position } : {}),
 				...(found.version ? { version: found.version } : {}),
 				...(found.start === "lazy" ? { start: "lazy" as const } : {}),
 				[named.kind]: (folder as string).trim(),
@@ -231,7 +273,11 @@ export function loadPluginRegistry(file: string = PLUGINS_FILE, bundledDir: stri
 			problems.push({ name, problem: visual.problem });
 			continue;
 		}
-		plugins.push({ name, command, args: [...(args as string[])], ...(visual.visual ? { visual: visual.visual } : {}), ...(shortcut !== undefined ? { shortcut: shortcut as string } : {}) });
+		if (pick.position !== undefined && visual.visual?.place !== "drawer") {
+			problems.push({ name, problem: 'position needs a panel with visual.place "drawer"' });
+			continue;
+		}
+		plugins.push({ name, command, args: [...(args as string[])], ...(visual.visual ? { visual: visual.visual } : {}), ...(shortcut !== undefined ? { shortcut: shortcut as string } : {}), ...(pick.position !== undefined ? { position: pick.position } : {}) });
 	}
 	return { plugins, problems };
 }
@@ -387,6 +433,9 @@ function visualOf(command: string, value: unknown): { visual?: PluginVisual; pro
 	if (entry === null) return { problem: "visual.entry must be a relative path inside the plugin's own folder" };
 	const place = bag.place;
 	if (place !== undefined && place !== "drawer") return { problem: "visual.place must be \"drawer\" when it is given" };
+	const position = positionOf(bag.position);
+	if (position.problem !== undefined) return { problem: position.problem };
+	if (position.position !== undefined && place !== "drawer") return { problem: 'visual.position needs visual.place "drawer"' };
 	const rows = bag.files;
 	if (!Array.isArray(rows) || rows.length === 0) return { problem: "visual.files must name at least one file" };
 	const files: string[] = [];
@@ -400,7 +449,32 @@ function visualOf(command: string, value: unknown): { visual?: PluginVisual; pro
 	for (const path of files) {
 		if (resolvePluginFile(root, path) === null) return { problem: `visual file ${path} is not a file inside ${root}` };
 	}
-	return { visual: { title, entry, files, ...(place === "drawer" ? { place: "drawer" as const } : {}) } };
+	return { visual: { title, entry, files, ...(place === "drawer" ? { place: "drawer" as const } : {}), ...(position.position !== undefined ? { position: position.position } : {}) } };
+}
+
+/**
+ * The edge a panel declared, no edge when it declared none, or the reason its word cannot be used.
+ *
+ * The list is the whole of what the board can draw: a side outside it is a problem on the row rather
+ * than a move to an edge a plugin did not ask for, so a plugin never learns of a newer side by being
+ * silently put somewhere else.
+ */
+function positionOf(value: unknown): { position?: PluginVisualPosition; problem?: string } {
+	if (value === undefined) return {};
+	if (typeof value !== "string" || !(PLUGIN_VISUAL_POSITIONS as readonly string[]).includes(value))
+		return { problem: 'visual.position must be "any", "bottom", "top", "left" or "right" when it is given' };
+	return { position: value as PluginVisualPosition };
+}
+
+/**
+ * The edge a human picked in settings as a row-level `position`: always one of the four concrete
+ * sides, so `"any"` — a plugin saying it takes any edge — is not a pick and is refused here.
+ */
+function positionPickOf(value: unknown): { position?: PluginVisualSide; problem?: string } {
+	if (value === undefined) return {};
+	if (typeof value !== "string" || !(PLUGIN_VISUAL_SIDES as readonly string[]).includes(value))
+		return { problem: 'position must be "bottom", "top", "left" or "right" when it is given' };
+	return { position: value as PluginVisualSide };
 }
 
 /**
@@ -512,6 +586,7 @@ export function loadAvailablePlugins(registered: Iterable<string>, installedDir:
 					args: manifest.args ?? [],
 					...(manifest.shortcut ? { shortcut: manifest.shortcut } : {}),
 					...(found.visual?.place === "drawer" ? { place: "drawer" as const } : {}),
+					...(found.visual?.position !== undefined ? { position: found.visual.position } : {}),
 				},
 			});
 		}

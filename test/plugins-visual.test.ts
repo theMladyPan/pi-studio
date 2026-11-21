@@ -124,6 +124,58 @@ test("a panel that asks for the drawer is read with its place, and one that asks
 	assert.match(bad.problems[0]?.problem ?? "", /visual\.place/);
 });
 
+test("a drawer panel is read with each position the board can draw, and none beside them", () => {
+	const exe = join(folder("positioned"), "exe");
+	for (const position of ["left", "bottom", "top", "right", "any"]) {
+		const row = { name: "positioned", command: exe, args: [], visual: { title: "positioned", entry: "panel.html", files: ["panel.html"], place: "drawer", position } };
+		const { plugins, problems } = read([row]);
+		assert.deepEqual(problems, [], position);
+		assert.deepEqual(plugins, [{ name: "positioned", command: exe, args: [], visual: row.visual }], position);
+	}
+	// A position that is not an edge the board draws is a problem, never a move to another edge.
+	for (const position of ["center", "sidebar", "", 42, null]) {
+		const { plugins, problems } = read([{ name: "positioned", command: exe, args: [], visual: { title: "positioned", entry: "panel.html", files: ["panel.html"], place: "drawer", position } }]);
+		assert.deepEqual(plugins, [], String(position));
+		assert.match(problems[0]?.problem ?? "", /visual\.position/, String(position));
+	}
+	// A position with no drawer place has no edge to sit on, and a toolbox panel with one is refused.
+	const homeless = read([{ name: "positioned", command: exe, args: [], visual: { title: "positioned", entry: "panel.html", files: ["panel.html"], position: "bottom" } }]);
+	assert.deepEqual(homeless.plugins, []);
+	assert.match(homeless.problems[0]?.problem ?? "", /visual\.position needs visual\.place/);
+});
+
+test("a row's position pick wins over the manifest, and only sits on a drawer panel", () => {
+	const path = ownExe("picked");
+	writeFileSync(join(path, "plugin.json"), JSON.stringify({
+		name: "picked",
+		version: "1.0.0",
+		protocol: 1,
+		visual: { entry: "panel.html", files: ["panel.html"], place: "drawer", position: "any" },
+	}));
+	const fileWith = (row: object) => {
+		const file = join(root, `picked-${Math.random().toString(36).slice(2)}.json`);
+		writeFileSync(file, JSON.stringify({ plugins: [row] }));
+		return loadPluginRegistry(file, undefined, root);
+	};
+	const picked = fileWith({ name: "picked", installed: "picked", args: [], position: "bottom" });
+	assert.deepEqual(picked.problems, []);
+	assert.equal(picked.plugins[0].position, "bottom");
+	assert.equal(picked.plugins[0].visual?.position, "any", "the pick rides beside the manifest's ask, not inside it");
+	const asAsked = fileWith({ name: "picked", installed: "picked", args: [] });
+	assert.equal(asAsked.plugins[0].visual?.position, "any", "no pick keeps the manifest's any");
+	assert.equal("position" in asAsked.plugins[0], false);
+	const anyPick = fileWith({ name: "picked", installed: "picked", args: [], position: "any" });
+	assert.deepEqual(anyPick.plugins, [], "any is not a pick");
+	assert.match(anyPick.problems[0]?.problem ?? "", /position must be/);
+	const toolbox = ownExe("picked-toolbox");
+	writeFileSync(join(toolbox, "plugin.json"), JSON.stringify({ name: "picked-toolbox", version: "1.0.0", protocol: 1, visual: { entry: "panel.html", files: ["panel.html"] } }));
+	const file = join(root, `picked-toolbox-${Math.random().toString(36).slice(2)}.json`);
+	writeFileSync(file, JSON.stringify({ plugins: [{ name: "picked-toolbox", installed: "picked-toolbox", args: [], position: "bottom" }] }));
+	const refused = loadPluginRegistry(file, undefined, root);
+	assert.deepEqual(refused.plugins, []);
+	assert.match(refused.problems[0]?.problem ?? "", /position needs a panel/);
+});
+
 test("a row's shortcut is one free letter, and a letter twice or the board's is refused", () => {
 	const exe = join(folder("keyed"), "exe");
 	const row = (name: string, shortcut: unknown) => ({ name, command: exe, args: [], shortcut });
@@ -244,6 +296,7 @@ test("folders in the plugins folder are offered to enable, and broken ones with 
 		mkdirSync(path, { recursive: true });
 		writeFileSync(join(path, name), "#!/bin/sh\nexit 0\n");
 		chmodSync(join(path, name), 0o755);
+		writeFileSync(join(path, "panel.html"), "<!doctype html><title>panel</title>\n");
 		writeFileSync(join(path, "plugin.json"), JSON.stringify(manifest));
 	};
 	leaf("offered", {
@@ -253,7 +306,7 @@ test("folders in the plugins folder are offered to enable, and broken ones with 
 		title: "offered one",
 		description: "offered",
 		shortcut: "y",
-		visual: { entry: "panel.html", files: ["panel.html"], place: "drawer" },
+		visual: { entry: "panel.html", files: ["panel.html"], place: "drawer", position: "bottom" },
 	});
 	leaf("broken", { name: "broken", protocol: 2 });
 	leaf("middle", { name: "middle", version: "1.0.0", protocol: 1 });
@@ -261,6 +314,8 @@ test("folders in the plugins folder are offered to enable, and broken ones with 
 	assert.deepEqual(available.map((one) => one.name), ["middle"], "offered is registered already, so it is not offered twice");
 	assert.equal(available[0].defaults.shortcut ?? "", "");
 	assert.equal(unavailable.some((one) => one.folder === "broken" && /protocol/.test(one.problem)), true, "broken is shown with its reason");
+	const unregistered = loadAvailablePlugins([], found, join(found, "absent"));
+	assert.equal(unregistered.available.find((one) => one.name === "offered")?.defaults.position, "bottom", "the offer carries the manifest's edge");
 });
 
 test("a lazy plugin registers dormant, keeps its door, and starts on its first panel request", async () => {
@@ -464,6 +519,54 @@ test("a panel that asks for the drawer is listed with its place", async () => {
 		assert.equal(listed.status, 200);
 		assert.deepEqual(JSON.parse(listed.body), {
 			plugins: [{ name: "example-drawer", title: "example panel", url: "/plugins/visual/example-drawer/panel.html", place: "drawer" }],
+		});
+	} finally {
+		daemon.child.kill("SIGTERM");
+		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);
+	}
+});
+
+test("a saved pick beats the manifest's any on the board's list, and settings still reads the ask", async () => {
+	const path = join(state, "plugins", "anyone");
+	mkdirSync(path, { recursive: true });
+	writeFileSync(join(path, "anyone"), readFileSync(join(example, "panel-plugin.mjs")));
+	chmodSync(join(path, "anyone"), 0o755);
+	writeFileSync(join(path, "plugin.json"), JSON.stringify({
+		name: "anyone",
+		version: "1.2.3",
+		protocol: 1,
+		title: "any one",
+		visual: { entry: "panel.html", files: ["panel.html", "panel.js", "panel.css"], place: "drawer", position: "any" },
+	}));
+	for (const file of ["panel.html", "panel.js", "panel.css"]) {
+		writeFileSync(join(path, file), readFileSync(join(example, file)));
+	}
+	const daemon = await boot([{ name: "anyone", installed: "anyone", args: [], position: "top" }]);
+	const gone = new Promise<void>((resolve) => daemon.child.once("exit", () => resolve()));
+	try {
+		const listed = await listedPanels(daemon);
+		assert.equal(listed.status, 200);
+		assert.deepEqual(JSON.parse(listed.body), {
+			plugins: [{ name: "anyone", title: "any one", url: "/plugins/visual/anyone/panel.html", place: "drawer", position: "top" }],
+		});
+		const registered = JSON.parse((await get(daemon, "/plugins/registry")).body) as { plugins: { name: string; position?: string; visual?: { position?: string } }[] };
+		assert.equal(registered.plugins[0].position, "top");
+		assert.equal(registered.plugins[0].visual?.position, "any", "settings reads the ask beside the pick");
+	} finally {
+		daemon.child.kill("SIGTERM");
+		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);
+	}
+});
+
+test("a panel that asks for the bottom is listed with its position", async () => {
+	const row = { ...exampleRow, name: "example-bottom", visual: { ...exampleRow.visual, place: "drawer", position: "bottom" } };
+	const daemon = await boot([row]);
+	const gone = new Promise<void>((resolve) => daemon.child.once("exit", () => resolve()));
+	try {
+		const listed = await listedPanels(daemon);
+		assert.equal(listed.status, 200);
+		assert.deepEqual(JSON.parse(listed.body), {
+			plugins: [{ name: "example-bottom", title: "example panel", url: "/plugins/visual/example-bottom/panel.html", place: "drawer", position: "bottom" }],
 		});
 	} finally {
 		daemon.child.kill("SIGTERM");
