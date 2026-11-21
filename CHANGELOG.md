@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-- fix: Keep a message steered into a running conversation on the turn that run answers, ahead of its reply, instead of appending it as a turn after that reply, so steering a run no longer leaves its words below the answer they shaped reading as an unanswered follow-up; boards written before read their old steer turns back the same way. [t-3f39e668]
-
 - feat: Let any card be named in the message you were writing, including one that belongs to another thread and one no thread answers for, by pressing `r` on it or by dragging it onto a message field. The drag puts the card back where it was and adds a chip to the message, so a reference costs no layout. A card written by a plugin, or one whose thread has gone, is handed to the agent quoted as any other card is. [t-0a6855b8]
 - feat: Follow a cross-reference written with its board in front, `[[board/key]]`, by opening that board in a new tab on the card it names; before, only the cards of the board the reader was on could be reached, so a link to another workspace went dead. [t-0a6855b8]
 - fix: Keep cross-references honest after review: a drag now ends cleanly when the browser cancels it and is read where the pointer is at release, a cross-board link is only shown as live when a known board answers to it and is followed as a real link to a new tab rather than a popup that can take the current one, folded threads are opened when a reference goes into them, and a queued message keeps the cards it named when it is edited. [t-0a6855b8]
@@ -25,6 +23,7 @@
 
 - feat: Let a plugin's panel live in the left drawers, by giving its visual the place `"drawer"`: the board draws its pane with the rail's own head and close button, sizes it with the rail grip, and puts its door in the header beside activity and cards, while every other panel still opens in the toolbox as before. [t-81baed9a]
 - feat: Add `pi-studio add <git-url>`, which clones a plugin's repository into the plugins folder, builds it when it is Rust, and leaves it for settings to enable; adding one already installed pulls and rebuilds instead and keeps its registration. [t-81baed9a]
+- fix: Keep a message steered into a running conversation on the turn that run answers, ahead of its reply, instead of appending it as a turn after that reply, so steering a run no longer leaves its words below the answer they shaped reading as an unanswered follow-up; boards written before read their old steer turns back the same way. [t-3f39e668]
 
 ## [0.6.0] - 2026-11-20
 

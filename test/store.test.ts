@@ -32,9 +32,10 @@ test("a thread file from today reloads with its fields intact", () => {
 });
 
 test("a turn comes back as the file says, and a steer the daemon stopped keeps its own label", () => {
-	// A steer that joined a live run is answered inside the run's own turn, so its words were spent; a steer
-	// the daemon stopped — an idle thread, a cut run — never was, and a load keyed on `mode` brought it back
-	// labelled as spent. Both directions are pinned here, and a turn in flight or waiting is nobody's work.
+	// A steer that joined a live run is kept on the run's own turn, so a top-level one is only the shape
+	// a steer with no run naming a turn takes; a steer the daemon stopped — an idle thread, a cut run —
+	// never joined one, and a load keyed on `mode` brought it back labelled as spent. Both directions
+	// are pinned here, and a turn in flight or waiting is nobody's work.
 	const spent = savedTurn({ text: "and this instead", status: "sent", mode: "steer", at: now });
 	const cut = savedTurn({ text: "and this instead", status: "stopped", mode: "steer", at: now });
 	const writing = savedTurn({ text: "the first words", status: "sent", mode: "queue", streaming: true, at: now });
@@ -94,6 +95,24 @@ test("a steer kept on its run's turn survives a save, and an older board's steer
 		["and this instead", "and this too"],
 	);
 	assert.equal(legacy.turns[0].reply, "the stub answered");
+
+	// A spent steer with no answer under it — a retry window, a cut run — keeps its own turn, exactly
+	// as the route still writes one, rather than folding onto a turn nothing answered.
+	const orphan = restoredThread(
+		{
+			id: "t14",
+			title: "x",
+			at: now,
+			turns: [
+				{ text: "the first words", status: "stopped", mode: "queue", at: now, error: "provider error" },
+				{ text: "and this instead", status: "sent", mode: "steer", at: now + 1 },
+			],
+		},
+		"/tmp/folder",
+	)!;
+	assert.equal(orphan.turns.length, 2, "a steer under a stopped turn was folded away");
+	assert.equal(orphan.turns[1].mode, "steer");
+	assert.equal(orphan.turns[1].steers, undefined);
 });
 
 test("a boss comes back as a boss, with the flow it was running", () => {

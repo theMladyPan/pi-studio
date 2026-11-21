@@ -26,6 +26,20 @@ export const boards = new Map();
 
 
 
+/** Words steered into a run, as they are written and read back: the words, when they arrived, and the thumbnail alone. */
+function cleanedSteers(raw) {
+	return (Array.isArray(raw) ? raw : [])
+		.filter((steer) => steer && typeof steer.text === "string")
+		.map((steer) => ({
+			text: String(steer.text),
+			at: Number.isFinite(steer.at) ? steer.at : Date.now(),
+			...(() => {
+				const images = thumbImages(steer.images);
+				return images.length ? { images } : {};
+			})(),
+		}));
+}
+
 /** Everything a `Turn` needs and nothing that dies with the process. */
 export function savedTurn(turn) {
 	return {
@@ -44,18 +58,10 @@ export function savedTurn(turn) {
 		...(turn.reply ? { reply: turn.reply } : {}),
 		// A steer that joined the run is kept on the turn it joined, ahead of the reply it helped
 		// shape, thumbnails only like a turn's pictures.
-		...(turn.steers?.length
-			? {
-					steers: turn.steers.map((steer) => ({
-						text: steer.text,
-						at: steer.at,
-						...(() => {
-							const images = thumbImages(steer.images);
-							return images.length ? { images } : {};
-						})(),
-					})),
-				}
-			: {}),
+		...(() => {
+			const steers = cleanedSteers(turn.steers);
+			return steers.length ? { steers } : {};
+		})(),
 		// What the run said on the way is kept with the answer: a card that reopens without it reads as
 		// a run that answered out of nowhere.
 		...(turn.interim?.length ? { interim: turn.interim } : {}),
@@ -203,20 +209,10 @@ export function restoredTurns(raw) {
 			mode: turn.mode === "steer" ? "steer" : "queue",
 			at: Number.isFinite(turn.at) ? turn.at : Date.now(),
 			...(typeof turn.reply === "string" ? { reply: turn.reply } : {}),
-			...(Array.isArray(turn.steers) && turn.steers.length
-				? {
-						steers: turn.steers
-							.filter((steer) => steer && typeof steer.text === "string")
-							.map((steer) => ({
-								text: String(steer.text),
-								at: Number.isFinite(steer.at) ? steer.at : Date.now(),
-								...(() => {
-									const images = thumbImages(steer.images);
-									return images.length ? { images } : {};
-								})(),
-							})),
-					}
-				: {}),
+			...(() => {
+				const steers = cleanedSteers(turn.steers);
+				return steers.length ? { steers } : {};
+			})(),
 			...(Array.isArray(turn.interim) && turn.interim.length ? { interim: turn.interim.map(String) } : {}),
 			...(typeof turn.error === "string" && turn.error ? { error: turn.error } : {}),
 			// The same gate the message came through: a thumbnail the file cannot vouch for is dropped.
@@ -227,10 +223,12 @@ export function restoredTurns(raw) {
 		};
 		// Boards written before a joined steer lived on its turn kept it as a turn of its own after
 		// the turn it joined, so it was drawn below that turn's reply. A spent steer — `sent`, never
-		// streaming at rest — folds back onto the turn before it, where it was read; one with no turn
-		// before it keeps its own, because there is nothing to fold it onto.
-		if (restored.status === "sent" && restored.mode === "steer" && !restored.reply && turns.length) {
-			const before = turns[turns.length - 1];
+		// streaming at rest — folds back onto the turn before it, where it was read, but only when
+		// that turn answered: a steer with no answer under it (a retry window, a cut run) keeps its
+		// own turn, exactly as the route still writes one. One with no turn before it keeps its own
+		// too, because there is nothing to fold it onto.
+		const before = turns[turns.length - 1];
+		if (restored.status === "sent" && restored.mode === "steer" && !restored.reply && before?.status === "answered") {
 			before.steers = [
 				...(before.steers ?? []),
 				{ text: restored.text, at: restored.at, ...(restored.images ? { images: restored.images } : {}) },

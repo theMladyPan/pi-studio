@@ -216,6 +216,45 @@ test("a steer carries its pictures to the child, and one waiting behind a run ke
 });
 
 
+test("a steer into a run answering for a card is kept on that card's turn", async () => {
+	const thread = {
+		...idleThread(),
+		id: "5555eeee",
+		status: "running",
+		hidden: true,
+		answering: { cardId: "note-1", turn: 0 },
+		turns: [],
+	};
+	const card: any = {
+		id: "note-1",
+		type: "note",
+		title: "a note",
+		markdown: "hi",
+		at: 1,
+		ownerThread: thread.id,
+		turns: [{ text: "the first words", status: "sent", mode: "queue", at: 1, streaming: true }],
+	};
+	const { board, written } = boardWith(thread);
+	(board as any).cards.set(card.id, card);
+	// The broadcast is what the tab repaints from, so a client that records it proves the card —
+	// not the hidden thread — was told.
+	const frames: string[] = [];
+	(board as any).clients.add({ write: (frame: string) => frames.push(frame) });
+	const steered = request({ cardId: card.id, text: "this instead", mode: "steer", images: [png()] });
+	await onMessage(steered.req, steered.res, board);
+	assert.equal(steered.res.status, 200, steered.res.body);
+	assert.equal(JSON.parse(steered.res.body).turn, 0);
+	assert.equal(thread.turns.length, 0, "the steer landed on the thread's own turns");
+	assert.equal(card.turns.length, 1, "the steer was appended as a turn after the card's turn");
+	assert.equal(card.turns[0].steers?.[0]?.text, "this instead");
+	assert.deepEqual(card.turns[0].steers[0].images, [{ thumb: `data:image/png;base64,${PIXEL}`, mimeType: "image/png" }]);
+	assert.equal(JSON.parse(written[0]).type, "steer");
+	const shown = JSON.parse(frames[frames.length - 1].replace(/^data: /, ""));
+	assert.equal(shown.card.id, card.id, "the broadcast was not the card the turn lives on");
+	assert.equal(shown.card.turns[0].steers?.[0]?.text, "this instead");
+	clearTimeout((board as any).saveTimer);
+});
+
 test("a message with no picture is written to the child exactly as before", async () => {
 	const thread = idleThread();
 	const { board, written } = boardWith(thread);

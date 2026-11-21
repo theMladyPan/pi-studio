@@ -207,7 +207,6 @@ export async function messageOnBoard(board, body) {
 			{ text: said.slice(0, 4000), at: Date.now(), ...(thumbs.length ? { images: thumbs } : {}) },
 		];
 		index = thread.answering.turn;
-		target = thread.answering;
 		if (joined.card) updateCard(board, joined.card);
 		else update(board, thread);
 	} else if (holding) {

@@ -491,7 +491,7 @@ commit's own account rather than on a check run now, the section below says so.
 - **Sessions resume**: the child writes its session under the app's own session dir, the thread
   stores the id, and a message after a daemon restart resumes that session. Verified: after a
   restart the agent remembered the word it had answered in the previous run.
-- **Steering and queueing** per thread; a turn a steer displaced reads `stopped`. Each field carries
+- **Steering and queueing** per thread; words steered into a run are kept on the turn that run answers, ahead of its reply. Each field carries
   one button for the choice (`.mode-toggle`), not two: its label is the mode the next message will use
   and it flips when pressed, so it is on screen whether or not a run is live. `steer` wears the warning
   colour, because that is the one that cuts a run short.
