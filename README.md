@@ -5,9 +5,8 @@
 <h1 align="center">pi-studio</h1>
 
 <p align="center">
-  A local daemon that owns pi agents and gives them a board.<br>
-  A workspace is a folder. A thread on its board is one agent;<br>
-  you type into its card and watch what it does.
+  Try it once, and you will never go back to classical chat harness.<br>
+  Batteries included.
 </p>
 
 <p align="center">
