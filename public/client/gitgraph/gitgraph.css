@@ -190,6 +190,8 @@ button.confirm { border-color: #9c3a39; }
 .file-warning { padding-left: 20px; overflow-wrap: anywhere; }
 .search-results { display: grid; gap: 4px; }
 .search-results button { text-align: left; }
+.git-details { margin: 8px 0; padding: 8px 10px; max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--mono); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+.git-help { color: var(--muted); }
 #settingsWidget { width: min(690px, 95vw); }
 .settings-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .settings-heading h2 { margin: 0; }
