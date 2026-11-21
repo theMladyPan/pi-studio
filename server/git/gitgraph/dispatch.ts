@@ -353,9 +353,10 @@ async function answer(board: DispatchBoard, request: LibreRequest, paths: string
 			return [{ command: "exportRepoConfig", status: cfg.ok ? null : cfg.error }];
 		}
 		case "explainGitError": {
-			// One sentence beside git's own words, asked once. The dialog names no repository
-			// for this, so the call runs in the daemon's folder with no tools; git's output
-			// alone is the question, and its path is not part of the answer.
+			// One sentence beside git's own words, asked once. The helper runs in the
+			// repository folder when one is named, as the commit drafts do, and in the
+			// daemon's folder otherwise; with no tools or context files the folder
+			// cannot colour the answer, and git's output alone is the question.
 			const details = str(f, "details").slice(0, 8000);
 			const forCommand = typeof f.forCommand === "string" && f.forCommand ? String(f.forCommand).slice(0, 120) : "";
 			const explanation = await explainGitError(details, forCommand || undefined, entry?.path ? { folder: entry.path } : {});

@@ -117,7 +117,10 @@ export function showError(error) {
 	]);
 	// One call, after the words are on screen: the helper fills in beside them and
 	// a silent failure leaves them alone. Closing the dialog abandons the answer.
+	// Only git replies carry details worth a call; a plain client error shows its
+	// own line and asks nothing.
 	void (async () => {
+		if (!error?.gitDetails) { help.hidden = true; return; }
 		const workspace = /^\/git\/([a-f0-9]{6,64})\/?$/.exec(location.pathname)?.[1];
 		if (!workspace) { help.hidden = true; return; }
 		try {

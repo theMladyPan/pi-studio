@@ -86,12 +86,12 @@ async function request(command, fields = {}) {
 }
 
 function fail(message, command, fields) {
-	const error = new Error(message);
+	const failed = new Error(message);
 	// The dialog shows git's words first, then asks the helper once beside them.
-	errno.gitCommand = command;
-	errno.gitRepo = fields?.repo ?? null;
-	errno.gitDetails = message;
-	throw error;
+	failed.gitCommand = command;
+	failed.gitRepo = fields?.repo ?? null;
+	failed.gitDetails = message;
+	throw failed;
 }
 
 function status(message, state = "ready") {

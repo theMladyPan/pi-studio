@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 /**
@@ -24,6 +27,31 @@ test("the first sentence is kept, and a greeting is refused", () => {
 	);
 	assert.equal(explain.plausibleHelp('"Hi — how can I help?"'), "");
 	assert.equal(explain.plausibleHelp("```\nMain has no upstream, so push with -u origin main.\n```"), "Main has no upstream, so push with -u origin main.");
+});
+
+test("the page carries a git failure on the thrown error, not on a stray name", () => {
+	// `npm run check` only parses the client, so a bare name in host.js would pass
+	// the gate and break every failed action in the browser. This is the guard.
+	const root = dirname(dirname(fileURLToPath(import.meta.url)));
+	const host = readFileSync(join(root, "public/client/gitgraph/host.js"), "utf8");
+	assert.ok(!/^\s*errno\./m.test(host), "host.js must not write to errno");
+	assert.match(host, /failed\.gitDetails = message/);
+	const dom = readFileSync(join(root, "public/client/gitgraph/dom.js"), "utf8");
+	assert.match(dom, /error\?\.gitDetails/);
+});
+
+test("empty failure text answers no helper, through the message switch", async () => {
+	const dispatch = await import("../server/git/gitgraph/dispatch.ts");
+	const { scratchRepo } = await import("../test-support/git.ts");
+	const { realpathSync } = await import("node:fs");
+	const { rmSync } = await import("node:fs");
+	const folder = realpathSync(scratchRepo());
+	try {
+		const board = { id: "w-explain", folder, trees: [], threads: new Map(), children: new Map() };
+		const replies = await dispatch.respond(board, { command: "explainGitError", details: "  ", forCommand: "mergeBranch" });
+		assert.equal(replies.length, 1);
+		assert.equal((replies[0] as Record<string, unknown>).explanation, null, "no text means no call, and the shape still answers");
+	} finally { rmSync(folder, { recursive: true, force: true }); }
 });
 
 test("one call is made, alone, and a failure answers nothing", async () => {
