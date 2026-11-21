@@ -9,7 +9,7 @@ import { join, resolve } from "node:path";
 import { isScratchFolder } from "../paths.ts";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
-import { activeHomeDefaults, describeWorkspace, emptyScratchFolder, ensureScratch, homeDefaults, rememberWorkspace, setHomeDefaults } from "../workspaces.ts";
+import { activeHomeDefaults, describeWorkspace, emptyScratchFolder, ensureScratch, forgetWorkspace, homeDefaults, rememberWorkspace, setHomeDefaults, workspaceById } from "../workspaces.ts";
 import { ensureProjectStateDir } from "../state-storage.ts";
 import { ensureStateExcludes } from "../worktrees/make.ts";
 import { boardFor } from "../store.ts";
@@ -59,6 +59,29 @@ export async function onOpenWorkspace(req, res) {
 	answer(res, 200, { workspace: describeWorkspace(workspace), board: { id: board.id }, cards: [...board.threads.values()].map(cardFor) });
 }
 
+
+
+/**
+ * Forget a workspace from the crossroads list. Only the list entry goes: the folder and its board
+ * files stay on disk untouched, so the same folder opened again brings the same board back. The
+ * scratch row is refused (it is made again on every read), and so is a board with a thread still
+ * running — forgetting it would strand the child and its work outside every list.
+ */
+export async function onForgetWorkspace(req, res) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const id = typeof body.id === "string" ? body.id.trim() : "";
+	if (!id) return void fail(res, 400, "a workspace id is required");
+	const workspace = workspaceById(id);
+	if (!workspace) return void fail(res, 404, "no such workspace");
+	const described = describeWorkspace(workspace);
+	if (described.scratch) return void fail(res, 403, "the scratch workspace cannot be removed");
+	if (described.running) return void fail(res, 409, `${described.running} thread${described.running === 1 ? "" : "s"} still running on ${workspace.name}`);
+	const forgotten = forgetWorkspace(id);
+	if (!forgotten) return void fail(res, 404, "no such workspace");
+	nudgeWelcome();
+	answer(res, 200, { removed: true, workspace: { id: forgotten.id, name: forgotten.name, folder: forgotten.folder } });
+}
 
 
 /**

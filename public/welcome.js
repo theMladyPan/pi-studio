@@ -294,6 +294,62 @@
     }
   }
 
+  /**
+   * Removing a row takes two presses, like emptying scratch: the first arms the button and says so.
+   * It forgets the workspace from this list only — the folder and its board files stay on disk, so
+   * reopening the folder brings the same board back. The button is drawn disabled while a thread is
+   * still running on the board, because forgetting it would strand that child outside every list.
+   */
+  const removeArmed = new Map();
+  const removePending = new Set();
+  let removePaint = 0;
+
+  function paintRemove(button, id) {
+    const pending = removePending.has(id);
+    const armed = !pending && (removeArmed.get(id) || 0) > Date.now();
+    button.disabled = pending || button.dataset.blocked === "yes";
+    button.classList.toggle("is-armed", armed);
+    button.textContent = pending ? "removing" : armed ? "remove?" : "remove";
+    button.dataset.armed = armed ? "yes" : "";
+  }
+
+  function paintRemoveRows() {
+    for (const button of nodes.list.querySelectorAll(".ws-remove")) paintRemove(button, button.dataset.id);
+  }
+
+  async function removeWorkspace(workspace) {
+    const id = workspace.id;
+    if (removePending.has(id) || workspace.running) return;
+    if ((removeArmed.get(id) || 0) <= Date.now()) {
+      removeArmed.set(id, Date.now() + EMPTY_ARM_MS);
+      paintRemoveRows();
+      clearTimeout(removePaint);
+      removePaint = setTimeout(paintRemoveRows, EMPTY_ARM_MS + 20);
+      return;
+    }
+    removeArmed.delete(id);
+    removePending.add(id);
+    paintRemoveRows();
+    pathError = "";
+    let done = true;
+    try {
+      const response = await fetch("/workspace/forget", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!response.ok) throw new Error((await response.text()).slice(0, 140) || response.statusText);
+    } catch (error) {
+      done = false;
+      pathError = `could not remove ${workspace.name} from the list: ${error.message || error}`;
+    } finally {
+      removePending.delete(id);
+      paintRemoveRows();
+      applyFilter();
+      if (done) await load();
+    }
+  }
+
   function rowFor(workspace) {
     const row = el("li", "ws-row");
     row.setAttribute("role", "option");
@@ -329,6 +385,24 @@
         if (event.key === "Enter" || event.key === " ") event.stopPropagation();
       });
       right.append(empty);
+    } else {
+      // Every other row can leave the list. The scratch row cannot: it is made again on every read.
+      const remove = el("button", "ws-remove", "remove");
+      remove.type = "button";
+      remove.dataset.id = workspace.id;
+      remove.title = workspace.running
+        ? "stop the running thread first"
+        : "remove from this list only — the folder and its board stay on disk";
+      if (workspace.running) remove.dataset.blocked = "yes";
+      paintRemove(remove, workspace.id);
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        removeWorkspace(workspace);
+      });
+      remove.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+      });
+      right.append(remove);
     }
     if (workspace.missing) right.append(el("span", "sig-missing", "folder missing"));
     else if (workspace.running) right.append(el("span", "sig-running", `${workspace.running} running`));
@@ -453,11 +527,11 @@
   function adopt(list) {
     // A live update replaces every row, and the empty button is the one control in the list: a human who had
     // it focused gets it back rather than losing their place to the body.
-    const focused = document.activeElement?.classList?.contains("ws-empty") ? document.activeElement.dataset.id : "";
+    const focused = document.activeElement?.dataset?.id && (document.activeElement.classList.contains("ws-empty") || document.activeElement.classList.contains("ws-remove")) ? document.activeElement.dataset.id : "";
     workspaces = Array.isArray(list) ? list : [];
     listError = "";
     nodes.list.replaceChildren(...workspaces.map(rowFor));
-    if (focused) nodes.list.querySelector(`.ws-empty[data-id="${focused}"]`)?.focus();
+    if (focused) nodes.list.querySelector(`.ws-empty[data-id="${focused}"], .ws-remove[data-id="${focused}"]`)?.focus();
     paintBrand();
     applyFilter();
   }
