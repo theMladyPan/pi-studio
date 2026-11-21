@@ -289,7 +289,9 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
       dockState[side] = key;
       paintDocks();
     }
-    paneFrame.focus();
+    // A drawer panel keeps the board's keyboard: a left or dock drawer stands off the board, so nothing
+    // steals the focus into its page, and the board letters keep working while it is up. A click into
+    // the page takes the keys there, the way a click into the terminal takes them from the board.
     if (loaded) say({ type: "pi-studio.host.hello", plugin });
   }
 
@@ -364,10 +366,26 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
     scrim.addEventListener("click", () => close());
   }
 
+  /** The door for one panel, the way the three drawers' doors work: a press for the panel that is up
+   * rolls it down, a press for any other brings that one up in its place. */
+  function toggle(panel) {
+    if (!panel || typeof panel.url !== "string" || panel.url === "") return;
+    const key = `plugin:${typeof panel.name === "string" ? panel.name : ""}`;
+    if (drawerMode) {
+      const side = pluginSide(panel);
+      const up = side === "left" ? drawerState.open === key : dockState[side] === key;
+      if (up) return closeDrawers();
+      return open(panel);
+    }
+    if (!drawer.hidden && drawer.dataset.plugin === key.slice("plugin:".length)) return close();
+    return open(panel);
+  }
+
   return {
     isOpen: () => (drawerMode ? ((drawerState.open === paneKey || dockState[paneSide] === paneKey) && paneKey !== "") : !drawer.hidden),
     close: () => (drawerMode ? closeDrawers() : close()),
     open,
+    toggle,
     relist: listDoors,
   };
 }
@@ -5914,8 +5932,13 @@ const dockState = { bottom: "", top: "", right: "" };
 function paintDocks() {
   for (const [side, id] of Object.entries(DOCK_NAMES)) {
     const dock = document.getElementById(id);
-    dock.hidden = dockState[side] === "";
-    for (const pane of dock.querySelectorAll(".plugin-pane")) pane.classList.toggle("on", dockState[side] === `plugin:${pane.id.slice("drawerPlugin-".length)}`);
+    // The strip rolls by its class the terminal drawer's way, and a shut strip keeps the last pane on:
+    // the slide carries that pane with it the way the terminal carries its screen, instead of the pane
+    // vanishing first and an empty background doing the travelling.
+    dock.classList.toggle("dock-on", dockState[side] !== "");
+    if (dockState[side] !== "") {
+      for (const pane of dock.querySelectorAll(".plugin-pane")) pane.classList.toggle("on", dockState[side] === `plugin:${pane.id.slice("drawerPlugin-".length)}`);
+    }
   }
   for (const [key, door] of Object.entries(pluginDrawerDoors)) {
     // A left door belongs to the left column, not to these strips: `paintDrawers` speaks for it.
@@ -5931,7 +5954,9 @@ function closeDocks(side) {
   paintDocks();
 }
 
-/** Whether any dock strip is up. It stands where the terminal strip stands in the panel checks: a strip over the board holds the letters, the left column does not. */
+/** Whether any dock strip is up. It stands in the escape order where the left column stands: a strip
+ * leaves board above it to read and to press, so it does not hold the letters the way the terminal strip
+ * does. Its own letter rolls it down again. */
 function dockOpen() {
   return Boolean(dockState.bottom || dockState.top || dockState.right);
 }
@@ -6022,6 +6047,50 @@ function restoreDrawers() {
   paintDrawers();
 }
 restoreDrawers();
+
+// The strips across the board are the terminal drawer's height, and the terminal drawer's grip is its
+// owner. A strip that stands across carries one of its own on its open edge, which sizes the same shared
+// height the terminal folds to: the dock follows, its pane refits through the rail's own observers.
+// A right column is the rail's width instead, and the rail grip already sizes it, so it needs none.
+{
+  const TERM_MIN = 220;
+  const TERM_MAX = 720;
+  const dockHeight = (px) => {
+    const viewport = typeof window !== "undefined" && Number.isFinite(window.innerHeight) ? window.innerHeight : 0;
+    const ceiling = viewport > 0 ? Math.max(TERM_MIN, Math.min(TERM_MAX, Math.floor(viewport * 0.85))) : TERM_MAX;
+    const height = Math.max(TERM_MIN, Math.min(ceiling, Math.round(px)));
+    document.documentElement?.style.setProperty("--term", `${height}px`);
+    try {
+      localStorage.setItem("board.termHeight", String(height));
+    } catch {}
+    return height;
+  };
+  const dragHeight = (grip, fromViewport) => {
+    if (!grip) return;
+    let dragging = false;
+    grip.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      dragging = true;
+      grip.setPointerCapture?.(event.pointerId);
+      document.body.classList.add("dock-resizing");
+      event.preventDefault();
+    });
+    grip.addEventListener("pointermove", (event) => {
+      if (!dragging || typeof window === "undefined" || !Number.isFinite(window.innerHeight)) return;
+      dockHeight(fromViewport(event));
+    });
+    const stop = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove("dock-resizing");
+      if (grip.hasPointerCapture?.(event.pointerId)) grip.releasePointerCapture(event.pointerId);
+    };
+    grip.addEventListener("pointerup", stop);
+    grip.addEventListener("pointercancel", stop);
+  };
+  dragHeight(document.getElementById("dockGripBottom"), (event) => window.innerHeight - event.clientY);
+  dragHeight(document.getElementById("dockGripTop"), (event) => event.clientY - 44);
+}
 
 for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn })) {
   door.addEventListener("click", () => {
@@ -9716,7 +9785,7 @@ function paintShortcuts() {
  * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too, and so does
  * a plugin's panel, whose page is the only thing the keyboard can reach while it is down.
  */
-const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || dockOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen();
+const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen();
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
@@ -13998,13 +14067,15 @@ document.addEventListener("keydown", (event) => {
     else toggleDrawer(letter);
     return;
   }
-  // A plugin's own letter opens its panel, in the drawers or the toolbox as its registration says.
+  // A plugin's own letter opens its panel, in the drawers or the toolbox as its registration says. It is
+  // a toggle the way the drawers' letters are: a second press rolls the same panel down again, and a
+  // press for another panel's letter brings that one up instead.
   if (!event.shiftKey) {
     const hit = pluginShortcuts.get(event.key.toLowerCase());
     if (hit) {
       event.preventDefault();
-      if (hit.drawer) pluginDrawer.open(hit.panel);
-      else pluginPanel.open(hit.panel);
+      if (hit.drawer) pluginDrawer.toggle(hit.panel);
+      else pluginPanel.toggle(hit.panel);
       return;
     }
   }
