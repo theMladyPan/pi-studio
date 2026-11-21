@@ -34,6 +34,7 @@ const node = process.execPath;
 const syntaxFiles = [
 	"server.ts",
 	"public/client/board.js",
+	"public/client/drawer-common.js",
 	"public/client/git-drawer.js",
 	"public/client/terminal-drawer.js",
 	"public/client/text-preview.js",

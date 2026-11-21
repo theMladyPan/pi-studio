@@ -2,6 +2,7 @@
 // The git drawer is a module of its own: the panel, its focus and the two messages its page trades
 // with this one are a single subject, and this file is long enough already. The daemon serves every
 // `/client/*.js` by one rule, so a new module beside this one loads without a table to edit.
+import { bindDragHeight, setTermHeight } from "./drawer-common.js";
 import { createGitDrawer } from "./git-drawer.js";
 // The terminal drawer is a module of its own beside it: the panel, the socket to the daemon's
 // shell and the vendored terminal screen are a single subject, served by the same one rule.
@@ -6052,45 +6053,8 @@ restoreDrawers();
 // owner. A strip that stands across carries one of its own on its open edge, which sizes the same shared
 // height the terminal folds to: the dock follows, its pane refits through the rail's own observers.
 // A right column is the rail's width instead, and the rail grip already sizes it, so it needs none.
-{
-  const TERM_MIN = 220;
-  const TERM_MAX = 720;
-  const dockHeight = (px) => {
-    const viewport = typeof window !== "undefined" && Number.isFinite(window.innerHeight) ? window.innerHeight : 0;
-    const ceiling = viewport > 0 ? Math.max(TERM_MIN, Math.min(TERM_MAX, Math.floor(viewport * 0.85))) : TERM_MAX;
-    const height = Math.max(TERM_MIN, Math.min(ceiling, Math.round(px)));
-    document.documentElement?.style.setProperty("--term", `${height}px`);
-    try {
-      localStorage.setItem("board.termHeight", String(height));
-    } catch {}
-    return height;
-  };
-  const dragHeight = (grip, fromViewport) => {
-    if (!grip) return;
-    let dragging = false;
-    grip.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
-      dragging = true;
-      grip.setPointerCapture?.(event.pointerId);
-      document.body.classList.add("dock-resizing");
-      event.preventDefault();
-    });
-    grip.addEventListener("pointermove", (event) => {
-      if (!dragging || typeof window === "undefined" || !Number.isFinite(window.innerHeight)) return;
-      dockHeight(fromViewport(event));
-    });
-    const stop = (event) => {
-      if (!dragging) return;
-      dragging = false;
-      document.body.classList.remove("dock-resizing");
-      if (grip.hasPointerCapture?.(event.pointerId)) grip.releasePointerCapture(event.pointerId);
-    };
-    grip.addEventListener("pointerup", stop);
-    grip.addEventListener("pointercancel", stop);
-  };
-  dragHeight(document.getElementById("dockGripBottom"), (event) => window.innerHeight - event.clientY);
-  dragHeight(document.getElementById("dockGripTop"), (event) => event.clientY - 44);
-}
+bindDragHeight(document.getElementById("dockGripBottom"), { bodyClass: "dock-resizing", resolvePx: (event) => setTermHeight(window.innerHeight - event.clientY) });
+bindDragHeight(document.getElementById("dockGripTop"), { bodyClass: "dock-resizing", resolvePx: (event) => setTermHeight(event.clientY - 44) });
 
 for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn })) {
   door.addEventListener("click", () => {

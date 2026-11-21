@@ -18,6 +18,8 @@
  * One drawer, for the whole life of the page. `typingSomewhere` comes from the board rather than a
  * second copy of the selector here, so the drawer and the board's letters agree on what a field is.
  */
+import { createSlidingDrawer } from "./drawer-common.js";
+
 export function createGitDrawer({ workspace, typingSomewhere }) {
   const drawer = document.getElementById("gitDrawer");
   const scrim = document.getElementById("gitScrim");
@@ -37,14 +39,10 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
   }
   setName("");
 
-  /** Is the drawer down. Named apart from the `open` verb below, which is what rolls it down. */
-  let shown = false;
   /** Has the frame ever been pointed at the page. The page is loaded once and kept after that. */
   let loaded = false;
   /** Has the page announced itself. Nothing may be posted before it does. */
   let ready = false;
-  /** What had the focus before the drawer took it, so rolling up puts it back. */
-  let back = null;
 
   // A board with no folder of its own has no repository to draw, and `/git/` with no id is a page that
   // cannot answer. The drawer says so in the space the graph would have used.
@@ -77,50 +75,33 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
     post({ command: "refresh" });
   }
 
-  /** The body class is the whole animation, and the button says which way it now stands. */
-  function paint() {
-    document.body.classList.toggle("git-open", shown);
-    btn.setAttribute("aria-expanded", shown ? "true" : "false");
-    // Every button in the header names the key it answers, and this one answers the same key both ways.
-    btn.title = shown ? "roll the git graph up (g)" : "roll the git graph down (g)";
-  }
+  /** The roll itself is the shared sliding drawer: the body class, the button and the focus return.
+   * What is git's is not: pointing the frame at the page once, and the scrim beside it. */
+  const sliding = createSlidingDrawer({
+    drawer,
+    btn,
+    bodyClass: "git-open",
+    openTitle: "roll the git graph up (g)",
+    shutTitle: "roll the git graph down (g)",
+    beforeOpen() {
+      if (!loaded && workspace) {
+        loaded = true;
+        // Loaded on the first roll down and never again: a second `g` finds the same scroll position,
+        // the same expanded commit and the same repository, because the page never went away.
+        frame.src = `/git/${encodeURIComponent(workspace)}`;
+      }
+      scrim.hidden = false;
+    },
+    afterOpen() {
+      // The page takes the keyboard once it is alive. Before its first `ready` the board keeps it, so a
+      // quick `g` or Escape still reaches the handlers that roll the drawer back up.
+      if (ready) takeKeyboard();
+      // The page still holds what it last drew, so every roll down asks it for the repository as it stands now.
+      if (ready) refreshNow();
+    },
+  });
 
-  function open() {
-    if (shown) return;
-    shown = true;
-    if (!loaded && workspace) {
-      loaded = true;
-      // Loaded on the first roll down and never again: a second `g` finds the same scroll position,
-      // the same expanded commit and the same repository, because the page never went away.
-      frame.src = `/git/${encodeURIComponent(workspace)}`;
-    }
-    // Remembered before the focus moves, so rolling up gives the keyboard back where it came from.
-    back = document.activeElement instanceof Element ? document.activeElement : null;
-    scrim.hidden = false;
-    // `inert` is the shut state: a closed drawer takes no focus and no clicks, and costs nothing.
-    drawer.inert = false;
-    paint();
-    // The page takes the keyboard once it is alive. Before its first `ready` the board keeps it, so a
-    // quick `g` or Escape still reaches the handlers that roll the drawer back up.
-    if (ready) takeKeyboard();
-    // The page still holds what it last drew, so every roll down asks it for the repository as it stands now.
-    if (ready) refreshNow();
-  }
-
-  function close() {
-    if (!shown) return;
-    shown = false;
-    drawer.inert = true;
-    paint();
-    // The frame keeps its src and its state: rolling up never reloads the page. A remembered `body` is
-    // no place to put the keyboard, so the button that owns the key takes it instead — unless that button
-    // now lives in a shut toolbox menu, where a hidden element takes no focus and the keyboard goes nowhere.
-    const visible = (el) => el instanceof Element && el.isConnected && el.offsetParent !== null;
-    const target = visible(back) ? back : visible(btn) ? btn : null;
-    back = null;
-    if (target) target.focus();
-    else if (document.activeElement instanceof Element && document.activeElement !== document.body) document.activeElement.blur();
-  }
+  const close = sliding.close;
 
   /**
    * The page speaks for itself and nothing else does. Both halves are checked because either one alone
@@ -132,7 +113,7 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
     if (!data || data.source !== "pi-gitgraph") return;
     if (data.type === "ready") {
       ready = true;
-      if (!shown) return;
+      if (!sliding.isOpen()) return;
       takeKeyboard();
       refreshNow();
     } else if (data.type === "close") {
@@ -150,7 +131,7 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
     "keydown",
     (event) => {
       if (event.key !== "g" || event.metaKey || event.ctrlKey || event.altKey) return;
-      if (!shown || typingSomewhere()) return;
+      if (!sliding.isOpen() || typingSomewhere()) return;
       event.preventDefault();
       event.stopPropagation();
       close();
@@ -164,5 +145,5 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
   });
   closeBtn.addEventListener("click", () => close());
 
-  return { isOpen: () => shown, toggle: () => (shown ? close() : open()), open, close, setName };
+  return { isOpen: sliding.isOpen, toggle: sliding.toggle, open: sliding.open, close: sliding.close, setName };
 }
