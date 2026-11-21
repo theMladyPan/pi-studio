@@ -332,6 +332,33 @@ export function cardPreamble(card, whole = false) {
 
 
 
+/**
+ * A thread quoted for an agent that is not it. Bounded like a card quote: the last few turns, trimmed,
+ * so a message can name a thread without carrying its whole conversation.
+ */
+export function threadPreamble(thread) {
+	const title = String(thread.title ?? "this thread").replace(/\s+/g, " ").trim().slice(0, 60) || "this thread";
+	const facts = [
+		thread.status ? `status ${thread.status}` : "",
+		thread.role ? `role ${thread.role}` : "",
+		thread.mode ? `mode ${thread.mode}` : "",
+		thread.provider && thread.model ? `model ${thread.model}` : "",
+	]
+		.filter(Boolean)
+		.join(" · ");
+	const turns = Array.isArray(thread.turns) ? thread.turns : [];
+	const chain = turns
+		.slice(-3)
+		.map((turn) => {
+			const asked = String(turn.text ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
+			const said = String(turn.reply ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
+			return `- asked: ${asked}${said ? `\n  answered: ${said}` : ""}`;
+		})
+		.join("\n")
+		.slice(-700);
+	return `[board reply · thread ${thread.id} · "${title}"]\nThe thread is ${facts || "idle"}; ${turns.length} turn${turns.length === 1 ? "" : "s"}.\n${chain ? `Latest turns:\n${chain}\n` : ""}\n`;
+}
+
 /** The thread a card should cascade under, when the caller named one that exists. */
 export function rootOf(board, body) {
 	const root = field(body.threadRoot, 100);
