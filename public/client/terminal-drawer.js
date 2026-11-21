@@ -20,6 +20,8 @@
  * It is also what tells an `x` in the shell from an `x` that rolls the drawer up: the terminal's
  * helper is a textarea, so while it holds the keyboard `typingSomewhere` is true and the letter
  * belongs to the shell. */
+import { bindDragHeight, createSlidingDrawer, setTermHeight } from "./drawer-common.js";
+
 export function createTerminalDrawer({ workspace, typingSomewhere }) {
   const drawer = document.getElementById("termDrawer");
   const host = document.getElementById("termHost");
@@ -28,55 +30,19 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
   const statusEl = document.getElementById("tdStatus");
   const workspaceLabel = document.getElementById("tdWorkspace");
   const grip = document.getElementById("termGrip");
-  const root = document.documentElement;
 
   // The drawer is the user's furniture: its height survives a reload, the way the rail's width
-  // does. The floor is the height the drawer always kept at minimum; the ceiling is the rail's,
-  // and never more than the screen can hold with the header still visible.
-  const TERM_MIN = 220;
-  const TERM_MAX = 720;
-
-  function termHeight(px) {
-    const viewport = typeof window !== "undefined" && Number.isFinite(window.innerHeight) ? window.innerHeight : 0;
-    const ceiling = viewport > 0 ? Math.max(TERM_MIN, Math.min(TERM_MAX, Math.floor(viewport * 0.85))) : TERM_MAX;
-    const height = Math.max(TERM_MIN, Math.min(ceiling, Math.round(px)));
-    if (root?.style) root.style.setProperty("--term", `${height}px`);
-    try {
-      localStorage.setItem("board.termHeight", String(height));
-    } catch {}
-    return height;
-  }
-
+  // does. What sets it is the shared drawer furniture, since the strips across the board size it too.
   // The last height the drawer was left at, restored before anything is drawn.
   try {
     const saved = Number(localStorage.getItem("board.termHeight")) || 0;
-    if (saved) termHeight(saved);
+    if (saved) setTermHeight(saved);
   } catch {}
 
   // Drag handle, the rail grip on its side: press on the top edge, drag up or down, and the
   // drawer follows the cursor. The observer on the host refits the shell as it grows, so no
   // size is told to the daemon here the way it is at connect.
-  if (grip) {
-    let dragging = false;
-    grip.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
-      dragging = true;
-      grip.setPointerCapture?.(event.pointerId);
-      document.body.classList.add("term-resizing");
-      event.preventDefault();
-    });
-    grip.addEventListener("pointermove", (event) => {
-      if (dragging && typeof window !== "undefined" && Number.isFinite(window.innerHeight)) termHeight(window.innerHeight - event.clientY);
-    });
-    const stop = (event) => {
-      if (!dragging) return;
-      dragging = false;
-      document.body.classList.remove("term-resizing");
-      if (grip.hasPointerCapture?.(event.pointerId)) grip.releasePointerCapture(event.pointerId);
-    };
-    grip.addEventListener("pointerup", stop);
-    grip.addEventListener("pointercancel", stop);
-  }
+  bindDragHeight(grip, { bodyClass: "term-resizing", resolvePx: (event) => setTermHeight(window.innerHeight - event.clientY) });
 
   /** The bar names the board the way a human knows it, as the git drawer's bar does. */
   function setName(name) {
@@ -84,18 +50,14 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
   }
   setName("");
 
-  /** Is the drawer up. Named apart from the `open` verb below, which is what rolls it up. */
-  let shown = false;
+  /** Why the shell never started, when it did not. The drawer stays up to let it be read, and the
+   * next roll up is a fresh socket rather than a reconnect to a shell that refused. */
+  let failed = "";
   /** The terminal screen, made once on the first roll up and kept after that. */
   let term = null;
   let fit = null;
   /** The socket to the daemon's shell, opened on the first roll up and kept. */
   let socket = null;
-  /** What had the focus before the drawer took it, so rolling down puts it back. */
-  let back = null;
-  /** Why the shell never started, when it did not. The drawer stays up to let it be read, and the
-   * next roll up is a fresh socket rather than a reconnect to a shell that refused. */
-  let failed = "";
 
   // A board with no folder of its own has no workspace to run in, so the drawer says that in the
   // space the terminal would have used rather than opening a socket that cannot answer.
@@ -112,13 +74,22 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
     statusEl.title = text || "";
   }
 
-  /** The body class is the whole animation, and the button says which way it now stands. */
-  function paint() {
-    document.body.classList.toggle("term-open", shown);
-    btn.setAttribute("aria-expanded", shown ? "true" : "false");
-    // Every button in the header names the key it answers, and this one answers the same key both ways.
-    btn.title = shown ? "roll the terminal drawer down (x)" : "roll the terminal drawer up from the bottom (x)";
-  }
+  /** The roll itself is the shared sliding drawer: the class, the button and the focus return. What is
+   * the terminal's is not: the screen, the socket and the fit. */
+  const sliding = createSlidingDrawer({
+    drawer,
+    btn,
+    bodyClass: "term-open",
+    openTitle: "roll the terminal drawer down (x)",
+    shutTitle: "roll the terminal drawer up from the bottom (x)",
+    afterOpen() {
+      if (ensureTerminal()) {
+        connect();
+        fitNow();
+        term.focus();
+      }
+    },
+  });
 
   function send(message) {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
@@ -207,41 +178,14 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
     term.onData((data) => send({ type: "input", data }));
     if (typeof ResizeObserver === "function") {
       new ResizeObserver(() => {
-        if (shown) fitNow();
+        if (sliding.isOpen()) fitNow();
       }).observe(host);
     }
     return true;
   }
 
-  function open() {
-    if (shown) return;
-    shown = true;
-    // Remembered before the focus moves, so rolling down gives the keyboard back where it came from.
-    back = document.activeElement instanceof Element ? document.activeElement : null;
-    drawer.inert = false;
-    paint();
-    if (ensureTerminal()) {
-      connect();
-      fitNow();
-      term.focus();
-    }
-  }
-
-  function close() {
-    if (!shown) return;
-    shown = false;
-    drawer.inert = true;
-    paint();
-    // The screen keeps its scrollback and the shell keeps running: rolling down never reloads
-    // either. A remembered `body` is no place to put the keyboard, so the button that owns the
-    // key takes it instead — unless that button now lives in a shut toolbox menu, where a hidden
-    // element takes no focus and the keyboard goes nowhere.
-    const visible = (el) => el instanceof Element && el.isConnected && el.offsetParent !== null;
-    const target = visible(back) ? back : visible(btn) ? btn : null;
-    back = null;
-    if (target) target.focus();
-    else if (document.activeElement instanceof Element && document.activeElement !== document.body) document.activeElement.blur();
-  }
+  const open = sliding.open;
+  const close = sliding.close;
 
   /**
    * `x` reaches this window only while the drawer is up and the focus is outside the terminal.
@@ -260,7 +204,7 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
     "keydown",
     (event) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
-      if (!shown) return;
+      if (!sliding.isOpen()) return;
       if (event.key === "x") {
         if (typingSomewhere()) return;
       } else if (event.key === "Escape") {
@@ -275,5 +219,5 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
 
   closeBtn.addEventListener("click", () => close());
 
-  return { isOpen: () => shown, toggle: () => (shown ? close() : open()), open, close, setName };
+  return { isOpen: sliding.isOpen, toggle: sliding.toggle, open: sliding.open, close: sliding.close, setName };
 }
