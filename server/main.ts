@@ -16,7 +16,7 @@ import { boardSettingsValues, settingsDocument } from "./settings-document.ts";
 import { boardMeta, cardsFor } from "./cards.ts";
 import { closedCards } from "./bus.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
-import { onDefaults, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults } from "./routes/crossroads.ts";
+import { onDefaults, onForgetWorkspace, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
 import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead, onFileRename, onFileWrite, onFilesList } from "./routes/board/files.ts";
 import { rowWithThought } from "./thought.ts";
@@ -35,7 +35,7 @@ import { onCardPdf } from "./routes/board/pdf.ts";
 import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onThreadCollect, onUndo } from "./routes/board/lifecycle.ts";
 import { onShell } from "./routes/board/shell.ts";
 import { onGitInit, onGitMsg, onGitPage } from "./routes/gitgraph.ts";
-import { onPluginRegistry, onVisualFile, onVisualPanels, onVisualRequest, VISUAL_PREFIX } from "./routes/plugins.ts";
+import { onPluginRegistry, onPluginReload, onVisualFile, onVisualPanels, onVisualRequest, VISUAL_PREFIX } from "./routes/plugins.ts";
 import { onCommand } from "./routes/board/command.ts";
 import { onSourceControlCommit, onSourceControlConflict, onSourceControlContinue, onSourceControlDiff, onSourceControlDiscard, onSourceControlFileAtHead, onSourceControlIgnore, onSourceControlMessage, onSourceControlResolve, onSourceControlStage, onSourceControlStatus, onSourceControlUnstage } from "./routes/board/source-control.ts";
 import { attachTerminal, stopAllTerminals, terminalSize } from "./terminal.ts";
@@ -495,6 +495,12 @@ export const server = createServer((req, res) => {
 			await onOpenWorkspace(req, res);
 			return;
 		}
+		// Forget one row from the crossroads list: the entry only, never the folder. Not in
+		// `THREAD_ROUTES`, so a child cannot reach it and only the human at the keyboard can remove it.
+		if (req.method === "POST" && url.pathname === "/workspace/forget") {
+			await onForgetWorkspace(req, res);
+			return;
+		}
 		// The scratch row's empty press: the files and the cards, with the settings kept. It is not in
 		// `THREAD_ROUTES`, so a child cannot reach it and only the human at the keyboard can empty it.
 		if (req.method === "POST" && url.pathname === "/scratch/empty") {
@@ -743,8 +749,9 @@ export const server = createServer((req, res) => {
 					// The editor is one program for the whole studio, so a board's page reads it from the defaults
 					// rather than from its own config, where a copy taken at birth would go stale.
 					values: boardSettingsValues(activeConfig(board), activeHomeDefaults()),
-					title: "this board",
-					subtitle: `${board.name} · ${board.folder}`,
+					title: "Board specific settings",
+					// No subtitle on a board's document: the panel floats over its own board and names no folder.
+					subtitle: "",
 					foot: "new threads only · a run in flight is untouched",
 				}),
 			);
@@ -756,6 +763,13 @@ export const server = createServer((req, res) => {
 		// made of are not here: they are served above, before this check, for the reason kept beside them.
 		if (req.method === "GET" && url.pathname === "/plugins/visual") {
 			onVisualPanels(res);
+			return;
+		}
+		// Restart every registered plugin from the file as it stands on disk, without writing it.
+		// Decided behind the caller check like the registry beside it: it starts whatever the rows
+		// name, so only the human may ask, and a thread has no route to it.
+		if (url.pathname === "/plugins/reload" && req.method === "POST") {
+			await onPluginReload(res);
 			return;
 		}
 		// Decide, behind the caller check like the panel listing: a row here starts whatever it names,

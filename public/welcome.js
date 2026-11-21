@@ -11,6 +11,8 @@
 
   /** Where the human left the settings tree, one entry per dotted group path. */
   const COLLAPSE_KEY = "pi-studio.settings.collapsed.v1";
+  /** How the shelf orders its rows: recent, oldest, name-asc or name-desc. */
+  const SORT_KEY = "pi-studio.welcome.sort.v1";
   /** Unsaved prompt text, one entry per field id: the page is reloaded far more often than it is closed. */
   const DRAFTS_KEY = "pi-studio.welcome.drafts.v1";
   /** How long a keystroke's draft waits before the store is written; a human types next faster than this. */
@@ -28,6 +30,7 @@
     omni: document.getElementById("omniInput"),
     modeBadge: document.getElementById("omniModeBadge"),
     browse: document.getElementById("browseBtn"),
+    sort: document.getElementById("sortSelect"),
     pathRow: document.getElementById("pathActionRow"),
     pathLabel: document.getElementById("pathActionLabel"),
     pathText: document.getElementById("pathActionText"),
@@ -43,6 +46,9 @@
     foldAll: document.getElementById("toggleAllGroupsBtn"),
     tree: document.getElementById("settingsTree"),
     settingsReadout: document.getElementById("settingsFootReadout"),
+    pluginRows: document.getElementById("pluginRows"),
+    pluginCount: document.getElementById("pluginCount"),
+    pluginNote: document.getElementById("plNote"),
   };
 
   const el = (tag, cls, text) => {
@@ -186,6 +192,38 @@
   /** @type {any[]} */
   let workspaces = [];
   let selectedId = null;
+  /** How the shelf orders its rows, kept between visits like the settings tree. */
+  const SORT_MODES = ["recent", "oldest", "name-asc", "name-desc"];
+  let sortMode = (() => {
+    try {
+      const saved = localStorage.getItem(SORT_KEY);
+      return SORT_MODES.includes(saved) ? saved : "recent";
+    } catch {
+      return "recent";
+    }
+  })();
+
+  /** When a row was last touched: its last activity, else when its folder was opened — the row's own age. */
+  function lastTouched(workspace) {
+    return workspace.lastActivity?.at ?? workspace.openedAt ?? 0;
+  }
+
+  /**
+   * The rows in the chosen order. Scratch stays first in every order: it is the throwaway row, not
+   * one of the projects being sorted. Name ties break by folder, so the order is stable.
+   */
+  function sortedWorkspaces() {
+    const scratch = workspaces.filter((workspace) => workspace.scratch);
+    const rest = workspaces.filter((workspace) => !workspace.scratch);
+    if (sortMode === "name-asc" || sortMode === "name-desc") {
+      const direction = sortMode === "name-asc" ? 1 : -1;
+      rest.sort((a, b) => direction * a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.folder.localeCompare(b.folder));
+    } else {
+      const direction = sortMode === "recent" ? -1 : 1;
+      rest.sort((a, b) => direction * (lastTouched(a) - lastTouched(b)) || a.folder.localeCompare(b.folder));
+    }
+    return [...scratch, ...rest];
+  }
   /** The daemon's own words for the last refusal, shown on the path line until the next keystroke. */
   let pathError = "";
   /** Set when the workspace list could not be read: the empty shelf says so rather than lying. */
@@ -291,6 +329,62 @@
     }
   }
 
+  /**
+   * Removing a row takes two presses, like emptying scratch: the first arms the button and says so.
+   * It forgets the workspace from this list only — the folder and its board files stay on disk, so
+   * reopening the folder brings the same board back. The button is drawn disabled while a thread is
+   * still running on the board, because forgetting it would strand that child outside every list.
+   */
+  const removeArmed = new Map();
+  const removePending = new Set();
+  let removePaint = 0;
+
+  function paintRemove(button, id) {
+    const pending = removePending.has(id);
+    const armed = !pending && (removeArmed.get(id) || 0) > Date.now();
+    button.disabled = pending || button.dataset.blocked === "yes";
+    button.classList.toggle("is-armed", armed);
+    button.textContent = pending ? "removing" : armed ? "remove?" : "remove";
+    button.dataset.armed = armed ? "yes" : "";
+  }
+
+  function paintRemoveRows() {
+    for (const button of nodes.list.querySelectorAll(".ws-remove")) paintRemove(button, button.dataset.id);
+  }
+
+  async function removeWorkspace(workspace) {
+    const id = workspace.id;
+    if (removePending.has(id) || workspace.running) return;
+    if ((removeArmed.get(id) || 0) <= Date.now()) {
+      removeArmed.set(id, Date.now() + EMPTY_ARM_MS);
+      paintRemoveRows();
+      clearTimeout(removePaint);
+      removePaint = setTimeout(paintRemoveRows, EMPTY_ARM_MS + 20);
+      return;
+    }
+    removeArmed.delete(id);
+    removePending.add(id);
+    paintRemoveRows();
+    pathError = "";
+    let done = true;
+    try {
+      const response = await fetch("/workspace/forget", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!response.ok) throw new Error((await response.text()).slice(0, 140) || response.statusText);
+    } catch (error) {
+      done = false;
+      pathError = `could not remove ${workspace.name} from the list: ${error.message || error}`;
+    } finally {
+      removePending.delete(id);
+      paintRemoveRows();
+      applyFilter();
+      if (done) await load();
+    }
+  }
+
   function rowFor(workspace) {
     const row = el("li", "ws-row");
     row.setAttribute("role", "option");
@@ -326,6 +420,24 @@
         if (event.key === "Enter" || event.key === " ") event.stopPropagation();
       });
       right.append(empty);
+    } else {
+      // Every other row can leave the list. The scratch row cannot: it is made again on every read.
+      const remove = el("button", "ws-remove", "remove");
+      remove.type = "button";
+      remove.dataset.id = workspace.id;
+      remove.title = workspace.running
+        ? "stop the running thread first"
+        : "remove from this list only — the folder and its board stay on disk";
+      if (workspace.running) remove.dataset.blocked = "yes";
+      paintRemove(remove, workspace.id);
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        removeWorkspace(workspace);
+      });
+      remove.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+      });
+      right.append(remove);
     }
     if (workspace.missing) right.append(el("span", "sig-missing", "folder missing"));
     else if (workspace.running) right.append(el("span", "sig-running", `${workspace.running} running`));
@@ -450,11 +562,11 @@
   function adopt(list) {
     // A live update replaces every row, and the empty button is the one control in the list: a human who had
     // it focused gets it back rather than losing their place to the body.
-    const focused = document.activeElement?.classList?.contains("ws-empty") ? document.activeElement.dataset.id : "";
+    const focused = document.activeElement?.dataset?.id && (document.activeElement.classList.contains("ws-empty") || document.activeElement.classList.contains("ws-remove")) ? document.activeElement.dataset.id : "";
     workspaces = Array.isArray(list) ? list : [];
     listError = "";
-    nodes.list.replaceChildren(...workspaces.map(rowFor));
-    if (focused) nodes.list.querySelector(`.ws-empty[data-id="${focused}"]`)?.focus();
+    nodes.list.replaceChildren(...sortedWorkspaces().map(rowFor));
+    if (focused) nodes.list.querySelector(`.ws-empty[data-id="${focused}"], .ws-remove[data-id="${focused}"]`)?.focus();
     paintBrand();
     applyFilter();
   }
@@ -1225,8 +1337,18 @@
     return row;
   }
 
+  /** Every foldable group on the page: the tree's, and the plugins section with each plugin in it. */
+  function foldGroups() {
+    const plugins = document.getElementById("cfgPlugins");
+    return [
+      ...nodes.tree.querySelectorAll(".cfg-group"),
+      ...(nodes.pluginRows ? nodes.pluginRows.querySelectorAll(".cfg-plugin") : []),
+      ...(plugins ? [plugins] : []),
+    ];
+  }
+
   function paintFoldAll() {
-    const groups = [...nodes.tree.querySelectorAll(".cfg-group")];
+    const groups = foldGroups();
     nodes.foldAll.textContent = groups.some((group) => group.open) ? "collapse all" : "expand all";
   }
 
@@ -1315,6 +1437,391 @@
     }
   }
 
+  // ---------- the plugins, handled here on the crossroads -----------------
+  //
+  // One registration for the whole studio, edited on this page and not on any board: a board lists the
+  // panels it may open at load, so a change lands on the next open of a board. The daemon's
+  // registration is the truth; whatever arrives is what the section shows. Saving writes the whole
+  // list, and the daemon proves it by the reader before it replaces what it runs, so a row it cannot
+  // use saves nothing.
+  let pluginData = null;
+  // Which plugin rows the human opened, by key, so a re-read (rescan, save) leaves them open.
+  const pluginOpen = new Set();
+
+  function pluginField(label, value, field, index, placeholder) {
+    const row = document.createElement("div");
+    row.className = "cfg-row is-typed";
+    row.append(Object.assign(el("span"), { textContent: label }));
+    const input = el("input", "cfg-type");
+    input.type = "text";
+    input.value = value || "";
+    if (placeholder) input.placeholder = placeholder;
+    if (index !== null) input.dataset.index = String(index);
+    if (field) input.dataset.field = field;
+    row.append(input);
+    return row;
+  }
+
+  function pluginPlaceSelect(value, index) {
+    const row = document.createElement("div");
+    row.className = "cfg-row is-typed";
+    row.append(Object.assign(el("span"), { textContent: "place" }));
+    const select = el("select", "cfg-type");
+    select.dataset.index = String(index);
+    select.dataset.field = "place";
+    for (const [key, label] of [["", "toolbox"], ["drawer", "drawer"]]) {
+      const option = el("option");
+      option.value = key;
+      option.textContent = label;
+      if ((value || "") === key) option.selected = true;
+      select.append(option);
+    }
+    // The edge only means something on a drawer: a toolbox panel has no edge to sit on.
+    select.addEventListener("change", () => {
+      const position = select.closest(".cfg-body")?.querySelector(`select[data-field="position"][data-index="${index}"]`);
+      if (position) position.disabled = select.value !== "drawer";
+    });
+    row.append(select);
+    return row;
+  }
+
+  function pluginPositionSelect(value, index, isDrawer) {
+    const row = document.createElement("div");
+    row.className = "cfg-row is-typed";
+    row.append(Object.assign(el("span"), { textContent: "position" }));
+    const select = el("select", "cfg-type");
+    select.dataset.index = String(index);
+    select.dataset.field = "position";
+    for (const [key, label] of [["", "left (default)"], ["left", "left"], ["bottom", "bottom"], ["top", "top"], ["right", "right"], ["any", "any"]]) {
+      const option = el("option");
+      option.value = key;
+      option.textContent = label;
+      if ((value || "") === key) option.selected = true;
+      select.append(option);
+    }
+    select.disabled = !isDrawer;
+    select.title = "which edge the drawer sits on; left is the default, any lets this pick decide";
+    row.append(select);
+    return row;
+  }
+
+  function pluginPickSelect(value, index) {
+    const row = document.createElement("div");
+    row.className = "cfg-row is-typed";
+    row.append(Object.assign(el("span"), { textContent: "position" }));
+    const select = el("select", "cfg-type");
+    select.dataset.index = String(index);
+    select.dataset.field = "position";
+    for (const [key, label] of [["", "as the plugin asks"], ["left", "left"], ["bottom", "bottom"], ["top", "top"], ["right", "right"]]) {
+      const option = el("option");
+      option.value = key;
+      option.textContent = label;
+      if ((value || "") === key) option.selected = true;
+      select.append(option);
+    }
+    select.title = "the edge to draw this plugin's panel on; for a panel that takes any edge, this is the pick";
+    row.append(select);
+    return row;
+  }
+
+  function positionWords(position) {
+    if (!position || position === "left") return "left drawer";
+    if (position === "any") return "drawer · any edge";
+    return `${position} drawer`;
+  }
+
+  /** A button that lives in a plugin's summary: it acts, and never folds the row it sits in. */
+  function pluginButton(label, onClick) {
+    const button = el("button", "omni-browse", label);
+    button.type = "button";
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onClick();
+    });
+    return button;
+  }
+
+  /**
+   * One plugin as one collapsible row: the summary names it and its state, the body holds its fields.
+   * Closed by default, so the section opens as a list and not as every field at once. The open state
+   * survives a re-read, so a rescan or a save leaves the row the human opened standing open.
+   */
+  function pluginDetails(key, title, badge, button, bodyChildren) {
+    const details = el("details", "cfg-group cfg-plugin");
+    details.dataset.depth = "1";
+    details.open = pluginOpen.has(key);
+    const summary = el("summary", "cfg-summary");
+    const left = el("div", "cfg-sum-left");
+    const caret = el("span", "cfg-caret", "▸");
+    caret.setAttribute("aria-hidden", "true");
+    left.append(caret, el("span", "cfg-label", title));
+    if (badge) left.append(el("span", "cfg-status-badge", badge));
+    summary.append(left);
+    if (button) {
+      const right = el("div", "cfg-sum-right");
+      right.append(button);
+      summary.append(right);
+    }
+    const body = el("div", "cfg-body");
+    body.append(...bodyChildren);
+    details.append(summary, body);
+    details.addEventListener("toggle", () => {
+      if (details.open) pluginOpen.add(key);
+      else pluginOpen.delete(key);
+      paintFoldAll();
+    });
+    return details;
+  }
+
+  /** The row above the list: a rescan is always there, whatever is registered or on disk. */
+  function pluginToolbar() {
+    const bar = document.createElement("div");
+    bar.className = "cfg-plugin-toolbar";
+    const rescan = el("button", "omni-browse", "rescan");
+    rescan.type = "button";
+    rescan.title = "Read the plugins folder again";
+    rescan.addEventListener("click", () => void loadPluginSettings());
+    bar.append(rescan);
+    return bar;
+  }
+
+  /** One registered plugin as the section edits it: its name, its command, and the panel and shortcut it declares. */
+  function renderPluginSettings() {
+    const pluginRowsEl = nodes.pluginRows;
+    if (!pluginRowsEl) return;
+    const available = pluginData?.available || [];
+    const unavailable = pluginData?.unavailable || [];
+    nodes.pluginCount.textContent = pluginData
+      ? `${pluginData.plugins.length} registered${available.length ? ` · ${available.length} available` : ""}`
+      : "could not read";
+    const rendered = [pluginToolbar()];
+    if (!pluginData) {
+      rendered.push(Object.assign(el("p", "cfg-note"), { textContent: "could not read the plugin list" }));
+      pluginRowsEl.replaceChildren(...rendered);
+      return;
+    }
+    const roster = new Map((pluginData.roster || []).map((one) => [one.name, one]));
+    const stateOf = (state) => (state ? (state.running ? `running${state.version ? ` ${state.version}` : ""}` : state.dormant ? "starts on open" : "not running") : "not running");
+    for (const problem of pluginData.problems || []) {
+      rendered.push(
+        Object.assign(el("p", "cfg-note"), {
+          textContent: problem.name ? `${problem.name}: ${problem.problem}` : problem.problem,
+        }),
+      );
+    }
+    pluginData.plugins.forEach((row, index) => {
+      // A row that names a folder takes everything else from that folder's plugin.json, so it shows
+      // only what a row of its own can decide — its name, its args, its shortcut and the edge its
+      // panel is drawn on. The command, the panel and the place belong to the manifest and are
+      // never rewritten by this form; the edge is the row's own, because a plugin that says `any`
+      // names no edge and settings has to.
+      const fromFolder = Boolean(row.installed || row.bundled);
+      const body = [pluginField("name", row.name, "name", index)];
+      if (fromFolder) {
+        body.push(
+          Object.assign(el("p", "cfg-note"), {
+            textContent: `the command, the panel and the place come from the ${row.installed ? "installed" : "shipped"} plugin.json`,
+          }),
+        );
+        if (row.visual?.place === "drawer") {
+          const asks = row.visual.position || "left";
+          body.push(
+            Object.assign(el("p", "cfg-note"), {
+              textContent: asks === "any"
+                ? "this panel takes any edge: pick the edge it is drawn on, or leave it and it is drawn on the left"
+                : `this panel sits in the ${positionWords(asks)}`,
+            }),
+          );
+          body.push(pluginPickSelect(row.position || "", index));
+        }
+      } else {
+        body.push(pluginField("command", row.command, "command", index));
+      }
+      body.push(pluginField("args", (row.args || []).join(", "), "args", index, "--flag value, comma separated"));
+      if (!fromFolder) {
+        body.push(pluginPlaceSelect(row.visual?.place || "", index));
+        body.push(pluginPositionSelect(row.visual?.position || "", index, row.visual?.place === "drawer"));
+        body.push(pluginField("panel title", row.visual?.title || "", "title", index));
+        body.push(pluginField("panel entry", row.visual?.entry || "", "entry", index));
+        body.push(pluginField("panel files", (row.visual?.files || []).join(", "), "files", index));
+      }
+      body.push(pluginField("shortcut", row.shortcut || "", "shortcut", index, "one letter"));
+      rendered.push(
+        pluginDetails(
+          `plugin:${row.name}`,
+          row.name,
+          `${stateOf(roster.get(row.name))}${row.shortcut ? ` · ${row.shortcut}` : ""}`,
+          pluginButton("remove", () => void savePluginSettings(gatherPluginRows().filter((_, at) => at !== index), `removed ${row.name}`)),
+          body,
+        ),
+      );
+    });
+    // What is on disk that nobody registered, offered to enable: a plugin the human copied into the
+    // plugins folder declares itself, so enabling it is one click and the row takes its defaults.
+    if (available.length || unavailable.length) {
+      const head = document.createElement("div");
+      head.className = "cfg-prose-head";
+      head.append(Object.assign(el("b"), { textContent: "available in the plugins folder" }));
+      rendered.push(head);
+      for (const one of available) {
+        const preview = [
+          one.defaults.place === "drawer" ? positionWords(one.defaults.position || "left") : "toolbox",
+          one.start === "lazy" ? "starts on open" : "starts on boot",
+          one.defaults.shortcut ? `shortcut ${one.defaults.shortcut}` : null,
+          one.description,
+        ].filter(Boolean).join(" · ");
+        rendered.push(
+          pluginDetails(`available:${one.name}`, one.title, one.version, pluginButton("enable", () => void enablePlugin(one)), preview ? [Object.assign(el("p", "cfg-note"), { textContent: preview })] : []),
+        );
+      }
+      for (const one of unavailable) {
+        rendered.push(
+          pluginDetails(`unavailable:${one.source}:${one.folder}`, one.folder, one.source, null, [Object.assign(el("p", "cfg-note"), { textContent: one.problem })]),
+        );
+      }
+    }
+    const save = el("button", "cfg-prose-save", "save plugins");
+    save.type = "button";
+    save.addEventListener("click", () => void savePluginSettings(gatherPluginRows(), "saved"));
+    const reload = el("button", "omni-browse");
+    reload.type = "button";
+    reload.textContent = "reload plugins";
+    reload.addEventListener("click", () => void reloadPluginSettings());
+    const actions = document.createElement("div");
+    actions.className = "cfg-prose-actions";
+    actions.append(save, reload);
+    rendered.push(actions);
+    pluginRowsEl.replaceChildren(...rendered);
+    paintFoldAll();
+  }
+
+  /**
+   * One click registers a plugin the human installed: the row takes the manifest's defaults, and the
+   * suggested shortcut only when it is still free — a taken one is the human's to reassign, never a
+   * guess the daemon makes for them.
+   */
+  async function enablePlugin(one) {
+    const rows = gatherPluginRows();
+    const taken = new Set(pluginData.taken || []);
+    for (const row of rows) if (row.shortcut) taken.add(row.shortcut);
+    const suggested = one.defaults.shortcut;
+    const free = suggested && !taken.has(suggested);
+    rows.push({
+      name: one.name,
+      [one.source]: one.folder,
+      args: one.defaults.args || [],
+      ...(free ? { shortcut: suggested } : {}),
+    });
+    await savePluginSettings(rows, suggested && !free ? `enabled without the default shortcut — ${suggested} is taken; set another above` : "enabled");
+  }
+
+  /** The rows as the form has them, before the daemon is asked to prove them. */
+  function gatherPluginRows() {
+    const byIndex = new Map();
+    for (const input of nodes.pluginRows.querySelectorAll("input[data-index], select[data-index]")) {
+      const index = Number(input.dataset.index);
+      if (!byIndex.has(index)) byIndex.set(index, {});
+      byIndex.get(index)[input.dataset.field] = input.value;
+    }
+    return [...byIndex.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([index, fields]) => {
+        // A row that names a folder keeps naming it: saving must never turn it into a command row,
+        // which would spawn it eagerly and pin it to a path the manifest no longer owns.
+        const named = (pluginData.plugins || [])[index];
+        const row = {
+          name: (fields.name || "").trim(),
+          args: (fields.args || "").split(",").map((one) => one.trim()).filter(Boolean),
+        };
+        if (named?.installed) row.installed = named.installed;
+        if (named?.bundled) row.bundled = named.bundled;
+        // The edge a human picked for a folder row: one of the four sides, or nothing when they left
+        // it as the plugin asks. It is written only for a folder row with a drawer panel.
+        if ((named?.installed || named?.bundled) && named?.visual?.place === "drawer" && fields.position) row.position = fields.position;
+        if (!named?.installed && !named?.bundled) {
+          row.command = (fields.command || "").trim();
+          const files = (fields.files || "").split(",").map((one) => one.trim()).filter(Boolean);
+          if (files.length) {
+            row.visual = {
+              title: (fields.title || "").trim() || row.name,
+              entry: (fields.entry || "").trim(),
+              files,
+              ...(fields.place ? { place: fields.place } : {}),
+              // An edge with no drawer place is refused by the daemon, so it is written only on one.
+              ...(fields.place === "drawer" && fields.position ? { position: fields.position } : {}),
+            };
+          }
+        }
+        const shortcut = (fields.shortcut || "").trim().toLowerCase();
+        if (shortcut) row.shortcut = shortcut;
+        return row;
+      });
+  }
+
+  async function savePluginSettings(rows, said) {
+    nodes.pluginNote.textContent = "";
+    try {
+      const response = await fetch("/plugins/registry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plugins: rows }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        const problems = (body?.problems || []).map((one) => (one.name ? `${one.name}: ` : "") + one.problem);
+        nodes.pluginNote.textContent = problems.join("; ") || "the daemon refused the list";
+        return;
+      }
+      // The POST answer carries no `available` list, so the section is read again: rendering the
+      // answer would drop the folders offered for enabling until the settings page was left and re-entered.
+      await loadPluginSettings();
+      nodes.pluginNote.textContent = `${said} — the roster restarted without a daemon restart`;
+    } catch (error) {
+      nodes.pluginNote.textContent = `could not save: ${error.message || error}`;
+    }
+  }
+
+  /**
+   * Restart every registered plugin from the file as it stands: a rebuilt binary, or a registration
+   * edited by hand, takes effect without a daemon restart. Nothing is written here — the rows on
+   * screen are not sent — and the section is read again after, for the same reason a save reads it:
+   * the reload answer carries no `available` list either, and the form is redrawn from the file, so
+   * edits not saved before the press are dropped.
+   */
+  async function reloadPluginSettings() {
+    nodes.pluginNote.textContent = "";
+    try {
+      const response = await fetch("/plugins/reload", { method: "POST" });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        const problems = (body?.problems || []).map((one) => (one.name ? `${one.name}: ` : "") + one.problem);
+        nodes.pluginNote.textContent = problems.join("; ") || "the daemon refused the reload";
+        return;
+      }
+      const running = (body.roster || []).filter((one) => one.running).length;
+      const problems = (body.problems || []).map((one) => (one.name ? `${one.name}: ` : "") + one.problem);
+      // The reload answer carries no `available` list, so the section is read again: rendering the
+      // answer would drop the folders offered for enabling until the settings page was left and re-entered.
+      await loadPluginSettings();
+      nodes.pluginNote.textContent = `reloaded — ${running} running${problems.length ? `; ${problems.join("; ")}` : ""}`;
+    } catch (error) {
+      nodes.pluginNote.textContent = `could not reload: ${error.message || error}`;
+    }
+  }
+
+  /** The section is read on every open of the settings page, so it always shows the roster as it stands. */
+  async function loadPluginSettings() {
+    try {
+      const response = await fetch("/plugins/registry");
+      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+      pluginData = await response.json();
+    } catch (error) {
+      pluginData = null;
+    }
+    renderPluginSettings();
+  }
+
   // ---------- the two views ------------------------------------------------
 
   function showView(next) {
@@ -1331,6 +1838,7 @@
     paintBrand();
     if (settings) {
       void loadDocument().then(() => nodes.tree.focus());
+      void loadPluginSettings();
       return;
     }
     nodes.omni.focus();
@@ -1339,17 +1847,29 @@
   nodes.door.addEventListener("click", () => showView("settings"));
   nodes.back.addEventListener("click", () => showView("shelf"));
   nodes.browse.addEventListener("click", () => void browse());
+  nodes.sort.value = sortMode;
+  nodes.sort.addEventListener("change", () => {
+    if (!SORT_MODES.includes(nodes.sort.value)) return;
+    sortMode = nodes.sort.value;
+    try {
+      localStorage.setItem(SORT_KEY, sortMode);
+    } catch {
+      // A browser that refuses storage still sorts for this visit.
+    }
+    // Rebuild the rows in the new order; the filter and selection ride along.
+    adopt(workspaces);
+  });
   nodes.omni.addEventListener("input", () => {
     // Typing clears the last refusal: the human is already answering it.
     pathError = "";
     applyFilter();
   });
   nodes.foldAll.addEventListener("click", () => {
-    const groups = [...nodes.tree.querySelectorAll(".cfg-group")];
+    const groups = foldGroups();
     const open = !groups.some((group) => group.open);
     for (const group of groups) {
       group.open = open;
-      writeCollapse(group.dataset.path, !open);
+      if (group.dataset.path) writeCollapse(group.dataset.path, !open);
     }
     paintFoldAll();
   });
@@ -1380,6 +1900,8 @@
     if (view !== "shelf") return;
 
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      // The sort dropdown owns its arrows: they change the order, not the selection.
+      if (document.activeElement === nodes.sort) return;
       const visible = [...nodes.list.children].filter((row) => !row.hidden);
       if (!visible.length) return;
       event.preventDefault();
@@ -1396,7 +1918,7 @@
     if (event.key === "Enter") {
       const active = document.activeElement;
       // Buttons own their own Enter: browse… must not also open a board.
-      if (active === nodes.browse) return;
+      if (active === nodes.browse || active === nodes.sort) return;
       if (active === nodes.omni || active === document.body || active?.classList.contains("ws-row")) {
         event.preventDefault();
         actOnEnter();

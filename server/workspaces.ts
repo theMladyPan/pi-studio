@@ -285,6 +285,22 @@ export function workspaceById(id) {
 }
 
 
+/**
+ * Forget one workspace from the list: the row and nothing else. The folder, its board file and any
+ * board already in memory stay where they are, so reopening the folder brings the same board back.
+ * The scratch row is not forgettable: `ensureScratch` puts it back on the next read, and a row that
+ * cannot stay gone is a button that lies. Returns the forgotten workspace, or null when no row
+ * answers to the id.
+ */
+export function forgetWorkspace(id) {
+	const at = workspaces.findIndex((workspace) => workspace.id === id);
+	if (at === -1 || isScratch(workspaces[at].folder)) return null;
+	const [forgotten] = workspaces.splice(at, 1);
+	saveWorkspaces();
+	return forgotten;
+}
+
+
 
 // ---------- the scratch workspace ------------------------------------------
 

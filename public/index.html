@@ -508,7 +508,8 @@
     display: flex; align-items: center; gap: 14px; padding: 0 14px; font-size: 13px; overflow-x: auto;
     background: rgba(13,17,23,.9); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border);
   }
-  header .brand { font-weight: 700; letter-spacing: .3px; }
+  header .brand { display: inline-flex; align-items: center; }
+  header .brand img { width: 24px; height: 24px; display: block; }
   header .live { display: flex; align-items: center; gap: 6px; color: var(--green); }
   header .live b { width: 7px; height: 7px; border-radius: 50%; background: var(--green);
     display: inline-block; box-shadow: 0 0 0 3px rgba(63,185,80,.15); }
@@ -564,6 +565,36 @@
   #statCtx.busy:hover #statCtxValue, #statCtx.busy:focus-visible #statCtxValue { visibility: visible; }
   #statCtx.busy:hover .act, #statCtx.busy:focus-visible .act { visibility: hidden; }
 
+  /* The drawers' shared furniture: every shell is a fixed, column flex box; every sliding shell rolls
+     by transform with the same visibility and the same two timings, open winning over shut. The open
+     selectors are grouped once, so a drawer that is not listed there is a drawer that does not slide.
+     Width, height, surface, edge and stacking stay where the drawer declares them. */
+  .drawer-shell { position: fixed; display: flex; flex-direction: column; }
+  .drawer-slide { visibility: hidden;
+    transition: transform 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms; }
+  body.git-open #gitDrawer, body.term-open #termDrawer, body:not(.rail-off) #drawers,
+  #drawersRight.dock-on, #pluginDockTop.dock-on, #pluginDockBottom.dock-on {
+    transform: none; visibility: visible;
+    transition: transform 170ms cubic-bezier(.2,.9,.25,1); }
+  /* The bar every overlay drawer carries: one row after the header's, same buttons, one border under it. */
+  .drawer-bar { display: flex; align-items: center; gap: 8px; padding: 6px 14px;
+    border-bottom: 1px solid var(--border); }
+  .drawer-bar .grow { flex: 1; }
+  .drawer-bar button { font: 12px var(--mono); color: var(--muted); background: #161b22;
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+  .drawer-bar button:hover { color: var(--text); border-color: var(--border-bright); }
+  .drawer-title { font: 12px var(--mono); color: var(--muted); }
+  .drawer-workspace { font: 11px var(--mono); color: var(--text); min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .drawer-body { flex: 1; min-height: 0; }
+  /* The grips are one invisible strip per size edge: the terminal's grip and the strips' share it,
+     and the rail's stands across the same primitive. Position, size and cursor stay per grip. */
+  .drawer-grip { position: absolute; background: transparent; z-index: 2; }
+  .drawer-grip:hover { background: var(--accent-dim); }
+  body.term-resizing, body.dock-resizing { cursor: row-resize; user-select: none; }
+  body.rail-resizing { cursor: col-resize; user-select: none; }
+  body.term-resizing #termGrip, body.dock-resizing .dock-grip, body.rail-resizing #railGrip {
+    background: var(--accent-dim); }
   /* The left drawers: files, activity and cards share one column, and one of them is open at a time.
      The width is the rail's, so the drag handle and the remembered width outlive the rail they came
      from. A drawer stands over the board instead of pushing it aside: opening one moves no card, so a
@@ -572,21 +603,13 @@
      against. `rail-off` is the shut column, still in the document, off the left edge. Nothing sits on
      top of it: its z-index clears the footer and the composer bar, which now run under it. */
   #drawers {
-    position: fixed; top: 44px; left: 0; bottom: 0; width: var(--rail); z-index: 45;
+    top: 44px; left: 0; bottom: 0; width: var(--rail); z-index: 45;
     background: #0a0f16; border-right: 1px solid var(--border);
-    display: flex; flex-direction: column; font: 12px var(--mono); overflow: hidden;
-    transform: translateX(-100%); visibility: hidden;
-    transition: transform 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms;
+    font: 12px var(--mono); overflow: hidden;
+    transform: translateX(-100%);
   }
-  body:not(.rail-off) #drawers { transform: none; visibility: visible;
-    transition: transform 170ms cubic-bezier(.2,.9,.25,1); }
-  #drawers > .drawer { display: none; flex: 1; min-height: 0; flex-direction: column; }
-  #drawers > .drawer.on { display: flex; }
   /* Drag handle. Six invisible pixels that turn into a line under the cursor. */
-  #railGrip { position: absolute; top: 0; bottom: 0; right: 0; width: 6px;
-    cursor: col-resize; background: transparent; z-index: 2; }
-  #railGrip:hover, body.rail-resizing #railGrip { background: var(--accent-dim); }
-  body.rail-resizing { cursor: col-resize; user-select: none; }
+  #railGrip { top: 0; bottom: 0; right: 0; width: 6px; cursor: col-resize; }
   .rail-head { padding: 8px 12px 4px; color: var(--muted); font-size: 11px;
     text-transform: uppercase; letter-spacing: .6px; display: flex; gap: 6px; align-items: center; }
   /* `display: flex` above outranks the browser's own `[hidden]`, so an empty head is hidden here too. */
@@ -599,6 +622,27 @@
      the rail-head and the close button, and the panel's own page fills the rest. */
   .drawer.plugin-pane { background: #0d1117; }
   .drawer.plugin-pane iframe.drawer-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #0d1117; }
+  /* The same pane on the other edges: one fixed strip per edge, always in the document and rolled by
+     `transform` and `visibility` the terminal drawer's way, so a strip slides like a drawer and its pane
+     keeps its size and its page while it is shut. The open class is `dock-on`, written by the paint that
+     rolls the strip up and down. One pane per strip is up at a time. A strip is a sheet over the board
+     the way the terminal drawer is, so it throws the same shadow outward from the board. */
+  #drawersRight, #pluginDockTop, #pluginDockBottom {
+    z-index: 1500; background: #0a0f16; font: 12px var(--mono); overflow: hidden; }
+  #drawersRight { top: 44px; right: 0; bottom: 0; width: var(--rail); border-left: 1px solid var(--border);
+    transform: translateX(100%); box-shadow: -18px 0 48px rgba(0,0,0,.6); }
+  #pluginDockTop { top: 44px; left: 0; right: 0; height: var(--term); border-bottom: 1px solid var(--border-bright);
+    transform: translateY(-100%); box-shadow: 0 18px 48px rgba(0,0,0,.6); }
+  #pluginDockBottom { left: 0; right: 0; bottom: 0; height: var(--term); border-top: 1px solid var(--border-bright);
+    transform: translateY(100%); box-shadow: 0 -18px 48px rgba(0,0,0,.6); }
+  /* The rail grip, on its side, for the strips that stand across the board: six invisible pixels on the
+     open edge that turn into a line under the cursor, the terminal drawer's grip for these. */
+  .dock-grip { left: 0; right: 0; height: 6px; cursor: row-resize; }
+  #pluginDockBottom .dock-grip { top: -3px; }
+  #pluginDockTop .dock-grip { bottom: -3px; }
+  #drawers > .drawer, #drawersRight > .drawer, #pluginDockTop > .drawer, #pluginDockBottom > .drawer {
+    display: none; flex: 1; min-height: 0; flex-direction: column; }
+  #drawers > .drawer.on, #drawersRight > .drawer.on, #pluginDockTop > .drawer.on, #pluginDockBottom > .drawer.on { display: flex; }
   #pluginDrawerDoors { display: contents; }
   #pluginDrawerDoors[hidden] { display: none; }
   /* Source control drawer: the message field rides at the top, then the staged list, then the rest.
@@ -1212,9 +1256,10 @@
   #boardConfig .cfg-prose-save:hover { background: #30363d; }
   #boardConfig .cfg-prose-save:disabled { opacity: .45; cursor: default; }
   #boardConfig .cfg-prose-save:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
-  #boardConfig .cfg-note { margin: 8px 4px 0; color: var(--muted); font: 11px/1.5 var(--mono); }
+  /* The one line under the panel, under a hairline, below the hotkeys: when a change lands. */
+  #boardConfig .cfg-foot { margin: 8px 4px 0; padding: 8px 8px 0; border-top: 1px solid #1b2029; color: var(--muted); font: 11px/1.5 var(--mono); }
+  #boardConfig .cfg-foot:empty { display: none; }
   #cfgTree { display: flex; flex-direction: column; }
-  #boardConfig .cfg-sub { margin: -3px 8px 4px; color: var(--muted); font: 10.5px var(--mono); }
   /* A group is a folder: a marker, its name, and — while it is folded — one line summing its leaves. */
   #boardConfig .cfg-group { margin: 0; }
   #boardConfig .cfg-group > summary { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px;
@@ -1271,68 +1316,44 @@
      (10), the rail (8), the footer (40) and the transcript drawer (60), and below the
      pickers and header panels (2000), the prompt editor (2100) and the sheets (2200). */
   #gitDrawer {
-    position: fixed; top: 44px; left: 0; right: 0; height: calc(100vh - 44px); z-index: 1500;
-    display: flex; flex-direction: column; background: var(--bg);
+    top: 44px; left: 0; right: 0; height: calc(100vh - 44px); z-index: 1500;
+    background: var(--bg);
     border-bottom: 1px solid var(--border-bright); box-shadow: 0 18px 48px rgba(0,0,0,.6);
-    transform: translateY(-100%); visibility: hidden;
-    transition: transform 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms;
+    transform: translateY(-100%);
   }
-  body.git-open #gitDrawer { transform: none; visibility: visible;
-    transition: transform 170ms cubic-bezier(.2,.9,.25,1); }
-  /* The bar is the header's row continued: same mono, same buttons, one border under it. */
-  #gitDrawer .gd-bar { display: flex; align-items: center; gap: 8px; padding: 6px 14px;
-    border-bottom: 1px solid var(--border); }
-  #gitDrawer .gd-title { font: 12px var(--mono); color: var(--muted); }
-  #gitDrawer .gd-workspace { font: 11px var(--mono); color: var(--text); min-width: 0;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #gitDrawer .gd-bar .grow { flex: 1; }
-  #gitDrawer button { font: 12px var(--mono); color: var(--muted); background: #161b22;
-    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
-  #gitDrawer button:hover { color: var(--text); border-color: var(--border-bright); }
   #gitDrawer button:disabled { cursor: default; opacity: .5; }
-  #gitDrawer .gd-body { flex: 1; min-height: 0; }
-  #gdFrame { width: 100%; height: 100%; border: 0; display: block; background: var(--bg); }
+  #gdFrame, #pvFrame { width: 100%; height: 100%; border: 0; display: block; background: var(--bg); }
   /* `display` on the id outranks the browser's own `[hidden]` rule, so a board with no folder hides the
      frame here rather than leaving an empty page over the drawer's notice. */
   #gdFrame[hidden] { display: none; }
   /* A board with no folder has no repository to draw, so the drawer says that instead of loading a page
-     that cannot answer. */
-  #gitDrawer .gd-note { margin: 0; padding: 18px; color: var(--muted); font: 12px var(--mono); }
-  /* The scrim dims the board behind the drawer and fades with the same 170ms slide. The drawer covers
-     the whole area it dims, so it is only ever seen through a slide in progress; it stays because the
-     drawer's height is the CSS's to change, and a scrim that is already there needs no new wiring. */
-  #gitScrim { position: fixed; inset: 44px 0 0 0; z-index: 1499; background: rgba(1,4,9,.45);
-    opacity: 0; visibility: hidden;
+     that cannot answer. The terminal's notice is the same one, word for word, and both share it. */
+  #gitDrawer .gd-note, #termDrawer .td-note { margin: 0; padding: 18px; color: var(--muted); font: 12px var(--mono); }
+  /* The scrims of the two sheet drawers: one wall of dim behind a drawer that covers the whole
+     area it dims. Only the git one fades with the same 170ms slide; the toolbox one is already heavy
+     enough standing still. */
+  #gitScrim, #pluginScrim { position: fixed; inset: 44px 0 0 0; z-index: 1499; background: rgba(1,4,9,.45); }
+  #gitScrim { opacity: 0; visibility: hidden;
     transition: opacity 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms; }
   body.git-open #gitScrim { opacity: 1; visibility: visible; transition: opacity 170ms cubic-bezier(.2,.9,.25,1); }
   /* `hidden` is only the state before the drawer was ever rolled down, so a board that never opens one
      paints no scrim at all. */
-  #gitScrim[hidden] { display: none; }
+  #gitScrim[hidden], #pluginScrim[hidden] { display: none; }
 
   /* The plugin panel: a plugin's own page in a frame that rolls down under the header, opened from one
      door per plugin in the toolbox. The frame is sandboxed with scripts and with no origin of its own, so
      the panel can reach neither this page nor a cookie of this daemon; what it may ask for is one message
      relayed by /client/board.js. These rules size the box it sits in, and nothing more. */
   #pluginDrawer {
-    position: fixed; top: 44px; left: 0; right: 0; height: calc(100vh - 44px); z-index: 1500;
-    display: flex; flex-direction: column; background: var(--bg);
+    top: 44px; left: 0; right: 0; height: calc(100vh - 44px); z-index: 1500;
+    background: var(--bg);
     border-bottom: 1px solid var(--border-bright); box-shadow: 0 18px 48px rgba(0,0,0,.6);
   }
   #pluginDrawer[hidden] { display: none; }
-  /* The bar is the git drawer's row with this panel's own title in it: same mono, same buttons. */
-  #pluginDrawer .pv-bar { display: flex; align-items: center; gap: 8px; padding: 6px 14px;
-    border-bottom: 1px solid var(--border); }
+  /* The bar's row is the git drawer's, with this panel's own title in it. */
   #pluginDrawer .pv-title { font: 12px var(--mono); color: var(--text); }
   #pluginDrawer .pv-note { font: 11px var(--mono); color: var(--muted); min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #pluginDrawer .pv-bar .grow { flex: 1; }
-  #pluginDrawer button { font: 12px var(--mono); color: var(--muted); background: #161b22;
-    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
-  #pluginDrawer button:hover { color: var(--text); border-color: var(--border-bright); }
-  #pluginDrawer .pv-body { flex: 1; min-height: 0; }
-  #pvFrame { width: 100%; height: 100%; border: 0; display: block; background: var(--bg); }
-  #pluginScrim { position: fixed; inset: 44px 0 0 0; z-index: 1499; background: rgba(1,4,9,.45); }
-  #pluginScrim[hidden] { display: none; }
   /* The doors are filled in by the client, one per plugin that declared a panel, and lay out as if they
      were written in the menu by hand. */
   #pluginDoors { display: contents; }
@@ -1344,35 +1365,18 @@
      reloads it. The shell keeps running on the daemon while it is shut. z-index matches the git
      drawer's 1500, so the two never stack wrongly, and the pickers above them still show. */
   #termDrawer {
-    position: fixed; left: 0; right: 0; bottom: 0; height: var(--term); min-height: 220px; z-index: 1500;
-    display: flex; flex-direction: column; background: var(--bg);
+    left: 0; right: 0; bottom: 0; height: var(--term); min-height: 220px; z-index: 1500;
+    background: var(--bg);
     border-top: 1px solid var(--border-bright); box-shadow: 0 -18px 48px rgba(0,0,0,.6);
-    transform: translateY(100%); visibility: hidden;
-    transition: transform 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms;
+    transform: translateY(100%);
   }
-  body.term-open #termDrawer { transform: none; visibility: visible;
-    transition: transform 170ms cubic-bezier(.2,.9,.25,1); }
-  /* The bar is the header's row continued, the same mono and the same buttons as the git bar. */
-  #termDrawer .td-bar { display: flex; align-items: center; gap: 8px; padding: 6px 14px;
-    border-bottom: 1px solid var(--border); }
-  #termDrawer .td-title { font: 12px var(--mono); color: var(--muted); }
-  #termDrawer .td-workspace { font: 11px var(--mono); color: var(--text); min-width: 0;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #termDrawer .td-status { font: 11px var(--mono); color: var(--muted); min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #termDrawer .td-bar .grow { flex: 1; }
-  #termDrawer button { font: 12px var(--mono); color: var(--muted); background: #161b22;
-    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
-  #termDrawer button:hover { color: var(--text); border-color: var(--border-bright); }
   #termHost { flex: 1; min-height: 0; padding: 6px 10px; background: #0d1117; }
   #termHost .xterm { height: 100%; }
-  #termDrawer .td-note { margin: 0; padding: 18px; color: var(--muted); font: 12px var(--mono); }
   /* Drag handle, the rail grip on its side: six invisible pixels along the top edge that turn
      into a line under the cursor. The height it sets is remembered, the way the rail's width is. */
-  #termGrip { position: absolute; top: 0; left: 0; right: 0; height: 6px;
-    cursor: row-resize; background: transparent; z-index: 2; }
-  #termGrip:hover, body.term-resizing #termGrip { background: var(--accent-dim); }
-  body.term-resizing { cursor: row-resize; user-select: none; }
+  #termGrip { top: 0; left: 0; right: 0; height: 6px; cursor: row-resize; }
 
   /* ---------- the files drawer: VS Code's Explorer ---------- */
   /* The two fonts the Explorer draws with are the ones VS Code installs beside the theme these colours
@@ -1571,13 +1575,13 @@
   @media (prefers-reduced-motion: reduce) {
     .card.fresh, .card.flash, header .live.working b, .act.running .dot, .composer .ctx-btn.hot::after { animation: none; }
     /* A roll down with no motion: the class still decides what is visible, it just arrives at once. */
-    #gitDrawer, #gitScrim, #drawers { transition: none; }
+    #gitDrawer, #gitScrim, #drawers, #drawersRight, #pluginDockTop, #pluginDockBottom { transition: none; }
   }
 </style>
 </head>
 <body>
 <header>
-  <span class="brand" title="every keyboard shortcut is listed under settings">pi</span>
+  <span class="brand" title="every keyboard shortcut is listed under settings"><img src="/favicon.svg" alt="pi-studio" width="24" height="24" /></span>
   <button class="sess" id="sess" type="button" title="switch workspace"></button>
   <!-- Polite, so the state is spoken when it changes; the elapsed clock is decoration that ticks
        every second and is hidden, so it is never read out. -->
@@ -1598,7 +1602,7 @@
   <!-- One door per plugin whose panel lives in the left drawers, filled in by board.js. The header's
        own buttons are the style, so a door stands here exactly like activity and cards do. -->
   <span id="pluginDrawerDoors" hidden></span>
-  <button id="configBtn" title="this board's settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
+  <button id="configBtn" title="board specific settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
 </header>
 
 <!-- The header's menus live outside the header, whose overflow would clip them. One is open at a
@@ -1638,25 +1642,19 @@
 <!-- The board's own configuration, drawn from the document `/settings/board` serves: the daemon owns
      the shape, and every leaf here opens the picker the composer uses, so there is one list of models
      in the whole app. -->
-<div id="boardConfig" hidden role="dialog" aria-label="this board's settings">
+<div id="boardConfig" hidden role="dialog" aria-label="board specific settings">
   <div id="cfgTree"></div>
   <!-- The map of every key lives here, outside the tree the daemon serves, so a re-render of the tree never
-       wipes it. -->
+       wipes it. Plugins are not here: they are handled on the crossroads settings page. -->
   <div id="cfgLocal">
     <details class="cfg-group" id="cfgShortcuts">
       <summary><span>hotkeys</span><span class="cfg-preview">all keyboard shortcuts</span></summary>
       <div class="cfg-kids" id="shortcutList"></div>
     </details>
-    <details class="cfg-group" id="cfgPlugins">
-      <summary><span>plugins</span><span class="cfg-preview" id="pluginCount">none</span></summary>
-      <div class="cfg-kids">
-        <p class="cfg-note">Install one with <code>pi-studio add &lt;git-url&gt;</code>, then enable it
-        below. A shortcut is one letter the board does not answer to yet, and it opens the panel.</p>
-        <div id="pluginRows"></div>
-        <div class="cfg-prose-actions"><span class="cfg-prose-size" id="plNote" role="status"></span></div>
-      </div>
-    </details>
   </div>
+  <!-- The one line under the panel, below the hotkeys and under a hairline: when a change lands. It lives
+       outside the tree the daemon serves, so it stays put when the tree is redrawn. -->
+  <p class="cfg-foot" id="cfgFoot"></p>
 </div>
 
 <div id="promptEditor" hidden role="dialog" aria-label="prompt files">
@@ -1673,7 +1671,7 @@
      what the agents are doing, `c` for the board's cards, `d` for source control. The rail's remembered
      width and its hidden choice carry over, because this is the rail with doors on it rather than a
      second place. -->
-<div id="drawers">
+<div id="drawers" class="drawer-shell drawer-slide">
   <section class="drawer" id="drawerFiles" aria-label="files" tabindex="-1">
     <div id="filesPane">
       <div class="ex-head">
@@ -1724,8 +1722,16 @@
     <div class="sc-group"><span>Changes</span><b id="scChangesCount"></b><button type="button" id="scStageAll" title="stage every changed file">+ all</button></div>
     <div class="sc-list" id="scChanges"></div>
   </section>
-  <div id="railGrip" title="drag to resize"></div>
+  <div id="railGrip" class="drawer-grip" title="drag to resize"></div>
 </div>
+
+<!-- The plugin drawers on the other three edges: a panel that asked for the bottom, the top or the right
+     sits in one of these, with its own pane per plugin, made on its first open and kept, the way the left
+     drawers' plugin panes are. The width follows the rail's and the height is the terminal drawer's, so
+     the furniture the human already sized sizes these too. Board.js fills and shows them. -->
+<div id="drawersRight" class="drawer-shell drawer-slide"></div>
+<div id="pluginDockTop" class="drawer-shell drawer-slide"><div class="dock-grip drawer-grip" id="dockGripTop" aria-hidden="true"></div></div>
+<div id="pluginDockBottom" class="drawer-shell drawer-slide"><div class="dock-grip drawer-grip" id="dockGripBottom" aria-hidden="true"></div></div>
 
 <!-- Where the field of a board with a single session behind it lives. A board of threads has none:
      every thread card carries its own field, built from the template below. -->
@@ -1935,15 +1941,15 @@
      because it is loaded once and never reloaded. Its src comes from the module in
      /client/git-drawer.js, which also knows whether this board has a folder to draw at all. -->
 <div id="gitScrim" hidden></div>
-<section id="gitDrawer" aria-label="git graph" inert>
-  <div class="gd-bar">
-    <span class="gd-title">git graph</span>
-    <span class="gd-workspace" id="gdWorkspace"></span>
+<section id="gitDrawer" class="drawer-shell drawer-slide" aria-label="git graph" inert>
+  <div class="gd-bar drawer-bar">
+    <span class="gd-title drawer-title">git graph</span>
+    <span class="gd-workspace drawer-workspace" id="gdWorkspace"></span>
     <span class="grow"></span>
     <button id="gdTab" type="button" title="open the git graph in a tab of its own">open in tab &#8599;</button>
     <button id="gdClose" type="button" title="roll the git graph up (g)">roll up (g)</button>
   </div>
-  <div class="gd-body"><iframe id="gdFrame" title="git graph"></iframe></div>
+  <div class="gd-body drawer-body"><iframe id="gdFrame" title="git graph"></iframe></div>
 </section>
 
 <!-- The plugin panel: a plugin's own page in a frame that rolls down under the header, opened from the
@@ -1952,14 +1958,14 @@
      the daemon is the one message /client/board.js relays. Its src is one of the addresses
      `/plugins/visual` lists, and the daemon serves only the files that plugin declared. -->
 <div id="pluginScrim" hidden></div>
-<section id="pluginDrawer" aria-label="plugin panel" hidden>
-  <div class="pv-bar">
+<section id="pluginDrawer" class="drawer-shell" aria-label="plugin panel" hidden>
+  <div class="pv-bar drawer-bar">
     <span class="pv-title" id="pvTitle">plugin</span>
     <span class="pv-note" id="pvNote"></span>
     <span class="grow"></span>
     <button id="pvClose" type="button" title="close the plugin panel (esc)">close (esc)</button>
   </div>
-  <div class="pv-body">
+  <div class="pv-body drawer-body">
     <iframe id="pvFrame" title="plugin panel" sandbox="allow-scripts"></iframe>
   </div>
 </section>
@@ -1968,11 +1974,11 @@
      screen and the socket are made once by the module in /client/terminal-drawer.js and kept, so
      rolling it down never loses the shell, its prompt or its scrollback. The terminal library is
      vendored beside the client modules, so the daemon still needs no downloads. -->
-<section id="termDrawer" aria-label="terminal" inert>
-  <div id="termGrip" title="drag to resize"></div>
-  <div class="td-bar">
-    <span class="td-title">terminal</span>
-    <span class="td-workspace" id="tdWorkspace"></span>
+<section id="termDrawer" class="drawer-shell drawer-slide" aria-label="terminal" inert>
+  <div id="termGrip" class="drawer-grip" title="drag to resize"></div>
+  <div class="td-bar drawer-bar">
+    <span class="td-title drawer-title">terminal</span>
+    <span class="td-workspace drawer-workspace" id="tdWorkspace"></span>
     <span class="grow"></span>
     <span class="td-status" id="tdStatus" role="status"></span>
     <button id="tdClose" type="button" title="roll the terminal drawer down (x)">roll down (x)</button>

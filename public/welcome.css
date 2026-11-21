@@ -179,11 +179,20 @@ button, input, select {
   color: var(--accent);
 }
 
-/* The settings page is the wider surface: 880px is a shelf, and a settings tree reads better in 1120. */
+/* The settings page is the wider surface: 880px is a shelf, and a settings tree reads better in 1120.
+   It fills the whole page height, masthead to bottom edge, so the tree never ends mid-window. */
 body[data-view="settings"] .shelf-stage {
   max-width: 1120px;
-  /* A settings page is read from the top, so it starts higher than the shelf does. */
-  margin-top: min(5vh, 44px);
+  margin-top: 0;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+}
+
+/* The settings card takes the rest of that height, so its foot sits at the bottom edge. */
+body[data-view="settings"] #settingsView {
+  flex: 1 1 auto;
 }
 
 /* Main 880px surface container (shared by both Shelf and Settings page) */
@@ -302,14 +311,143 @@ body[data-view="settings"] .shelf-stage {
   outline-offset: 1px;
 }
 
-/* Scrollable settings tree region */
-.settings-tree {
-  padding: 8px 10px;
-  overflow-y: auto;
+/* One scroll for the whole page: the daemon's tree and the plugins section below it ride the
+   same scrollbar, so the page reads as one list rather than two boxes. */
+.settings-scroll {
+  flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-tree {
+  padding: 8px 10px 0;
+  flex: none;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* The plugins section, outside the tree the daemon serves: one registration for the whole studio,
+   handled on the crossroads and not on any board. It sits in the page's own scroll, after the
+   tree, so it takes no box of its own. */
+.cfg-local {
+  flex: none;
+  padding: 6px 10px 10px;
+}
+
+.cfg-note {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.cfg-note code {
+  font-family: var(--mono);
+  color: var(--dim);
+}
+
+/* Rescan sits above the list, so it stays reachable whether a plugin is open or nothing is on disk. */
+.cfg-plugin-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 4px;
+}
+
+/* One plugin, folded to its name and state until it is opened. */
+.cfg-plugin > .cfg-summary .cfg-label {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* One plugin row: a label and the input beside it, the way a settings leaf reads. */
+.cfg-row {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 8px;
+  margin: 0 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-2);
+}
+
+.cfg-row > span {
+  color: var(--muted);
+  font: 11px/1.2 var(--mono);
+  white-space: nowrap;
+  flex: none;
+  min-width: 86px;
+}
+
+.cfg-type {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  padding: 4px 7px;
+  font: 11.5px/1.2 var(--mono);
+  outline: none;
+}
+
+.cfg-type:focus {
+  border-color: var(--accent);
+}
+
+.cfg-prose-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.cfg-prose-head b {
+  color: var(--dim);
+  font: 11px/1.2 var(--mono);
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cfg-prose-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.cfg-prose-size {
+  color: var(--muted);
+  font: 10.5px/1.2 var(--mono);
+}
+
+.cfg-prose-save {
+  background: var(--raised);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  padding: 4px 9px;
+  font: 11px/1.2 var(--mono);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.cfg-prose-save:hover {
+  border-color: var(--accent);
+}
+
+.cfg-prose-save:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* Collapsible group node at any depth */
@@ -880,6 +1018,27 @@ body[data-view="settings"] .shelf-stage {
   flex: none;
 }
 
+.omni-sort {
+  background: var(--raised);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  padding: 4px 6px;
+  font: 11.5px/1.2 var(--mono);
+  color: var(--dim);
+  cursor: pointer;
+  flex: none;
+}
+
+.omni-sort:hover {
+  color: var(--text);
+  border-color: #3a424e;
+}
+
+.omni-sort:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .omni-browse:hover {
   border-color: #3a424e;
   color: var(--text);
@@ -1060,7 +1219,7 @@ body[data-view="settings"] .shelf-stage {
   font-weight: 500;
 }
 
-.ws-empty {
+.ws-empty, .ws-remove {
   font: 11px/1 var(--mono);
   color: var(--muted);
   background: transparent;
@@ -1070,22 +1229,28 @@ body[data-view="settings"] .shelf-stage {
   cursor: pointer;
 }
 
-.ws-empty:hover {
+.ws-empty:hover, .ws-remove:hover {
   color: var(--text);
   border-color: var(--muted);
 }
 
-.ws-empty.is-armed {
+.ws-empty.is-armed, .ws-remove.is-armed {
   color: var(--bad);
   border-color: var(--bad);
   background: rgba(248, 81, 73, 0.1);
 }
 
-.ws-empty:disabled {
+.ws-empty:disabled, .ws-remove:disabled {
   color: var(--muted);
   border-color: var(--border);
   background: transparent;
-  cursor: progress;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.ws-row.is-missing .ws-remove {
+  cursor: pointer;
+  opacity: 1;
 }
 
 .enter-glyph {
@@ -1248,8 +1413,12 @@ body[data-view="settings"] .settings-help {
 }
 
 body[data-view="settings"] .settings-tree {
-  padding: 10px 14px 14px;
+  padding: 10px 14px 0;
   gap: 9px;
+}
+
+body[data-view="settings"] .cfg-local {
+  padding: 9px 14px 14px;
 }
 
 body[data-view="settings"] .cfg-summary {

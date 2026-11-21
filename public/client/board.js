@@ -2,6 +2,7 @@
 // The git drawer is a module of its own: the panel, its focus and the two messages its page trades
 // with this one are a single subject, and this file is long enough already. The daemon serves every
 // `/client/*.js` by one rule, so a new module beside this one loads without a table to edit.
+import { bindDragHeight, setTermHeight } from "./drawer-common.js";
 import { createGitDrawer } from "./git-drawer.js";
 // The terminal drawer is a module of its own beside it: the panel, the socket to the daemon's
 // shell and the vendored terminal screen are a single subject, served by the same one rule.
@@ -45,6 +46,7 @@ document.getElementById("gitBtn").addEventListener("click", () => {
 const terminalDrawer = createTerminalDrawer({ workspace, typingSomewhere });
 document.getElementById("termBtn").addEventListener("click", () => {
   closeHeaderMenus();
+  closeDocks("bottom");
   terminalDrawer.toggle();
 });
 // The plugin panel: one sandboxed frame for the life of the page, the doors the toolbox lists for the
@@ -79,6 +81,16 @@ const pluginShortcuts = new Map();
  * Neither direction carries a token, a cookie or the daemon's address: the frame is same-origin with this
  * page for its own files only, and every request it makes is made here, with this page's own promise.
  */
+/**
+ * Which edge a drawer panel sits on, once the plugin's `any` and its missing position are settled: an
+ * `any`, a missing word and an explicit left all mean the left drawers' column, as a drawer panel has
+ * always meant. Only bottom, top and right leave it.
+ */
+function pluginSide(panel) {
+  const position = panel && typeof panel.position === "string" ? panel.position : "";
+  return position === "bottom" || position === "top" || position === "right" ? position : "left";
+}
+
 function createPluginPanelHost({ workspace, mode = "overlay" }) {
   const drawerMode = mode === "drawer";
   const drawer = document.getElementById("pluginDrawer");
@@ -88,13 +100,15 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
   const noteEl = document.getElementById("pvNote");
   const closeBtn = document.getElementById("pvClose");
   const doors = document.getElementById("pluginDoors");
-  // Drawer mode: the panel lives in the left drawers' column instead of behind the toolbox overlay,
-  // so its frame is made on its first open rather than read from the page.
+  // Drawer mode: the panel lives in a drawer instead of behind the toolbox overlay, so its frame is
+  // made on its first open rather than read from the page. Which edge it sits on is the panel's own
+  // `position` (see `pluginSide`): left, bottom, top or right.
   const drawerColumn = document.getElementById("drawers");
   const drawerDoorsEl = document.getElementById("pluginDrawerDoors");
   let pane = null;
   let paneFrame = null;
   let paneKey = "";
+  let paneSide = "left";
   let registeredLetters = [];
   const targetFrame = () => (drawerMode ? paneFrame : frame);
   /** The plugin whose panel is on screen, `""` before a door was ever pressed. */
@@ -209,12 +223,14 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
   });
 
   /**
-   * The panel as one more left drawer: a pane in the drawers' column with the board's own rail-head and
-   * close button under it, sized by the rail grip like files, activity and cards. One pane per plugin,
-   * made on its first open and kept, so its state survives closing the drawer.
+   * The panel as one more drawer: a pane with the board's own rail-head and close button under it,
+   * sized by the rail grip like files, activity and cards. Left panes sit in the left drawers' column,
+   * beside files, activity and cards; panes for the bottom, the top and the right sit in their own
+   * strip. One pane per plugin, made on its first open and kept, so its state survives closing.
    */
   function openDrawer(panel) {
     const key = `plugin:${plugin}`;
+    const side = pluginSide(panel);
     const paneId = `drawerPlugin-${plugin}`;
     if (!pane || pane.id !== paneId) {
       let live = document.getElementById(paneId);
@@ -244,12 +260,17 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
           say({ type: "pi-studio.host.hello", plugin });
         });
         live.append(head, inner);
-        drawerColumn.insertBefore(live, document.getElementById("railGrip"));
-        DRAWER_NAMES[key] = paneId;
+        if (side === "left") {
+          drawerColumn.insertBefore(live, document.getElementById("railGrip"));
+          DRAWER_NAMES[key] = paneId;
+        } else {
+          document.getElementById(DOCK_NAMES[side]).append(live);
+        }
       }
       pane = live;
       paneFrame = live.querySelector("iframe.drawer-frame");
       paneKey = key;
+      paneSide = side;
     }
     if (paneFrame.dataset.plugin !== plugin) {
       nonce = newNonce();
@@ -258,9 +279,20 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
       paneFrame.src = panel.url;
     }
     if (gitDrawer.isOpen()) gitDrawer.close();
-    explorerCore.drawerOpen(drawerState, key);
-    paintDrawers();
-    paneFrame.focus();
+    if (side === "left") {
+      closeDocks();
+      explorerCore.drawerOpen(drawerState, key);
+      paintDrawers();
+    } else {
+      if (side === "bottom" && terminalDrawer.isOpen()) terminalDrawer.close();
+      explorerCore.drawerClose(drawerState);
+      paintDrawers();
+      dockState[side] = key;
+      paintDocks();
+    }
+    // A drawer panel keeps the board's keyboard: a left or dock drawer stands off the board, so nothing
+    // steals the focus into its page, and the board letters keep working while it is up. A click into
+    // the page takes the keys there, the way a click into the terminal takes them from the board.
     if (loaded) say({ type: "pi-studio.host.hello", plugin });
   }
 
@@ -300,11 +332,14 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
       door.textContent = (typeof panel.title === "string" && panel.title) || panel.name;
       if (drawerMode) {
         const key = `plugin:${panel.name}`;
+        const side = pluginSide(panel);
         door.setAttribute("aria-controls", `drawerPlugin-${panel.name}`);
         door.setAttribute("aria-expanded", "false");
+        door.dataset.side = side;
         door.title = `show the ${door.textContent} drawer`;
         door.addEventListener("click", () => {
-          if (drawerState.open === key) closeDrawers();
+          const open = side === "left" ? drawerState.open === key : dockState[side] === key;
+          if (open) closeDrawers();
           else open(panel);
         });
         pluginDrawerDoors[key] = door;
@@ -322,6 +357,8 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
     }
     if (drawerMode) drawerDoorsEl.hidden = mine.length === 0;
     else doors.hidden = mine.length === 0;
+    // The letters the map teaches are these doors' letters, so a re-list repaints the map with them.
+    paintShortcuts();
   }
   void listDoors();
 
@@ -330,10 +367,26 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
     scrim.addEventListener("click", () => close());
   }
 
+  /** The door for one panel, the way the three drawers' doors work: a press for the panel that is up
+   * rolls it down, a press for any other brings that one up in its place. */
+  function toggle(panel) {
+    if (!panel || typeof panel.url !== "string" || panel.url === "") return;
+    const key = `plugin:${typeof panel.name === "string" ? panel.name : ""}`;
+    if (drawerMode) {
+      const side = pluginSide(panel);
+      const up = side === "left" ? drawerState.open === key : dockState[side] === key;
+      if (up) return closeDrawers();
+      return open(panel);
+    }
+    if (!drawer.hidden && drawer.dataset.plugin === key.slice("plugin:".length)) return close();
+    return open(panel);
+  }
+
   return {
-    isOpen: () => (drawerMode ? drawerState.open === paneKey && paneKey !== "" : !drawer.hidden),
-    close: () => (drawerMode ? (drawerState.open === paneKey ? closeDrawers() : null) : close()),
+    isOpen: () => (drawerMode ? ((drawerState.open === paneKey || dockState[paneSide] === paneKey) && paneKey !== "") : !drawer.hidden),
+    close: () => (drawerMode ? closeDrawers() : close()),
     open,
+    toggle,
     relist: listDoors,
   };
 }
@@ -5870,6 +5923,44 @@ const THOUGHT_STALL_MS = 3000;
 // rail are the ones these open with, because this is that rail with doors on it.
 const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards", source: "drawerSource" };
 const drawerState = explorerCore.drawers();
+// The plugin drawers off the other three edges: one strip per edge, one pane open per strip. The
+// strips are separate from the left column because the left column is the rail's (files, activity,
+// cards, source control), and a column or a strip is not part of it.
+const DOCK_NAMES = { bottom: "pluginDockBottom", top: "pluginDockTop", right: "drawersRight" };
+const dockState = { bottom: "", top: "", right: "" };
+
+/** Paint which dock pane is up, and say so on the doors. */
+function paintDocks() {
+  for (const [side, id] of Object.entries(DOCK_NAMES)) {
+    const dock = document.getElementById(id);
+    // The strip rolls by its class the terminal drawer's way, and a shut strip keeps the last pane on:
+    // the slide carries that pane with it the way the terminal carries its screen, instead of the pane
+    // vanishing first and an empty background doing the travelling.
+    dock.classList.toggle("dock-on", dockState[side] !== "");
+    if (dockState[side] !== "") {
+      for (const pane of dock.querySelectorAll(".plugin-pane")) pane.classList.toggle("on", dockState[side] === `plugin:${pane.id.slice("drawerPlugin-".length)}`);
+    }
+  }
+  for (const [key, door] of Object.entries(pluginDrawerDoors)) {
+    // A left door belongs to the left column, not to these strips: `paintDrawers` speaks for it.
+    if (!(door.dataset.side in DOCK_NAMES)) continue;
+    door.setAttribute("aria-expanded", dockState[door.dataset.side] === key ? "true" : "false");
+  }
+}
+
+/** Roll every dock down; a side rolls only that one. */
+function closeDocks(side) {
+  if (side) dockState[side] = "";
+  else for (const key of Object.keys(dockState)) dockState[key] = "";
+  paintDocks();
+}
+
+/** Whether any dock strip is up. It stands in the escape order where the left column stands: a strip
+ * leaves board above it to read and to press, so it does not hold the letters the way the terminal strip
+ * does. Its own letter rolls it down again. */
+function dockOpen() {
+  return Boolean(dockState.bottom || dockState.top || dockState.right);
+}
 /** The doors in the header for plugins whose panel lives in this column, by drawer name. */
 const pluginDrawerDoors = {};
 // The three doors in the header, read before anything paints them.
@@ -5914,6 +6005,7 @@ function paintDrawers() {
 function showDrawer(name) {
   // The git graph covers the whole board, so it cannot stand over a drawer and be alive at both ends.
   if (gitDrawer.isOpen()) gitDrawer.close();
+  closeDocks();
   if (name === "files") exPrime();
   if (name === "source") scPrime();
   explorerCore.drawerOpen(drawerState, name);
@@ -5923,6 +6015,7 @@ function showDrawer(name) {
 function toggleDrawer(name) {
   const open = drawerState.open === name;
   if (gitDrawer.isOpen()) gitDrawer.close();
+  if (!open) closeDocks();
   explorerCore.drawerToggle(drawerState, name);
   if (!open && name === "files") exPrime();
   if (!open && name === "source") scPrime();
@@ -5930,8 +6023,10 @@ function toggleDrawer(name) {
 }
 
 function closeDrawers() {
-  if (!drawerState.open) return;
+  const leftWasOpen = Boolean(drawerState.open);
   explorerCore.drawerClose(drawerState);
+  closeDocks();
+  if (!leftWasOpen && !Object.values(dockState).some(Boolean)) return;
   paintDrawers();
   // The keyboard goes back to the board rather than dying with the element that had it.
   if (document.activeElement instanceof Element && document.activeElement.closest("#drawers")) {
@@ -5953,6 +6048,13 @@ function restoreDrawers() {
   paintDrawers();
 }
 restoreDrawers();
+
+// The strips across the board are the terminal drawer's height, and the terminal drawer's grip is its
+// owner. A strip that stands across carries one of its own on its open edge, which sizes the same shared
+// height the terminal folds to: the dock follows, its pane refits through the rail's own observers.
+// A right column is the rail's width instead, and the rail grip already sizes it, so it needs none.
+bindDragHeight(document.getElementById("dockGripBottom"), { bodyClass: "dock-resizing", resolvePx: (event) => setTermHeight(window.innerHeight - event.clientY) });
+bindDragHeight(document.getElementById("dockGripTop"), { bodyClass: "dock-resizing", resolvePx: (event) => setTermHeight(event.clientY - 44) });
 
 for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn })) {
   door.addEventListener("click", () => {
@@ -9443,6 +9545,7 @@ const configBtn = document.getElementById("configBtn");
 const configPanel = document.getElementById("boardConfig");
 const shortcutList = document.getElementById("shortcutList");
 const cfgTree = document.getElementById("cfgTree");
+const cfgFoot = document.getElementById("cfgFoot");
 // The document the panel is drawn from, and what was drawn from it: every leaf in document order, and
 // every group with the leaves under it, so a config that arrives repaints all of them.
 let boardDoc = null;
@@ -9521,7 +9624,7 @@ const SHORTCUTS = [
       { keys: "o", does: "flip the thread order, newest first or oldest first" },
       { keys: "g", does: "roll the git graph down, and press it again to roll it up" },
       { keys: "x", does: "roll the terminal drawer up from the bottom, and press it again to roll it down" },
-      { keys: "one letter per plugin", does: "open that plugin's panel — assigned in settings under plugins" },
+      { keys: "one letter per plugin", does: "open that plugin's panel — assigned in the crossroads settings under plugins" },
       { keys: "t", does: "start a new thread, on a board of threads with no card selected" },
       { keys: "r", does: "name the card you are reading in the message you were writing" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
@@ -9620,7 +9723,7 @@ const SHORTCUTS = [
 
 /** The panel, drawn once from that list: a heading per group, then a row of keys beside what it does.
  * A plugin's own letter is a live row: the list is drawn when the settings are read, so the map always
- * is the map, with the letters the settings page assigned. */
+ * is the map, with the letters the crossroads settings assigned. */
 function paintShortcuts() {
   const live = [...pluginShortcuts.entries()].map(([letter, hit]) => ({
     keys: letter,
@@ -9637,255 +9740,6 @@ function paintShortcuts() {
       }),
     ]),
   );
-}
-
-// ---------- the plugins in settings --------------------------------------
-// The daemon's registration is the truth; whatever arrives is what the section shows. Saving writes
-// the whole list, and the daemon proves it by the reader before it replaces what it runs, so a row it
-// cannot use saves nothing.
-const pluginRowsEl = document.getElementById("pluginRows");
-const pluginCountEl = document.getElementById("pluginCount");
-const pluginNote = document.getElementById("plNote");
-let pluginData = null;
-
-function pluginField(label, value, field, index, placeholder) {
-  const row = document.createElement("div");
-  row.className = "cfg-row is-typed";
-  row.append(Object.assign(el("span"), { textContent: label }));
-  const input = el("input", "cfg-type");
-  input.type = "text";
-  input.value = value || "";
-  if (placeholder) input.placeholder = placeholder;
-  if (index !== null) input.dataset.index = String(index);
-  if (field) input.dataset.field = field;
-  row.append(input);
-  return row;
-}
-
-function pluginPlaceSelect(value, index) {
-  const row = document.createElement("div");
-  row.className = "cfg-row is-typed";
-  row.append(Object.assign(el("span"), { textContent: "place" }));
-  const select = el("select", "cfg-type");
-  select.dataset.index = String(index);
-  select.dataset.field = "place";
-  for (const [key, label] of [["", "toolbox"], ["drawer", "left drawers"]]) {
-    const option = el("option");
-    option.value = key;
-    option.textContent = label;
-    if ((value || "") === key) option.selected = true;
-    select.append(option);
-  }
-  row.append(select);
-  return row;
-}
-
-/** One plugin as the section edits it: its name, its command, and the panel and shortcut it declares. */
-function renderPluginSettings() {
-  if (!pluginRowsEl) return;
-  const available = pluginData?.available || [];
-  pluginCountEl.textContent = pluginData
-    ? `${pluginData.plugins.length} registered${available.length ? ` · ${available.length} available` : ""}`
-    : "could not read";
-  const nodes = [];
-  if (!pluginData) {
-    nodes.push(Object.assign(el("p", "cfg-note"), { textContent: "could not read the plugin list" }));
-    pluginRowsEl.replaceChildren(...nodes);
-    return;
-  }
-  const roster = new Map((pluginData.roster || []).map((one) => [one.name, one]));
-  const stateOf = (state) => (state ? (state.running ? `running${state.version ? ` ${state.version}` : ""}` : state.dormant ? "starts on open" : "not running") : "not running");
-  for (const problem of pluginData.problems || []) {
-    nodes.push(
-      Object.assign(el("p", "cfg-note"), {
-        textContent: problem.name ? `${problem.name}: ${problem.problem}` : problem.problem,
-      }),
-    );
-  }
-  pluginData.plugins.forEach((row, index) => {
-    const head = document.createElement("div");
-    head.className = "cfg-prose-head";
-    head.append(
-      Object.assign(el("b"), {
-        textContent: `${row.name} · ${stateOf(roster.get(row.name))}${row.shortcut ? ` · ${row.shortcut}` : ""}`,
-      }),
-    );
-    const remove = el("button", "omni-browse");
-    remove.type = "button";
-    remove.textContent = "remove";
-    remove.addEventListener("click", () => void savePluginSettings(gatherPluginRows().filter((_, at) => at !== index), `removed ${row.name}`));
-    head.append(remove);
-    nodes.push(head);
-    // A row that names a folder takes everything else from that folder's plugin.json, so it shows
-    // only what a row of its own can decide — its name, its args and its shortcut. The command, the
-    // panel and the place belong to the manifest and are never rewritten by this form.
-    nodes.push(pluginField("name", row.name, "name", index));
-    if (row.installed || row.bundled) {
-      nodes.push(
-        Object.assign(el("p", "cfg-note"), {
-          textContent: `the command, the panel and the place come from the ${row.installed ? "installed" : "shipped"} plugin.json`,
-        }),
-      );
-    } else {
-      nodes.push(pluginField("command", row.command, "command", index));
-    }
-    nodes.push(pluginField("args", (row.args || []).join(", "), "args", index, "--flag value, comma separated"));
-    if (!(row.installed || row.bundled)) {
-      nodes.push(pluginPlaceSelect(row.visual?.place || "", index));
-      nodes.push(pluginField("panel title", row.visual?.title || "", "title", index));
-      nodes.push(pluginField("panel entry", row.visual?.entry || "", "entry", index));
-      nodes.push(pluginField("panel files", (row.visual?.files || []).join(", "), "files", index));
-    }
-    nodes.push(pluginField("shortcut", row.shortcut || "", "shortcut", index, "one letter"));
-  });
-  // What is on disk that nobody registered, offered to enable: a plugin the human copied into the
-  // plugins folder declares itself, so enabling it is one click and the row takes its defaults.
-  if (available.length || (pluginData.unavailable || []).length) {
-    const head = document.createElement("div");
-    head.className = "cfg-prose-head";
-    head.append(Object.assign(el("b"), { textContent: "available in the plugins folder" }));
-    const rescan = el("button", "omni-browse");
-    rescan.type = "button";
-    rescan.textContent = "rescan";
-    rescan.addEventListener("click", () => void loadPluginSettings());
-    head.append(rescan);
-    nodes.push(head);
-    for (const one of available) {
-      // Two lines, not one: the title keeps its ellipsis one line, and the description wraps under it
-      // rather than stretching the row past the panel — a long span here used to clip the whole
-      // settings page off the left edge.
-      const head = document.createElement("div");
-      head.className = "cfg-prose-head";
-      head.append(Object.assign(el("b"), { textContent: `${one.title} · ${one.version}` }));
-      const enable = el("button", "omni-browse");
-      enable.type = "button";
-      enable.textContent = "enable";
-      enable.addEventListener("click", () => void enablePlugin(one));
-      head.append(enable);
-      nodes.push(head);
-      const preview = [
-        one.defaults.place === "drawer" ? "left drawers" : "toolbox",
-        one.start === "lazy" ? "starts on open" : "starts on boot",
-        one.defaults.shortcut ? `shortcut ${one.defaults.shortcut}` : null,
-        one.description,
-      ].filter(Boolean).join(" · ");
-      if (preview) {
-        nodes.push(Object.assign(el("p", "cfg-note"), { textContent: preview }));
-      }
-    }
-    for (const one of pluginData.unavailable || []) {
-      const head = document.createElement("div");
-      head.className = "cfg-prose-head";
-      head.append(Object.assign(el("b"), { textContent: `${one.folder} · ${one.source}` }));
-      nodes.push(head);
-      nodes.push(Object.assign(el("p", "cfg-note"), { textContent: one.problem }));
-    }
-  }
-  const save = el("button", "cfg-prose-save");
-  save.type = "button";
-  save.textContent = "save plugins";
-  save.addEventListener("click", () => void savePluginSettings(gatherPluginRows(), "saved"));
-  const actions = document.createElement("div");
-  actions.className = "cfg-prose-actions";
-  actions.append(save);
-  nodes.push(actions);
-  pluginRowsEl.replaceChildren(...nodes);
-}
-
-/**
- * One click registers a plugin the human installed: the row takes the manifest's defaults, and the
- * suggested shortcut only when it is still free — a taken one is the human's to reassign, never a
- * guess the daemon makes for them.
- */
-async function enablePlugin(one) {
-  const rows = gatherPluginRows();
-  const taken = new Set(pluginData.taken || []);
-  for (const row of rows) if (row.shortcut) taken.add(row.shortcut);
-  const suggested = one.defaults.shortcut;
-  const free = suggested && !taken.has(suggested);
-  rows.push({
-    name: one.name,
-    [one.source]: one.folder,
-    args: one.defaults.args || [],
-    ...(free ? { shortcut: suggested } : {}),
-  });
-  await savePluginSettings(rows, suggested && !free ? `enabled without the default shortcut — ${suggested} is taken; set another above` : "enabled");
-}
-
-/** The rows as the form has them, before the daemon is asked to prove them. */
-function gatherPluginRows() {
-  const byIndex = new Map();
-  for (const input of pluginRowsEl.querySelectorAll("input[data-index], select[data-index]")) {
-    const index = Number(input.dataset.index);
-    if (!byIndex.has(index)) byIndex.set(index, {});
-    byIndex.get(index)[input.dataset.field] = input.value;
-  }
-  return [...byIndex.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([index, fields]) => {
-      // A row that names a folder keeps naming it: saving must never turn it into a command row,
-      // which would spawn it eagerly and pin it to a path the manifest no longer owns.
-      const named = (pluginData.plugins || [])[index];
-      const row = {
-        name: (fields.name || "").trim(),
-        args: (fields.args || "").split(",").map((one) => one.trim()).filter(Boolean),
-      };
-      if (named?.installed) row.installed = named.installed;
-      if (named?.bundled) row.bundled = named.bundled;
-      if (!named?.installed && !named?.bundled) {
-        row.command = (fields.command || "").trim();
-        const files = (fields.files || "").split(",").map((one) => one.trim()).filter(Boolean);
-        if (files.length) {
-          row.visual = {
-            title: (fields.title || "").trim() || row.name,
-            entry: (fields.entry || "").trim(),
-            files,
-            ...(fields.place ? { place: fields.place } : {}),
-          };
-        }
-      }
-      const shortcut = (fields.shortcut || "").trim().toLowerCase();
-      if (shortcut) row.shortcut = shortcut;
-      return row;
-    });
-}
-
-async function savePluginSettings(rows, said) {
-  pluginNote.textContent = "";
-  try {
-    const response = await fetch(`/plugins/registry?${auth}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ plugins: rows }),
-    });
-    const body = await response.json().catch(() => null);
-    if (!response.ok) {
-      const problems = (body?.problems || []).map((one) => (one.name ? `${one.name}: ` : "") + one.problem);
-      pluginNote.textContent = problems.join("; ") || "the daemon refused the list";
-      return;
-    }
-    pluginData = body;
-    renderPluginSettings();
-    pluginPanel.relist();
-    pluginDrawer.relist();
-    paintShortcuts();
-    pluginNote.textContent = `${said} — the roster restarted without a daemon restart`;
-  } catch (error) {
-    pluginNote.textContent = `could not save: ${error.message || error}`;
-  }
-}
-
-/** The section is read on every open, so the same page always shows the roster as it stands. */
-async function loadPluginSettings() {
-  try {
-    const response = await fetch(`/plugins/registry?${auth}`);
-    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
-    pluginData = await response.json();
-  } catch (error) {
-    pluginData = null;
-  }
-  paintShortcuts();
-  renderPluginSettings();
 }
 
 /**
@@ -9961,7 +9815,8 @@ function refreshSettings() {
   void loadBoardSettings();
 }
 
-/** The whole panel: what the board is, the groups, and the one line under them. */
+/** The whole panel: the groups, and the one line under them. The footnote lives outside the tree, below
+ * the hotkeys, so a redraw of the tree never moves it. */
 function renderTree(doc) {
   treeLeaves = [];
   treeGroups = [];
@@ -9971,19 +9826,13 @@ function renderTree(doc) {
     head.textContent = doc.title;
     nodes.push(head);
   }
-  if (doc.subtitle) {
-    const sub = el("p", "cfg-sub");
-    sub.textContent = doc.subtitle;
-    nodes.push(sub);
-  }
   for (const group of doc.groups ?? []) nodes.push(renderGroup(group, "").fold);
-  if (doc.foot) {
-    const foot = el("p", "cfg-note");
-    foot.textContent = doc.foot;
-    nodes.push(foot);
-  }
   cfgTree.replaceChildren(...nodes);
+  if (cfgFoot) cfgFoot.textContent = doc.foot || "";
   paintConfig();
+  // The map is painted here as well as when the plugin doors list: opening the panel after the doors
+  // arrived must still show their letters, and the load-time paint ran while the map was empty.
+  paintShortcuts();
 }
 
 /** One group: a `<details>` whose leaves come first and whose own groups follow, to any depth. */
@@ -10932,7 +10781,6 @@ configBtn.addEventListener("click", () => {
   // is what it settles on.
   if (boardDoc) renderTree(boardDoc);
   void loadBoardSettings();
-  void loadPluginSettings();
 });
 
 // ---------- the prompt files ----------------------------------------------
@@ -13959,7 +13807,7 @@ function exOpenSurfaces() {
     git: gitDrawer.isOpen(),
     plugin: pluginPanel.isOpen(),
     terminal: terminalDrawer.isOpen(),
-    drawer: Boolean(drawerState.open),
+    drawer: Boolean(drawerState.open) || dockOpen(),
     card: Boolean(document.querySelector(".card.active")) || selectedIds.size > 0,
   };
 }
@@ -14183,13 +14031,15 @@ document.addEventListener("keydown", (event) => {
     else toggleDrawer(letter);
     return;
   }
-  // A plugin's own letter opens its panel, in the drawers or the toolbox as its registration says.
+  // A plugin's own letter opens its panel, in the drawers or the toolbox as its registration says. It is
+  // a toggle the way the drawers' letters are: a second press rolls the same panel down again, and a
+  // press for another panel's letter brings that one up instead.
   if (!event.shiftKey) {
     const hit = pluginShortcuts.get(event.key.toLowerCase());
     if (hit) {
       event.preventDefault();
-      if (hit.drawer) pluginDrawer.open(hit.panel);
-      else pluginPanel.open(hit.panel);
+      if (hit.drawer) pluginDrawer.toggle(hit.panel);
+      else pluginPanel.toggle(hit.panel);
       return;
     }
   }
@@ -14242,6 +14092,7 @@ document.addEventListener("keydown", (event) => {
   if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
   event.preventDefault();
   if (gitDrawer.isOpen()) gitDrawer.close();
+  closeDocks("bottom");
   terminalDrawer.toggle();
 });
 
@@ -14289,10 +14140,10 @@ function applyMeta(meta) {
   terminalDrawer.setName(meta.workspace?.name);
   const sess = document.getElementById("sess");
   sess.innerHTML = "";
-  sess.append("board of ");
   const name = document.createElement("b");
   name.textContent = folder;
   sess.append(name);
+  sess.append(" board");
   // A second daemon answering here says so in the header: the tab title is not always on screen.
   if (meta.instance) {
     const which = document.createElement("span");

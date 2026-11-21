@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { boardSettingsValues, settingsDocument } from "../server/settings-document.ts";
@@ -38,8 +39,8 @@ const config = {
 const document = settingsDocument({
 	scope: "board",
 	values: config,
-	title: "this board",
-	subtitle: "pi-studio · /home/stanke/projekty/pi-studio",
+	title: "Board specific settings",
+	subtitle: "",
 	foot: "new threads only · a run in flight is untouched",
 });
 
@@ -68,9 +69,9 @@ const writtenLeaves = settingLeaves.filter((field) => field.id !== "overviewMap"
 test("the document is five groups in the order the panel draws them", () => {
 	assert.equal(document.version, 1);
 	assert.equal(document.scope, "board");
-	assert.equal(document.title, "this board");
-	// A subtitle saying which board this is, so a tab on two of them can tell them apart.
-	assert.equal(document.subtitle, "pi-studio · /home/stanke/projekty/pi-studio");
+	assert.equal(document.title, "Board specific settings");
+	// No subtitle: the panel is headed "Board specific settings" and names no board or folder.
+	assert.equal(document.subtitle, "");
 	assert.equal(document.foot, "new threads only · a run in flight is untouched");
 	assert.deepEqual(
 		document.groups.map((group) => group.id),
@@ -263,8 +264,8 @@ test("the text editor leaf reads the studio's value, because a board keeps no co
 				settingsDocument({
 					scope: "board",
 					values: boardSettingsValues(config, studio),
-					title: "this board",
-					subtitle: "pi-studio · /home/stanke/projekty/pi-studio",
+					title: "Board specific settings",
+					subtitle: "",
 					foot: "new threads only · a run in flight is untouched",
 				}).groups,
 			).map((field) => [field.id, field]),
@@ -276,8 +277,8 @@ test("the text editor leaf reads the studio's value, because a board keeps no co
 				settingsDocument({
 					scope: "board",
 					values: boardSettingsValues(config, studio),
-					title: "this board",
-					subtitle: "pi-studio · /home/stanke/projekty/pi-studio",
+					title: "Board specific settings",
+					subtitle: "",
 					foot: "new threads only · a run in flight is untouched",
 				}).groups,
 			).map((field) => [field.id, field]),
@@ -289,4 +290,53 @@ test("the text editor leaf reads the studio's value, because a board keeps no co
 	const [nameProvider, ...nameRest] = NAME_MODEL.split("/");
 	assert.equal(helperOf({ helperProvider: "github-copilot", helperModel: "gemini-4-argon" }), "github-copilot/gemini-4-argon");
 	assert.equal(helperOf({}), `${nameProvider}/${nameRest.join("/")}`);
+});
+
+/**
+ * Plugins live on the crossroads settings page, not on any board: the board panel carries the hotkeys
+ * and the footnote only, so a reintroduction of the editor there would be a second registration page.
+ */
+test("plugins are handled on the crossroads settings page, and the board settings keep only hotkeys and the foot", () => {
+	const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+	const settings = html.slice(html.indexOf('id="boardConfig"'), html.indexOf('id="promptEditor"'));
+	assert.ok(!settings.includes('id="cfgPlugins"'), "the board settings hold no plugins section");
+	assert.ok(!settings.includes('id="pluginRows"'), "the board settings hold no plugin rows");
+	assert.ok(settings.includes('id="cfgShortcuts"'), "the hotkeys section stays on the board");
+	assert.ok(settings.indexOf('id="cfgShortcuts"') < settings.indexOf('id="cfgFoot"'), "the footnote sits below the hotkeys");
+	const welcome = readFileSync(new URL("../public/welcome.html", import.meta.url), "utf8");
+	assert.ok(welcome.includes('id="cfgPlugins"'), "the crossroads settings hold the plugins section");
+	assert.ok(welcome.includes('id="pluginRows"'), "the crossroads settings hold the plugin rows");
+	const board = readFileSync(new URL("../public/client/board.js", import.meta.url), "utf8");
+	assert.ok(!board.includes("/plugins/registry"), "the board client no longer edits the plugin registration");
+	// The hotkeys map is repainted when the tree renders: the plugin doors list asynchronously, after
+	// the load-time paint ran with an empty map, and the old plugin loader was that repaint.
+	const renderTree = board.slice(board.indexOf("function renderTree"), board.indexOf("function renderGroup"));
+	assert.ok(renderTree.includes("paintShortcuts()"), "rendering the settings repaints the hotkeys map");
+	const welcomeJs = readFileSync(new URL("../public/welcome.js", import.meta.url), "utf8");
+	assert.ok(welcomeJs.includes("await loadPluginSettings()"), "a save on the crossroads re-reads the registration, so the offered folders stay");
+	// Each plugin is one collapsible row, closed at first: the section opens as a list, not as every field.
+	assert.ok(welcomeJs.includes('"cfg-group cfg-plugin"') && welcomeJs.includes("pluginDetails("), "each registered plugin is drawn as one collapsible row");
+	assert.ok(!welcomeJs.includes("details.open = true"), "no plugin row starts open");
+	// Rescan is drawn above the list on every render, not only when a folder is offered for enabling.
+	const toolbar = welcomeJs.slice(welcomeJs.indexOf("function pluginToolbar"), welcomeJs.indexOf("function renderPluginSettings"));
+	assert.ok(toolbar.includes('"rescan"'), "the rescan button lives in the toolbar above the plugin rows");
+	assert.ok(welcomeJs.includes("const rendered = [pluginToolbar()];"), "the toolbar is drawn before the read is checked, so rescan survives an unreadable list");
+});
+
+/**
+ * The shelf sorts its rows in the browser: the daemon always answers newest first, and the order
+ * the human picks — by name or by last touch — is a view choice kept in this browser, not a
+ * rewrite of the saved list.
+ */
+test("the shelf offers sorting by name and by last access, kept in the browser", () => {
+	const welcome = readFileSync(new URL("../public/welcome.html", import.meta.url), "utf8");
+	assert.ok(welcome.includes('id="sortSelect"'), "the omnibar holds the sort control");
+	for (const mode of ["recent", "oldest", "name-asc", "name-desc"]) {
+		assert.ok(welcome.includes(`value="${mode}"`), `the sort control offers ${mode}`);
+	}
+	const welcomeJs = readFileSync(new URL("../public/welcome.js", import.meta.url), "utf8");
+	assert.ok(welcomeJs.includes("function sortedWorkspaces()"), "the rows are ordered by one function");
+	assert.ok(welcomeJs.includes("sortedWorkspaces().map(rowFor)"), "the list renders in the chosen order");
+	assert.ok(welcomeJs.includes("lastActivity?.at ?? workspace.openedAt"), "last access reads the row's own age");
+	assert.ok(welcomeJs.includes("localStorage.setItem(SORT_KEY"), "the chosen order is kept between visits");
 });

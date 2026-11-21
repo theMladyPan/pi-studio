@@ -32,7 +32,7 @@ import { pluginManager, reloadPlugins } from "../plugins/manager.ts";
 import { INTERNAL_ERROR, PLUGIN_UNAVAILABLE } from "../plugins/protocol.ts";
 import { PLUGINS_FILE, PLUGIN_SHORTCUT_TAKEN, loadAvailablePlugins, loadPluginRegistry, resolvePluginFile } from "../plugins/registry.ts";
 import { workspaceById } from "../workspaces.ts";
-import type { PluginVisual } from "../plugins/registry.ts";
+import type { PluginVisual, PluginVisualPosition } from "../plugins/registry.ts";
 
 /** Where a panel and its files are served from. One prefix, so `main.ts` can route them in one line each. */
 export const VISUAL_PREFIX = "/plugins/visual/";
@@ -77,7 +77,7 @@ const VISUAL_TYPES: Record<string, string> = {
 const VISUAL_CSP = "sandbox allow-scripts";
 
 /** One panel the board may show: what to call it, and where its frame starts. */
-export type VisualPanel = { name: string; title: string; url: string; place?: "drawer"; shortcut?: string };
+export type VisualPanel = { name: string; title: string; url: string; place?: "drawer"; position?: PluginVisualPosition; shortcut?: string };
 
 /** Who asked, as `main.ts` decided it. A panel is the human's; a thread has no page to draw in. */
 type Caller = { human?: unknown } | null | undefined;
@@ -89,7 +89,10 @@ function visualRoster(): { name: string; root: string; visual: PluginVisual; sho
 		// A plugin that failed to start has no page to ask, so its door is not offered either. A dormant
 		// one keeps its door: the page is served from disk, and the first request starts the process.
 		if ((!one.running && !one.dormant) || !one.visual) continue;
-		panels.push({ name: one.name, root: dirname(one.command), visual: one.visual, ...(one.shortcut ? { shortcut: one.shortcut } : {}) });
+		// The settings pick wins over the manifest's ask here and only here: the registry and the
+		// roster keep the two apart so settings can show both, and the board sees the one edge.
+		const visual = one.position !== undefined ? { ...one.visual, position: one.position } : one.visual;
+		panels.push({ name: one.name, root: dirname(one.command), visual, ...(one.shortcut ? { shortcut: one.shortcut } : {}) });
 	}
 	return panels;
 }
@@ -97,7 +100,7 @@ function visualRoster(): { name: string; root: string; visual: PluginVisual; sho
 /** The doors the board draws, one per plugin that has a panel. */
 export function onVisualPanels(res: ServerResponse): void {
 	answer(res, 200, {
-		plugins: visualRoster().map((one) => ({ name: one.name, title: one.visual.title, url: `${VISUAL_PREFIX}${encodeURIComponent(one.name)}/${one.visual.entry}`, ...(one.visual.place ? { place: one.visual.place } : {}), ...(one.shortcut ? { shortcut: one.shortcut } : {}) })),
+		plugins: visualRoster().map((one) => ({ name: one.name, title: one.visual.title, url: `${VISUAL_PREFIX}${encodeURIComponent(one.name)}/${one.visual.entry}`, ...(one.visual.place ? { place: one.visual.place } : {}), ...(one.visual.position ? { position: one.visual.position } : {}), ...(one.shortcut ? { shortcut: one.shortcut } : {}) })),
 	});
 }
 
@@ -147,6 +150,29 @@ export async function onPluginRegistry(req: IncomingMessage, res: ServerResponse
 		taken: PLUGIN_SHORTCUT_TAKEN,
 		available,
 		unavailable,
+	});
+}
+
+/**
+ * Restart every registered plugin from the file as it stands on disk: a rebuilt binary, or a
+ * registration edited by hand, takes effect without a daemon restart and without anything being
+ * written. The whole roster restarts, because `reloadPlugins` is the same call a save makes; the
+ * page that asks is the human's, and a thread has no route here for the same reason a saved row
+ * starts whatever it names. A file nothing in it can start is refused and the running roster stays:
+ * a missing file is an empty registration, which is a list on its own.
+ */
+export async function onPluginReload(res: ServerResponse): Promise<void> {
+	const read = loadPluginRegistry();
+	if (read.plugins.length === 0 && read.problems.length > 0) {
+		answer(res, 400, { problems: read.problems });
+		return;
+	}
+	await reloadPlugins();
+	answer(res, 200, {
+		plugins: read.plugins,
+		problems: pluginManager()?.problems() ?? [],
+		roster: pluginManager()?.roster() ?? [],
+		taken: PLUGIN_SHORTCUT_TAKEN,
 	});
 }
 
