@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- feat: Show the pi-studio logo in the top-left of the board instead of the word `pi`, and name the workspace label `<workspace> board` instead of `board of <workspace>`, so the header reads as the workspace's own board. [t-4b4fa58d]
+
 ## [0.7.0] - 2026-11-21
 
 - feat: Name the action in the status strip while a Git action runs in the graph drawer — for example `Merge dev into the current branch…` or `Push branch main…` — instead of the generic `Git action running…`, so a long push, fetch or merge says what it is doing.

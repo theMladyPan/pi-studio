@@ -508,7 +508,8 @@
     display: flex; align-items: center; gap: 14px; padding: 0 14px; font-size: 13px; overflow-x: auto;
     background: rgba(13,17,23,.9); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border);
   }
-  header .brand { font-weight: 700; letter-spacing: .3px; }
+  header .brand { display: inline-flex; align-items: center; }
+  header .brand img { width: 24px; height: 24px; display: block; }
   header .live { display: flex; align-items: center; gap: 6px; color: var(--green); }
   header .live b { width: 7px; height: 7px; border-radius: 50%; background: var(--green);
     display: inline-block; box-shadow: 0 0 0 3px rgba(63,185,80,.15); }
@@ -1577,7 +1578,7 @@
 </head>
 <body>
 <header>
-  <span class="brand" title="every keyboard shortcut is listed under settings">pi</span>
+  <span class="brand" title="every keyboard shortcut is listed under settings"><img src="/favicon.svg" alt="pi-studio" width="24" height="24" /></span>
   <button class="sess" id="sess" type="button" title="switch workspace"></button>
   <!-- Polite, so the state is spoken when it changes; the elapsed clock is decoration that ticks
        every second and is hidden, so it is never read out. -->
