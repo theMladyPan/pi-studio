@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- feat: Name the action in the status strip while a Git action runs in the graph drawer — for example `Merge dev into the current branch…` or `Push branch main…` — instead of the generic `Git action running…`, so a long push, fetch or merge says what it is doing. [t-32571b81]
+
 - feat: Let any card be named in the message you were writing, including one that belongs to another thread and one no thread answers for, by pressing `r` on it or by dragging it onto a message field. The drag puts the card back where it was and adds a chip to the message, so a reference costs no layout. A card written by a plugin, or one whose thread has gone, is handed to the agent quoted as any other card is. [t-0a6855b8]
 - feat: Follow a cross-reference written with its board in front, `[[board/key]]`, by opening that board in a new tab on the card it names; before, only the cards of the board the reader was on could be reached, so a link to another workspace went dead. [t-0a6855b8]
 - fix: Keep cross-references honest after review: a drag now ends cleanly when the browser cancels it and is read where the pointer is at release, a cross-board link is only shown as live when a known board answers to it and is followed as a real link to a new tab rather than a popup that can take the current one, folded threads are opened when a reference goes into them, and a queued message keeps the cards it named when it is edited. [t-0a6855b8]

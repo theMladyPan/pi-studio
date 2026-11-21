@@ -135,11 +135,11 @@ function ctx() {
 			if (!reply.view) throw new Error("Git could not open that file or diff.");
 			showView(reply.view);
 		},
-		write: async (command, fields = {}, after = null) => {
+		write: async (command, fields = {}, after = null, label = null) => {
 			expectRepo();
 			if (busy) throw new Error("A Git action is already running in this view.");
 			busy = true;
-			status("Git action running…", "action");
+			status(label ? `${label.replace(/[?…]+$/, "")}…` : "Git action running…", "action");
 			let failure = null;
 			try {
 				await read(command, fields);
