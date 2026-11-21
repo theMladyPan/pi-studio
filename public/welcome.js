@@ -1394,7 +1394,9 @@
     details.open = pluginOpen.has(key);
     const summary = el("summary", "cfg-summary");
     const left = el("div", "cfg-sum-left");
-    left.append(el("span", "cfg-caret", "▸"), el("span", "cfg-label", title));
+    const caret = el("span", "cfg-caret", "▸");
+    caret.setAttribute("aria-hidden", "true");
+    left.append(caret, el("span", "cfg-label", title));
     if (badge) left.append(el("span", "cfg-status-badge", badge));
     summary.append(left);
     if (button) {
@@ -1502,7 +1504,7 @@
       }
       for (const one of unavailable) {
         rendered.push(
-          pluginDetails(`unavailable:${one.folder}`, one.folder, one.source, null, [Object.assign(el("p", "cfg-note"), { textContent: one.problem })]),
+          pluginDetails(`unavailable:${one.source}:${one.folder}`, one.folder, one.source, null, [Object.assign(el("p", "cfg-note"), { textContent: one.problem })]),
         );
       }
     }

@@ -343,10 +343,6 @@ body[data-view="settings"] .shelf-stage {
 }
 
 /* One plugin, folded to its name and state until it is opened. */
-.cfg-plugin > .cfg-summary .cfg-sum-right .omni-browse {
-  flex: none;
-}
-
 .cfg-plugin > .cfg-summary .cfg-label {
   flex: 0 1 auto;
   overflow: hidden;
