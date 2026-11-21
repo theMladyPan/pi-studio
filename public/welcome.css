@@ -179,11 +179,20 @@ button, input, select {
   color: var(--accent);
 }
 
-/* The settings page is the wider surface: 880px is a shelf, and a settings tree reads better in 1120. */
+/* The settings page is the wider surface: 880px is a shelf, and a settings tree reads better in 1120.
+   It fills the whole page height, masthead to bottom edge, so the tree never ends mid-window. */
 body[data-view="settings"] .shelf-stage {
   max-width: 1120px;
-  /* A settings page is read from the top, so it starts higher than the shelf does. */
-  margin-top: min(5vh, 44px);
+  margin-top: 0;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+}
+
+/* The settings card takes the rest of that height, so its foot sits at the bottom edge. */
+body[data-view="settings"] #settingsView {
+  flex: 1 1 auto;
 }
 
 /* Main 880px surface container (shared by both Shelf and Settings page) */
@@ -302,25 +311,30 @@ body[data-view="settings"] .shelf-stage {
   outline-offset: 1px;
 }
 
-/* Scrollable settings tree region */
-.settings-tree {
-  padding: 8px 10px;
-  overflow-y: auto;
+/* One scroll for the whole page: the daemon's tree and the plugins section below it ride the
+   same scrollbar, so the page reads as one list rather than two boxes. */
+.settings-scroll {
+  flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-tree {
+  padding: 8px 10px 0;
+  flex: none;
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
 /* The plugins section, outside the tree the daemon serves: one registration for the whole studio,
-   handled on the crossroads and not on any board. It keeps its own scroll so a long list never
-   pushes the tree or the footer off the page. */
+   handled on the crossroads and not on any board. It sits in the page's own scroll, after the
+   tree, so it takes no box of its own. */
 .cfg-local {
   flex: none;
-  max-height: min(45vh, 320px);
-  overflow-y: auto;
-  padding: 8px 10px;
-  border-top: 1px solid var(--border);
+  padding: 6px 10px 10px;
 }
 
 .cfg-note {
@@ -1372,8 +1386,12 @@ body[data-view="settings"] .settings-help {
 }
 
 body[data-view="settings"] .settings-tree {
-  padding: 10px 14px 14px;
+  padding: 10px 14px 0;
   gap: 9px;
+}
+
+body[data-view="settings"] .cfg-local {
+  padding: 9px 14px 14px;
 }
 
 body[data-view="settings"] .cfg-summary {
