@@ -100,3 +100,7 @@ The human step-by-step for cutting and publishing a release lives in `docs/relea
   duplicate unreleased notes using the rules above. Never take one side of the file wholesale.
 - Recheck the version and release tags at release time. If `dev` has already released the work
   your bullet would describe, do not add a duplicate entry.
+
+## Notes
+- this application is visual element based wrapper on pi.dev harness. There is no point to make it 
+  screen-reader accessible. Do not bother. 
