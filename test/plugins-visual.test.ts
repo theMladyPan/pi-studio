@@ -470,3 +470,91 @@ test("a panel that asks for the drawer is listed with its place", async () => {
 		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);
 	}
 });
+
+// ---------- the reload route, against a daemon ----------
+
+/** The roster once the daemon's plugins are up, waited for as panels are, because a daemon starts them after its socket opens. */
+async function untilRoster(daemon: Daemon, count: number) {
+	const until = Date.now() + 10_000;
+	for (;;) {
+		const { roster } = JSON.parse((await get(daemon, "/plugins/registry")).body) as { roster: unknown[] };
+		if (roster.length >= count || Date.now() > until) return roster;
+		await new Promise((done) => setTimeout(done, 50));
+	}
+}
+
+test("a reload restarts every registered plugin from the file as it stands", async () => {
+	const daemon = await boot([exampleRow]);
+	const gone = new Promise<void>((resolve) => daemon.child.once("exit", () => resolve()));
+	try {
+		await untilRoster(daemon, 1);
+		const reloaded = await post(daemon, "/plugins/reload", {});
+		assert.equal(reloaded.status, 200);
+		const body = JSON.parse(reloaded.body) as { roster: { name: string; running: boolean }[]; problems: unknown[] };
+		assert.deepEqual(body.roster.map((one) => [one.name, one.running]), [["example-panel", true]]);
+		assert.deepEqual(body.problems, []);
+
+		// Emptying the file by hand and reloading closes the roster, with no daemon restart.
+		writeFileSync(join(state, "plugins.json"), JSON.stringify({ plugins: [] }));
+		const emptied = await post(daemon, "/plugins/reload", {});
+		assert.equal(emptied.status, 200);
+		assert.deepEqual((JSON.parse(emptied.body) as { roster: unknown[] }).roster, []);
+
+		// Bring the row back, then break the file: nothing in it can start, so the reload is refused
+		// and the running roster stays as it is.
+		writeFileSync(join(state, "plugins.json"), JSON.stringify({ plugins: [exampleRow] }));
+		await post(daemon, "/plugins/reload", {});
+		await untilRoster(daemon, 1);
+		writeFileSync(join(state, "plugins.json"), "not json");
+		const refused = await post(daemon, "/plugins/reload", {});
+		assert.equal(refused.status, 400);
+		assert.equal((JSON.parse(refused.body) as { problems: unknown[] }).problems.length > 0, true);
+		assert.deepEqual(
+			(JSON.parse((await get(daemon, "/plugins/registry")).body) as { roster: { name: string }[] }).roster.map((one) => one.name),
+			["example-panel"],
+		);
+
+		// The reload is the human's: no caller gets it.
+		assert.equal((await post(daemon, "/plugins/reload", {}, "")).status, 403);
+		const thread = { human: false, board: { id: "ws" }, thread: {} };
+		assert.equal(threadRefusal(thread, "POST", "/plugins/reload", "ws"), "a thread may not use that");
+	} finally {
+		daemon.child.kill("SIGTERM");
+		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);
+	}
+});
+
+test("the plugins reload command asks the running daemon to restart its roster", async () => {
+	const daemon = await boot([exampleRow]);
+	const gone = new Promise<void>((resolve) => daemon.child.once("exit", () => resolve()));
+	const cli = (args: string[], stateDir: string) =>
+		new Promise<{ code: number | null; out: string }>((resolve) => {
+			const child = spawn(process.execPath, [join(repo, "bin/pi-studio"), ...args], { cwd: repo, env: { ...process.env, PI_STUDIO_STATE: stateDir }, stdio: ["ignore", "pipe", "pipe"] });
+			let out = "";
+			child.stdout.on("data", (chunk) => (out += String(chunk)));
+			child.stderr.on("data", (chunk) => (out += String(chunk)));
+			child.on("exit", (code) => resolve({ code, out }));
+		});
+	try {
+		await untilRoster(daemon, 1);
+		const reloaded = await cli(["plugins", "reload"], state);
+		assert.equal(reloaded.code, 0, reloaded.out);
+		assert.match(reloaded.out, /example-panel — running/);
+		// No daemon has run against a fresh state folder: the command says so and exits 1.
+		const nowhere = mkdtempSync(join(tmpdir(), "pi-studio-plugin-reload-"));
+		try {
+			const missing = await cli(["plugins", "reload"], nowhere);
+			assert.equal(missing.code, 1, missing.out);
+			assert.match(missing.out, /no daemon has run/);
+		} finally {
+			await removeTree(nowhere);
+		}
+		// And a verb nobody knows is usage, exit 2.
+		const usage = await cli(["plugins"], state);
+		assert.equal(usage.code, 2, usage.out);
+		assert.match(usage.out, /usage: pi-studio plugins reload/);
+	} finally {
+		daemon.child.kill("SIGTERM");
+		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);
+	}
+});

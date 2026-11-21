@@ -94,6 +94,7 @@ export PATH="$HOME/.local/share/pi-node/current/bin:$PATH"
 
 ```bash
 pi-studio --version                # the version, the commit and whether the build is official
+pi-studio plugins reload           # restart every registered plugin in the running daemon, from the file as it stands
 pi-studio update                   # the latest official release, checked before it is installed
 pi-studio update --replace-custom  # replace a copy you built from your own source
 pi-studio uninstall
