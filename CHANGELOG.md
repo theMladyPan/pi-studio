@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- feat: Fold each plugin on the crossroads settings page into its own collapsible row, so the section opens as a list of names and states and only the plugin being edited shows its fields, and keep rescan above the list where it is always reachable, even with no folder offered for enabling or while a plugin is open. [t-347dbd48]
 - feat: Show the pi-studio logo in the top-left of the board instead of the word `pi`, and name the workspace label `<workspace> board` instead of `board of <workspace>`, so the header reads as the workspace's own board. [t-4b4fa58d]
 - feat: Simplify a board's settings panel and handle plugins on the crossroads: the panel now heads `Board specific settings` and names no board or folder, the line about new threads sits below the hotkeys under a hairline, and plugins — registering, enabling and assigning shortcuts — are handled on the crossroads settings page instead of on any board. [t-496f7a81]
 
