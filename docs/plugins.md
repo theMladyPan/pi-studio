@@ -100,6 +100,8 @@ A plugin asks the daemon over the same pipe, and each answer is a call into the 
 A workspace is always an id the daemon already knows, resolved from its own list; a plugin never names a
 folder and never receives one it asked for by path. `cards.note`, `threads.create`, `threads.prompt` and
 `threads.stop` write what the human's own routes write, and are refused what those routes refuse. The
+`turn` in `threads.prompt`'s answer is the index of the turn the words landed on: for a steer joining a
+live run that is the turn the run is answering, whose reply follows the steered words. The
 exact params, the events and the refusal codes are documented at the top of `server/plugins/service.ts`.
 
 The shapes of those nine methods, the two events and `initialize` are frozen while the protocol version

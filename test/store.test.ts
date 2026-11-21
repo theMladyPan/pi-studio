@@ -32,9 +32,10 @@ test("a thread file from today reloads with its fields intact", () => {
 });
 
 test("a turn comes back as the file says, and a steer the daemon stopped keeps its own label", () => {
-	// A steer that joined a live run is answered inside the run's own turn, so its words were spent; a steer
-	// the daemon stopped — an idle thread, a cut run — never was, and a load keyed on `mode` brought it back
-	// labelled as spent. Both directions are pinned here, and a turn in flight or waiting is nobody's work.
+	// A steer that joined a live run is kept on the run's own turn, so a top-level one is only the shape
+	// a steer with no run naming a turn takes; a steer the daemon stopped — an idle thread, a cut run —
+	// never joined one, and a load keyed on `mode` brought it back labelled as spent. Both directions
+	// are pinned here, and a turn in flight or waiting is nobody's work.
 	const spent = savedTurn({ text: "and this instead", status: "sent", mode: "steer", at: now });
 	const cut = savedTurn({ text: "and this instead", status: "stopped", mode: "steer", at: now });
 	const writing = savedTurn({ text: "the first words", status: "sent", mode: "queue", streaming: true, at: now });
@@ -54,6 +55,64 @@ test("a turn comes back as the file says, and a steer the daemon stopped keeps i
 	// A file this version cannot vouch for — a turn written mid-run by an older one — reads as stopped.
 	const old = restoredThread({ id: "t11", title: "x", at: now, turns: [{ text: "queued once", status: "queued" }] }, "/tmp/folder")!;
 	assert.equal(old.turns[0].status, "stopped");
+});
+
+test("a steer kept on its run's turn survives a save, and an older board's steer turn folds onto the turn it joined", () => {
+	// A steer that joined a live run is kept on the turn that run answered, ahead of its reply, so a
+	// save and a reload keep it there.
+	const turn = {
+		text: "the first words",
+		status: "answered",
+		mode: "queue",
+		at: now,
+		reply: "the stub answered",
+		steers: [{ text: "and this instead", at: now + 1, images: [{ thumb: "data:image/png;base64,AA==", mimeType: "image/png" }] }],
+	};
+	const restored = restoredThread({ id: "t12", title: "x", at: now, turns: [savedTurn(turn)] }, "/tmp/folder")!;
+	assert.equal(restored.turns.length, 1);
+	assert.equal(restored.turns[0].steers?.[0]?.text, "and this instead");
+	assert.deepEqual(restored.turns[0].steers?.[0]?.images, [{ thumb: "data:image/png;base64,AA==", mimeType: "image/png" }]);
+	assert.equal(restored.turns[0].reply, "the stub answered");
+
+	// A board written before that kept each steer as a turn of its own after the turn it joined, so
+	// it was drawn below the reply it helped shape. Reading it folds it back onto that turn.
+	const legacy = restoredThread(
+		{
+			id: "t13",
+			title: "x",
+			at: now,
+			turns: [
+				{ text: "the first words", status: "answered", mode: "queue", at: now, reply: "the stub answered" },
+				{ text: "and this instead", status: "sent", mode: "steer", at: now + 1 },
+				{ text: "and this too", status: "sent", mode: "steer", at: now + 2 },
+			],
+		},
+		"/tmp/folder",
+	)!;
+	assert.equal(legacy.turns.length, 1, "the legacy steer turns were left after the answer");
+	assert.deepEqual(
+		legacy.turns[0].steers?.map((steer: any) => steer.text),
+		["and this instead", "and this too"],
+	);
+	assert.equal(legacy.turns[0].reply, "the stub answered");
+
+	// A spent steer with no answer under it — a retry window, a cut run — keeps its own turn, exactly
+	// as the route still writes one, rather than folding onto a turn nothing answered.
+	const orphan = restoredThread(
+		{
+			id: "t14",
+			title: "x",
+			at: now,
+			turns: [
+				{ text: "the first words", status: "stopped", mode: "queue", at: now, error: "provider error" },
+				{ text: "and this instead", status: "sent", mode: "steer", at: now + 1 },
+			],
+		},
+		"/tmp/folder",
+	)!;
+	assert.equal(orphan.turns.length, 2, "a steer under a stopped turn was folded away");
+	assert.equal(orphan.turns[1].mode, "steer");
+	assert.equal(orphan.turns[1].steers, undefined);
 });
 
 test("a boss comes back as a boss, with the flow it was running", () => {

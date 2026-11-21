@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { runtimeDefaults } from "../../workspaces.ts";
 import { card, update, updateCard } from "../../bus.ts";
 import { acceptedImages, promptImages, thumbImages, threadError } from "../../cards.ts";
-import { prompt } from "../../child/run.ts";
+import { liveTurn, prompt } from "../../child/run.ts";
 import { isCompacting } from "../../waiters.ts";
 import { chipSections, MAX_CHIPS } from "./chips.ts";
 
@@ -192,10 +192,26 @@ export async function messageOnBoard(board, body) {
 	// when the summary ends, the way one behind a run waits for it to settle.
 	const running = thread.status === "running";
 	const compactingNow = isCompacting(thread);
-	if (holding) {
+	// A steer that joins the run in flight is part of the turn that run is answering, not a turn of
+	// its own: the run's reply is written onto that turn, so a steer appended after it would be drawn
+	// below the very answer it helped shape and read as a follow-up nobody answered. The words are
+	// kept on the answering turn instead, ahead of its reply. `liveTurn` alone is not the test — with
+	// no answering turn named it falls back to the newest turn — so this asks for the run's own turn
+	// by name, and a steer with no run naming one keeps a turn of its own below rather than lose its
+	// words onto a turn no run is answering.
+	const joined = running && mode === "steer" && thread.answering ? liveTurn(board, thread) : null;
+	if (joined?.turn) {
+		const answering = joined.turn;
+		answering.steers = [
+			...(answering.steers ?? []),
+			{ text: said.slice(0, 4000), at: Date.now(), ...(thumbs.length ? { images: thumbs } : {}) },
+		];
+		index = thread.answering.turn;
+		if (joined.card) updateCard(board, joined.card);
+		else update(board, thread);
+	} else if (holding) {
 		holding.turns = holding.turns ?? [];
-		// A steer joins the run in flight, so the turn is already being acted on. A steer during a
-		// compaction has no run to join, so it waits like any queued message.
+		// A steer during a compaction has no run to join, so it waits like any queued message.
 		holding.turns.push({
 			text: said.slice(0, 4000),
 			status: mode === "steer" && running ? "sent" : "queued",

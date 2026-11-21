@@ -493,11 +493,12 @@ export function handleChildLine(board, thread, line) {
 		// reads as stopped rather than as a message still being worked on, and the caret goes because
 		// nothing is being written any more.
 		//
-		// One turn keeps its words: the one this run was answering, when it is a steer. The composer sends
-		// `steer` whether a run is live or not, so a steer on an idle thread is the run's own turn and is
-		// swept like any other; a steer that joined a live run is read and answered inside the run's turn,
-		// so its words are spent and it keeps the label that says so. The run's own turn is the one
-		// `thread.answering` names, read here before the pointer is cleared.
+		// One turn keeps its words: the one this run was answering, when it is a steer of its own. The
+		// composer sends `steer` whether a run is live or not, so a steer on an idle thread is the run's
+		// own turn and is swept like any other. A steer that joined a live run is kept on that run's
+		// turn, ahead of its reply, so there is no turn of its own to sweep; the same exception below
+		// still covers a steer turn written before that, or one with no run naming a turn. The run's
+		// own turn is the one `thread.answering` names, read here before the pointer is cleared.
 		const { turn: reached } = liveTurn(board, thread);
 		for (const turn of thread.turns) {
 			turn.streaming = false;
@@ -547,8 +548,8 @@ function endRun(board, thread, reached) {
 	// tree it worked in is still there to assemble. A turn that was stopped or failed is not an answer,
 	// however much of it arrived: an abort, a timeout and an error all leave the turn reading `stopped`,
 	// which is the distinction the spawn route drew with `result.status === "done"`. The turn read is the
-	// one captured above, before the answering pointer went: a steer or a message taken back after the
-	// answer is the newest turn, and it is not the turn that ended this run.
+	// one captured above, before the answering pointer went: a message taken back after the answer is
+	// the newest turn, and it is not the turn that ended this run.
 	if (reached?.status === "answered") autoCloseChild(board, thread);
 	// What the run spent is only known to the child, so it is asked before stdin closes. The close
 	// waits for the answer.

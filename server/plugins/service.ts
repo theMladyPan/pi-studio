@@ -35,8 +35,9 @@
  *
  * `threads.create` makes the thread a human makes and is refused what a human is refused; like the
  * human's route it does not spawn, so a thread costs nothing until it is prompted. `threads.prompt`
- * writes one turn: `mode: "queue"` (the default) puts the words behind the run in flight, `"steer"`
- * joins it, and a thread not running starts on the words at once. `threads.stop` asks one named run to
+ * writes one turn, or joins the run in flight: `mode: "queue"` (the default) puts the words behind
+ * that run, `"steer"` keeps them on the turn it answers, ahead of its reply, and a thread not running
+ * starts on the words at once. `threads.stop` asks one named run to
  * give up; it never stops the board's other runs, which is the human's own bottom bar.
  *
  * A refusal is a JSON-RPC error with a code a plugin can act on: `-32601` for a method this daemon does

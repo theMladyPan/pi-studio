@@ -25,6 +25,7 @@
 
 - feat: Let a plugin's panel live in the left drawers, by giving its visual the place `"drawer"`: the board draws its pane with the rail's own head and close button, sizes it with the rail grip, and puts its door in the header beside activity and cards, while every other panel still opens in the toolbox as before. [t-81baed9a]
 - feat: Add `pi-studio add <git-url>`, which clones a plugin's repository into the plugins folder, builds it when it is Rust, and leaves it for settings to enable; adding one already installed pulls and rebuilds instead and keeps its registration. [t-81baed9a]
+- fix: Keep a message steered into a running conversation on the turn that run answers, ahead of its reply, instead of appending it as a turn after that reply, so steering a run no longer leaves its words below the answer they shaped reading as an unanswered follow-up; boards written before read their old steer turns back the same way. [t-3f39e668]
 
 ## [0.6.0] - 2026-11-20
 
