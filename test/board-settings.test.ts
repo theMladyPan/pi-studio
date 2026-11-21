@@ -314,4 +314,11 @@ test("plugins are handled on the crossroads settings page, and the board setting
 	assert.ok(renderTree.includes("paintShortcuts()"), "rendering the settings repaints the hotkeys map");
 	const welcomeJs = readFileSync(new URL("../public/welcome.js", import.meta.url), "utf8");
 	assert.ok(welcomeJs.includes("await loadPluginSettings()"), "a save on the crossroads re-reads the registration, so the offered folders stay");
+	// Each plugin is one collapsible row, closed at first: the section opens as a list, not as every field.
+	assert.ok(welcomeJs.includes('"cfg-group cfg-plugin"') && welcomeJs.includes("pluginDetails("), "each registered plugin is drawn as one collapsible row");
+	assert.ok(!welcomeJs.includes("details.open = true"), "no plugin row starts open");
+	// Rescan is drawn above the list on every render, not only when a folder is offered for enabling.
+	const toolbar = welcomeJs.slice(welcomeJs.indexOf("function pluginToolbar"), welcomeJs.indexOf("function renderPluginSettings"));
+	assert.ok(toolbar.includes('"rescan"'), "the rescan button lives in the toolbar above the plugin rows");
+	assert.ok(welcomeJs.includes("const rendered = [pluginToolbar()];"), "the toolbar is drawn before the read is checked, so rescan survives an unreadable list");
 });

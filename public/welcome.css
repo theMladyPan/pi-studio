@@ -335,6 +335,20 @@ body[data-view="settings"] .shelf-stage {
   color: var(--dim);
 }
 
+/* Rescan sits above the list, so it stays reachable whether a plugin is open or nothing is on disk. */
+.cfg-plugin-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 4px;
+}
+
+/* One plugin, folded to its name and state until it is opened. */
+.cfg-plugin > .cfg-summary .cfg-label {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* One plugin row: a label and the input beside it, the way a settings leaf reads. */
 .cfg-row {
   display: flex;

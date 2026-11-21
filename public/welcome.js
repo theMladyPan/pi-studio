@@ -1228,8 +1228,18 @@
     return row;
   }
 
+  /** Every foldable group on the page: the tree's, and the plugins section with each plugin in it. */
+  function foldGroups() {
+    const plugins = document.getElementById("cfgPlugins");
+    return [
+      ...nodes.tree.querySelectorAll(".cfg-group"),
+      ...(nodes.pluginRows ? nodes.pluginRows.querySelectorAll(".cfg-plugin") : []),
+      ...(plugins ? [plugins] : []),
+    ];
+  }
+
   function paintFoldAll() {
-    const groups = [...nodes.tree.querySelectorAll(".cfg-group")];
+    const groups = foldGroups();
     nodes.foldAll.textContent = groups.some((group) => group.open) ? "collapse all" : "expand all";
   }
 
@@ -1326,6 +1336,8 @@
   // list, and the daemon proves it by the reader before it replaces what it runs, so a row it cannot
   // use saves nothing.
   let pluginData = null;
+  // Which plugin rows the human opened, by key, so a re-read (rescan, save) leaves them open.
+  const pluginOpen = new Set();
 
   function pluginField(label, value, field, index, placeholder) {
     const row = document.createElement("div");
@@ -1359,15 +1371,72 @@
     return row;
   }
 
-  /** One plugin as the section edits it: its name, its command, and the panel and shortcut it declares. */
+  /** A button that lives in a plugin's summary: it acts, and never folds the row it sits in. */
+  function pluginButton(label, onClick) {
+    const button = el("button", "omni-browse", label);
+    button.type = "button";
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onClick();
+    });
+    return button;
+  }
+
+  /**
+   * One plugin as one collapsible row: the summary names it and its state, the body holds its fields.
+   * Closed by default, so the section opens as a list and not as every field at once. The open state
+   * survives a re-read, so a rescan or a save leaves the row the human opened standing open.
+   */
+  function pluginDetails(key, title, badge, button, bodyChildren) {
+    const details = el("details", "cfg-group cfg-plugin");
+    details.dataset.depth = "1";
+    details.open = pluginOpen.has(key);
+    const summary = el("summary", "cfg-summary");
+    const left = el("div", "cfg-sum-left");
+    const caret = el("span", "cfg-caret", "▸");
+    caret.setAttribute("aria-hidden", "true");
+    left.append(caret, el("span", "cfg-label", title));
+    if (badge) left.append(el("span", "cfg-status-badge", badge));
+    summary.append(left);
+    if (button) {
+      const right = el("div", "cfg-sum-right");
+      right.append(button);
+      summary.append(right);
+    }
+    const body = el("div", "cfg-body");
+    body.append(...bodyChildren);
+    details.append(summary, body);
+    details.addEventListener("toggle", () => {
+      if (details.open) pluginOpen.add(key);
+      else pluginOpen.delete(key);
+      paintFoldAll();
+    });
+    return details;
+  }
+
+  /** The row above the list: a rescan is always there, whatever is registered or on disk. */
+  function pluginToolbar() {
+    const bar = document.createElement("div");
+    bar.className = "cfg-plugin-toolbar";
+    const rescan = el("button", "omni-browse", "rescan");
+    rescan.type = "button";
+    rescan.title = "Read the plugins folder again";
+    rescan.addEventListener("click", () => void loadPluginSettings());
+    bar.append(rescan);
+    return bar;
+  }
+
+  /** One registered plugin as the section edits it: its name, its command, and the panel and shortcut it declares. */
   function renderPluginSettings() {
     const pluginRowsEl = nodes.pluginRows;
     if (!pluginRowsEl) return;
     const available = pluginData?.available || [];
+    const unavailable = pluginData?.unavailable || [];
     nodes.pluginCount.textContent = pluginData
       ? `${pluginData.plugins.length} registered${available.length ? ` · ${available.length} available` : ""}`
       : "could not read";
-    const rendered = [];
+    const rendered = [pluginToolbar()];
     if (!pluginData) {
       rendered.push(Object.assign(el("p", "cfg-note"), { textContent: "could not read the plugin list" }));
       pluginRowsEl.replaceChildren(...rendered);
@@ -1383,86 +1452,64 @@
       );
     }
     pluginData.plugins.forEach((row, index) => {
-      const head = document.createElement("div");
-      head.className = "cfg-prose-head";
-      head.append(
-        Object.assign(el("b"), {
-          textContent: `${row.name} · ${stateOf(roster.get(row.name))}${row.shortcut ? ` · ${row.shortcut}` : ""}`,
-        }),
-      );
-      const remove = el("button", "omni-browse");
-      remove.type = "button";
-      remove.textContent = "remove";
-      remove.addEventListener("click", () => void savePluginSettings(gatherPluginRows().filter((_, at) => at !== index), `removed ${row.name}`));
-      head.append(remove);
-      rendered.push(head);
       // A row that names a folder takes everything else from that folder's plugin.json, so it shows
       // only what a row of its own can decide — its name, its args and its shortcut. The command, the
       // panel and the place belong to the manifest and are never rewritten by this form.
-      rendered.push(pluginField("name", row.name, "name", index));
-      if (row.installed || row.bundled) {
-        rendered.push(
+      const fromFolder = Boolean(row.installed || row.bundled);
+      const body = [pluginField("name", row.name, "name", index)];
+      if (fromFolder) {
+        body.push(
           Object.assign(el("p", "cfg-note"), {
             textContent: `the command, the panel and the place come from the ${row.installed ? "installed" : "shipped"} plugin.json`,
           }),
         );
       } else {
-        rendered.push(pluginField("command", row.command, "command", index));
+        body.push(pluginField("command", row.command, "command", index));
       }
-      rendered.push(pluginField("args", (row.args || []).join(", "), "args", index, "--flag value, comma separated"));
-      if (!(row.installed || row.bundled)) {
-        rendered.push(pluginPlaceSelect(row.visual?.place || "", index));
-        rendered.push(pluginField("panel title", row.visual?.title || "", "title", index));
-        rendered.push(pluginField("panel entry", row.visual?.entry || "", "entry", index));
-        rendered.push(pluginField("panel files", (row.visual?.files || []).join(", "), "files", index));
+      body.push(pluginField("args", (row.args || []).join(", "), "args", index, "--flag value, comma separated"));
+      if (!fromFolder) {
+        body.push(pluginPlaceSelect(row.visual?.place || "", index));
+        body.push(pluginField("panel title", row.visual?.title || "", "title", index));
+        body.push(pluginField("panel entry", row.visual?.entry || "", "entry", index));
+        body.push(pluginField("panel files", (row.visual?.files || []).join(", "), "files", index));
       }
-      rendered.push(pluginField("shortcut", row.shortcut || "", "shortcut", index, "one letter"));
+      body.push(pluginField("shortcut", row.shortcut || "", "shortcut", index, "one letter"));
+      rendered.push(
+        pluginDetails(
+          `plugin:${row.name}`,
+          row.name,
+          `${stateOf(roster.get(row.name))}${row.shortcut ? ` · ${row.shortcut}` : ""}`,
+          pluginButton("remove", () => void savePluginSettings(gatherPluginRows().filter((_, at) => at !== index), `removed ${row.name}`)),
+          body,
+        ),
+      );
     });
     // What is on disk that nobody registered, offered to enable: a plugin the human copied into the
     // plugins folder declares itself, so enabling it is one click and the row takes its defaults.
-    if (available.length || (pluginData.unavailable || []).length) {
+    if (available.length || unavailable.length) {
       const head = document.createElement("div");
       head.className = "cfg-prose-head";
       head.append(Object.assign(el("b"), { textContent: "available in the plugins folder" }));
-      const rescan = el("button", "omni-browse");
-      rescan.type = "button";
-      rescan.textContent = "rescan";
-      rescan.addEventListener("click", () => void loadPluginSettings());
-      head.append(rescan);
       rendered.push(head);
       for (const one of available) {
-        // Two lines, not one: the title keeps its ellipsis one line, and the description wraps under it
-        // rather than stretching the row past the page — a long span here used to clip the panel.
-        const head = document.createElement("div");
-        head.className = "cfg-prose-head";
-        head.append(Object.assign(el("b"), { textContent: `${one.title} · ${one.version}` }));
-        const enable = el("button", "omni-browse");
-        enable.type = "button";
-        enable.textContent = "enable";
-        enable.addEventListener("click", () => void enablePlugin(one));
-        head.append(enable);
-        rendered.push(head);
         const preview = [
           one.defaults.place === "drawer" ? "left drawers" : "toolbox",
           one.start === "lazy" ? "starts on open" : "starts on boot",
           one.defaults.shortcut ? `shortcut ${one.defaults.shortcut}` : null,
           one.description,
         ].filter(Boolean).join(" · ");
-        if (preview) {
-          rendered.push(Object.assign(el("p", "cfg-note"), { textContent: preview }));
-        }
+        rendered.push(
+          pluginDetails(`available:${one.name}`, one.title, one.version, pluginButton("enable", () => void enablePlugin(one)), preview ? [Object.assign(el("p", "cfg-note"), { textContent: preview })] : []),
+        );
       }
-      for (const one of pluginData.unavailable || []) {
-        const head = document.createElement("div");
-        head.className = "cfg-prose-head";
-        head.append(Object.assign(el("b"), { textContent: `${one.folder} · ${one.source}` }));
-        rendered.push(head);
-        rendered.push(Object.assign(el("p", "cfg-note"), { textContent: one.problem }));
+      for (const one of unavailable) {
+        rendered.push(
+          pluginDetails(`unavailable:${one.source}:${one.folder}`, one.folder, one.source, null, [Object.assign(el("p", "cfg-note"), { textContent: one.problem })]),
+        );
       }
     }
-    const save = el("button", "cfg-prose-save");
+    const save = el("button", "cfg-prose-save", "save plugins");
     save.type = "button";
-    save.textContent = "save plugins";
     save.addEventListener("click", () => void savePluginSettings(gatherPluginRows(), "saved"));
     const reload = el("button", "omni-browse");
     reload.type = "button";
@@ -1473,6 +1520,7 @@
     actions.append(save, reload);
     rendered.push(actions);
     pluginRowsEl.replaceChildren(...rendered);
+    paintFoldAll();
   }
 
   /**
@@ -1627,11 +1675,11 @@
     applyFilter();
   });
   nodes.foldAll.addEventListener("click", () => {
-    const groups = [...nodes.tree.querySelectorAll(".cfg-group")];
+    const groups = foldGroups();
     const open = !groups.some((group) => group.open);
     for (const group of groups) {
       group.open = open;
-      writeCollapse(group.dataset.path, !open);
+      if (group.dataset.path) writeCollapse(group.dataset.path, !open);
     }
     paintFoldAll();
   });
