@@ -104,3 +104,5 @@ The human step-by-step for cutting and publishing a release lives in `docs/relea
 ## Notes
 - this application is visual element based wrapper on pi.dev harness. There is no point to make it 
   screen-reader accessible. Do not bother. 
+- if there is component that is similar and can be reused - REUSE IT. Ask user if there are corners
+  to cut do decide how.
