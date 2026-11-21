@@ -45,6 +45,7 @@ document.getElementById("gitBtn").addEventListener("click", () => {
 const terminalDrawer = createTerminalDrawer({ workspace, typingSomewhere });
 document.getElementById("termBtn").addEventListener("click", () => {
   closeHeaderMenus();
+  closeDocks("bottom");
   terminalDrawer.toggle();
 });
 // The plugin panel: one sandboxed frame for the life of the page, the doors the toolbox lists for the
@@ -79,6 +80,16 @@ const pluginShortcuts = new Map();
  * Neither direction carries a token, a cookie or the daemon's address: the frame is same-origin with this
  * page for its own files only, and every request it makes is made here, with this page's own promise.
  */
+/**
+ * Which edge a drawer panel sits on, once the plugin's `any` and its missing position are settled: an
+ * `any`, a missing word and an explicit left all mean the left drawers' column, as a drawer panel has
+ * always meant. Only bottom, top and right leave it.
+ */
+function pluginSide(panel) {
+  const position = panel && typeof panel.position === "string" ? panel.position : "";
+  return position === "bottom" || position === "top" || position === "right" ? position : "left";
+}
+
 function createPluginPanelHost({ workspace, mode = "overlay" }) {
   const drawerMode = mode === "drawer";
   const drawer = document.getElementById("pluginDrawer");
@@ -88,13 +99,15 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
   const noteEl = document.getElementById("pvNote");
   const closeBtn = document.getElementById("pvClose");
   const doors = document.getElementById("pluginDoors");
-  // Drawer mode: the panel lives in the left drawers' column instead of behind the toolbox overlay,
-  // so its frame is made on its first open rather than read from the page.
+  // Drawer mode: the panel lives in a drawer instead of behind the toolbox overlay, so its frame is
+  // made on its first open rather than read from the page. Which edge it sits on is the panel's own
+  // `position` (see `pluginSide`): left, bottom, top or right.
   const drawerColumn = document.getElementById("drawers");
   const drawerDoorsEl = document.getElementById("pluginDrawerDoors");
   let pane = null;
   let paneFrame = null;
   let paneKey = "";
+  let paneSide = "left";
   let registeredLetters = [];
   const targetFrame = () => (drawerMode ? paneFrame : frame);
   /** The plugin whose panel is on screen, `""` before a door was ever pressed. */
@@ -209,12 +222,14 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
   });
 
   /**
-   * The panel as one more left drawer: a pane in the drawers' column with the board's own rail-head and
-   * close button under it, sized by the rail grip like files, activity and cards. One pane per plugin,
-   * made on its first open and kept, so its state survives closing the drawer.
+   * The panel as one more drawer: a pane with the board's own rail-head and close button under it,
+   * sized by the rail grip like files, activity and cards. Left panes sit in the left drawers' column,
+   * beside files, activity and cards; panes for the bottom, the top and the right sit in their own
+   * strip. One pane per plugin, made on its first open and kept, so its state survives closing.
    */
   function openDrawer(panel) {
     const key = `plugin:${plugin}`;
+    const side = pluginSide(panel);
     const paneId = `drawerPlugin-${plugin}`;
     if (!pane || pane.id !== paneId) {
       let live = document.getElementById(paneId);
@@ -244,12 +259,17 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
           say({ type: "pi-studio.host.hello", plugin });
         });
         live.append(head, inner);
-        drawerColumn.insertBefore(live, document.getElementById("railGrip"));
-        DRAWER_NAMES[key] = paneId;
+        if (side === "left") {
+          drawerColumn.insertBefore(live, document.getElementById("railGrip"));
+          DRAWER_NAMES[key] = paneId;
+        } else {
+          document.getElementById(DOCK_NAMES[side]).append(live);
+        }
       }
       pane = live;
       paneFrame = live.querySelector("iframe.drawer-frame");
       paneKey = key;
+      paneSide = side;
     }
     if (paneFrame.dataset.plugin !== plugin) {
       nonce = newNonce();
@@ -258,8 +278,17 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
       paneFrame.src = panel.url;
     }
     if (gitDrawer.isOpen()) gitDrawer.close();
-    explorerCore.drawerOpen(drawerState, key);
-    paintDrawers();
+    if (side === "left") {
+      closeDocks();
+      explorerCore.drawerOpen(drawerState, key);
+      paintDrawers();
+    } else {
+      if (side === "bottom" && terminalDrawer.isOpen()) terminalDrawer.close();
+      explorerCore.drawerClose(drawerState);
+      paintDrawers();
+      dockState[side] = key;
+      paintDocks();
+    }
     paneFrame.focus();
     if (loaded) say({ type: "pi-studio.host.hello", plugin });
   }
@@ -300,11 +329,14 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
       door.textContent = (typeof panel.title === "string" && panel.title) || panel.name;
       if (drawerMode) {
         const key = `plugin:${panel.name}`;
+        const side = pluginSide(panel);
         door.setAttribute("aria-controls", `drawerPlugin-${panel.name}`);
         door.setAttribute("aria-expanded", "false");
+        door.dataset.side = side;
         door.title = `show the ${door.textContent} drawer`;
         door.addEventListener("click", () => {
-          if (drawerState.open === key) closeDrawers();
+          const open = side === "left" ? drawerState.open === key : dockState[side] === key;
+          if (open) closeDrawers();
           else open(panel);
         });
         pluginDrawerDoors[key] = door;
@@ -333,8 +365,8 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
   }
 
   return {
-    isOpen: () => (drawerMode ? drawerState.open === paneKey && paneKey !== "" : !drawer.hidden),
-    close: () => (drawerMode ? (drawerState.open === paneKey ? closeDrawers() : null) : close()),
+    isOpen: () => (drawerMode ? ((drawerState.open === paneKey || dockState[paneSide] === paneKey) && paneKey !== "") : !drawer.hidden),
+    close: () => (drawerMode ? closeDrawers() : close()),
     open,
     relist: listDoors,
   };
@@ -5872,6 +5904,28 @@ const THOUGHT_STALL_MS = 3000;
 // rail are the ones these open with, because this is that rail with doors on it.
 const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards", source: "drawerSource" };
 const drawerState = explorerCore.drawers();
+// The plugin drawers off the other three edges: one strip per edge, one pane open per strip. The
+// strips are separate from the left column because the left column is the rail's (files, activity,
+// cards, source control), and a column or a strip is not part of it.
+const DOCK_NAMES = { bottom: "pluginDockBottom", top: "pluginDockTop", right: "drawersRight" };
+const dockState = { bottom: "", top: "", right: "" };
+
+/** Paint which dock pane is up, and say so on the doors. */
+function paintDocks() {
+  for (const [side, id] of Object.entries(DOCK_NAMES)) {
+    const dock = document.getElementById(id);
+    dock.hidden = dockState[side] === "";
+    for (const pane of dock.querySelectorAll(".plugin-pane")) pane.classList.toggle("on", dockState[side] === `plugin:${pane.id.slice("drawerPlugin-".length)}`);
+  }
+  for (const [key, door] of Object.entries(pluginDrawerDoors)) door.setAttribute("aria-expanded", dockState[door.dataset.side] === key ? "true" : "false");
+}
+
+/** Roll every dock down; a side rolls only that one. */
+function closeDocks(side) {
+  if (side) dockState[side] = "";
+  else for (const key of Object.keys(dockState)) dockState[key] = "";
+  paintDocks();
+}
 /** The doors in the header for plugins whose panel lives in this column, by drawer name. */
 const pluginDrawerDoors = {};
 // The three doors in the header, read before anything paints them.
@@ -5916,6 +5970,7 @@ function paintDrawers() {
 function showDrawer(name) {
   // The git graph covers the whole board, so it cannot stand over a drawer and be alive at both ends.
   if (gitDrawer.isOpen()) gitDrawer.close();
+  closeDocks();
   if (name === "files") exPrime();
   if (name === "source") scPrime();
   explorerCore.drawerOpen(drawerState, name);
@@ -5925,6 +5980,7 @@ function showDrawer(name) {
 function toggleDrawer(name) {
   const open = drawerState.open === name;
   if (gitDrawer.isOpen()) gitDrawer.close();
+  if (!open) closeDocks();
   explorerCore.drawerToggle(drawerState, name);
   if (!open && name === "files") exPrime();
   if (!open && name === "source") scPrime();
@@ -5932,8 +5988,10 @@ function toggleDrawer(name) {
 }
 
 function closeDrawers() {
-  if (!drawerState.open) return;
+  const leftWasOpen = Boolean(drawerState.open);
   explorerCore.drawerClose(drawerState);
+  closeDocks();
+  if (!leftWasOpen && !Object.values(dockState).some(Boolean)) return;
   paintDrawers();
   // The keyboard goes back to the board rather than dying with the element that had it.
   if (document.activeElement instanceof Element && document.activeElement.closest("#drawers")) {
@@ -9649,7 +9707,7 @@ function paintShortcuts() {
  * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too, and so does
  * a plugin's panel, whose page is the only thing the keyboard can reach while it is down.
  */
-const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen();
+const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || pluginDrawer.isOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen();
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
@@ -13707,7 +13765,7 @@ function exOpenSurfaces() {
     git: gitDrawer.isOpen(),
     plugin: pluginPanel.isOpen(),
     terminal: terminalDrawer.isOpen(),
-    drawer: Boolean(drawerState.open),
+    drawer: Boolean(drawerState.open) || pluginDrawer.isOpen(),
     card: Boolean(document.querySelector(".card.active")) || selectedIds.size > 0,
   };
 }
@@ -13990,6 +14048,7 @@ document.addEventListener("keydown", (event) => {
   if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
   event.preventDefault();
   if (gitDrawer.isOpen()) gitDrawer.close();
+  closeDocks("bottom");
   terminalDrawer.toggle();
 });
 
