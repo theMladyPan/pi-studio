@@ -18,6 +18,13 @@ import { StringDecoder } from "node:string_decoder";
 /** What both ends say in `initialize`. A plugin that answers another number is refused. */
 export const PROTOCOL_VERSION = 1;
 
+/**
+ * What this daemon may add inside one wire version: new methods, new fields, new optional keys.
+ * A plugin that asks for a newer minor than this daemon carries is refused at the handshake rather
+ * than at the first call that needs it, while one that asks for no minor than this one runs.
+ */
+export const PROTOCOL_MINOR = 0;
+
 /** The one method the host calls before anything else. */
 export const INITIALIZE = "initialize";
 

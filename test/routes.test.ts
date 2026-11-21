@@ -1652,8 +1652,15 @@ describe("routes", { concurrency: 8 }, () => {
 			if (frame.type === "compact") {
 				// A "die" file is a child that exits without answering, which the board must not wait out.
 				if (existsSync(flag("die"))) process.exit(0);
-				writeFileSync(flag("compacted"), "1");
-				say({ type: "response", command: "compact", success: true, data: { summary: "a shorter conversation", tokensBefore: 150000, estimatedTokensAfter: 32000 } });
+				// A "slowcompact" file delays the summary, which is the window a message is sent in.
+				const answer = () => {
+					writeFileSync(flag("compacted"), "1");
+					say({ type: "response", command: "compact", success: true, data: { summary: "a shorter conversation", tokensBefore: 150000, estimatedTokensAfter: 32000 } });
+				};
+				if (existsSync(flag("slowcompact"))) {
+					unlinkSync(flag("slowcompact"));
+					setTimeout(answer, 600);
+				} else answer();
 			}
 			if (frame.type === "prompt") {
 				// A slash command is a prompt frame too, and pi answers it with what it did rather than with a run:
@@ -2065,7 +2072,7 @@ describe("routes", { concurrency: 8 }, () => {
 		}
 	});
 
-	test("a run that read a steer keeps the steer's own words, and the answer stays on the run's turn", async () => {
+	test("a run that read a steer keeps the steer's words on its own turn, ahead of the answer", async () => {
 		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-steer-spent-"));
 		const folder = mkdtempSync(join(tmpdir(), "pi-studio-steer-spent-work-"));
 		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
@@ -2092,9 +2099,12 @@ describe("routes", { concurrency: 8 }, () => {
 			const card = await seen.until(threadId, (shown) => shown.status === "answered");
 			assert.equal(card.turns[0].status, "answered", "the run's own turn kept no answer");
 			assert.equal(card.turns[0].reply, "the stub answered");
-			assert.equal(card.turns[at].status, "sent", "the steer the run read was relabelled as stopped");
-			assert.equal(card.turns[at].mode, "steer");
-			assert.equal(card.turns[at].reply, undefined, "the steer took the run's answer");
+			// The steer joined this run, so its words live on the turn the run answered, ahead of the
+			// reply — as a turn of its own after that reply it would read as an unanswered follow-up.
+			assert.equal(at, 0, "the steer was given a turn of its own after the run's turn");
+			assert.equal(card.turns.length, 1, "the steer was appended after the answer it shaped");
+			assert.equal(card.turns[0].steers?.length, 1, "the steer's words were not kept");
+			assert.equal(card.turns[0].steers[0].text, "and this instead");
 		} finally {
 			tab?.stop();
 			daemon.child.kill();
@@ -2163,11 +2173,13 @@ describe("routes", { concurrency: 8 }, () => {
 			const report = JSON.parse(answered.body);
 			assert.equal(report.status, "done", `a run that answered was reported as ${report.status}`);
 			assert.equal(report.output, "the stub answered", "the report took the steer's words instead of the answer");
-			// Where the words landed is the other half of the report being right: the steer took nothing.
+			// Where the words landed is the other half of the report being right: the steer is kept on
+			// the turn the run answered, ahead of its reply, and took nothing of its own.
 			const child = await threadState(daemon, board.id, childId);
 			assert.equal(child.turns[0].status, "answered");
 			assert.equal(child.turns[0].reply, "the stub answered", "the steer took the run's answer");
-			assert.equal(child.turns[1].status, "sent");
+			assert.equal(child.turns.length, 1, "the steer was appended after the answer it shaped");
+			assert.equal(child.turns[0].steers?.[0]?.text, "and this instead");
 
 			// A child that said nothing has no answering turn to report, so it is a run that stopped.
 			writeFileSync(join(flags, "cut"), "1");
@@ -2236,6 +2248,58 @@ describe("routes", { concurrency: 8 }, () => {
 			const throughNote = await postTo(daemon, board.id, "/compact", { cardId: note.cardId });
 			assert.equal(throughNote.status, 200, throughNote.body);
 			assert.equal(JSON.parse(throughNote.body).threadId, threadId);
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
+		}
+	});
+
+	test("a message sent during a compaction waits in the queue and goes when it ends", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-compact-queue-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-compact-queue-work-"));
+		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+		const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+		try {
+			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+			const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" })).status, 200);
+			// The run has to be over and its child gone: a compaction starts a child rather than interrupting one.
+			for (let tries = 0; tries < 100; tries++) {
+				const thread = await threadState(daemon, board.id, threadId);
+				if (thread && thread.status === "idle" && thread.live === false) break;
+				await new Promise((done) => setTimeout(done, 50));
+			}
+			// The summary takes a moment, which is the window the next message is sent in.
+			writeFileSync(join(dirname(stub.envFile), "slowcompact"), "1");
+			const compacting = postTo(daemon, board.id, "/compact", { cardId: threadId });
+			for (let tries = 0; tries < 100 && !framesOf(stub).some((frame: any) => frame.type === "compact"); tries++) {
+				await new Promise((done) => setTimeout(done, 25));
+			}
+			assert.ok(framesOf(stub).some((frame: any) => frame.type === "compact"), "no compact frame reached the child");
+			// A steer has no run to join while the child summarises, so it waits like a queued message.
+			const sent = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "and this during the summary", mode: "steer" });
+			assert.equal(sent.status, 200, sent.body);
+			const at = JSON.parse(sent.body).turn as number;
+			const waiting = await threadState(daemon, board.id, threadId);
+			assert.equal(waiting.status, "idle", "a message during a compaction broke the thread");
+			assert.equal(waiting.turns[at].status, "queued", "a message sent during a compaction was not queued");
+			assert.equal(waiting.queued.length, 1);
+			assert.equal(framesOf(stub).filter((frame: any) => frame.type === "prompt").length, 1, "the child was given a message still waiting on the summary");
+			const compacted = await compacting;
+			assert.equal(compacted.status, 200, compacted.body);
+			// The summary ends and the waiting message goes: one turn answered, not a stopped thread.
+			let settled = null;
+			for (let tries = 0; tries < 200; tries++) {
+				settled = await threadState(daemon, board.id, threadId);
+				if (settled?.status === "idle" && (settled?.turns ?? []).every((turn: any) => turn.status === "answered")) break;
+				await new Promise((done) => setTimeout(done, 50));
+			}
+			assert.equal(settled?.turns?.[at]?.status, "answered", "the message queued during the compaction never went");
+			assert.equal(settled?.queued?.length, 0);
+			const frames = framesOf(stub);
+			const compactAt = frames.findIndex((frame: any) => frame.type === "compact");
+			const secondPrompt = frames.findIndex((frame: any, index: number) => frame.type === "prompt" && index > compactAt);
+			assert.ok(secondPrompt > compactAt, "the queued message went before the summary ended");
 		} finally {
 			daemon.child.kill();
 			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
@@ -2422,12 +2486,13 @@ describe("routes", { concurrency: 8 }, () => {
 			const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
 			const first = JSON.parse((await postTo(daemon, board.id, "/card/note", { markdown: "the first artifact", key: "named-first", threadRoot: threadId })).body);
 			const second = JSON.parse((await postTo(daemon, board.id, "/card/note", { markdown: "the second artifact", key: "named-second", threadRoot: threadId })).body);
+			const otherThreadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
 
-			// The field lives in the thread's own card, and the cards it names travel beside it: that is the
+			// The field lives in the thread's own card, and the things it names travel beside it: that is the
 			// shape a message typed about several artifacts arrives in.
 			const asked = await postTo(daemon, board.id, "/message", {
 				cardId: threadId,
-				refs: [first.cardId, second.cardId, "no-such-card"],
+				refs: [first.cardId, second.cardId, otherThreadId, "no-such-card"],
 				text: "compare these two",
 			});
 			assert.equal(asked.status, 200, asked.body);
@@ -2436,6 +2501,7 @@ describe("routes", { concurrency: 8 }, () => {
 			const prompt = framesOf(stub).filter((frame: any) => frame.type === "prompt")[0].message;
 			assert.match(prompt, /The card says: the first artifact/, "the first card the message named was not quoted");
 			assert.match(prompt, /The card says: the second artifact/, "the second card the message named was not quoted");
+			assert.match(prompt, /board reply · thread/, "the thread the message named was not quoted");
 			assert.match(prompt, /compare these two/, "the words the human typed did not reach the child");
 			// A card that is not on the board is passed over rather than refusing the message.
 			assert.doesNotMatch(prompt, /no-such-card/, "an unknown reference reached the child");

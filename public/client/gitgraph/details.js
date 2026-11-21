@@ -126,7 +126,7 @@ function makeCommitFile(ctx, detail, file, label) {
 		revision && item("View file at revision", () => ctx.view("viewFileAtRevision", { commitHash: revision, filePath: displayPath })),
 		revision && revision !== "*" && item("Compare file with working tree", () => ctx.view("compareFileWithWorkingTree", { commitHash: revision, filePath: displayPath })),
 		type !== "D" && item("Open working file", open),
-		!fromDisk && revision && revision !== "*" && item("Restore file from revision…", () => modal(`Restore ${displayPath} from ${short(revision)}?`, elt("p", {}, "This replaces the staged and working copies."), "Restore file", () => ctx.write("resetFileToRevision", { commitHash: revision, filePath: displayPath }), true), { danger: true }),
+		!fromDisk && revision && revision !== "*" && item("Restore file from revision…", () => modal(`Restore ${displayPath} from ${short(revision)}?`, elt("p", {}, "This replaces the staged and working copies."), "Restore file", () => ctx.write("resetFileToRevision", { commitHash: revision, filePath: displayPath }, null, `Restoring ${displayPath} from ${short(revision)}`), true), { danger: true }),
 		item("Copy absolute path", () => copyText(`${ctx.repo.replace(/[/\\]$/, "")}/${displayPath}`)), item("Copy relative path", copy),
 	]);
 }
@@ -175,6 +175,7 @@ export function detailPanel(ctx, state, prefs, changePref) {
 	});
 
 	if (!state.info) return elt("p", { className: "detail-content muted" }, "Loading details…");
+	const stageLabel = (staging, count) => `${staging ? "Staging" : "Unstaging"} ${count} file${count === 1 ? "" : "s"}`;
 	const dirty = state.hash === "*";
 	const prefKey = dirty ? "flatUncommitted" : "flatFiles";
 	const listMode = Boolean(prefs[prefKey]);
@@ -182,7 +183,7 @@ export function detailPanel(ctx, state, prefs, changePref) {
 		let dragging = null;
 		for (const section of ["staged", "unstaged"]) {
 			const rows = state.info[section];
-			const move = (paths) => ctx.write(section === "staged" ? "unstageFiles" : "stageFiles", { filePaths: paths });
+			const move = (paths) => ctx.write(section === "staged" ? "unstageFiles" : "stageFiles", { filePaths: paths }, null, stageLabel(section !== "staged", paths.length));
 			const drag = (node, paths) => {
 				node.addEventListener("dragstart", (event) => {
 					event.stopPropagation();
@@ -207,7 +208,7 @@ export function detailPanel(ctx, state, prefs, changePref) {
 			}, listMode, state.folders, section, drag);
 			panes.append(makePane(section, `${section === "staged" ? "Staged" : "Unstaged"} (${rows.length})`, elt("div", { className: "detail-content" }, files), state, onToggle, () => {
 				if (!dragging || dragging.section === section) return;
-				ctx.write(section === "staged" ? "stageFiles" : "unstageFiles", { filePaths: dragging.paths }).catch(ctx.fail);
+				ctx.write(section === "staged" ? "stageFiles" : "unstageFiles", { filePaths: dragging.paths }, null, stageLabel(section === "staged", dragging.paths.length)).catch(ctx.fail);
 				dragging = null;
 			}));
 		}

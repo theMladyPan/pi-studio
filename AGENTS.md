@@ -5,11 +5,13 @@ A local daemon that owns pi agents: a workspace is a folder, a thread on its boa
 ## Keyboard shortcuts
 
 The `hotkeys` group in `settings` lists every shortcut. It renders from one list, `SHORTCUTS` in
-`public/client/board.js`, which is the single source of truth for it. The overview map toggle is the
-`mapToggle` checkbox in `settings`.
+`public/client/board.js`, which is the single source of truth for it.
 
-Any change to a shortcut handler must change that same list in the same commit, and the `mapToggle`
-checkbox's title in the same client, which names its own key (`"hide the board overview (m)"`).
+Any change to a shortcut handler must change that same list in the same commit, and the title of the row
+for the `m` key in the same client. That row is the `overviewMap` leaf of the `canvas` group in
+`settings`, drawn beside `dim others`: its leaf carries no route to write, because the map is the
+browser's own session choice and the page answers for it, and its title names its own key
+(`"… looking through on it (m)"`).
 
 ## Branching and merging
 
@@ -25,7 +27,8 @@ checkbox's title in the same client, which names its own key (`"hide the board o
 - Merge, tag or publish only when the human asks. Otherwise, hand off the committed work branch.
 - Run `npm run check` before merging: syntax, imports, types, unit and route tests, and smoke tests
   must all pass. Targeted tests during development do not replace this gate. Use `npm ci` if the
-  locked development dependencies need installing.
+  locked development dependencies need installing; a fresh thread worktree has no `node_modules`, so run
+  `npm ci` in it once before the gate.
 
 ## Versioning
 

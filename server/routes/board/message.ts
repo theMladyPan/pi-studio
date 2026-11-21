@@ -4,12 +4,13 @@
  */
 import { answer, fail, readJson } from "../../http.ts";
 import { cardIndex } from "./index.ts";
-import { cardPreamble, field, refusal } from "./thread.ts";
+import { cardPreamble, field, refusal, threadPreamble } from "./thread.ts";
 import { randomUUID } from "node:crypto";
 import { runtimeDefaults } from "../../workspaces.ts";
 import { card, update, updateCard } from "../../bus.ts";
 import { acceptedImages, promptImages, thumbImages, threadError } from "../../cards.ts";
-import { prompt } from "../../child/run.ts";
+import { liveTurn, prompt } from "../../child/run.ts";
+import { isCompacting } from "../../waiters.ts";
 import { chipSections, MAX_CHIPS } from "./chips.ts";
 
 
@@ -93,10 +94,11 @@ export async function messageOnBoard(board, body) {
 	const mode = body.mode === "steer" ? "steer" : "queue";
 	const asked = typeof body.cardId === "string" ? body.cardId : "";
 	const fork = body.fork === true;
-	// The cards a message names beside the one it answers. Each is quoted into the prompt below, so one
-	// message can put several artifacts in front of the agent at once: a note it wrote, a source it read,
-	// and the question it is answering. A thread card is not a card of this map — it is the thread that
-	// reads the message — so naming one simply adds nothing.
+	// What a message names beside the one it answers. Each is quoted into the prompt below, so one message
+	// can put several things in front of the agent at once: a note it wrote, a source it read, a question
+	// it is answering, and a thread whose last turns matter. A thread that already answered on this card
+	// holds its conversation in its own session, so it only needs the card; a named thread is quoted last
+	// turns and all, bounded, so a message can point at it.
 	const named = [
 		...(new Set(Array.isArray(body.refs) ? body.refs.filter((id) => typeof id === "string" && id) : [])),
 	]
@@ -124,9 +126,13 @@ export async function messageOnBoard(board, body) {
 	// What the message names, in the order the human named it: the agent reads the same words the board
 	// shows, and the card it is asked about comes first.
 	const naming = named
-		.map((id) => board.cards.get(id))
+		.map((id) => {
+			const held = board.cards.get(id);
+			if (held) return cardPreamble(held, false);
+			const heldThread = board.threads.get(id);
+			return heldThread ? threadPreamble(heldThread) : "";
+		})
 		.filter(Boolean)
-		.map((held) => cardPreamble(held, false))
 		.join("");
 	if (!thread) {
 		// Two shapes, and only one of them is drawn. A card nobody answers for gets a hidden child: the
@@ -181,12 +187,34 @@ export async function messageOnBoard(board, body) {
 	const holding = askedCard && thread.hidden ? askedCard : null;
 	let target = null;
 	let index;
-	if (holding) {
+	// A compaction in flight is a busy thread too, even though no run is answering: the child is
+	// summarising and would refuse a prompt, so a message in that window waits in the queue and goes
+	// when the summary ends, the way one behind a run waits for it to settle.
+	const running = thread.status === "running";
+	const compactingNow = isCompacting(thread);
+	// A steer that joins the run in flight is part of the turn that run is answering, not a turn of
+	// its own: the run's reply is written onto that turn, so a steer appended after it would be drawn
+	// below the very answer it helped shape and read as a follow-up nobody answered. The words are
+	// kept on the answering turn instead, ahead of its reply. `liveTurn` alone is not the test — with
+	// no answering turn named it falls back to the newest turn — so this asks for the run's own turn
+	// by name, and a steer with no run naming one keeps a turn of its own below rather than lose its
+	// words onto a turn no run is answering.
+	const joined = running && mode === "steer" && thread.answering ? liveTurn(board, thread) : null;
+	if (joined?.turn) {
+		const answering = joined.turn;
+		answering.steers = [
+			...(answering.steers ?? []),
+			{ text: said.slice(0, 4000), at: Date.now(), ...(thumbs.length ? { images: thumbs } : {}) },
+		];
+		index = thread.answering.turn;
+		if (joined.card) updateCard(board, joined.card);
+		else update(board, thread);
+	} else if (holding) {
 		holding.turns = holding.turns ?? [];
-		// A steer joins the run in flight, so the turn is already being acted on.
+		// A steer during a compaction has no run to join, so it waits like any queued message.
 		holding.turns.push({
 			text: said.slice(0, 4000),
-			status: mode === "steer" ? "sent" : "queued",
+			status: mode === "steer" && running ? "sent" : "queued",
 			mode,
 			at: Date.now(),
 			...(thumbs.length ? { images: thumbs } : {}),
@@ -197,7 +225,7 @@ export async function messageOnBoard(board, body) {
 	} else {
 		thread.turns.push({
 			text: said.slice(0, 4000),
-			status: mode === "steer" ? "sent" : "queued",
+			status: mode === "steer" && running ? "sent" : "queued",
 			mode,
 			at: Date.now(),
 			...(thumbs.length ? { images: thumbs } : {}),
@@ -207,7 +235,6 @@ export async function messageOnBoard(board, body) {
 		target = { turn: index };
 		update(board, thread);
 	}
-	const running = thread.status === "running";
 	if (running && mode === "steer") {
 		// A steer joins the run in flight instead of waiting behind it.
 		try {
@@ -220,11 +247,11 @@ export async function messageOnBoard(board, body) {
 		} catch (error) {
 			threadError(board, thread, `could not steer the child: ${error.message}`);
 		}
-	} else if (running) {
+	} else if (running || compactingNow) {
 		// The card quote is kept beside the words the human typed, so a message still waiting can be
 		// rewritten without losing what the child needs to know about the card it is about.
 		// The pictures wait with the words: a run that has not read them yet is not told about them twice.
-		thread.queued.push({ message, text: said, preamble, skills: chipped.sections, target, ...(images.length ? { images } : {}) });
+		thread.queued.push({ message, text: said, preamble, naming, skills: chipped.sections, target, ...(images.length ? { images } : {}) });
 	} else {
 		prompt(board, thread, message, target, images, said);
 	}
@@ -287,9 +314,10 @@ export async function onMessageEdit(req, res, board) {
 	if (!thread) return void fail(res, 409, "no such thread");
 	if (!entry) return void fail(res, 409, "that message is not waiting: the child has it");
 	entry.text = text.slice(0, 4000);
-	// Only the human's own words change: the card quote the message was queued with stays as it was. The
-	// board section is built again, so a message rewritten after a card was added still names that card.
-	entry.message = boardSections(board, entry.preamble ?? "", "", entry.text, entry.skills ?? "");
+	// Only the human's own words change: the card and thread quotes the message was queued with stay as
+	// they were. The board section is built again, so the message keeps what it named until the child
+	// reads it.
+	entry.message = boardSections(board, entry.preamble ?? "", entry.naming ?? "", entry.text, entry.skills ?? "");
 	const turn = queuedTurn(board, thread, target);
 	if (turn) turn.text = entry.text;
 	showQueue(board, thread, target);

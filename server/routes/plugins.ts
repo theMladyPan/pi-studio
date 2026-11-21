@@ -24,13 +24,13 @@
  * panel's files are the one exception, and it is `main.ts` that serves them before the caller check: the
  * frame that loads them has an opaque origin, so not even the human's own cookie reaches them.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, extname } from "node:path";
 import { answer, fail, readJson } from "../http.ts";
-import { pluginManager } from "../plugins/manager.ts";
+import { pluginManager, reloadPlugins } from "../plugins/manager.ts";
 import { INTERNAL_ERROR, PLUGIN_UNAVAILABLE } from "../plugins/protocol.ts";
-import { resolvePluginFile } from "../plugins/registry.ts";
+import { PLUGINS_FILE, PLUGIN_SHORTCUT_TAKEN, loadAvailablePlugins, loadPluginRegistry, resolvePluginFile } from "../plugins/registry.ts";
 import { workspaceById } from "../workspaces.ts";
 import type { PluginVisual } from "../plugins/registry.ts";
 
@@ -77,18 +77,19 @@ const VISUAL_TYPES: Record<string, string> = {
 const VISUAL_CSP = "sandbox allow-scripts";
 
 /** One panel the board may show: what to call it, and where its frame starts. */
-export type VisualPanel = { name: string; title: string; url: string };
+export type VisualPanel = { name: string; title: string; url: string; place?: "drawer"; shortcut?: string };
 
 /** Who asked, as `main.ts` decided it. A panel is the human's; a thread has no page to draw in. */
 type Caller = { human?: unknown } | null | undefined;
 
 /** The running plugins that declared a panel, with the folder their files are served from. */
-function visualRoster(): { name: string; root: string; visual: PluginVisual }[] {
-	const panels: { name: string; root: string; visual: PluginVisual }[] = [];
+function visualRoster(): { name: string; root: string; visual: PluginVisual; shortcut?: string }[] {
+	const panels: { name: string; root: string; visual: PluginVisual; shortcut?: string }[] = [];
 	for (const one of pluginManager()?.roster() ?? []) {
-		// A plugin that failed to start has no page to ask, so its door is not offered either.
-		if (!one.running || !one.visual) continue;
-		panels.push({ name: one.name, root: dirname(one.command), visual: one.visual });
+		// A plugin that failed to start has no page to ask, so its door is not offered either. A dormant
+		// one keeps its door: the page is served from disk, and the first request starts the process.
+		if ((!one.running && !one.dormant) || !one.visual) continue;
+		panels.push({ name: one.name, root: dirname(one.command), visual: one.visual, ...(one.shortcut ? { shortcut: one.shortcut } : {}) });
 	}
 	return panels;
 }
@@ -96,7 +97,56 @@ function visualRoster(): { name: string; root: string; visual: PluginVisual }[] 
 /** The doors the board draws, one per plugin that has a panel. */
 export function onVisualPanels(res: ServerResponse): void {
 	answer(res, 200, {
-		plugins: visualRoster().map((one) => ({ name: one.name, title: one.visual.title, url: `${VISUAL_PREFIX}${encodeURIComponent(one.name)}/${one.visual.entry}` })),
+		plugins: visualRoster().map((one) => ({ name: one.name, title: one.visual.title, url: `${VISUAL_PREFIX}${encodeURIComponent(one.name)}/${one.visual.entry}`, ...(one.visual.place ? { place: one.visual.place } : {}), ...(one.shortcut ? { shortcut: one.shortcut } : {}) })),
+	});
+}
+
+/**
+ * The registration the settings page edits, beside what is running and what the daemon could not use.
+ * `GET` reads it; `POST` writes a whole new list, proves it through the reader, and restarts the
+ * roster under it. The file this reads and writes is the daemon's own, in the state folder, and only
+ * the human reaches either: a thread has no route here, since writing a row starts whatever it names.
+ */
+export async function onPluginRegistry(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	if (req.method === "POST") {
+		const body = await readJson(req, res).catch(() => null);
+		const rows = body && typeof body === "object" && Array.isArray((body as { plugins?: unknown }).plugins) ? (body as { plugins: unknown[] }).plugins : null;
+		if (rows === null) {
+			answer(res, 400, { problems: [{ name: "", problem: 'the file must hold { "plugins": [ … ] }' }] });
+			return;
+		}
+		// The list is proved by the reader itself before it replaces the file: a row it cannot use
+		// changes nothing, and the daemon keeps running what it was running.
+		const temporary = `${PLUGINS_FILE}.tmp`;
+		writeFileSync(temporary, `${JSON.stringify({ plugins: rows }, null, 2)}\n`);
+		const read = loadPluginRegistry(temporary);
+		if (read.problems.length > 0) {
+			rmSync(temporary, { force: true });
+			answer(res, 400, { problems: read.problems });
+			return;
+		}
+		renameSync(temporary, PLUGINS_FILE);
+		await reloadPlugins();
+		answer(res, 200, {
+			plugins: read.plugins,
+			problems: pluginManager()?.problems() ?? [],
+		roster: pluginManager()?.roster() ?? [],
+			taken: PLUGIN_SHORTCUT_TAKEN,
+		});
+		return;
+	}
+	const read = loadPluginRegistry();
+	const roster = pluginManager()?.roster() ?? [];
+	// What is on disk that nobody registered, for the settings page to offer. A folder a registration
+	// already holds is not offered twice.
+	const { available, unavailable } = loadAvailablePlugins([...read.plugins.map((one) => one.name), ...roster.map((one) => one.name)]);
+	answer(res, 200, {
+		plugins: read.plugins,
+		problems: read.problems,
+		roster,
+		taken: PLUGIN_SHORTCUT_TAKEN,
+		available,
+		unavailable,
 	});
 }
 

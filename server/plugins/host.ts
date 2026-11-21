@@ -25,6 +25,7 @@ import {
 	MAX_FRAME_BYTES,
 	METHOD_NOT_FOUND,
 	PLUGIN_UNAVAILABLE,
+	PROTOCOL_MINOR,
 	PROTOCOL_VERSION,
 	SHUTDOWN,
 	encodeFrame,
@@ -34,6 +35,7 @@ import {
 	requestFrame,
 	resultFrame,
 } from "./protocol.ts";
+import { APP_VERSION } from "../paths.ts";
 import type { PluginId, PluginWire } from "./protocol.ts";
 import type { PluginEntry } from "./registry.ts";
 
@@ -223,10 +225,15 @@ export async function startPlugin(entry: PluginEntry, options: PluginHostOptions
 	child.on("close", (code: number | null, signal: NodeJS.Signals | null) => gone({ code, signal }));
 
 	try {
-		const answer = await call(INITIALIZE, { protocolVersion: PROTOCOL_VERSION, plugin: entry.name, client: { name: "pi-studio" } }, options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS);
+		const answer = await call(INITIALIZE, { protocolVersion: PROTOCOL_VERSION, protocolMinor: PROTOCOL_MINOR, plugin: entry.name, client: { name: "pi-studio", version: APP_VERSION } }, options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS);
 		const said = typeof answer === "object" && answer !== null ? (answer as Record<string, unknown>) : {};
 		if (said.protocolVersion !== PROTOCOL_VERSION) {
 			throw new PluginFailure(PLUGIN_UNAVAILABLE, `${entry.name} speaks protocol ${String(said.protocolVersion)}; this daemon speaks ${PROTOCOL_VERSION}`);
+		}
+		// A plugin that asks for more of this wire version than this daemon carries is refused here
+		// rather than at the first call that needs what it is missing.
+		if (typeof said.protocolMinor === "number" && said.protocolMinor > PROTOCOL_MINOR) {
+			throw new PluginFailure(PLUGIN_UNAVAILABLE, `${entry.name} asks for protocol minor ${String(said.protocolMinor)}; this daemon carries ${PROTOCOL_MINOR}`);
 		}
 		info = {
 			name: typeof said.name === "string" && said.name !== "" ? said.name : entry.name,

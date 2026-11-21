@@ -237,6 +237,12 @@
   .turn-status.stopped { color: #f85149; }
   .turn-status.sent { color: var(--accent); }
   .turn-status.queued { color: #d29922; }
+  /* Words steered into the run while it was going: drawn on the turn the run answers, ahead of its
+     reply, in the accent's colour so they read as an interruption of that run and not as a new ask. */
+  .turn-steer { display: flex; flex-direction: column; gap: 3px; }
+  .turn-steer-label { font: 11px var(--mono); color: var(--accent); text-transform: uppercase; letter-spacing: .5px; }
+  .turn-steer-q { color: #f0e6d2; background: rgba(88,166,255,.08); border-left: 3px solid var(--accent);
+    padding: 6px 9px; border-radius: 4px; white-space: pre-wrap; font-size: 13px; }
   /* What a waiting message may still be given: its words rewritten, or itself taken back. */
   .turn-acts { margin-left: auto; display: flex; gap: 2px; }
   .turn-act { border: 0; background: transparent; color: var(--muted); font: 11px var(--mono);
@@ -589,6 +595,12 @@
   .rail-head .rail-close { margin-left: auto; background: none; border: none; color: var(--muted);
     cursor: pointer; font: 12px var(--mono); padding: 0 2px; line-height: 1; }
   .rail-head .rail-close:hover { color: var(--text); }
+  /* A plugin's panel inside the drawers column, the same pane every other drawer is: the board draws
+     the rail-head and the close button, and the panel's own page fills the rest. */
+  .drawer.plugin-pane { background: #0d1117; }
+  .drawer.plugin-pane iframe.drawer-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #0d1117; }
+  #pluginDrawerDoors { display: contents; }
+  #pluginDrawerDoors[hidden] { display: none; }
   /* Source control drawer: the message field rides at the top, then the staged list, then the rest.
      A row is a name, its folder, its letter and one button that moves it across. */
   .sc-msg { padding: 8px 10px 4px; display: flex; flex-direction: column; gap: 6px; }
@@ -1168,7 +1180,8 @@
     gap: 12px; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; text-align: left;
     cursor: pointer; }
   #boardConfig .cfg-row:hover { background: #161b22; }
-  #boardConfig .cfg-row span { color: var(--muted); font: 11.5px var(--mono); white-space: nowrap; }
+  #boardConfig .cfg-row span { color: var(--muted); font: 11.5px var(--mono); white-space: nowrap;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   #boardConfig .cfg-row b { color: var(--accent); font: 12.5px var(--mono); font-weight: 500; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* A value nobody picks is typed in the row it is shown in, so the leaf keeps its one line: the box is
@@ -1228,11 +1241,6 @@
   #boardConfig #shortcutList .cfg-row b { flex: none; min-width: 104px; font-size: 12px; }
   #boardConfig #shortcutList .cfg-row span { color: #c9d1d9; white-space: normal; }
   #cfgLocal { display: flex; flex-direction: column; }
-  #boardConfig .cfg-check { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; border-radius: 6px;
-    color: var(--text); font: 12px var(--mono); cursor: pointer; }
-  #boardConfig .cfg-check:hover { background: #161b22; }
-  #boardConfig .cfg-check input { accent-color: var(--accent); cursor: pointer; }
-  #boardConfig .cfg-check .cfg-sub { margin-left: auto; }
   /* The prompt files are plain markdown, so the editor is a list and a textarea: what is saved is what
      the daemon reads on the next thread that starts. */
   #promptEditor { position: fixed; z-index: 2100; top: 46px; right: 374px; display: flex;
@@ -1387,7 +1395,7 @@
     font: 13px/18px system-ui, -apple-system, "Segoe UI", sans-serif; color: #e6edf3; }
   #filesPane .ex-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 6px 4px 10px; }
   #filesPane .ex-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    color: #e6edf3; font-size: 11px; letter-spacing: .5px; text-transform: uppercase; }
+    color: #e6edf3; font-size: 12px; }
   #filesPane .ex-act { flex: none; display: flex; align-items: center; gap: 2px; }
   #filesPane .ex-act button { width: 22px; height: 22px; padding: 0; display: grid; place-items: center;
     background: transparent; border: 0; border-radius: 4px; color: #cccccc; cursor: pointer; }
@@ -1536,6 +1544,17 @@
     height: 100%; margin: 0; border: 0; padding: 8px 10px; font: 13px/20px var(--mono); tab-size: 4;
     white-space: pre; overflow: auto; scrollbar-gutter: stable; }
   .tp > .tp-code { overflow: hidden; color: #c9d1d9; pointer-events: none; }
+  /* The lane under both layers: one tinted block per conflict range, scrolled with the area. It sits
+     behind the coloured text, so the block reads as a background and never covers a glyph. */
+  .tp > .tp-bg { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .tp > .tp-bg-inner { position: absolute; left: 0; right: 0; top: 0; }
+  .tp-bg-line { position: absolute; left: 0; right: 0; border-left: 3px solid transparent; box-sizing: border-box; }
+  .tp-bg-marker { background: rgba(248, 81, 73, .16); border-left-color: #f85149; }
+  .tp-bg-ours { background: rgba(56, 139, 253, .13); border-left-color: #58a6ff; }
+  .tp-bg-theirs { background: rgba(63, 185, 80, .13); border-left-color: #3fb950; }
+  .tp-bg-base { background: rgba(210, 153, 34, .12); border-left-color: #d29922; }
+  .ex-conflict-hunk .hk-jump { cursor: pointer; }
+  .ex-conflict-hunk .hk-jump:hover { color: var(--text); border-color: var(--accent); }
   /* A `<code>` chooses a monospace of the engine's own; the colours are drawn on the panel's font, so
      the one inside the coloured layer inherits it instead of defaulting away from it. */
   .tp > .tp-code code { font: inherit; }
@@ -1576,6 +1595,9 @@
   <!-- The two drawers that stay in the header. One drawer is open at a time, and each door names the key that opens it. -->
   <button id="activityBtn" type="button" aria-controls="drawerActivity" aria-expanded="false" title="show the activity drawer (a)">activity</button>
   <button id="cardsBtn" type="button" aria-controls="drawerCards" aria-expanded="false" title="show the cards drawer (c)">cards</button>
+  <!-- One door per plugin whose panel lives in the left drawers, filled in by board.js. The header's
+       own buttons are the style, so a door stands here exactly like activity and cards do. -->
+  <span id="pluginDrawerDoors" hidden></span>
   <button id="configBtn" title="this board's settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
 </header>
 
@@ -1618,14 +1640,21 @@
      in the whole app. -->
 <div id="boardConfig" hidden role="dialog" aria-label="this board's settings">
   <div id="cfgTree"></div>
-  <!-- The board's own display choice and the map of every key live here, outside the tree the
-       daemon serves, so a re-render of the tree never wipes them. -->
+  <!-- The map of every key lives here, outside the tree the daemon serves, so a re-render of the tree never
+       wipes it. -->
   <div id="cfgLocal">
-    <p class="cfg-head">board view</p>
-    <label class="cfg-check" for="mapToggle"><input type="checkbox" id="mapToggle" checked> <span>overview map</span><span class="cfg-sub">show the small overview map (m)</span></label>
     <details class="cfg-group" id="cfgShortcuts">
       <summary><span>hotkeys</span><span class="cfg-preview">all keyboard shortcuts</span></summary>
       <div class="cfg-kids" id="shortcutList"></div>
+    </details>
+    <details class="cfg-group" id="cfgPlugins">
+      <summary><span>plugins</span><span class="cfg-preview" id="pluginCount">none</span></summary>
+      <div class="cfg-kids">
+        <p class="cfg-note">Install one with <code>pi-studio add &lt;git-url&gt;</code>, then enable it
+        below. A shortcut is one letter the board does not answer to yet, and it opens the panel.</p>
+        <div id="pluginRows"></div>
+        <div class="cfg-prose-actions"><span class="cfg-prose-size" id="plNote" role="status"></span></div>
+      </div>
     </details>
   </div>
 </div>
@@ -1648,7 +1677,7 @@
   <section class="drawer" id="drawerFiles" aria-label="files" tabindex="-1">
     <div id="filesPane">
       <div class="ex-head">
-        <span class="ex-title" id="exTitle">explorer</span>
+        <span class="ex-title" id="exTitle">files</span>
         <span class="ex-act">
           <button type="button" id="exNewFile" class="codicon codicon-new-file" aria-label="new file" title="new file"></button>
           <button type="button" id="exNewFolder" class="codicon codicon-new-folder" aria-label="new folder" title="new folder"></button>
@@ -1710,7 +1739,7 @@
       <div class="refs" hidden></div>
       <div class="paths"></div>
       <div class="shots"></div>
-      <textarea class="msg" rows="1" placeholder="message the agent…  (enter sends, shift+enter for a new line, drop a file on a card to reference it)"></textarea>
+      <textarea class="msg" rows="1" placeholder="message the agent…  (enter sends, shift+enter for a new line, drop a file or a card on a message field to reference it)"></textarea>
     </div>
     <div class="side">
       <div class="modes">

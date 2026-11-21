@@ -108,6 +108,20 @@ test("a note lands on the scratch board, and the same key revises that one card"
 	);
 });
 
+test("a card the plugin noted is taken off by its key once the problem it carried is gone", async () => {
+	const service = createPluginService();
+	const workspace = scratch();
+	await call(service, "cards.note", { workspace: workspace.id, markdown: "# failing", key: "job-1" });
+	const removed = await call(service, "cards.remove", { workspace: workspace.id, key: "job-1" });
+	assert.deepEqual(removed, { removed: true });
+	const read = await call(service, "workspace.read", { workspace: workspace.id });
+	assert.equal(read.cards.filter((card: any) => card.type === "note").length, 0, "the card is off the board");
+	const again = await call(service, "cards.remove", { workspace: workspace.id, key: "job-1" });
+	assert.deepEqual(again, { removed: false }, "removing a card that is not there is an answer, not a refusal");
+	const refusal = await refused(service, "cards.remove", { workspace: workspace.id });
+	assert.equal(refusal.code, -32602);
+});
+
 test("a note the board will not draw is refused with the reason, not with a daemon failure", async () => {
 	const service = createPluginService();
 	const refusal = await refused(service, "cards.note", { workspace: scratch().id, markdown: "   " });
@@ -191,7 +205,7 @@ test("a method this daemon does not answer is refused as one", async () => {
 	const service = createPluginService();
 	const refusal = await refused(service, "thread.spawn", { workspace: scratch().id, text: "do the thing" });
 	assert.equal(refusal.code, -32601);
-	assert.match(refusal.message, /it answers workspace\.list, workspace\.read, cards\.note, events\.subscribe/);
+	assert.match(refusal.message, /it answers workspace\.list, workspace\.read, cards\.note, cards\.remove, events\.subscribe/);
 });
 
 test("params that are not one object are refused", async () => {

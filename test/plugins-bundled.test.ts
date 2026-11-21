@@ -61,7 +61,7 @@ test("a row naming a plugin this install ships runs that plugin's own program, w
 	const { plugins, problems } = read([{ name: "history", bundled: "history", args: [] }], base);
 	assert.deepEqual(problems, []);
 	assert.deepEqual(plugins, [
-		{ name: "history", command: join(base, "history", `history-${PLATFORM}`), args: [], visual: PANEL, bundled: "history" },
+		{ name: "history", command: join(base, "history", `history-${PLATFORM}`), args: [], visual: PANEL, bundled: "history", version: "1.2.3" },
 	]);
 });
 
@@ -92,7 +92,7 @@ test("a bundled name is one folder of this install, never a path to somewhere el
 	for (const name of ["../history", "/opt/plugin", "inst/plugins/history", "", ".hidden", 7]) {
 		const { plugins, problems } = read([{ name: "history", bundled: name }], base);
 		assert.deepEqual(plugins, [], `${JSON.stringify(name)} is not a folder name`);
-		assert.match(problems[0].problem, /one folder inside this install's plugins folder/);
+		assert.match(problems[0].problem, /one folder inside the plugins folder/);
 	}
 });
 
@@ -176,7 +176,7 @@ test("a plugin an install ships registers in one word and takes its panel from i
 
 	const { plugins, problems } = read([{ name: "shipped", bundled: "shipped" }], base);
 	assert.deepEqual(problems, []);
-	assert.deepEqual(plugins, [{ name: "shipped", command: exe, args: [], visual: manifest.visual, bundled: "shipped" }]);
+	assert.deepEqual(plugins, [{ name: "shipped", command: exe, args: [], visual: manifest.visual, bundled: "shipped", version: "1.2.3" }]);
 
 	// A daemon whose registration names nothing starts nothing, even when this install ships a plugin.
 	assert.deepEqual(loadPluginRegistry(join(root, "no-such-file.json"), base), { plugins: [], problems: [] });

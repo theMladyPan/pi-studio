@@ -29,6 +29,9 @@ const resetBtn = document.getElementById("reset");
 // board route has to carry it.
 const workspace = (location.pathname.match(/^\/w\/([0-9a-f]{6,64})\/?$/) || [])[1] || "";
 const auth = workspace ? `workspace=${encodeURIComponent(workspace)}` : "";
+// A link written as `[[board/key]]` opens that board's page with the card it names in `?jump=`, and the
+// first snapshot takes the reader there. Read once, so the address stops carrying it after that.
+let pendingJump = new URLSearchParams(location.search).get("jump") || "";
 // One drawer for the life of the page, so the graph inside it keeps the scroll position, the expanded
 // commit and the repository the human left in it between rolls. `typingSomewhere` is passed rather
 // than copied, so the drawer and the board's letters read a field the same way.
@@ -47,6 +50,8 @@ document.getElementById("termBtn").addEventListener("click", () => {
 // The plugin panel: one sandboxed frame for the life of the page, the doors the toolbox lists for the
 // plugins that declared a panel, and the one call a panel is allowed to make.
 const pluginPanel = createPluginPanelHost({ workspace });
+/** One plain letter to the panel it opens, as the daemon lists them; set in settings, read by the keys. */
+const pluginShortcuts = new Map();
 
 // ---------- the plugin panel ---------------------------------------------
 /**
@@ -74,7 +79,8 @@ const pluginPanel = createPluginPanelHost({ workspace });
  * Neither direction carries a token, a cookie or the daemon's address: the frame is same-origin with this
  * page for its own files only, and every request it makes is made here, with this page's own promise.
  */
-function createPluginPanelHost({ workspace }) {
+function createPluginPanelHost({ workspace, mode = "overlay" }) {
+  const drawerMode = mode === "drawer";
   const drawer = document.getElementById("pluginDrawer");
   const scrim = document.getElementById("pluginScrim");
   const frame = document.getElementById("pvFrame");
@@ -82,6 +88,15 @@ function createPluginPanelHost({ workspace }) {
   const noteEl = document.getElementById("pvNote");
   const closeBtn = document.getElementById("pvClose");
   const doors = document.getElementById("pluginDoors");
+  // Drawer mode: the panel lives in the left drawers' column instead of behind the toolbox overlay,
+  // so its frame is made on its first open rather than read from the page.
+  const drawerColumn = document.getElementById("drawers");
+  const drawerDoorsEl = document.getElementById("pluginDrawerDoors");
+  let pane = null;
+  let paneFrame = null;
+  let paneKey = "";
+  let registeredLetters = [];
+  const targetFrame = () => (drawerMode ? paneFrame : frame);
   /** The plugin whose panel is on screen, `""` before a door was ever pressed. */
   let plugin = "";
   /** Has the panel's own document loaded, which is when it can hear a greeting. */
@@ -103,8 +118,9 @@ function createPluginPanelHost({ workspace }) {
    * own to name; what keeps a stranger out is the frame's window above, and the secret in every message.
    */
   function say(message) {
-    if (!frame.contentWindow) return;
-    frame.contentWindow.postMessage({ ...message, nonce }, "*");
+    const live = targetFrame();
+    if (!live?.contentWindow) return;
+    live.contentWindow.postMessage({ ...message, nonce }, "*");
   }
 
   /**
@@ -139,8 +155,9 @@ function createPluginPanelHost({ workspace }) {
   function open(panel) {
     if (!panel || typeof panel.url !== "string" || panel.url === "") return;
     closeHeaderMenus();
-    const opening = drawer.hidden;
     plugin = typeof panel.name === "string" ? panel.name : "";
+    if (drawerMode) return openDrawer(panel);
+    const opening = drawer.hidden;
     titleEl.textContent = (typeof panel.title === "string" && panel.title) || plugin || "plugin";
     noteEl.textContent = plugin;
     if (frame.dataset.plugin !== plugin) {
@@ -179,7 +196,8 @@ function createPluginPanelHost({ workspace }) {
   window.addEventListener("message", (event) => {
     // The frame's own window, and a document the sandbox left without an origin: either check alone is
     // reachable, since this page can hold other frames and another site can frame this page.
-    if (!frame.contentWindow || event.source !== frame.contentWindow) return;
+    const live = targetFrame();
+    if (!live?.contentWindow || event.source !== live.contentWindow) return;
     if (event.origin !== "null") return;
     const data = event.data;
     if (!data || typeof data !== "object") return;
@@ -191,10 +209,67 @@ function createPluginPanelHost({ workspace }) {
   });
 
   /**
+   * The panel as one more left drawer: a pane in the drawers' column with the board's own rail-head and
+   * close button under it, sized by the rail grip like files, activity and cards. One pane per plugin,
+   * made on its first open and kept, so its state survives closing the drawer.
+   */
+  function openDrawer(panel) {
+    const key = `plugin:${plugin}`;
+    const paneId = `drawerPlugin-${plugin}`;
+    if (!pane || pane.id !== paneId) {
+      let live = document.getElementById(paneId);
+      if (!live) {
+        live = document.createElement("section");
+        live.className = "drawer plugin-pane";
+        live.id = paneId;
+        live.setAttribute("aria-label", (typeof panel.title === "string" && panel.title) || plugin);
+        live.tabIndex = -1;
+        const head = document.createElement("div");
+        head.className = "rail-head";
+        head.textContent = (typeof panel.title === "string" && panel.title) || plugin;
+        const shut = document.createElement("button");
+        shut.type = "button";
+        shut.className = "rail-close";
+        shut.title = "hide the drawer (esc)";
+        shut.textContent = "«";
+        shut.addEventListener("click", () => closeDrawers());
+        head.append(shut);
+        const inner = document.createElement("iframe");
+        inner.className = "drawer-frame";
+        inner.setAttribute("sandbox", "allow-scripts");
+        inner.title = `${(typeof panel.title === "string" && panel.title) || plugin} plugin panel`;
+        inner.addEventListener("load", () => {
+          if (plugin === "") return;
+          loaded = true;
+          say({ type: "pi-studio.host.hello", plugin });
+        });
+        live.append(head, inner);
+        drawerColumn.insertBefore(live, document.getElementById("railGrip"));
+        DRAWER_NAMES[key] = paneId;
+      }
+      pane = live;
+      paneFrame = live.querySelector("iframe.drawer-frame");
+      paneKey = key;
+    }
+    if (paneFrame.dataset.plugin !== plugin) {
+      nonce = newNonce();
+      loaded = false;
+      paneFrame.dataset.plugin = plugin;
+      paneFrame.src = panel.url;
+    }
+    if (gitDrawer.isOpen()) gitDrawer.close();
+    explorerCore.drawerOpen(drawerState, key);
+    paintDrawers();
+    paneFrame.focus();
+    if (loaded) say({ type: "pi-studio.host.hello", plugin });
+  }
+
+  /**
    * One door per panel the daemon lists, read once: which plugins are installed and running is a fact of its
    * own start, so a panel added while it runs is a door on the next one. The listing is the daemon's answer
    * about the human at the keyboard, and a board no plugin offers a panel to simply keeps its toolbox as it
-   * was.
+   * was. The two hosts each take the panels that are theirs: the toolbox takes every panel without a place,
+   * and the header takes only the ones that asked for the drawers.
    */
   async function listDoors() {
     if (!workspace) return;
@@ -207,24 +282,60 @@ function createPluginPanelHost({ workspace }) {
       return;
     }
     const panels = Array.isArray(payload?.plugins) ? payload.plugins : [];
-    for (const panel of panels) {
-      if (!panel || typeof panel.name !== "string" || typeof panel.url !== "string") continue;
+    const mine = panels.filter((panel) => panel && typeof panel.name === "string" && typeof panel.url === "string" && ((panel.place === "drawer") === drawerMode));
+    // A re-list replaces the doors rather than leaving a second set beside them.
+    if (drawerMode) {
+      drawerDoorsEl.replaceChildren();
+      for (const key of Object.keys(pluginDrawerDoors)) {
+        if (key.startsWith("plugin:")) delete pluginDrawerDoors[key];
+      }
+    } else {
+      doors.replaceChildren();
+    }
+    for (const letter of registeredLetters) pluginShortcuts.delete(letter);
+    registeredLetters = [];
+    for (const panel of mine) {
       const door = document.createElement("button");
       door.type = "button";
-      door.setAttribute("role", "menuitem");
       door.textContent = (typeof panel.title === "string" && panel.title) || panel.name;
-      door.title = `open the ${door.textContent} plugin panel`;
-      door.addEventListener("click", () => open(panel));
-      doors.append(door);
+      if (drawerMode) {
+        const key = `plugin:${panel.name}`;
+        door.setAttribute("aria-controls", `drawerPlugin-${panel.name}`);
+        door.setAttribute("aria-expanded", "false");
+        door.title = `show the ${door.textContent} drawer`;
+        door.addEventListener("click", () => {
+          if (drawerState.open === key) closeDrawers();
+          else open(panel);
+        });
+        pluginDrawerDoors[key] = door;
+        drawerDoorsEl.append(door);
+      } else {
+        door.setAttribute("role", "menuitem");
+        door.title = `open the ${door.textContent} plugin panel`;
+        door.addEventListener("click", () => open(panel));
+        doors.append(door);
+      }
+      if (typeof panel.shortcut === "string" && /^[a-z]$/.test(panel.shortcut)) {
+        pluginShortcuts.set(panel.shortcut, { panel, drawer: drawerMode });
+        registeredLetters.push(panel.shortcut);
+      }
     }
-    doors.hidden = panels.length === 0;
+    if (drawerMode) drawerDoorsEl.hidden = mine.length === 0;
+    else doors.hidden = mine.length === 0;
   }
   void listDoors();
 
-  closeBtn.addEventListener("click", () => close());
-  scrim.addEventListener("click", () => close());
+  if (!drawerMode) {
+    closeBtn.addEventListener("click", () => close());
+    scrim.addEventListener("click", () => close());
+  }
 
-  return { isOpen: () => !drawer.hidden, close };
+  return {
+    isOpen: () => (drawerMode ? drawerState.open === paneKey && paneKey !== "" : !drawer.hidden),
+    close: () => (drawerMode ? (drawerState.open === paneKey ? closeDrawers() : null) : close()),
+    open,
+    relist: listDoors,
+  };
 }
 // ---------- the header menus ---------------------------------------------
 // Three chips in the header, each opening one menu outside it. A menu that closed while its item held
@@ -552,6 +663,21 @@ function exBasename(path) {
     .split("/")
     .filter(Boolean);
   return steps.length ? steps[steps.length - 1] : "";
+}
+
+/**
+ * A workspace path as a human writes it: the home folder shortened to `~`, everything else left as it is.
+ * The drawer's header prints this, so a workspace under the home folder reads `~/projekty/pi-studio`
+ * instead of a long absolute path, and one outside it keeps its full path.
+ */
+function exShortPath(path, home) {
+  const raw = String(path ?? "").replaceAll("\\", "/");
+  if (!raw) return "";
+  const base = String(home ?? "").replaceAll("\\", "/").replace(/\/+$/, "");
+  if (!base) return raw;
+  if (raw === base) return "~";
+  if (raw.startsWith(`${base}/`)) return `~${raw.slice(base.length)}`;
+  return raw;
 }
 
 /** Folders first, then names the way a person reads them: `file2` comes before `file10`. */
@@ -1057,9 +1183,10 @@ function exBoardLetter(key, { shift = false, typing = false, panel = false, surf
 
 // ---------- conflict hunks ------------------------------------------------
 /**
- * One unresolved hunk in a marked file: where the whole block stands in the text, and the two
- * sides it holds. The parser reads ordinary markers and the diff3 base section, and refuses a
- * block that never closes, so an acceptance never replaces the wrong lines.
+ * One unresolved hunk in a marked file: where the whole block stands in the text — by offset for an
+ * acceptance and by `startLine`/`endLine` (1-based, inclusive) for the merge editor's tinted blocks —
+ * and the two sides it holds. The parser reads ordinary markers and the diff3 base section, and
+ * refuses a block that never closes, so an acceptance never replaces the wrong lines.
  */
 function exConflictHunks(text) {
   const lines = String(text ?? "").split("\n");
@@ -1103,7 +1230,7 @@ function exConflictHunks(text) {
       if (j < lines.length) closed = true;
     }
     if (!closed) return hunks;
-    hunks.push({ index: hunks.length, start: offsets[start], end: offsets[j] + lines[j].length + 1, ours, theirs, base });
+    hunks.push({ index: hunks.length, start: offsets[start], end: offsets[j] + lines[j].length + 1, ours, theirs, base, startLine: start + 1, endLine: j + 1 });
     i = j + 1;
   }
   return hunks;
@@ -1210,6 +1337,7 @@ const explorerCore = {
   under: exUnder,
   cleanPath: exCleanPath,
   basename: exBasename,
+  shortPath: exShortPath,
   sortEntries: exSortEntries,
   listing: exListing,
   listingStart: exListingStart,
@@ -2704,6 +2832,24 @@ function shotRow(images) {
   return row;
 }
 
+/**
+ * Words steered into a run while it was going, drawn on the turn the run answers — between what it
+ * said on the way and its answer, because that is where they were read: ahead of the reply they
+ * helped shape, never below it as a follow-up nobody answered.
+ */
+function steerNode(steer) {
+  const wrap = el("div", "turn-steer");
+  const label = el("span", "turn-steer-label");
+  label.textContent = "steered into the run";
+  wrap.appendChild(label);
+  const words = el("div", "turn-steer-q");
+  words.textContent = steer.text || "";
+  wrap.appendChild(words);
+  const shots = shotRow(steer.images);
+  if (shots) wrap.appendChild(shots);
+  return wrap;
+}
+
 /** One follow-up exchange: your question, what happened to it, then the answer. */
 function turnNode(entry, turn, index) {
   const wrap = el("div", `turn ${turn.status || "queued"}`);
@@ -2730,6 +2876,8 @@ function turnNode(entry, turn, index) {
   // What the run said on the way, above the answer: one block each, ruled apart, muted. It draws
   // nothing at all on a run that answered in one message.
   wrap.appendChild(el("div", "turn-interim"));
+  // What was steered into the run, in the order it arrived, ahead of the answer it shaped.
+  for (const steer of Array.isArray(turn.steers) ? turn.steers : []) wrap.appendChild(steerNode(steer));
   // Always there, even before the answer has a word: an empty one draws nothing, and having it
   // from the start means a growing answer is one element to fill, not a node to add.
   wrap.appendChild(el("div", "turn-a note-body"));
@@ -2895,6 +3043,7 @@ function turnShape(turn) {
     // The pictures arrive from a fresh parse of every broadcast, so the array is a new one each time and
     // only its value says whether the turn changed.
     JSON.stringify(turn.images ?? null),
+    JSON.stringify(turn.steers ?? null),
     turn.error,
     notes.length,
     notes.join("\u0000"),
@@ -3769,19 +3918,63 @@ function startCardDrag(card, event) {
     x: parseFloat(other.style.left),
     y: parseFloat(other.style.top),
   }));
+  // The field the press is over, while the card is moving and not on its first pixel: a card let go
+  // there is named in that message instead of being put down.
+  let moved = false;
+  let over = null;
+  // A press is one pointer: a second pointer's move or release is not this drag.
+  const samePointer = (ev) => ev?.pointerId == null || event.pointerId == null || ev.pointerId === event.pointerId;
+  const markField = (ev) => {
+    const field = moved ? composerUnder(ev.clientX, ev.clientY) : null;
+    if (field === over) return;
+    over?.root.classList.remove("dropping");
+    field?.root.classList.add("dropping");
+    over = field;
+  };
   const move = (ev) => {
+    if (!samePointer(ev)) return;
+    moved = moved || Math.abs(ev.clientX - sx) > 6 || Math.abs(ev.clientY - sy) > 6;
     const dx = (ev.clientX - sx) / view.k;
     const dy = (ev.clientY - sy) / view.k;
     for (const spot of from) {
       spot.card.style.left = `${spot.x + dx}px`;
       spot.card.style.top = `${spot.y + dy}px`;
     }
+    markField(ev);
     scheduleMap();
     scheduleArrows();
   };
-  const up = () => {
+  const up = (ev) => {
+    if (!samePointer(ev)) return;
     removeEventListener("pointermove", move);
     removeEventListener("pointerup", up);
+    removeEventListener("pointercancel", cancel);
+    // The release is re-read where the pointer is now, not where the last move left the mark.
+    const field = moved ? composerUnder(ev?.clientX ?? sx, ev?.clientY ?? sy) : null;
+    over?.root.classList.remove("dropping");
+    over = null;
+    const cards = from.filter((spot) => spot.entry);
+    if (field && cards.length) {
+      // A reference, not a move: the cards go back where they were and the message names them.
+      for (const spot of from) {
+        spot.card.classList.remove("dragging");
+        spot.card.style.left = `${spot.x}px`;
+        spot.card.style.top = `${spot.y}px`;
+      }
+      scheduleMap();
+      scheduleArrows();
+      const named = cards.filter((spot) => addReference(field, spot.entry));
+      focusComposer(field);
+      footNote(
+        named.length
+          ? `named ${named.length === 1 ? `“${cardName(named[0].entry)}”` : `${named.length} cards`} in the message`
+          : field.named.length >= MAX_NAMED
+            ? `a message names ${MAX_NAMED} cards at most`
+            : "those cards are already named in that message",
+        !named.length,
+      );
+      return;
+    }
     for (const spot of from) {
       spot.card.classList.remove("dragging");
       const x = Math.round(parseFloat(spot.card.style.left));
@@ -3801,8 +3994,41 @@ function startCardDrag(card, event) {
       void saveLayout(spot.entry.id, rect);
     }
   };
+  // A press the browser cancels — a gesture, a touch scroll — must take the drag back: the cards where
+  // they were and the mark off the field, so nothing is left waiting for a release that never comes.
+  const cancel = (ev) => {
+    if (!samePointer(ev)) return;
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", up);
+    removeEventListener("pointercancel", cancel);
+    over?.root.classList.remove("dropping");
+    over = null;
+    for (const spot of from) {
+      spot.card.classList.remove("dragging");
+      spot.card.style.left = `${spot.x}px`;
+      spot.card.style.top = `${spot.y}px`;
+    }
+    scheduleMap();
+    scheduleArrows();
+  };
   addEventListener("pointermove", move);
   addEventListener("pointerup", up);
+  addEventListener("pointercancel", cancel);
+}
+
+/**
+ * The message field under a point, if a dragged card has just been let go over one. The dragged cards
+ * follow the pointer, so the field is the first thing under it that none of them covers: the first hit
+ * that is not a dragged card decides, and anything behind it — another card, the canvas — means there is
+ * no drop here.
+ */
+function composerUnder(x, y) {
+  for (const hit of document.elementsFromPoint(x, y)) {
+    if (hit.closest(".card.dragging")) continue;
+    const root = hit.closest(".composer");
+    return root ? composers.get(root.dataset.composer ?? "") ?? null : null;
+  }
+  return null;
 }
 
 /** The agent is blocked on this card until the question on it is answered. */
@@ -4881,7 +5107,6 @@ function openQuestion() {
   return record;
 }
 
-/** Follow a [[key]] reference: by key first, then by card title. */
 /**
  * Where a cross-reference can land right now: what each card carries as its key, and its name.
  * A card that was closed takes both with it, so a link to it is dead and has to look it.
@@ -4904,17 +5129,191 @@ function refreshXrefs() {
     // and a markdown note's links are in the body. A link may be in either.
     for (const link of record.card.querySelectorAll(".xref")) {
       const key = String(link.dataset.key ?? "");
-      const known = keys.has(key.toLowerCase());
-      link.classList.toggle("stale", !known);
-      link.title = known
-        ? `jump to ${key}`
-        : `${key} is not on this board: that card was closed or never written`;
+      paintXref(link, key, keys.has(key.toLowerCase()));
     }
   }
 }
 
-function jumpToKey(key) {
-  const wanted = key.toLowerCase();
+/**
+ * Draw one link's standing against the workspaces that are known. A key carrying a `/` is a link to
+ * another board only when some board answers to the part before the slash, so a link to a card of this
+ * board — or to one that has gone — still reads dead. A link to another board is answered there, and
+ * this board cannot say whether the card is still on it, so it is neither marked dead nor promised. A
+ * link that names this board is different: if the card is not here, it reads dead.
+ */
+function paintXref(link, key, known) {
+  const other = known ? null : otherBoardKey(key);
+  const found = other ? findCachedWorkspace(other.board) : null;
+  const aboard = Boolean(found && !found.ambiguous);
+  const current = aboard && found.id === workspace;
+  if (found?.ambiguous) {
+    link.classList.toggle("stale", false);
+    link.setAttribute("href", "#");
+    link.removeAttribute("target");
+    link.removeAttribute("rel");
+    link.title = `more than one workspace is called “${other.board}”: use its id`;
+    return;
+  }
+  if (aboard && !current) {
+    link.setAttribute("href", `/w/${found.id}?jump=${encodeURIComponent(other.key)}`);
+    link.setAttribute("target", "_blank");
+    link.setAttribute("rel", "noopener");
+  } else {
+    link.setAttribute("href", "#");
+    link.removeAttribute("target");
+    link.removeAttribute("rel");
+  }
+  link.classList.toggle("stale", !known && (!aboard || current));
+  link.title = known
+    ? `jump to ${key}`
+    : current
+      ? `${key} is not on this board: that card was closed or never written`
+      : aboard
+        ? `open ${other.key} on the board of ${other.board}`
+        : `${key} is not on this board: that card was closed or never written`;
+}
+
+/**
+ * A link that names its board: `[[workspace/key]]`, where the workspace is a board's name, its folder or
+ * its id. Every other link is a key on this board, which is asked first. The longest known workspace
+ * prefix wins, so a folder path with slashes in it is addressed whole.
+ */
+function otherBoardKey(key) {
+  const text = String(key).trim();
+  const lower = text.toLowerCase();
+  let best = "";
+  for (const label of namedWorkspaces) {
+    if (!label || lower.length <= label.length) continue;
+    if (!lower.startsWith(`${label}/`)) continue;
+    if (label.length > best.length) best = label;
+  }
+  if (!best) return null;
+  const board = text.slice(0, best.length).trim();
+  const rest = text.slice(best.length + 1).trim();
+  return board && rest ? { board, key: rest } : null;
+}
+
+/** The workspaces the daemon knows, read once: a board page is not the crossroads, so it has no list. */
+let knownWorkspaces = null;
+/** The workspaces themselves, once the read landed. */
+let knownWorkspaceList = [];
+/** What a workspace may be named by: its id, its name, its folder, all lowercased. */
+let namedWorkspaces = new Set();
+function loadWorkspaces(refresh = false) {
+  if (refresh) knownWorkspaces = null;
+  knownWorkspaces ??= fetch("/workspaces", { cache: "no-store" })
+    .then(async (response) => {
+      if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+      const payload = await response.json();
+      if (!Array.isArray(payload?.workspaces)) throw new Error("the workspaces were not a list");
+      return payload;
+    })
+    .then((payload) => {
+      const list = payload.workspaces;
+      knownWorkspaceList = list;
+      namedWorkspaces = new Set(
+        list.flatMap((one) =>
+          [one.id, one.name, one.folder].map((value) => String(value ?? "").toLowerCase()).filter(Boolean),
+        ),
+      );
+      // Links were drawn before the workspaces were known, and one naming a board read dead until now.
+      refreshXrefs();
+      return list;
+    })
+    // A refused read is not a list: the next click asks again, so one refused read takes no later ones.
+    .catch(() => {
+      knownWorkspaces = null;
+      knownWorkspaceList = [];
+      namedWorkspaces = new Set();
+      throw new Error("the workspaces could not be read");
+    });
+  // A refused read leaves nobody waiting on it, and the click that asked for it has already gone.
+  knownWorkspaces.catch(() => {});
+  return knownWorkspaces;
+}
+/**
+ * The one workspace a name points at, with exact ids before names and folders: two boards may share a
+ * name, but an id points at one.
+ */
+function findWorkspaceIn(list, name) {
+  const wanted = String(name).toLowerCase();
+  const byId = list.filter((one) => String(one.id ?? "").toLowerCase() === wanted);
+  if (byId.length === 1) return byId[0];
+  if (byId.length > 1) return { ambiguous: true, matches: byId };
+  const byName = list.filter((one) =>
+    [one.name, one.folder].some((value) => String(value ?? "").toLowerCase() === wanted),
+  );
+  if (byName.length === 1) return byName[0];
+  if (byName.length > 1) return { ambiguous: true, matches: byName };
+  return null;
+}
+
+/** The workspace a link's board part names, among the ones already known. */
+function findCachedWorkspace(board) {
+  return findWorkspaceIn(knownWorkspaceList, board);
+}
+
+/**
+ * The workspace a board part names. A name the cached list misses is read once more, so a workspace
+ * opened after this page loaded is not invisible to it.
+ */
+async function workspaceNamed(name) {
+  let found = findWorkspaceIn(await loadWorkspaces(), name);
+  if (!found) found = findWorkspaceIn(await loadWorkspaces(true), name);
+  return found;
+}
+
+/**
+ * Follow a link that carries its board. The card is read where it lives, so that board's page opens in a
+ * tab of its own, centred on the card: the reader keeps the board they were on.
+ */
+async function jumpToOtherBoard(board, key) {
+  const found = await workspaceNamed(board);
+  if (!found) {
+    footNote(`no workspace called “${board}” here`, true);
+    return true;
+  }
+  if (found.ambiguous) {
+    footNote(`more than one workspace is called “${board}”: use its id`, true);
+    return true;
+  }
+  // A link may name the board the reader is already on, and then the card is simply here.
+  if (found.id === workspace) {
+    if (jumpToKeyLocal(key)) return true;
+    footNote(`“${key}” is not on this board`, true);
+    return true;
+  }
+  const url = `/w/${found.id}?jump=${encodeURIComponent(key)}`;
+  // A link of its own, followed as one: no popup return to misread, and this tab is never taken.
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.target = "_blank";
+  anchor.rel = "noopener";
+  anchor.hidden = true;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  footNote(`opened “${key}” on the board of ${found.name}`);
+  return true;
+}
+
+/**
+ * Follow a [[key]] reference: by key first, then by card title on this board, then on the board the link
+ * names. Answers whether the click went somewhere, so a dead link can say so.
+ */
+async function jumpToKey(key) {
+  if (jumpToKeyLocal(key)) return true;
+  let other = otherBoardKey(key);
+  if (!other) {
+    await loadWorkspaces();
+    other = otherBoardKey(key);
+  }
+  return other ? jumpToOtherBoard(other.board, other.key) : false;
+}
+
+/** The card of this board a key or a title names, centred, if the board holds one. */
+function jumpToKeyLocal(key) {
+  const wanted = String(key).toLowerCase();
   for (const record of byId.values()) {
     if (record.data.key && record.data.key.toLowerCase() === wanted) {
       centerOn(record);
@@ -4944,11 +5343,17 @@ viewport.addEventListener("click", (event) => {
   }
   const link = event.target.closest(".xref");
   if (!link) return;
+  // A cross-board link carries its own address now, so the browser goes there itself on a new tab.
+  if (link.getAttribute("href") && link.getAttribute("href") !== "#") return;
   event.preventDefault();
   const key = String(link.dataset.key ?? "");
   // A link whose card was closed points at nothing, and a click that does nothing reads as a broken
   // board. Say which card is missing instead.
-  if (!jumpToKey(key)) footNote(`${key} is not on this board: that card was closed or never written`);
+  void jumpToKey(key)
+    .then((visited) => {
+      if (!visited) footNote(`${key} is not on this board: that card was closed or never written`);
+    })
+    .catch(() => footNote("the workspaces could not be read", true));
 });
 
 /** A wheel reports pixels, lines or pages, so one factor turns any of them into pixels. */
@@ -5231,7 +5636,6 @@ const MAP_PAD = 8;
 const MAP_COLOUR = { note: "#7d8590", code: "#d2a8ff", sticky: "#d29922", question: "#db61a2" };
 const mapCanvas = document.getElementById("minimap");
 const mapCtx = mapCanvas.getContext("2d");
-const mapToggle = document.getElementById("mapToggle");
 let mapOn = true;
 let mapQueued = false;
 /** The projection the last paint used, so a press lands where the eye saw the picture. */
@@ -5375,11 +5779,21 @@ mapCanvas.addEventListener("pointerdown", (event) => {
   addEventListener("pointercancel", up);
 });
 
+/**
+ * The switches the page answers for rather than the daemon: a leaf that carries no route to write holds no
+ * value a board could keep, so the page says what it is doing and takes the press. The overview map is the
+ * only one, and `m` is the same press as its row.
+ *
+ * `leaf` is the row drawn for it while the settings panel is open, so the two never disagree about what
+ * the map is doing.
+ */
+const OWN_SWITCHES = {
+  overviewMap: { state: () => mapOn, set: (on) => setMap(on), leaf: null },
+};
+
+/** The map changed, so the row drawn for it says so — unless the panel is closed and no row is drawn. */
 function paintMapBtn() {
-  // The overview map is a checkbox in settings, so it says what the board shows rather than hiding
-  // behind a header button that no longer exists.
-  mapToggle.checked = mapOn;
-  mapToggle.title = mapOn ? "hide the board overview (m)" : "show the board overview (m)";
+  OWN_SWITCHES.overviewMap.leaf?.set();
 }
 
 /**
@@ -5394,9 +5808,8 @@ function setMap(on) {
   if (on) scheduleMap();
 }
 
-paintMapBtn();
+// No row is drawn yet, so there is nothing to paint; the panel reads `mapOn` when it draws one.
 document.body.classList.toggle("map-on", mapOn);
-mapToggle.addEventListener("change", () => setMap(mapToggle.checked));
 // The window rect is measured against the canvas, so the map follows the box it is drawn in:
 // a resized window and a rail that opens, closes or is dragged all land here.
 new ResizeObserver(() => scheduleMap()).observe(viewport);
@@ -5457,6 +5870,8 @@ const THOUGHT_STALL_MS = 3000;
 // rail are the ones these open with, because this is that rail with doors on it.
 const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards", source: "drawerSource" };
 const drawerState = explorerCore.drawers();
+/** The doors in the header for plugins whose panel lives in this column, by drawer name. */
+const pluginDrawerDoors = {};
 // The three doors in the header, read before anything paints them.
 const filesBtn = document.getElementById("filesBtn");
 const activityBtn = document.getElementById("activityBtn");
@@ -5484,7 +5899,7 @@ function paintDrawers() {
     const pane = document.getElementById(id);
     pane.classList.toggle("on", drawerState.open === name);
   }
-  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn };
+  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn, ...pluginDrawerDoors };
   for (const [name, door] of Object.entries(doors)) {
     door.setAttribute("aria-expanded", drawerState.open === name ? "true" : "false");
   }
@@ -5545,6 +5960,9 @@ for (const [name, door] of Object.entries({ files: filesBtn, activity: activityB
     toggleDrawer(name);
   });
 }
+// The header doors for plugins whose panel lives in this column: the same doors as activity and cards,
+// added as the daemon lists them, and painted with the same aria-expanded the drawers keep.
+const pluginDrawer = createPluginPanelHost({ workspace, mode: "drawer" });
 for (const shut of document.querySelectorAll("#drawers .rail-close")) {
   shut.addEventListener("click", () => closeDrawers());
 }
@@ -7359,6 +7777,8 @@ const statCtx = document.getElementById("statCtx");
 const statCtxValue = document.getElementById("statCtxValue");
 /** Every field on the board, by the card it belongs to. `""` is the bottom bar of a one-session board. */
 const composers = new Map();
+/** How many cards one message may name; the daemon quotes at most this many. */
+const MAX_NAMED = 8;
 /** The field the keyboard was last in: where a hint lands, and where a reference is added. */
 let activeComposer = null;
 /** A note that outranks the usual hint until it has been read. */
@@ -7370,10 +7790,47 @@ const cardOf = (inst) => (inst ? inst.entry : null);
 /** The field built for a card, if that card has one. */
 const composerOf = (entry) => (entry ? composers.get(entry.id) ?? null : null);
 
+/** A field the board will still send through: an ended thread answers nothing. */
+const fieldUsable = (inst) => {
+  const held = cardOf(inst);
+  // A thread card says `stopped` when its thread has ended; nothing else a thread card shows does.
+  return !held || held.data?.status !== "stopped";
+};
+
+/** The same field, only if the board can still send through it. */
+const usableField = (inst) => (inst && fieldUsable(inst) ? inst : null);
+
 /** The field that holds the caret, if one does. `activeComposer` is the last one used, which is not the same. */
 function focusedComposer() {
   const caret = document.activeElement;
   return caret && activeComposer && activeComposer.root.contains(caret) ? activeComposer : null;
+}
+
+/**
+ * The field the human wrote in last, while it is still on the board. A card read after a message was
+ * written belongs to that message, which is what lets one thread name a card of another.
+ */
+function lastComposer() {
+  if (!activeComposer) return null;
+  if (!activeComposer.key) return activeComposer;
+  const held = composers.get(activeComposer.key);
+  return held === activeComposer && byId.has(activeComposer.key) && fieldUsable(held) ? held : null;
+}
+
+/**
+ * The field a board offers when nothing has been written in yet: the bottom bar of a one-session board,
+ * or the newest thread's field, which is the one the human is most likely working in. The note under the
+ * field says where the card went, so a wrong guess costs one chip and not a lost message.
+ */
+function boardField() {
+  const bar = document.body.classList.contains("threads") ? null : composers.get("");
+  if (bar) return bar;
+  const fields = [...composers.values()].filter((inst) => inst.key && byId.has(inst.key) && fieldUsable(inst));
+  const newest = fields.reduce(
+    (best, inst) => (best && Number(best.entry?.data?.at ?? 0) >= Number(inst.entry?.data?.at ?? 0) ? best : inst),
+    null,
+  );
+  return newest;
 }
 
 /**
@@ -7416,6 +7873,9 @@ function makeComposer(entry) {
   const key = entry ? entry.id : "";
   if (composers.has(key)) return composers.get(key);
   const root = composerTpl.content.firstElementChild.cloneNode(true);
+  // The card the field belongs to, on the element itself: a card dropped on the field is found by the
+  // element under the pointer, and this is how that element names its field.
+  root.dataset.composer = key;
   const inst = {
     key,
     entry: entry ?? null,
@@ -7964,6 +8424,7 @@ function addReference(inst, entry) {
   if (!inst || !entry) return false;
   // The card the field is written in is what the message answers; naming it again would be noise.
   if (inst.key === entry.id || inst.named.includes(entry.id)) return false;
+  if (inst.named.length >= MAX_NAMED) return false;
   inst.named.push(entry.id);
   paintRefs(inst);
   paintReferenceRings();
@@ -7972,12 +8433,12 @@ function addReference(inst, entry) {
 
 /** One chip per card the message names and one per command it carries, each droppable on its own. */
 function paintRefs(inst) {
-  // A card that left the board is not a reference any more, so the row drops it rather than naming
-  // something a click would miss.
-  inst.named = inst.named.filter((id) => byId.has(id));
-  inst.refRow.hidden = inst.named.length === 0 && inst.commands.length === 0;
+  // A card that has not arrived yet keeps its place: a reconnect may rebuild a field before the card
+  // it names, and the chip is drawn once the card is here.
+  const shown = inst.named.filter((id) => byId.has(id));
+  inst.refRow.hidden = shown.length === 0 && inst.commands.length === 0;
   inst.refRow.replaceChildren(
-    ...inst.named.map((id) => {
+    ...shown.map((id) => {
       const entry = byId.get(id);
       const chip = el("div", "ref");
       const name = el("span");
@@ -8011,38 +8472,74 @@ function paintReferenceRings() {
   for (const record of byId.values()) record.card.classList.toggle("referenced", named.has(record.id));
 }
 
+/**
+ * A field the board hides behind a folded card is useless until the card is open, so opening it here
+ * makes the field visible before the keyboard goes into it.
+ */
+function showComposer(inst) {
+  const entry = cardOf(inst);
+  if (!entry || !entry.card.classList.contains("mini")) return;
+  setMini(entry.card, false);
+  const rect = JSON.parse(entry.card.dataset.rect || "{}");
+  if (Number.isFinite(rect.x) && Number.isFinite(rect.y)) void saveLayout(entry.id, rect, false);
+  centerOn(entry);
+}
+
 /** The keyboard goes into one field, and the cards it names light up with it. */
 function focusComposer(inst) {
   if (!inst) return;
   activeComposer = inst;
+  showComposer(inst);
   paintReferenceRings();
   inst.msg.focus();
   reveal(inst.msg);
 }
 
 /**
- * What `r` and the `↩` in a card's head do: name that card in a field. A thread card has a field of its
- * own, so the caret goes there; a note, source or question joins the message being written, or the
- * message of the thread that answers it when nothing is being written.
+ * What `r` and the `↩` in a card's head do: name that card in a field. A thread card named while
+ * another message is being written joins that message; otherwise the caret goes to the thread's own
+ * field. A note, source or question joins the message being written, then the message the human last
+ * wrote in, then the one of the thread that answers it. A card nothing answers for — one a plugin
+ * wrote, or one whose thread has gone — has no field of its own, and the message being written is
+ * still somewhere to name it: the agent is handed the card quoted.
  */
 function replyToCard(entry) {
   if (!entry) return;
   const own = entry.data.type === "sticky" ? entry : null;
-  const house = composerOf(own ?? windowOf(entry));
-  if (!house) {
-    footNote("this card has no thread card to answer it", true);
-    return;
+  const house = own ? composerOf(own) : null;
+  if (own) {
+    // While another message is being written, a thread itself may be named in it; otherwise the
+    // caret belongs in the thread's own field.
+    const writing = focusedComposer();
+    if (writing && writing !== house) {
+      const added = addReference(writing, own);
+      focusComposer(writing);
+      footNote(
+        added
+          ? `named “${cardName(own)}” in the message${cardOf(writing) ? ` in “${cardName(cardOf(writing))}”` : " on the board"}`
+          : writing.named.length >= MAX_NAMED
+            ? `a message names ${MAX_NAMED} cards at most`
+            : `“${cardName(own)}” is already named in that message`,
+      );
+      return;
+    }
+    if (house) return focusComposer(house);
   }
-  if (own) return focusComposer(house);
   // A field with the keyboard is the message being written, and a card picked while writing is what
   // the message is about.
-  const into = focusedComposer() ?? house;
+  const into = focusedComposer() ?? lastComposer() ?? usableField(composerOf(windowOf(entry))) ?? boardField();
+  if (!into) {
+    footNote("no message field is open here, so there is nowhere to name that card", true);
+    return;
+  }
   const added = addReference(into, entry);
   focusComposer(into);
   footNote(
     added
       ? `named “${cardName(entry)}” in the message${cardOf(into) ? ` in “${cardName(cardOf(into))}”` : " on the board"}`
-      : `“${cardName(entry)}” is already named in that message`,
+      : into.named.length >= MAX_NAMED
+        ? `a message names ${MAX_NAMED} cards at most`
+        : `“${cardName(entry)}” is already named in that message`,
   );
 }
 
@@ -9024,8 +9521,9 @@ const SHORTCUTS = [
       { keys: "o", does: "flip the thread order, newest first or oldest first" },
       { keys: "g", does: "roll the git graph down, and press it again to roll it up" },
       { keys: "x", does: "roll the terminal drawer up from the bottom, and press it again to roll it down" },
+      { keys: "one letter per plugin", does: "open that plugin's panel — assigned in settings under plugins" },
       { keys: "t", does: "start a new thread, on a board of threads with no card selected" },
-      { keys: "r", does: "reply to the card you are reading" },
+      { keys: "r", does: "name the card you are reading in the message you were writing" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
       { keys: "q", does: "close the card you are reading" },
       { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the plugin panel, then the git graph, then the terminal, then the files drawer, or with nothing open, let go of the selected card" },
@@ -9120,10 +9618,17 @@ const SHORTCUTS = [
   },
 ];
 
-/** The panel, drawn once from that list: a heading per group, then a row of keys beside what it does. */
+/** The panel, drawn once from that list: a heading per group, then a row of keys beside what it does.
+ * A plugin's own letter is a live row: the list is drawn when the settings are read, so the map always
+ * is the map, with the letters the settings page assigned. */
 function paintShortcuts() {
+  const live = [...pluginShortcuts.entries()].map(([letter, hit]) => ({
+    keys: letter,
+    does: `open the ${hit.panel.title || hit.panel.name} plugin, in the ${hit.drawer ? "drawers" : "toolbox"}`,
+  }));
+  const groups = live.length ? [...SHORTCUTS, { group: "plugins", rows: live }] : SHORTCUTS;
   shortcutList.replaceChildren(
-    ...SHORTCUTS.flatMap((group) => [
+    ...groups.flatMap((group) => [
       Object.assign(el("p", "cfg-head"), { textContent: group.group }),
       ...group.rows.map((row) => {
         const line = el("div", "cfg-row");
@@ -9132,6 +9637,255 @@ function paintShortcuts() {
       }),
     ]),
   );
+}
+
+// ---------- the plugins in settings --------------------------------------
+// The daemon's registration is the truth; whatever arrives is what the section shows. Saving writes
+// the whole list, and the daemon proves it by the reader before it replaces what it runs, so a row it
+// cannot use saves nothing.
+const pluginRowsEl = document.getElementById("pluginRows");
+const pluginCountEl = document.getElementById("pluginCount");
+const pluginNote = document.getElementById("plNote");
+let pluginData = null;
+
+function pluginField(label, value, field, index, placeholder) {
+  const row = document.createElement("div");
+  row.className = "cfg-row is-typed";
+  row.append(Object.assign(el("span"), { textContent: label }));
+  const input = el("input", "cfg-type");
+  input.type = "text";
+  input.value = value || "";
+  if (placeholder) input.placeholder = placeholder;
+  if (index !== null) input.dataset.index = String(index);
+  if (field) input.dataset.field = field;
+  row.append(input);
+  return row;
+}
+
+function pluginPlaceSelect(value, index) {
+  const row = document.createElement("div");
+  row.className = "cfg-row is-typed";
+  row.append(Object.assign(el("span"), { textContent: "place" }));
+  const select = el("select", "cfg-type");
+  select.dataset.index = String(index);
+  select.dataset.field = "place";
+  for (const [key, label] of [["", "toolbox"], ["drawer", "left drawers"]]) {
+    const option = el("option");
+    option.value = key;
+    option.textContent = label;
+    if ((value || "") === key) option.selected = true;
+    select.append(option);
+  }
+  row.append(select);
+  return row;
+}
+
+/** One plugin as the section edits it: its name, its command, and the panel and shortcut it declares. */
+function renderPluginSettings() {
+  if (!pluginRowsEl) return;
+  const available = pluginData?.available || [];
+  pluginCountEl.textContent = pluginData
+    ? `${pluginData.plugins.length} registered${available.length ? ` · ${available.length} available` : ""}`
+    : "could not read";
+  const nodes = [];
+  if (!pluginData) {
+    nodes.push(Object.assign(el("p", "cfg-note"), { textContent: "could not read the plugin list" }));
+    pluginRowsEl.replaceChildren(...nodes);
+    return;
+  }
+  const roster = new Map((pluginData.roster || []).map((one) => [one.name, one]));
+  const stateOf = (state) => (state ? (state.running ? `running${state.version ? ` ${state.version}` : ""}` : state.dormant ? "starts on open" : "not running") : "not running");
+  for (const problem of pluginData.problems || []) {
+    nodes.push(
+      Object.assign(el("p", "cfg-note"), {
+        textContent: problem.name ? `${problem.name}: ${problem.problem}` : problem.problem,
+      }),
+    );
+  }
+  pluginData.plugins.forEach((row, index) => {
+    const head = document.createElement("div");
+    head.className = "cfg-prose-head";
+    head.append(
+      Object.assign(el("b"), {
+        textContent: `${row.name} · ${stateOf(roster.get(row.name))}${row.shortcut ? ` · ${row.shortcut}` : ""}`,
+      }),
+    );
+    const remove = el("button", "omni-browse");
+    remove.type = "button";
+    remove.textContent = "remove";
+    remove.addEventListener("click", () => void savePluginSettings(gatherPluginRows().filter((_, at) => at !== index), `removed ${row.name}`));
+    head.append(remove);
+    nodes.push(head);
+    // A row that names a folder takes everything else from that folder's plugin.json, so it shows
+    // only what a row of its own can decide — its name, its args and its shortcut. The command, the
+    // panel and the place belong to the manifest and are never rewritten by this form.
+    nodes.push(pluginField("name", row.name, "name", index));
+    if (row.installed || row.bundled) {
+      nodes.push(
+        Object.assign(el("p", "cfg-note"), {
+          textContent: `the command, the panel and the place come from the ${row.installed ? "installed" : "shipped"} plugin.json`,
+        }),
+      );
+    } else {
+      nodes.push(pluginField("command", row.command, "command", index));
+    }
+    nodes.push(pluginField("args", (row.args || []).join(", "), "args", index, "--flag value, comma separated"));
+    if (!(row.installed || row.bundled)) {
+      nodes.push(pluginPlaceSelect(row.visual?.place || "", index));
+      nodes.push(pluginField("panel title", row.visual?.title || "", "title", index));
+      nodes.push(pluginField("panel entry", row.visual?.entry || "", "entry", index));
+      nodes.push(pluginField("panel files", (row.visual?.files || []).join(", "), "files", index));
+    }
+    nodes.push(pluginField("shortcut", row.shortcut || "", "shortcut", index, "one letter"));
+  });
+  // What is on disk that nobody registered, offered to enable: a plugin the human copied into the
+  // plugins folder declares itself, so enabling it is one click and the row takes its defaults.
+  if (available.length || (pluginData.unavailable || []).length) {
+    const head = document.createElement("div");
+    head.className = "cfg-prose-head";
+    head.append(Object.assign(el("b"), { textContent: "available in the plugins folder" }));
+    const rescan = el("button", "omni-browse");
+    rescan.type = "button";
+    rescan.textContent = "rescan";
+    rescan.addEventListener("click", () => void loadPluginSettings());
+    head.append(rescan);
+    nodes.push(head);
+    for (const one of available) {
+      // Two lines, not one: the title keeps its ellipsis one line, and the description wraps under it
+      // rather than stretching the row past the panel — a long span here used to clip the whole
+      // settings page off the left edge.
+      const head = document.createElement("div");
+      head.className = "cfg-prose-head";
+      head.append(Object.assign(el("b"), { textContent: `${one.title} · ${one.version}` }));
+      const enable = el("button", "omni-browse");
+      enable.type = "button";
+      enable.textContent = "enable";
+      enable.addEventListener("click", () => void enablePlugin(one));
+      head.append(enable);
+      nodes.push(head);
+      const preview = [
+        one.defaults.place === "drawer" ? "left drawers" : "toolbox",
+        one.start === "lazy" ? "starts on open" : "starts on boot",
+        one.defaults.shortcut ? `shortcut ${one.defaults.shortcut}` : null,
+        one.description,
+      ].filter(Boolean).join(" · ");
+      if (preview) {
+        nodes.push(Object.assign(el("p", "cfg-note"), { textContent: preview }));
+      }
+    }
+    for (const one of pluginData.unavailable || []) {
+      const head = document.createElement("div");
+      head.className = "cfg-prose-head";
+      head.append(Object.assign(el("b"), { textContent: `${one.folder} · ${one.source}` }));
+      nodes.push(head);
+      nodes.push(Object.assign(el("p", "cfg-note"), { textContent: one.problem }));
+    }
+  }
+  const save = el("button", "cfg-prose-save");
+  save.type = "button";
+  save.textContent = "save plugins";
+  save.addEventListener("click", () => void savePluginSettings(gatherPluginRows(), "saved"));
+  const actions = document.createElement("div");
+  actions.className = "cfg-prose-actions";
+  actions.append(save);
+  nodes.push(actions);
+  pluginRowsEl.replaceChildren(...nodes);
+}
+
+/**
+ * One click registers a plugin the human installed: the row takes the manifest's defaults, and the
+ * suggested shortcut only when it is still free — a taken one is the human's to reassign, never a
+ * guess the daemon makes for them.
+ */
+async function enablePlugin(one) {
+  const rows = gatherPluginRows();
+  const taken = new Set(pluginData.taken || []);
+  for (const row of rows) if (row.shortcut) taken.add(row.shortcut);
+  const suggested = one.defaults.shortcut;
+  const free = suggested && !taken.has(suggested);
+  rows.push({
+    name: one.name,
+    [one.source]: one.folder,
+    args: one.defaults.args || [],
+    ...(free ? { shortcut: suggested } : {}),
+  });
+  await savePluginSettings(rows, suggested && !free ? `enabled without the default shortcut — ${suggested} is taken; set another above` : "enabled");
+}
+
+/** The rows as the form has them, before the daemon is asked to prove them. */
+function gatherPluginRows() {
+  const byIndex = new Map();
+  for (const input of pluginRowsEl.querySelectorAll("input[data-index], select[data-index]")) {
+    const index = Number(input.dataset.index);
+    if (!byIndex.has(index)) byIndex.set(index, {});
+    byIndex.get(index)[input.dataset.field] = input.value;
+  }
+  return [...byIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([index, fields]) => {
+      // A row that names a folder keeps naming it: saving must never turn it into a command row,
+      // which would spawn it eagerly and pin it to a path the manifest no longer owns.
+      const named = (pluginData.plugins || [])[index];
+      const row = {
+        name: (fields.name || "").trim(),
+        args: (fields.args || "").split(",").map((one) => one.trim()).filter(Boolean),
+      };
+      if (named?.installed) row.installed = named.installed;
+      if (named?.bundled) row.bundled = named.bundled;
+      if (!named?.installed && !named?.bundled) {
+        row.command = (fields.command || "").trim();
+        const files = (fields.files || "").split(",").map((one) => one.trim()).filter(Boolean);
+        if (files.length) {
+          row.visual = {
+            title: (fields.title || "").trim() || row.name,
+            entry: (fields.entry || "").trim(),
+            files,
+            ...(fields.place ? { place: fields.place } : {}),
+          };
+        }
+      }
+      const shortcut = (fields.shortcut || "").trim().toLowerCase();
+      if (shortcut) row.shortcut = shortcut;
+      return row;
+    });
+}
+
+async function savePluginSettings(rows, said) {
+  pluginNote.textContent = "";
+  try {
+    const response = await fetch(`/plugins/registry?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plugins: rows }),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      const problems = (body?.problems || []).map((one) => (one.name ? `${one.name}: ` : "") + one.problem);
+      pluginNote.textContent = problems.join("; ") || "the daemon refused the list";
+      return;
+    }
+    pluginData = body;
+    renderPluginSettings();
+    pluginPanel.relist();
+    pluginDrawer.relist();
+    paintShortcuts();
+    pluginNote.textContent = `${said} — the roster restarted without a daemon restart`;
+  } catch (error) {
+    pluginNote.textContent = `could not save: ${error.message || error}`;
+  }
+}
+
+/** The section is read on every open, so the same page always shows the roster as it stands. */
+async function loadPluginSettings() {
+  try {
+    const response = await fetch(`/plugins/registry?${auth}`);
+    if (!response.ok) throw new Error((await response.text()).slice(0, 80) || response.statusText);
+    pluginData = await response.json();
+  } catch (error) {
+    pluginData = null;
+  }
+  paintShortcuts();
+  renderPluginSettings();
 }
 
 /**
@@ -9193,6 +9947,8 @@ async function loadBoardSettings() {
     boardDoc = null;
     treeLeaves = [];
     treeGroups = [];
+    // The row drawn for the map went with the tree, so nothing is left holding a stale switch.
+    OWN_SWITCHES.overviewMap.leaf = null;
     const line = el("p", "cfg-failure");
     line.textContent = `could not read this board's settings: ${error.message || error}`;
     cfgTree.replaceChildren(line);
@@ -9337,11 +10093,16 @@ function renderProseLeaf(field) {
   return leaf;
 }
 
-/** One leaf: a label, its value, and the click that changes it. */
+/**
+ * One leaf: a label, its value, and the click that changes it. A switch the page answers for is drawn the
+ * same way and read from the page rather than from the leaf, so it says `on` or `off` like the rest and
+ * keeps saying it when the board's own key turns it.
+ */
 function renderLeaf(field) {
   // A whole text is not a row with a value on its right: it is a box that holds a file, and its own save.
   if (field.type === "prose") return renderProseLeaf(field);
   if (typedLeaf(field)) return renderTypedLeaf(field);
+  const own = OWN_SWITCHES[field.id];
   const row = el("button", "cfg-row");
   row.type = "button";
   row.title = field.help ?? "";
@@ -9349,8 +10110,17 @@ function renderLeaf(field) {
   label.textContent = field.label ?? field.id;
   const value = el("b");
   row.append(label, value);
-  row.addEventListener("click", () => void openLeaf(field, row));
-  const leaf = { field, row, value, set: () => (value.textContent = leafShown(field)) };
+  row.addEventListener("click", () => (own ? own.set(!own.state()) : void openLeaf(field, row)));
+  const leaf = {
+    field,
+    row,
+    value,
+    set: () => {
+      if (own) field.value = own.state();
+      value.textContent = leafShown(field);
+    },
+  };
+  if (own) own.leaf = leaf;
   treeLeaves.push(leaf);
   return leaf;
 }
@@ -10162,6 +10932,7 @@ configBtn.addEventListener("click", () => {
   // is what it settles on.
   if (boardDoc) renderTree(boardDoc);
   void loadBoardSettings();
+  void loadPluginSettings();
 });
 
 // ---------- the prompt files ----------------------------------------------
@@ -10496,6 +11267,7 @@ const pickCount = document.getElementById("pickCount");
  */
 const exState = {
   root: "",
+  home: "",
   folders: new Map(),
   expanded: new Set([""]),
   filter: "",
@@ -10565,11 +11337,22 @@ async function exLoad(dir, { quiet = false } = {}) {
       // The canonical root comes from the daemon, so a path copied from the tree is the one its own
       // file tools open, whatever the workspace was reached by.
       if (typeof page.root === "string" && page.root) exState.root = page.root;
+      if (typeof page.home === "string" && page.home) exState.home = page.home;
       if (dir === "") {
-        // The section header is the folder the human opened, not the route that reached it, and not
-        // whether that folder happens to be a repository.
-        const label = explorerCore.basename(exState.root) || "explorer";
-        exTitleEl.textContent = label;
+        // The section header is the workspace path, shortened to `~` inside the home folder, not the
+        // route that reached it, and not whether that folder happens to be a repository.
+        const label = explorerCore.shortPath(exState.root, exState.home) || "files";
+        // The workspace folder, the last step of the path, stands bold after the path to it.
+        const slash = label.lastIndexOf("/");
+        exTitleEl.textContent = "";
+        if (slash >= 0 && slash < label.length - 1) {
+          exTitleEl.append(label.slice(0, slash + 1));
+          const leaf = document.createElement("b");
+          leaf.textContent = label.slice(slash + 1);
+          exTitleEl.append(leaf);
+        } else {
+          exTitleEl.textContent = label;
+        }
         exTitleEl.title = exState.root || label;
       }
       exPaint();
@@ -11480,6 +12263,7 @@ async function exGet(path) {
 async function exEditOpen(path, target = "edit") {
   exConflict = null;
   exConflictBar.hidden = true;
+  exEditorPreview.setHighlights([]);
   exViewClear();
   exEditorKind = explorerCore.previewKind(path);
   exEditorMode = "source";
@@ -11572,6 +12356,7 @@ function exEditClose() {
   if (exEditorEl.hidden) return;
   exConflict = null;
   exConflictBar.hidden = true;
+  exEditorPreview.setHighlights([]);
   exViewClear();
   exEditorKind = "text";
   exEditorSaveBtn.hidden = false;
@@ -11632,16 +12417,46 @@ function exConflictSay(text, bad = false) {
   exConflictNote.classList.toggle("bad", bad);
 }
 
+/**
+ * The tinted blocks for one hunk, derived from its line span and side lengths: the two marker lines
+ * and the separator wear `marker`, the current side `ours`, the incoming `theirs`, a diff3 base `base`.
+ */
+function exConflictRanges(hunk) {
+  const ranges = [{ from: hunk.startLine, to: hunk.startLine, kind: "marker" }];
+  const oursFrom = hunk.startLine + 1;
+  const oursTo = hunk.startLine + hunk.ours.length;
+  if (hunk.ours.length) ranges.push({ from: oursFrom, to: oursTo, kind: "ours" });
+  let line = oursTo + 1;
+  if (hunk.base) {
+    ranges.push({ from: line, to: line, kind: "marker" });
+    line += 1;
+    if (hunk.base.length) ranges.push({ from: line, to: line + hunk.base.length - 1, kind: "base" });
+    line += hunk.base.length;
+  }
+  ranges.push({ from: line, to: line, kind: "marker" });
+  line += 1;
+  if (hunk.theirs.length) ranges.push({ from: line, to: line + hunk.theirs.length - 1, kind: "theirs" });
+  ranges.push({ from: hunk.endLine, to: hunk.endLine, kind: "marker" });
+  return ranges;
+}
+
 /** The hunk rows, re-read from the text as it stands: after every acceptance and every edit. */
 function exConflictPaint() {
   if (!exConflict) return;
   const text = exEditorPreview.getText();
   const hunks = explorerCore.conflictHunks(text);
+  exEditorPreview.setHighlights(hunks.flatMap(exConflictRanges));
   exConflictHunksEl.replaceChildren(
     ...hunks.map((hunk) => {
       const row = el("div", "ex-conflict-hunk");
-      const label = el("span", "hk");
+      const label = el("button", "hk hk-jump");
+      label.type = "button";
       label.textContent = `hunk ${hunk.index + 1}`;
+      label.title = "jump to this block";
+      label.addEventListener("click", () => {
+        exEditorPreview.revealRange(hunk.startLine, hunk.endLine);
+        exEditorPreview.focus();
+      });
       row.append(label);
       for (const [choice, word] of [["current", "accept current"], ["incoming", "accept incoming"], ["both", "accept both"]]) {
         const button = el("button");
@@ -12905,8 +13720,9 @@ async function sendMessage(inst = activeComposer) {
       // A fork answers in its own card, so the caret follows the answer instead of staying behind.
       focusThread(made.id);
     }
-    // With no run in flight the message is being sent, not queued behind one.
-    sayHint(inst, metaRunning !== true ? "sent" : inst.sendMode === "steer" ? "steered" : "queued");
+    // With no run in flight the message is being sent, not queued behind one. A compaction in flight
+    // in this field queues it the same way, so the line says so rather than claiming it went.
+    sayHint(inst, inst.compacting ? "queued · waits for the compaction" : metaRunning !== true ? "sent" : inst.sendMode === "steer" ? "steered" : "queued");
     // The footer says where the message went when that is not simply this card: a fork is answered in a
     // new card, and a message about another card is worth naming.
     if (sentFork && made?.id) footNote(`a new thread answers ↳ ${cardName(sentFork)}`);
@@ -13196,8 +14012,9 @@ document.addEventListener("keydown", (event) => {
   clearSelection();
 });
 
-// `r` names the card you last clicked in a field, `p` pins it and `q` closes it. A field keeps its own
-// keys, so a message being typed is never cut short.
+// `r` names the card you last clicked in the field you were writing in, `p` pins it and `q` closes it. A
+// card of another thread, or one no thread answers for, is named in the same field: the field the
+// keyboard was last in. A field keeps its own keys, so a message being typed is never cut short.
 document.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
   if ((key !== "r" && key !== "q" && key !== "p") || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -13365,6 +14182,16 @@ document.addEventListener("keydown", (event) => {
     if (letter === "fit") fitAll();
     else toggleDrawer(letter);
     return;
+  }
+  // A plugin's own letter opens its panel, in the drawers or the toolbox as its registration says.
+  if (!event.shiftKey) {
+    const hit = pluginShortcuts.get(event.key.toLowerCase());
+    if (hit) {
+      event.preventDefault();
+      if (hit.drawer) pluginDrawer.open(hit.panel);
+      else pluginPanel.open(hit.panel);
+      return;
+    }
   }
   if (event.shiftKey) return;
   if (event.key === "0") {
@@ -13731,6 +14558,9 @@ function connect() {
       } finally {
         replaying = false;
       }
+      // A field may have been rebuilt before the card it names, so the chips are drawn now that
+      // every card is here.
+      for (const inst of composers.values()) paintRefs(inst);
       // A snapshot is the whole board, so a draft whose card is not in it has nowhere to go.
       for (const id of [...drafts.keys()]) if (id && !byId.has(id)) drafts.delete(id);
       // Every thread comes back in the order the human chose, not the order the server lists.
@@ -13745,6 +14575,15 @@ function connect() {
       if (!framedView) {
         framedView = true;
         if (cards.length) fitAll();
+      }
+      // A tab opened on a card of this board, by a link from another one, is taken to that card now
+      // that the board is drawn. The address keeps the card only for that one load.
+      if (pendingJump) {
+        const wanted = pendingJump;
+        pendingJump = "";
+        history.replaceState(null, "", location.pathname);
+        // The address names a card of this board, so it is asked for here and nowhere else.
+        if (!jumpToKeyLocal(wanted)) footNote(`“${wanted}” is not on this board`);
       }
     } else if (payload.type === "move") {
       const record = byId.get(payload.id);
@@ -13795,6 +14634,9 @@ const BOARD_START = () => {
   updateEmpty();
   paintRuntime();
   connect();
+  // The workspaces are read while the board loads, so a link that names another board is followed
+  // without waiting for one.
+  void loadWorkspaces();
 };
 
 // A module runs after the page is parsed, so there is no inline call left to wait for.

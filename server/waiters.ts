@@ -18,6 +18,32 @@ const statsWaiters = new Map();
 /** Whoever waits for a compaction to come back: the button that asked for it reads it. */
 const compactWaiters = new Map();
 
+/**
+ * Threads with a compaction in flight, and whether one is already running for a thread. The compaction
+ * route marks a thread here for the whole summary, and the message route reads it: a child asked to
+ * compact cannot take a prompt until the summary is done, so a message that arrives in that window
+ * waits in the thread's queue instead of reaching a child that would refuse it. Kept here, beside the
+ * compaction waiters, so the two routes share one record without importing each other.
+ */
+const compactingThreads = new Set();
+
+/** Mark a thread as compacting. False means a compaction is already running for it. */
+export function beginCompact(thread) {
+	if (compactingThreads.has(thread.id)) return false;
+	compactingThreads.add(thread.id);
+	return true;
+}
+
+/** The compaction in flight is over, one way or another, and the thread takes messages again. */
+export function endCompact(thread) {
+	compactingThreads.delete(thread.id);
+}
+
+/** Whether a compaction is in flight for this thread. */
+export function isCompacting(thread) {
+	return compactingThreads.has(thread.id);
+}
+
 
 
 /** Wake whoever waits on this thread. Called where a run ends, never where one starts. */

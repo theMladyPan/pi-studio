@@ -159,8 +159,9 @@ test("an answer that arrives without a spawn is put away all the same", (t) => {
 
 test("a card whose run answered is put away even when a steer or a taken-back message came last", (t) => {
 	t.mock.timers.enable({ apis: ["setTimeout"] });
-	// The run answered its own turn, which is the turn `thread.answering` names; a steer it read and a
-	// message the human took back both land after it, and neither is the turn that ended the run.
+	// The run answered its own turn, which is the turn `thread.answering` names; a message the human
+	// took back lands after it and is not the turn that ended the run, and a steer with no run naming
+	// a turn — the oldest shape of one — keeps a turn of its own after it the same way.
 	const cases: [string, any][] = [
 		["a steer", { text: "and this instead", status: "sent", mode: "steer", at: Date.now() }],
 		["a message taken back", { text: "never mind", status: "stopped", error: "withdrawn", mode: "queue", at: Date.now() }],

@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_ROW_CHARS } from "./limits.ts";
 import { scheduleSave } from "./store.ts";
 import { threadError } from "./cards.ts";
-import { STREAM_MS, afterMessage, liveTurn, prompt, retryRun, stopStream, streamTick, streamTimers } from "./child/run.ts";
+import { STREAM_MS, afterMessage, drainQueue, liveTurn, retryRun, stopStream, streamTick, streamTimers } from "./child/run.ts";
 import { keptArgs } from "./child/argv.ts";
 import { describeTool, firstLine, headline, rowResult } from "./child/describe.ts";
 import { join } from "node:path";
@@ -493,11 +493,12 @@ export function handleChildLine(board, thread, line) {
 		// reads as stopped rather than as a message still being worked on, and the caret goes because
 		// nothing is being written any more.
 		//
-		// One turn keeps its words: the one this run was answering, when it is a steer. The composer sends
-		// `steer` whether a run is live or not, so a steer on an idle thread is the run's own turn and is
-		// swept like any other; a steer that joined a live run is read and answered inside the run's turn,
-		// so its words are spent and it keeps the label that says so. The run's own turn is the one
-		// `thread.answering` names, read here before the pointer is cleared.
+		// One turn keeps its words: the one this run was answering, when it is a steer of its own. The
+		// composer sends `steer` whether a run is live or not, so a steer on an idle thread is the run's
+		// own turn and is swept like any other. A steer that joined a live run is kept on that run's
+		// turn, ahead of its reply, so there is no turn of its own to sweep; the same exception below
+		// still covers a steer turn written before that, or one with no run naming a turn. The run's
+		// own turn is the one `thread.answering` names, read here before the pointer is cleared.
 		const { turn: reached } = liveTurn(board, thread);
 		for (const turn of thread.turns) {
 			turn.streaming = false;
@@ -516,27 +517,7 @@ export function handleChildLine(board, thread, line) {
 		// The cards this thread answers through carried `answersWith.running` while it ran, and a card
 		// still offering a stop for a run that has finished is a button that cannot work.
 		refreshOwned(board, thread);
-		const next = thread.queued.shift();
-		if (next) {
-			// An older board file queued plain strings; a card quote travels with the message now.
-			const text = typeof next === "string" ? next : next.text;
-			const target = typeof next === "string" ? null : (next.target ?? null);
-			if (target) {
-				// A card's turn and the thread's own turn differ only in where they are held.
-				const held = target.cardId ? board.cards.get(target.cardId) : undefined;
-				const waiting = held ? held.turns?.[target.turn] : thread.turns[target.turn];
-				if (waiting) {
-					waiting.status = "queued";
-					if (held) updateCard(board, held);
-					else update(board, thread);
-				}
-			} else {
-				thread.turns.push({ text, status: "queued", mode: "queue", at: Date.now() });
-				update(board, thread);
-			}
-			prompt(board, thread, typeof next === "string" ? next : next.message, target, typeof next === "string" ? [] : next.images);
-			return;
-		}
+		if (drainQueue(board, thread)) return;
 		// A run that died of the provider's own weather is sent again before the card is left reading
 		// stopped, and the same words go out up to three times before the human is told it failed.
 		if (retryRun(board, thread, reached, () => endRun(board, thread, reached))) return;
@@ -567,8 +548,8 @@ function endRun(board, thread, reached) {
 	// tree it worked in is still there to assemble. A turn that was stopped or failed is not an answer,
 	// however much of it arrived: an abort, a timeout and an error all leave the turn reading `stopped`,
 	// which is the distinction the spawn route drew with `result.status === "done"`. The turn read is the
-	// one captured above, before the answering pointer went: a steer or a message taken back after the
-	// answer is the newest turn, and it is not the turn that ended this run.
+	// one captured above, before the answering pointer went: a message taken back after the answer is
+	// the newest turn, and it is not the turn that ended this run.
 	if (reached?.status === "answered") autoCloseChild(board, thread);
 	// What the run spent is only known to the child, so it is asked before stdin closes. The close
 	// waits for the answer.

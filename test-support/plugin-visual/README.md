@@ -42,6 +42,8 @@ The row's keys, and what each one is:
   - `files` — every file the daemon will serve for this panel, relative to that same folder. It has to
     include `entry`. Nothing beside these files is served, however it is spelled: the request path is
     looked up in this list rather than joined to a folder.
+  - `place` — optional. `"drawer"` puts the panel in the left drawers' column behind a header door,
+    beside files, activity and cards, instead of in the toolbox. Anything else is refused.
 
 A declared file that is not a plain file inside the executable's folder — a `..` path, an absolute path, a
 missing file, a symbolic link — is refused when the registration is read, and the row is reported as a

@@ -11,7 +11,7 @@ const pushModes = [["normal", "Normal"], ["force-with-lease", "Force with lease"
 
 // Every write uses the graph's existing command, including its workspace and live-tree checks.
 function ask(ctx, label, title, command, fields = [], payload = () => ({}), danger = false) {
-	modal(title, fields, label, (form) => ctx.write(command, payload(form)), danger);
+	modal(title, fields, label, (form) => ctx.write(command, payload(form), null, title.split("? ")[0]), danger);
 }
 
 function action(ctx, label, title, command, fields, payload, danger = false) {
@@ -106,7 +106,7 @@ export async function checkoutRef(ctx, ref) {
 			if (ctx.hasRepo(held.path)) return ctx.switchRepo(held.path);
 			throw new Error(`${name} is checked out in ${held.path}.`);
 		}
-		return ctx.write("checkoutBranch", { branchName: name, remoteBranch: null });
+		return ctx.write("checkoutBranch", { branchName: name, remoteBranch: null }, null, `Checking out ${name}`);
 	}
 	if (type !== "remote") return;
 	const [, branch] = splitRemote(name, remoteNames(ctx));
@@ -115,7 +115,7 @@ export async function checkoutRef(ctx, ref) {
 	const make = () => modal(`Track ${name}`, field("branchName", "New local branch name", local === branch ? "" : branch, required), "Create and check out", (form) => {
 		const branchName = value(form, "branchName");
 		if (ctx.localBranches.has(branchName)) throw new Error(`${branchName} already exists.`);
-		return ctx.write("checkoutBranch", { branchName, remoteBranch: name });
+		return ctx.write("checkoutBranch", { branchName, remoteBranch: name }, null, `Checking out ${branchName}`);
 	});
 	if (!local) return make();
 	const held = heldBy(ctx, local);
@@ -127,8 +127,8 @@ export async function checkoutRef(ctx, ref) {
 		elt("p", { className: "muted" }, held ? `It is checked out in ${held.path}.` : `Keep its current tip, or fast-forward it to ${name}.`),
 		elt("div", { className: "control-row" },
 			held ? ctx.hasRepo(held.path) && btn("Show its worktree", select(() => ctx.switchRepo(held.path)))
-				: btn("Switch to local branch", select(() => ctx.write("checkoutBranch", { branchName: local, remoteBranch: null }))),
-			!held && btn("Switch and fast-forward", select(() => ctx.write("checkoutAndFastForward", { branchName: local, target: name }))),
+				: btn("Switch to local branch", select(() => ctx.write("checkoutBranch", { branchName: local, remoteBranch: null }, null, `Checking out ${local}`))),
+			!held && btn("Switch and fast-forward", select(() => ctx.write("checkoutAndFastForward", { branchName: local, target: name }, null, `Checking out ${local} and fast-forwarding to ${name}`))),
 			btn("Create another branch…", select(make))),
 	]);
 }
@@ -162,7 +162,7 @@ export function fetchFrom(ctx, remote = null) {
 	], "Fetch", (form) => {
 		const options = checks(form, "prune", "pruneTags");
 		if (options.pruneTags && !options.prune) throw new Error("Enable pruning before pruning tags.");
-		return ctx.write("fetchRemotes", { remote, ...options }, form.has("tags") ? ["fetchTags", { remotes: remoteNames(ctx), pruneTags: options.pruneTags }] : null);
+		return ctx.write("fetchRemotes", { remote, ...options }, form.has("tags") ? ["fetchTags", { remotes: remoteNames(ctx), pruneTags: options.pruneTags }] : null, `Fetching from ${remote ?? "all remotes"}`);
 	});
 }
 
@@ -213,7 +213,7 @@ async function removeWorktree(ctx, tree, branch = null) {
 		files.length > 0 && elt("ul", { className: "file-warning" }, files.map((file) => elt("li", {}, file))),
 		reply.truncated && elt("p", {}, "Other changed files are not shown."),
 		branch && elt("p", {}, `If removal succeeds, Git will also delete ${branch.branchName}.`),
-	], "Remove worktree", () => ctx.write("removeWorktree", { path: tree.path, force: files.length > 0, unlock: Boolean(tree.locked) }, branch ? ["deleteBranch", branch] : null), true);
+	], "Remove worktree", () => ctx.write("removeWorktree", { path: tree.path, force: files.length > 0, unlock: Boolean(tree.locked) }, branch ? ["deleteBranch", branch] : null, `Removing worktree ${tree.path}`), true);
 }
 
 export function refMenu(ctx, ref, row) {

@@ -1,6 +1,6 @@
 {
   "name": "pi-studio",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "A local daemon that owns pi agents: a workspace is a folder, a thread on its board is an agent.",
   "type": "module",
@@ -17,12 +17,12 @@
     "build:plugins": "node bin/build-plugins.mjs",
     "start": "node server.ts",
     "server": "node server.ts --no-open --host 0.0.0.0",
-    "check": "node --check server.ts && node --check public/client/board.js && node --check public/client/git-drawer.js && node --check public/client/terminal-drawer.js && node --check public/client/text-preview.js && node --check public/client/diff-table.js && node --check public/client/chart-umd-min.js && node --check public/client/gitgraph/host.js && node --check bin/smoke.mjs && node --check bin/check-imports.mjs && node --check bin/pi-studio && node --check bin/runtime.mjs && node --check bin/manage.mjs && node --check bin/install.mjs && node --check bin/build-release.mjs && node --check bin/build-plugins.mjs && node --check bin/package-release.mjs && node --check bin/release-notes.mjs && sh -n install.sh && node bin/check-imports.mjs && tsc -p tsconfig.node.json && node --test --test-timeout=90000 && node bin/smoke.mjs",
+    "check": "node bin/check.mjs",
     "dev": "node --watch server.ts --no-open",
     "smoke": "node bin/smoke.mjs",
     "dev:alt": "node --watch server.ts --no-open --state ~/.pi/agent/state/pi-studio-dev",
     "test": "node --test",
-    "precheck": "node -e \"try{require.resolve(\\\"typescript/package.json\\\")}catch{console.error(\\\"pi-studio: npm run check needs the dev dependency, so run npm install once. The daemon itself needs nothing.\\\");process.exit(1)}\""
+    "precheck": "node -e \"if(!require('fs').existsSync('node_modules/typescript/bin/tsc')){console.error('pi-studio: npm run check needs the dev dependency, so run npm ci once. The daemon itself needs nothing.');process.exit(1)}\""
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

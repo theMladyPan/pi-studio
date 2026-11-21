@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
+import { settingsDocument } from "../server/settings-document.ts";
+
 /**
  * The files explorer's decisions, exercised.
  *
@@ -16,6 +18,18 @@ import { test } from "node:test";
 
 const BOARD = new URL("../public/client/board.js", import.meta.url);
 const HTML = new URL("../public/index.html", import.meta.url);
+
+/** The leaves under the canvas group the settings panel draws, read from the document the daemon serves. */
+function leavesOfCanvas() {
+	const canvas = settingsDocument({
+		scope: "board",
+		values: {},
+		title: "this board",
+		subtitle: "",
+		foot: "",
+	}).groups.find((group) => group.id === "canvas");
+	return canvas?.fields ?? [];
+}
 
 // The shapes the explorer's block deals in, named here once. The page itself carries no types, so these
 // interfaces are the seam between it and this file: every call below is checked against them.
@@ -43,6 +57,7 @@ type ExListing = {
 /** One page of a folder, in the shape `/files` answers with. */
 type ExPage = {
 	root?: string;
+	home?: string;
 	path?: string;
 	parent?: string | null;
 	canonical?: string;
@@ -75,6 +90,7 @@ type ExDeleteResult = {
 type ExCore = {
 	sortEntries(entries: ExSortable[]): ExSortable[];
 	basename(path: string): string;
+	shortPath(path: string, home: string): string;
 	listing(): ExListing;
 	listingStart(listing: ExListing, parent?: string): number;
 	listingPage(listing: ExListing, ticket: number, page: ExPage): boolean;
@@ -137,7 +153,7 @@ type ExCore = {
 	drawerToggle(state: { open: string }, name: string): { open: string };
 	escapeTarget(open: Record<string, boolean | undefined>): string;
 	boardLetter(key: string, flags?: { shift?: boolean; typing?: boolean; panel?: boolean; surface?: boolean }): string;
-	conflictHunks(text: string): { index: number; start: number; end: number; ours: string[]; theirs: string[]; base: string[] | null }[];
+	conflictHunks(text: string): { index: number; start: number; end: number; startLine: number; endLine: number; ours: string[]; theirs: string[]; base: string[] | null }[];
 	conflictAccept(text: string, index: number, choice: string): string;
 	copyText(text: string, ports: ExPorts): Promise<unknown>;
 	icon(theme: unknown, entry: { name: string; dir?: boolean }): ExIcon | null;
@@ -370,6 +386,13 @@ test("the drawer's header names the folder the human opened, and a repository st
 	assert.equal(core.basename("/work/project/"), "project");
 	assert.equal(core.basename("C:\\work\\project"), "project", "a Windows root is read the same way");
 	assert.equal(core.basename(""), "", "there is no name to print before the daemon has answered");
+	assert.equal(core.shortPath("/home/matus/projekty/pi-studio", "/home/matus"), "~/projekty/pi-studio");
+	assert.equal(core.shortPath("/home/matus", "/home/matus"), "~");
+	assert.equal(core.shortPath("/home/matus/projekty/pi-studio", "/home/matus/"), "~/projekty/pi-studio", "a home with a trailing slash shortens the same way");
+	assert.equal(core.shortPath("/srv/pi-studio", "/home/matus"), "/srv/pi-studio", "outside the home folder the full path stands");
+	assert.equal(core.shortPath("/home/matus2/pi-studio", "/home/matus"), "/home/matus2/pi-studio", "a name that only starts with the home letters is never shortened");
+	assert.equal(core.shortPath("", "/home/matus"), "", "there is no path to print before the daemon has answered");
+	assert.equal(core.shortPath("/srv/pi-studio", ""), "/srv/pi-studio", "with no home known the full path stands");
 	const listing = core.listing();
 	assert.equal(listing.repo, false, "a fresh listing is not a repository");
 	const ticket = core.listingStart(listing, "");
@@ -781,10 +804,12 @@ test("the keys panel says what the keys do, including f as the drawer and shift+
 	assert.ok(board.includes('{ keys: "c", does: "open the cards drawer, and press it again to roll it up" }'));
 	assert.ok(board.includes('{ keys: "shift+f", does: "fit every card on the screen" }'));
 	assert.ok(!board.includes('{ keys: "f", does: "fit every card on the screen" }'), "f no longer claims the fit");
-	// The map toggle still names its own key, which the project's own rule asks for.
-	const html = readFileSync(HTML, "utf8");
-	assert.ok(html.includes('id="mapToggle" checked'));
-	assert.ok(board.includes('mapToggle.title = mapOn ? "hide the board overview (m)"'));
+	// The map row still names its own key, which the project's own rule asks for. It is a leaf of the
+	// canvas group like any other switch, so the key rides in the help the panel shows as the row's title.
+	const map = leavesOfCanvas().find((field) => field.id === "overviewMap");
+	assert.ok(map, "the canvas holds the overview map");
+	assert.match(String(map.help), /\(m\)$/, "the map's help names the key that turns it");
+	assert.ok(board.includes("row.title = field.help ?? \"\""), "a leaf's help is its title");
 });
 
 test("the header chips and the settings hold the map and the hotkeys", () => {
@@ -806,7 +831,7 @@ test("the header chips and the settings hold the map and the hotkeys", () => {
 		for (const id of ids) assert.ok(slice.includes(`id="${id}"`), `#${id} is in #${menu}`);
 	}
 	const settings = html.slice(html.indexOf('id="boardConfig"'), html.indexOf('id="promptEditor"'));
-	for (const id of ["cfgLocal", "mapToggle", "cfgShortcuts", "shortcutList"]) {
+	for (const id of ["cfgLocal", "cfgShortcuts", "shortcutList"]) {
 		assert.ok(settings.includes(`id="${id}"`), `#${id} lives in settings`);
 	}
 	assert.ok(!html.includes('id="shortcutPanel"'), "the standalone shortcuts panel is gone");
@@ -826,6 +851,8 @@ test("conflict hunks are read with their two sides, and accepting one rewrites o
 	const text = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\nafter\n";
 	const hunks = core.conflictHunks(text);
 	assert.equal(hunks.length, 1);
+	assert.equal(hunks[0].startLine, 2, "the opening marker's line, 1-based");
+	assert.equal(hunks[0].endLine, 6, "the closing marker's line, 1-based");
 	assert.deepEqual(hunks[0].ours, ["ours"]);
 	assert.deepEqual(hunks[0].theirs, ["theirs"]);
 	assert.equal(core.conflictAccept(text, 0, "current"), "before\nours\nafter\n");

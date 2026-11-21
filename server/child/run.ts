@@ -164,7 +164,7 @@ export function prompt(board, thread, text, target = null, images = [], said = t
 	}
 	const message = wireText(thread, text);
 	// The turn this run answers, named here and not at the moment it is sent: a steer that joins the run
-	// is the newest turn, and a message sent again after a provider error has to land back on the words
+	// is kept on this turn, and a message sent again after a provider error has to land back on the words
 	// that are being repeated.
 	const answers = target ?? (thread.turns.length ? { turn: thread.turns.length - 1 } : null);
 	// The pictures ride beside the words, as pi's RPC takes them: the base64 and the type it is.
@@ -180,6 +180,38 @@ export function prompt(board, thread, text, target = null, images = [], said = t
 	} catch (error) {
 		threadError(board, thread, `could not send to the child: ${error.message}`);
 	}
+}
+
+
+
+/**
+ * Send the next message that is waiting behind whatever kept the thread busy, if there is one. A run
+ * that settles and a compaction that ends both leave a queue behind them, and the message at its head
+ * starts now: the two callers are one habit rather than two that have to be kept in step. It answers
+ * whether a message was sent, so a caller with its own ending knows whether it still owes one.
+ */
+export function drainQueue(board, thread) {
+	if (thread.status === "running" || thread.status === "dead") return false;
+	const next = thread.queued?.shift();
+	if (!next) return false;
+	// An older board file queued plain strings; a card quote travels with the message now.
+	const text = typeof next === "string" ? next : next.text;
+	const target = typeof next === "string" ? null : (next.target ?? null);
+	if (target) {
+		// A card's turn and the thread's own turn differ only in where they are held.
+		const held = target.cardId ? board.cards.get(target.cardId) : undefined;
+		const waiting = held ? held.turns?.[target.turn] : thread.turns[target.turn];
+		if (waiting) {
+			waiting.status = "queued";
+			if (held) updateCard(board, held);
+			else update(board, thread);
+		}
+	} else {
+		thread.turns.push({ text, status: "queued", mode: "queue", at: Date.now() });
+		update(board, thread);
+	}
+	prompt(board, thread, typeof next === "string" ? next : next.message, target, typeof next === "string" ? [] : next.images);
+	return true;
 }
 
 
@@ -272,7 +304,7 @@ export function beginRun(board, thread, target = null) {
 	// asked for it. That is a card's turn when a hidden child answers for a card, and one of the
 	// thread's own turns otherwise — by index, because a queue can hold more than one message.
 	// A caller that names no target means the turn it has just made, and it is pinned by index here: a
-	// steer that joins the run while it is live is the newest turn, and a run that followed the newest
+	// steer that joins the run while it is live is kept on this turn, and a run that followed the newest
 	// would write its answer into the steer and leave the task's own turn with nothing.
 	thread.answering = target ?? (thread.turns.length ? { turn: thread.turns.length - 1 } : null);
 	const { turn, card: held } = liveTurn(board, thread);

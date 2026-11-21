@@ -239,9 +239,11 @@ export function paintText(raw, language = PLAIN_LANGUAGE) {
 
 // ---------- the surface ----------------------------------------------------
 /**
- * A text area laid over a `<pre>` that holds the same text coloured, both scrolled as one. The area is
- * the truth: it takes the caret, the selection and the typing, and its own text is never coloured, so
- * the colours under it cannot lag a keystroke behind. The `<pre>` is decoration and says so with
+ * A text area laid over a `<pre>` that holds the same text coloured, both scrolled as one. A lane of
+ * full-width tinted blocks sits under both, so a caller that knows which lines matter — a merge
+ * editor's conflict blocks — can tint them without touching the colours above. The area is the truth:
+ * it takes the caret, the selection and the typing, and its own text is never coloured, so the colours
+ * under it cannot lag a keystroke behind. The `<pre>` and the lane are decoration and say so with
  * `aria-hidden`, which keeps a screen reader from reading the file twice.
  *
  * The container is emptied and filled with the two layers; the page styles them by the `tp` class.
@@ -250,6 +252,12 @@ export function paintText(raw, language = PLAIN_LANGUAGE) {
  */
 export function createTextPreview(container, { readOnly = false, onInput = null } = {}) {
   const doc = container?.ownerDocument ?? globalThis.document;
+  const lane = doc.createElement("div");
+  lane.className = "tp-bg";
+  lane.setAttribute("aria-hidden", "true");
+  const laneInner = doc.createElement("div");
+  laneInner.className = "tp-bg-inner";
+  lane.append(laneInner);
   const pre = doc.createElement("pre");
   pre.className = "tp-code";
   pre.setAttribute("aria-hidden", "true");
@@ -265,7 +273,7 @@ export function createTextPreview(container, { readOnly = false, onInput = null 
   area.setAttribute("aria-label", "the text of this file");
   area.readOnly = Boolean(readOnly);
   container.classList?.add("tp");
-  container.replaceChildren(pre, area);
+  container.replaceChildren(lane, pre, area);
 
   let path = "";
   let language = PLAIN_LANGUAGE;
@@ -275,9 +283,25 @@ export function createTextPreview(container, { readOnly = false, onInput = null 
     lines.innerHTML = paintText(area.value, language);
   };
 
+  // The line box every layer shares, read from the area rather than guessed, because the blocks have
+  // to land on the very rows the text owns. The padding is the box the text starts in.
+  const lineMetrics = () => {
+    const style = typeof globalThis.getComputedStyle === "function" ? globalThis.getComputedStyle(area) : null;
+    const each = Number.parseFloat(style?.lineHeight ?? "") || 20;
+    const padTop = Number.parseFloat(style?.paddingTop ?? "") || 8;
+    return { each, padTop };
+  };
+  const syncLane = () => {
+    const { padTop } = lineMetrics();
+    laneInner.style.transform = `translateY(${padTop - area.scrollTop}px)`;
+    laneInner.style.left = "0";
+    laneInner.style.right = "0";
+  };
+
   area.addEventListener("scroll", () => {
     pre.scrollTop = area.scrollTop;
     pre.scrollLeft = area.scrollLeft;
+    syncLane();
   });
   area.addEventListener("input", () => {
     paint();
@@ -296,6 +320,40 @@ export function createTextPreview(container, { readOnly = false, onInput = null 
       text = String(next.content ?? "");
       area.value = text;
       paint();
+      syncLane();
+    },
+    /**
+     * The tinted blocks behind the text: one per range, `{from, to}` 1-based and inclusive, its
+     * `kind` choosing the tint (`ours`, `theirs`, `base`, `marker`). An empty list clears the lane.
+     */
+    setHighlights(ranges = []) {
+      const { each } = lineMetrics();
+      laneInner.replaceChildren(
+        ...ranges.map((range) => {
+          const from = Math.max(1, Math.trunc(Number(range.from) || 1));
+          const to = Math.max(from, Math.trunc(Number(range.to) || from));
+          const block = doc.createElement("div");
+          block.className = `tp-bg-line tp-bg-${String(range.kind ?? "marker")}`;
+          block.style.top = `${(from - 1) * each}px`;
+          block.style.height = `${(to - from + 1) * each}px`;
+          return block;
+        }),
+      );
+      syncLane();
+    },
+    /** Put the reader on a range: its first line scrolls into view and the whole range is selected. */
+    revealRange(from, to) {
+      const linesText = String(area.value ?? "").split("\n");
+      const at = Math.max(1, Math.trunc(Number(from) || 1));
+      const endAt = Math.max(at, Math.trunc(Number(to) || at));
+      const offsetOf = (line) => linesText.slice(0, line - 1).join("\n").length + (line > 1 ? 1 : 0);
+      this.setLine(at);
+      try {
+        area.selectionStart = offsetOf(at);
+        area.selectionEnd = Math.min(offsetOf(endAt) + (linesText[endAt - 1] ?? "").length, String(area.value ?? "").length);
+      } catch {
+        // A stand-in without selection is a reader that does not need it; the scroll is the navigation.
+      }
     },
     /** The text as it stands, which is the area's own when a human has typed into it. */
     getText() {
@@ -310,10 +368,10 @@ export function createTextPreview(container, { readOnly = false, onInput = null 
      */
     setLine(line) {
       const at = Math.max(1, Math.trunc(Number(line) || 1));
-      const style = typeof globalThis.getComputedStyle === "function" ? globalThis.getComputedStyle(area) : null;
-      const each = Number.parseFloat(style?.lineHeight ?? "") || 18;
+      const { each } = lineMetrics();
       area.scrollTop = (at - 1) * each;
       pre.scrollTop = area.scrollTop;
+      syncLane();
     },
     /** What the surface is showing, for a caller that wants to name it. */
     getPath() {
