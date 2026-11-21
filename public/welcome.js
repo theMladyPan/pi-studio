@@ -1464,9 +1464,13 @@
     save.type = "button";
     save.textContent = "save plugins";
     save.addEventListener("click", () => void savePluginSettings(gatherPluginRows(), "saved"));
+    const reload = el("button", "omni-browse");
+    reload.type = "button";
+    reload.textContent = "reload plugins";
+    reload.addEventListener("click", () => void reloadPluginSettings());
     const actions = document.createElement("div");
     actions.className = "cfg-prose-actions";
-    actions.append(save);
+    actions.append(save, reload);
     rendered.push(actions);
     pluginRowsEl.replaceChildren(...rendered);
   }
@@ -1549,6 +1553,34 @@
       nodes.pluginNote.textContent = `${said} — the roster restarted without a daemon restart`;
     } catch (error) {
       nodes.pluginNote.textContent = `could not save: ${error.message || error}`;
+    }
+  }
+
+  /**
+   * Restart every registered plugin from the file as it stands: a rebuilt binary, or a registration
+   * edited by hand, takes effect without a daemon restart. Nothing is written here — the rows on
+   * screen are not sent — and the section is read again after, for the same reason a save reads it:
+   * the reload answer carries no `available` list either, and the form is redrawn from the file, so
+   * edits not saved before the press are dropped.
+   */
+  async function reloadPluginSettings() {
+    nodes.pluginNote.textContent = "";
+    try {
+      const response = await fetch("/plugins/reload", { method: "POST" });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        const problems = (body?.problems || []).map((one) => (one.name ? `${one.name}: ` : "") + one.problem);
+        nodes.pluginNote.textContent = problems.join("; ") || "the daemon refused the reload";
+        return;
+      }
+      const running = (body.roster || []).filter((one) => one.running).length;
+      const problems = (body.problems || []).map((one) => (one.name ? `${one.name}: ` : "") + one.problem);
+      // The reload answer carries no `available` list, so the section is read again: rendering the
+      // answer would drop the folders offered for enabling until the settings page was left and re-entered.
+      await loadPluginSettings();
+      nodes.pluginNote.textContent = `reloaded — ${running} running${problems.length ? `; ${problems.join("; ")}` : ""}`;
+    } catch (error) {
+      nodes.pluginNote.textContent = `could not reload: ${error.message || error}`;
     }
   }
 

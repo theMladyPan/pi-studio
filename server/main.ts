@@ -35,7 +35,7 @@ import { onCardPdf } from "./routes/board/pdf.ts";
 import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onThreadCollect, onUndo } from "./routes/board/lifecycle.ts";
 import { onShell } from "./routes/board/shell.ts";
 import { onGitInit, onGitMsg, onGitPage } from "./routes/gitgraph.ts";
-import { onPluginRegistry, onVisualFile, onVisualPanels, onVisualRequest, VISUAL_PREFIX } from "./routes/plugins.ts";
+import { onPluginRegistry, onPluginReload, onVisualFile, onVisualPanels, onVisualRequest, VISUAL_PREFIX } from "./routes/plugins.ts";
 import { onCommand } from "./routes/board/command.ts";
 import { onSourceControlCommit, onSourceControlConflict, onSourceControlContinue, onSourceControlDiff, onSourceControlDiscard, onSourceControlFileAtHead, onSourceControlIgnore, onSourceControlMessage, onSourceControlResolve, onSourceControlStage, onSourceControlStatus, onSourceControlUnstage } from "./routes/board/source-control.ts";
 import { attachTerminal, stopAllTerminals, terminalSize } from "./terminal.ts";
@@ -757,6 +757,13 @@ export const server = createServer((req, res) => {
 		// made of are not here: they are served above, before this check, for the reason kept beside them.
 		if (req.method === "GET" && url.pathname === "/plugins/visual") {
 			onVisualPanels(res);
+			return;
+		}
+		// Restart every registered plugin from the file as it stands on disk, without writing it.
+		// Decided behind the caller check like the registry beside it: it starts whatever the rows
+		// name, so only the human may ask, and a thread has no route to it.
+		if (url.pathname === "/plugins/reload" && req.method === "POST") {
+			await onPluginReload(res);
 			return;
 		}
 		// Decide, behind the caller check like the panel listing: a row here starts whatever it names,

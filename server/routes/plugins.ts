@@ -151,6 +151,29 @@ export async function onPluginRegistry(req: IncomingMessage, res: ServerResponse
 }
 
 /**
+ * Restart every registered plugin from the file as it stands on disk: a rebuilt binary, or a
+ * registration edited by hand, takes effect without a daemon restart and without anything being
+ * written. The whole roster restarts, because `reloadPlugins` is the same call a save makes; the
+ * page that asks is the human's, and a thread has no route here for the same reason a saved row
+ * starts whatever it names. A file nothing in it can start is refused and the running roster stays:
+ * a missing file is an empty registration, which is a list on its own.
+ */
+export async function onPluginReload(res: ServerResponse): Promise<void> {
+	const read = loadPluginRegistry();
+	if (read.plugins.length === 0 && read.problems.length > 0) {
+		answer(res, 400, { problems: read.problems });
+		return;
+	}
+	await reloadPlugins();
+	answer(res, 200, {
+		plugins: read.plugins,
+		problems: pluginManager()?.problems() ?? [],
+		roster: pluginManager()?.roster() ?? [],
+		taken: PLUGIN_SHORTCUT_TAKEN,
+	});
+}
+
+/**
  * One file of one panel. The name in the path is the plugin's, and the rest of the path has to be one of
  * the files that plugin declared — a lookup in a list, not a path joined to a folder, so nothing outside
  * the list can be asked for however it is spelled. What is left is the filesystem's own answer, which

@@ -61,7 +61,10 @@ Otherwise `plugins.json` holds one list of rows:
 
 A row that cannot be used is a line in the daemon's log at startup, saying which row and why, and the
 other rows still start. The settings page writes the file and restarts the roster in place; the file is
-read when plugins start, never watched.
+read when plugins start, never watched. A rebuilt binary, or a list edited by hand, takes effect
+through one press that writes nothing: the settings page's *reload plugins*, or `pi-studio plugins
+reload` in a terminal, which restarts every registered plugin from the file as it stands and prints
+the roster (a file nothing in it can start is refused and the current roster keeps running).
 
 ## What the daemon offers a plugin
 
@@ -181,6 +184,7 @@ staged: it is an example to build from its own source.
 - **Reporting plugins where the other gaps are reported.** `pi-studio doctor` names Node, git and pi. It
   could list the registered plugins, what each one answers, and the rows that did not start.
 - **A helper for the registration.** Writing `plugins.json` by hand is the whole install step for a
-  bundled plugin. A `pi-studio plugins` command could list the shipped ones and write the row.
+  bundled plugin. `pi-studio plugins reload` restarts the roster; the command could also list the
+  shipped ones and write the row.
 - **Per-plugin settings.** A row can carry `args`, and nothing else about a plugin's own configuration
   reaches it, so a plugin that needs a token or a folder has to be told in its own file.

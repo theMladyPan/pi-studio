@@ -4,6 +4,7 @@
 
 - feat: Show the pi-studio logo in the top-left of the board instead of the word `pi`, and name the workspace label `<workspace> board` instead of `board of <workspace>`, so the header reads as the workspace's own board. [t-4b4fa58d]
 - feat: Simplify a board's settings panel and handle plugins on the crossroads: the panel now heads `Board specific settings` and names no board or folder, the line about new threads sits below the hotkeys under a hairline, and plugins — registering, enabling and assigning shortcuts — are handled on the crossroads settings page instead of on any board. [t-496f7a81]
+- feat: Restart every registered plugin on one press — a *reload plugins* button beside *save plugins* on the crossroads settings page and `pi-studio plugins reload` in a terminal — so a rebuilt binary or a hand-edited registration takes effect without a daemon restart and without saving anything; a file nothing in it can start is refused and the current roster keeps running. [t-98dcd2d1]
 
 ## [0.7.0] - 2026-11-21
 
