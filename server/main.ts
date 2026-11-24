@@ -339,6 +339,15 @@ function servedTlsOf(req) {
 	return Boolean(req?.socket?.encrypted);
 }
 
+/**
+ * Whether the other end of this socket is this machine. The Host header cannot say it — any peer can
+ * claim it — so the peer's address decides the loopback exemption.
+ */
+function isLoopbackAddress(address) {
+	const normalised = String(address ?? "").replace(/^::ffff:/, "");
+	return normalised === "127.0.0.1" || normalised === "::1";
+}
+
 /** The bare hostname from a Host header, port and brackets stripped for the redirect target. */
 function hostHeaderHostname(value) {
 	const header = String(value ?? "").trim();
@@ -359,8 +368,8 @@ export function httpsRedirectLocation(req, url) {
 	if (tlsPort <= 0 || plainHttpAllowed) return null;
 	if (isLoopback(bindAddress)) return null;
 	if (servedTlsOf(req)) return null;
+	if (isLoopbackAddress(req.socket?.remoteAddress)) return null;
 	const hostname = hostHeaderHostname(req.headers?.host) || (bindAddress.includes(":") ? `[${bindAddress}]` : bindAddress);
-	if (isLoopback(hostname)) return null;
 	return `https://${hostname}:${tlsPort}${url.pathname}${url.search}`;
 }
 
@@ -1001,6 +1010,12 @@ function requestHandler(req, res) {
 export const server = createServer(requestHandler);
 
 function onUpgrade(req, socket, head) {
+	// Upgrades never reach the request handler, so the plain-http refusal is answered here: a
+	// non-loopback plain socket is dropped rather than handed the board or the shell.
+	if (!plainHttpAllowed && tlsPort > 0 && !servedTlsOf(req) && !isLoopbackAddress(req.socket?.remoteAddress)) {
+		socket.destroy();
+		return;
+	}
 	let pathname = "";
 	try {
 		pathname = requestUrl(req.url).pathname;
@@ -1081,6 +1096,9 @@ export function startListening(wanted, host = bindAddress) {
 	bindAddress = host;
 	if (tlsOptions) {
 		httpsServer = createHttpsServer(tlsOptions, requestHandler);
+		httpsServer.on("tlsClientError", (error) => {
+			console.error(`pi-studio: a plain http request reached the https port: ${error.message || error}`);
+		});
 		httpsServer.on("upgrade", onUpgrade);
 		httpsServer.once("error", onListenError);
 		httpsServer.listen(wanted, host, onListening);
@@ -1120,7 +1138,8 @@ export function onListening() {
 	const mainServer = httpsServer ?? server;
 	port = mainServer.address().port;
 	if (tlsOptions) tlsPort = port;
-	writeJsonFile(STATE_FILE, { token, port, at: new Date().toISOString() });
+	const saved = readJsonFile(STATE_FILE, null) ?? {};
+	writeJsonFile(STATE_FILE, { ...saved, token, port, at: new Date().toISOString() });
 	const links = boardUrls(bindAddress, port, token, undefined, tlsOptions ? "https" : "http");
 	const url = links[0];
 	console.log(`pi-studio${INSTANCE ? ` [${INSTANCE}]` : ""} listening on ${url}`);
@@ -1134,7 +1153,7 @@ export function onListening() {
 			console.error(`pi-studio: plain http on ${plainPort} could not open: ${error.message || error}`);
 		});
 		server.listen(plainPort, bindAddress, () => {
-			console.log(`plain http on http://${bindAddress}:${plainPort}${plainHttpAllowed ? "" : " (redirects to https)"}`);
+			console.log(`plain http on http://127.0.0.1:${plainPort}${plainHttpAllowed || isLoopback(bindAddress) ? "" : " (redirects to https)"}`);
 		});
 	}
 	// The link is a credential, and what it costs is worth knowing before it is shared.

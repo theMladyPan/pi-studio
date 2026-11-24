@@ -248,8 +248,14 @@ export async function onSettingsGeneral(req, res) {
 export async function onSettingsDefaults(res) {
 	const publish = publishConfig();
 	// The control shows the address the daemon is actually on, flag and environment included, so a
-	// choice made outside the page never reads as a blank.
-	const effective = bindHost(process.argv.slice(2), process.env, publish.host);
+	// choice made outside the page never reads as a blank. A hand-edited stored address that the bind
+	// would refuse falls back to loopback rather than taking the whole document down with it.
+	let effective;
+	try {
+		effective = bindHost(process.argv.slice(2), process.env, publish.host);
+	} catch {
+		effective = publish.host || "127.0.0.1";
+	}
 	answer(
 		res,
 		200,

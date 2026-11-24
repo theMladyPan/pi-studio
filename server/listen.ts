@@ -10,7 +10,7 @@
  */
 import { networkInterfaces } from "node:os";
 import { readFileSync } from "node:fs";
-import { X509Certificate, createPrivateKey } from "node:crypto";
+import { X509Certificate, createPrivateKey, createPublicKey } from "node:crypto";
 import { STATE_FILE, readJsonFile, writeJsonFile } from "./paths.ts";
 
 export const LOOPBACK = "127.0.0.1";
@@ -120,8 +120,13 @@ export function tlsConfig(argv: readonly string[] = process.argv.slice(2), env: 
 	try {
 		const certData = readFileSync(cert);
 		const keyData = readFileSync(key);
-		new X509Certificate(certData);
-		createPrivateKey(keyData);
+		const certificate = new X509Certificate(certData);
+		const privateKey = createPrivateKey(keyData);
+		// A pair that parses but does not belong together fails every handshake, so the mismatch is
+		// named here rather than at the first visitor.
+		const certificateKey = certificate.publicKey.export({ type: "spki", format: "der" });
+		const keyOfPrivate = createPublicKey(privateKey).export({ type: "spki", format: "der" });
+		if (!certificateKey.equals(keyOfPrivate)) throw new Error("the certificate and the key do not belong together");
 		return { enabled: true, cert, key, certData, keyData };
 	} catch (error) {
 		throw new Error(`TLS files could not be read: ${(error as Error).message}`);

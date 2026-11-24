@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
-import { request as httpsRequest } from "node:https";import { tmpdir } from "node:os";
+import { request as httpsRequest } from "node:https";import { networkInterfaces, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -3676,6 +3676,43 @@ describe("routes", { concurrency: 8 }, () => {
 		}
 	});
 
+	test("the publish choice survives the restart it was applied by", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-publish-restart-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-publish-restart-work-"));
+		// The test runner's own PI_STUDIO_HOST is 0.0.0.0 on the owner's machine, so the daemons are
+		// pinned to loopback: the restart below has to be allowed to start.
+		const first = await boot(stateHome, { PI_STUDIO_HOST: "127.0.0.1" });
+		try {
+			const saved = await post(first, "/settings/general", { host: "127.0.0.1", allowPlainHttp: false });
+			assert.equal(saved.status, 200);
+		} finally {
+			first.child.kill();
+		}
+		// A second start applies the choice and must not erase it from the file it was read from.
+		const second = await boot(stateHome, { PI_STUDIO_HOST: "127.0.0.1" });
+		try {
+			const stored = JSON.parse(readFileSync(join(stateHome, "daemon.json"), "utf8"));
+			assert.deepEqual(stored.publish, { host: "127.0.0.1", allowPlainHttp: false });
+			assert.ok(stored.token, "the token was disturbed");
+		} finally {
+			second.child.kill();
+			for (const gone of [stateHome, folder]) await removeTree(gone);
+		}
+	});
+
+	test("a hand-edited stored address does not take the settings document down", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-publish-malformed-"));
+		writeFileSync(join(stateHome, "daemon.json"), `${JSON.stringify({ token: "a1b2c3d4e5f6a7b8", publish: { host: "not an address", allowPlainHttp: true } })}\n`);
+		const daemon = await boot(stateHome, { PI_STUDIO_HOST: "127.0.0.1" });
+		try {
+			const doc = await get(daemon, `/settings/defaults?token=${daemon.token}`);
+			assert.equal(doc.status, 200, doc.body.slice(0, 200));
+		} finally {
+			daemon.child.kill();
+			await removeTree(stateHome);
+		}
+	});
+
 	test("a thread's token cannot write the publish choice", async () => {
 		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-publish-token-"));
 		const folder = mkdtempSync(join(tmpdir(), "pi-studio-publish-token-work-"));
@@ -3727,21 +3764,27 @@ describe("routes", { concurrency: 8 }, () => {
 			const httpsPort = Number(httpsMatch[1]);
 			const plainPort = Number(plainMatch[1]);
 			assert.equal(plainPort, httpsPort - 1);
-			const plain = (path: string, host: string) =>
+			const plain = (hostname: string, path: string, host: string) =>
 				new Promise<{ status: number; location: string }>((resolve, reject) => {
-					const req = request({ hostname: "127.0.0.1", port: plainPort, path, method: "GET", headers: { host }, agent: false }, (res) => {
+					const req = request({ hostname, port: plainPort, path, method: "GET", headers: { host }, agent: false }, (res) => {
 						res.resume();
 						res.on("end", () => resolve({ status: res.statusCode ?? 0, location: res.headers.location ?? "" }));
 					});
 					req.on("error", reject);
 					req.end();
 				});
-			// A non-loopback Host lands on the HTTPS port with path and query kept; loopback is served.
-			const redirected = await plain("/w/abc123?x=1", `fedora:${plainPort}`);
+			// A request that arrives from beyond this machine lands on the HTTPS port with path and
+			// query kept; one that arrives from loopback is served, whatever Host it claims.
+			const lan = Object.values(networkInterfaces()).flat().find((one) => one?.family === "IPv4" && !one.internal)?.address;
+			assert.ok(lan, "no lan address to test the redirect from");
+			const redirected = await plain(lan, "/w/abc123?x=1", `fedora:${plainPort}`);
 			assert.equal(redirected.status, 308);
 			assert.equal(redirected.location, `https://fedora:${httpsPort}/w/abc123?x=1`);
-			const local = await plain("/", `127.0.0.1:${plainPort}`);
+			const local = await plain("127.0.0.1", "/", `127.0.0.1:${plainPort}`);
 			assert.equal(local.status, 200);
+			// A loopback caller claiming a foreign Host still gets the board: the peer address decides.
+			const spoofed = await plain("127.0.0.1", "/", `fedora:${plainPort}`);
+			assert.equal(spoofed.status, 200);
 			// The HTTPS port itself answers.
 			const secure = await new Promise<number>((resolve, reject) => {
 				const req = httpsRequest({ hostname: "127.0.0.1", port: httpsPort, path: "/", method: "GET", rejectUnauthorized: false }, (res) => {
