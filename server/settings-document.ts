@@ -17,6 +17,7 @@ import { AGENTS_FILE, STUDIO_FILE } from "./workspace-prompt.ts";
 import { CHILD_INTEGRATION, INTEGRATION_DEFAULT } from "./integration.ts";
 import { NAME_MODEL, THINKING_LEVELS } from "./models.ts";
 import { programOnPath } from "./paths.ts";
+import { LOOPBACK, localAddresses } from "./listen.ts";
 
 /**
  * The picker a leaf opens. A `select` says a value is one of a list, not what the list means, so the panel
@@ -50,11 +51,13 @@ export type SettingsPick =
 export type SettingsField = {
 	id: string;
 	label: string;
-	type: "combo" | "select" | "toggle" | "list" | "prompt" | "prose";
+	type: "combo" | "select" | "toggle" | "list" | "prompt" | "prose" | "multi" | "button";
 	value: string | boolean | string[];
 	pick?: SettingsPick;
 	/** The ids a picker offers, where the daemon already knows them. */
 	options?: string[];
+	/** The words a picker shows beside those ids, where an id alone says too little. */
+	labels?: string[];
 	/** A route the field reads from instead: the model catalogue, this machine's tools, a prompt's file. */
 	source?: string;
 	/**
@@ -126,6 +129,7 @@ type SettingsValues = Partial<{
 	showMathFormulas: string;
 	showCharts: string;
 	showReferences: string;
+	publish?: { hosts: string[]; allowPlainHttp: boolean };
 }>;
 
 /**
@@ -168,6 +172,7 @@ const CARD_CONTENT = [
  * for the two choices a live child can be told about, and sends the rest to `/config`.
  */
 function routeFor(scope: SettingsInput["scope"], id: string): string {
+	if (id === "publishAddress" || id === "publishAllowPlainHttp") return "/settings/general";
 	if (scope === "defaults") return "/defaults";
 	// `editor` is one program for the whole studio, so a board's page writes it where it is kept too: a board
 	// has no copy of it in its config, and `/config` would drop the key. The helper model is the same.
@@ -184,6 +189,8 @@ function routeFor(scope: SettingsInput["scope"], id: string): string {
  */
 function writeFor(scope: SettingsInput["scope"], id: string): { route: string; body: Record<string, string> } {
 	const route = routeFor(scope, id);
+	if (id === "publishAddress") return { route, body: { hosts: "@value" } };
+	if (id === "publishAllowPlainHttp") return { route, body: { allowPlainHttp: "@value" } };
 	if (id === "model") return { route, body: { provider: "@head", model: "@rest" } };
 	if (id === "helperModel") return { route, body: { helperProvider: "@head", helperModel: "@rest" } };
 	if (id === "thinking") return { route, body: scope === "board" ? { level: "@value" } : { thinking: "@value" } };
@@ -272,6 +279,58 @@ function workspacePromptFields(): SettingsField[] {
  * because the prompt leaves are whatever is in `prompts/` right now and the values are the object the
  * caller just read; a cached copy would answer yesterday's tree.
  */
+/**
+ * The daemon's own publish choice, on the crossroads alone: which address the daemon answers on and
+ * whether it may speak plain http there. The values are read by the caller from `daemon.json`, not from
+ * a board's config, because a publish address belongs to the machine and not to one workspace. The
+ * option list carries the current address even when a flag or the environment put it there, so the
+ * control never shows a blank for a choice the page did not make.
+ */
+function generalGroup(values: SettingsValues): SettingsGroup {
+	const current = values.publish?.hosts?.length ? values.publish.hosts : [LOOPBACK];
+	const own = localAddresses();
+	const options = [LOOPBACK, ...own, "0.0.0.0"];
+	for (const one of current) if (!options.includes(one)) options.push(one);
+	const labels = options.map((option) =>
+		option === LOOPBACK ? "this machine only" : option === "0.0.0.0" ? "all interfaces" : current.includes(option) && !own.includes(option) ? `${option} (current)` : option,
+	);
+	return {
+		id: "general",
+		label: "general",
+		open: true,
+		help: "applies the next time the daemon starts",
+		fields: [
+			{
+				id: "publishAddress",
+				label: "publish address",
+				type: "multi",
+				pick: "options",
+				options,
+				labels,
+				value: current,
+				help: "tick each address the daemon answers on after the next start",
+				write: { route: "/settings/general", body: { hosts: "@value" } },
+			},
+			{
+				id: "publishAllowPlainHttp",
+				label: "allow plain http",
+				type: "toggle",
+				value: values.publish?.allowPlainHttp ?? true,
+				help: "plain http beyond this machine is refused when this is off and no TLS is configured",
+				write: { route: "/settings/general", body: { allowPlainHttp: "@value" } },
+			},
+			{
+				id: "tlsGenerate",
+				label: "generate certificate",
+				type: "button",
+				value: "",
+				help: "writes a self-signed certificate and key for this machine's addresses (replacing any generated pair); the daemon uses it after the next start, and a browser may ask to trust it",
+				write: { route: "/settings/tls/generate", body: {} },
+			},
+		],
+	};
+}
+
 export function settingsDocument({ scope, values, title, subtitle, foot }: SettingsInput): SettingsDocument {
 	const write = (id: string) => writeFor(scope, id);
 	// The helper model's own default, split at the first slash the way a chosen value is.
@@ -284,6 +343,7 @@ export function settingsDocument({ scope, values, title, subtitle, foot }: Setti
 		subtitle,
 		foot,
 		groups: [
+			...(scope === "defaults" ? [generalGroup(values)] : []),
 			{
 				id: "thread",
 				label: "thread",

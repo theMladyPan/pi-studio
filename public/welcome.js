@@ -1105,7 +1105,7 @@
               [true, labels[labels.length - 1]],
               [false, labels[0]],
             ]
-          : options.map((option) => [option, String(option)]);
+          : options.map((option, index) => [option, field.labels?.[index] ?? String(option)]);
       const seg = el("div", "seg-row");
       seg.setAttribute("role", "group");
       seg.setAttribute("aria-label", field.label);
@@ -1126,8 +1126,47 @@
         for (const [other, node] of buttons) node.setAttribute("aria-pressed", String(other === value));
       };
       line.append(seg);
+    } else if (field.type === "button") {
+      // A press, not a value: the daemon does the thing and the line says it is saved.
+      const button = el("button", "cfg-button", field.label);
+      button.type = "button";
+      button.disabled = disabled;
+      button.addEventListener("click", () => {
+        void commitWrite(entry, "");
+      });
+      entry.set = () => {};
+      line.append(button);
     } else if (field.type === "list") {
       listControl(field, entry, line);
+    } else if (field.type === "multi") {
+      // Tick each choice: the value is every ticked id, so the daemon answers on each of them.
+      const chips = el("div", "seg-row cfg-chips");
+      chips.setAttribute("role", "group");
+      chips.setAttribute("aria-label", field.label);
+      const paint = () => {
+        const onIds = Array.isArray(field.value) ? field.value : [];
+        const offered = (field.options || []).map((option, index) => [String(option), field.labels?.[index] ?? String(option)]);
+        chips.replaceChildren(
+          ...offered.map(([id, text]) => {
+            const on = onIds.map(String).includes(id);
+            const chip = el("button", "", String(text));
+            chip.type = "button";
+            chip.disabled = Boolean(field.disabled);
+            chip.setAttribute("aria-pressed", String(on));
+            chip.title = on ? `${text} is listened on` : `${text} is not listened on`;
+            chip.addEventListener("click", () => {
+              const next = on ? onIds.filter((one) => String(one) !== id) : [...onIds, id];
+              // Unticking the last one would leave the daemon with nowhere to answer: the press is ignored.
+              if (!next.length) return;
+              void commitWrite(entry, next).then(paint);
+            });
+            return chip;
+          }),
+        );
+      };
+      paint();
+      entry.set = () => paint();
+      line.append(chips);
     } else if (field.type === "prompt") {
       // A prompt is a file, not a setting: the text stays dirty until the human presses this field's own
       // save, because a file written on every keystroke is not a file anybody meant. `write` says where

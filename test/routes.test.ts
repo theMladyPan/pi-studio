@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { request } from "node:http";import { tmpdir } from "node:os";
+import { request } from "node:http";
+import { request as httpsRequest } from "node:https";import { networkInterfaces, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -3637,6 +3638,253 @@ describe("routes", { concurrency: 8 }, () => {
 		} finally {
 			daemon.child.kill();
 			for (const gone of [stateHome, folder]) await removeTree(gone);
+		}
+	});
+
+	test("the publish choice is saved on its own route and read back", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-publish-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-publish-work-"));
+		const daemon = await boot(stateHome);
+		try {
+			const saved = await post(daemon, "/settings/general", { hosts: ["0.0.0.0"], allowPlainHttp: false });
+			assert.equal(saved.status, 200, saved.body.slice(0, 200));
+			assert.deepEqual(JSON.parse(saved.body).publish, { hosts: ["0.0.0.0"], allowPlainHttp: false });
+			// Beside the token and the port, not in a board's config.
+			const stored = JSON.parse(readFileSync(join(stateHome, "daemon.json"), "utf8"));
+			assert.deepEqual(stored.publish, { hosts: ["0.0.0.0"], allowPlainHttp: false });
+			assert.ok(stored.token, "the token was disturbed");
+			// The settings document reads the choice back, and the address carries the current one.
+			const doc = JSON.parse((await get(daemon, `/settings/defaults?token=${daemon.token}`)).body);
+			const leaves: any[] = [];
+			const walk = (groups: any[]) => { for (const g of groups) { leaves.push(...(g.fields ?? [])); walk(g.groups ?? []); } };
+			walk(doc.groups);
+			const address = leaves.find((f: any) => f.id === "publishAddress");
+			const http = leaves.find((f: any) => f.id === "publishAllowPlainHttp");
+			assert.ok(address && http, "no publish leaves in the settings document");
+			assert.equal(http.value, false);
+			assert.deepEqual(address.value, stored.publish.hosts);
+			assert.ok(address.options.includes(stored.publish.hosts[0]));
+			// A foreign address, an empty list and a non-boolean are one sentence each, and the choice stands.
+			assert.equal((await post(daemon, "/settings/general", { hosts: ["8.8.8.8"] })).status, 400);
+			assert.equal((await post(daemon, "/settings/general", { hosts: [] })).status, 400);
+			assert.equal((await post(daemon, "/settings/general", { allowPlainHttp: "no" })).status, 400);
+			assert.equal((await post(daemon, "/settings/general", {})).status, 400);
+			const after = JSON.parse(readFileSync(join(stateHome, "daemon.json"), "utf8"));
+			assert.deepEqual(after.publish, { hosts: ["0.0.0.0"], allowPlainHttp: false });
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder]) await removeTree(gone);
+		}
+	});
+
+	test("the publish choice survives the restart it was applied by", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-publish-restart-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-publish-restart-work-"));
+		// The test runner's own PI_STUDIO_HOST is 0.0.0.0 on the owner's machine, so the daemons are
+		// pinned to loopback: the restart below has to be allowed to start.
+		const first = await boot(stateHome, { PI_STUDIO_HOST: "127.0.0.1" });
+		try {
+			const saved = await post(first, "/settings/general", { hosts: ["127.0.0.1"], allowPlainHttp: false });
+			assert.equal(saved.status, 200);
+		} finally {
+			first.child.kill();
+		}
+		// A second start applies the choice and must not erase it from the file it was read from.
+		const second = await boot(stateHome, { PI_STUDIO_HOST: "127.0.0.1" });
+		try {
+			const stored = JSON.parse(readFileSync(join(stateHome, "daemon.json"), "utf8"));
+			assert.deepEqual(stored.publish, { hosts: ["127.0.0.1"], allowPlainHttp: false });
+			assert.ok(stored.token, "the token was disturbed");
+		} finally {
+			second.child.kill();
+			for (const gone of [stateHome, folder]) await removeTree(gone);
+		}
+	});
+
+	test("a hand-edited stored address does not take the settings document down", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-publish-malformed-"));
+		writeFileSync(join(stateHome, "daemon.json"), `${JSON.stringify({ token: "a1b2c3d4e5f6a7b8", publish: { hosts: ["not an address"], allowPlainHttp: true } })}\n`);
+		const daemon = await boot(stateHome, { PI_STUDIO_HOST: "127.0.0.1" });
+		try {
+			const doc = await get(daemon, `/settings/defaults?token=${daemon.token}`);
+			assert.equal(doc.status, 200, doc.body.slice(0, 200));
+		} finally {
+			daemon.child.kill();
+			await removeTree(stateHome);
+		}
+	});
+
+	test("a thread's token cannot write the publish choice", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-publish-token-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-publish-token-work-"));
+		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+		const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+		try {
+			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+			const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			const said = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" });
+			assert.equal(said.status, 200);
+			const child = await childEnvOf(daemon, stub.envFile);
+			const refused = await postAs(daemon, child.token, board.id, "/settings/general", { host: "0.0.0.0" });
+			assert.equal(refused.status, 403);
+			assert.equal(refused.body, "a thread may not use that");
+			const stored = JSON.parse(readFileSync(join(stateHome, "daemon.json"), "utf8"));
+			assert.equal(stored.publish, undefined, "a thread wrote the publish choice");
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
+		}
+	});
+
+	test("plain http beyond loopback redirects to https when TLS is on and http is refused", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-tls-"));
+		const certDir = mkdtempSync(join(tmpdir(), "pi-studio-tls-cert-"));
+		execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=localhost", "-keyout", join(certDir, "key.pem"), "-out", join(certDir, "cert.pem")]);
+		writeFileSync(join(stateHome, "daemon.json"), `${JSON.stringify({ token: "tls-token", publish: { hosts: ["0.0.0.0"], allowPlainHttp: false } })}\n`);
+		const child = spawn(process.execPath, [join(repo, "server.ts"), "--no-open"], {
+			cwd: repo,
+			env: { ...process.env, PI_STUDIO_STATE: stateHome, PI_STUDIO_PORT: "", PI_STUDIO_HOST: "0.0.0.0", PI_STUDIO_TLS_CERT: join(certDir, "cert.pem"), PI_STUDIO_TLS_KEY: join(certDir, "key.pem") },
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		try {
+			const lines = await new Promise<string>((resolve, reject) => {
+				let seen = "";
+				const timer = setTimeout(() => reject(new Error(`no tls listening line: ${seen.slice(-400)}`)), 20_000);
+				child.stdout.on("data", (chunk) => {
+					seen += String(chunk);
+					if (seen.includes("plain http on http://")) {
+						clearTimeout(timer);
+						resolve(seen);
+					}
+				});
+				child.on("exit", (code) => reject(new Error(`the daemon exited with ${code}: ${seen.slice(-400)}`)));
+			});
+			const httpsMatch = lines.match(/listening on https:\/\/[^:\s]+:(\d+)\//);
+			const plainMatch = lines.match(/plain http on http:\/\/[^:\s]+:(\d+)/);
+			assert.ok(httpsMatch && plainMatch, lines.slice(-400));
+			const httpsPort = Number(httpsMatch[1]);
+			const plainPort = Number(plainMatch[1]);
+			assert.equal(plainPort, httpsPort - 1);
+			const plain = (hostname: string, path: string, host: string) =>
+				new Promise<{ status: number; location: string }>((resolve, reject) => {
+					const req = request({ hostname, port: plainPort, path, method: "GET", headers: { host }, agent: false }, (res) => {
+						res.resume();
+						res.on("end", () => resolve({ status: res.statusCode ?? 0, location: res.headers.location ?? "" }));
+					});
+					req.on("error", reject);
+					req.end();
+				});
+			// A request that arrives from beyond this machine lands on the HTTPS port with path and
+			// query kept; one that arrives from loopback is served, whatever Host it claims.
+			const lan = Object.values(networkInterfaces()).flat().find((one) => one?.family === "IPv4" && !one.internal)?.address;
+			assert.ok(lan, "no lan address to test the redirect from");
+			const redirected = await plain(lan, "/w/abc123?x=1", `fedora:${plainPort}`);
+			assert.equal(redirected.status, 308);
+			assert.equal(redirected.location, `https://fedora:${httpsPort}/w/abc123?x=1`);
+			const local = await plain("127.0.0.1", "/", `127.0.0.1:${plainPort}`);
+			assert.equal(local.status, 200);
+			// A loopback caller claiming a foreign Host still gets the board: the peer address decides.
+			const spoofed = await plain("127.0.0.1", "/", `fedora:${plainPort}`);
+			assert.equal(spoofed.status, 200);
+			// The HTTPS port itself answers.
+			const secure = await new Promise<number>((resolve, reject) => {
+				const req = httpsRequest({ hostname: "127.0.0.1", port: httpsPort, path: "/", method: "GET", rejectUnauthorized: false }, (res) => {
+					res.resume();
+					res.on("end", () => resolve(res.statusCode ?? 0));
+				});
+				req.on("error", reject);
+				req.end();
+			});
+			assert.equal(secure, 200);
+		} finally {
+			child.kill();
+			for (const gone of [stateHome, certDir]) await removeTree(gone);
+		}
+	});
+
+	test("the daemon refuses a non-loopback bind with no TLS and plain http refused", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-tls-refuse-"));
+		writeFileSync(join(stateHome, "daemon.json"), `${JSON.stringify({ token: "tls-token", publish: { hosts: ["0.0.0.0"], allowPlainHttp: false } })}\n`);
+		const child = spawn(process.execPath, [join(repo, "server.ts"), "--no-open"], {
+			cwd: repo,
+			env: { ...process.env, PI_STUDIO_STATE: stateHome, PI_STUDIO_PORT: "", PI_STUDIO_HOST: "0.0.0.0" },
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		try {
+			const { code, stderr } = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+				let stderr = "";
+				child.stderr.on("data", (chunk) => (stderr += String(chunk)));
+				child.on("exit", (code) => resolve({ code, stderr }));
+			});
+			assert.equal(code, 1);
+			assert.match(stderr, /plain http is refused beyond this machine/);
+		} finally {
+			child.kill();
+			await removeTree(stateHome);
+		}
+	});
+
+	test("the daemon answers on every ticked publish address", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-publish-multi-"));
+		const lan = Object.values(networkInterfaces()).flat().find((one) => one?.family === "IPv4" && !one.internal)?.address;
+		assert.ok(lan, "no lan address to test the multi-address bind");
+		writeFileSync(join(stateHome, "daemon.json"), `${JSON.stringify({ token: "a1b2c3d4e5f6a7b8", publish: { hosts: ["127.0.0.1", lan], allowPlainHttp: true } })}\n`);
+		const daemon = await boot(stateHome, { PI_STUDIO_HOST: "" });
+		try {
+			for (const address of ["127.0.0.1", lan]) {
+				const page = await fetch(`http://${address}:${new URL(daemon.base).port}/`);
+				assert.equal(page.status, 200, `${address} did not answer`);
+			}
+		} finally {
+			daemon.child.kill();
+			await removeTree(stateHome);
+		}
+	});
+
+	test("the certificate button writes a pair the daemon reads at the next start", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-tls-generate-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-tls-generate-work-"));
+		const daemon = await boot(stateHome);
+		try {
+			const made = await post(daemon, "/settings/tls/generate", {});
+			assert.equal(made.status, 200, made.body.slice(0, 300));
+			const tls = JSON.parse(made.body).tls;
+			assert.ok(tls.cert.endsWith("/tls/cert.pem"), tls.cert);
+			assert.ok(tls.key.endsWith("/tls/key.pem"), tls.key);
+			assert.ok(Array.isArray(tls.names) && tls.names.length > 0, "no names in the answer");
+			assert.ok(!made.body.includes("PRIVATE KEY"), "the key rode in the answer");
+			assert.ok(existsSync(tls.cert) && existsSync(tls.key), "the pair was not written");
+			// The pair covers the address the document the page draws publishes on.
+			const doc = JSON.parse((await get(daemon, `/settings/defaults?token=${daemon.token}`)).body);
+			const leaves: any[] = [];
+			const walk = (groups: any[]) => { for (const g of groups) { leaves.push(...(g.fields ?? [])); walk(g.groups ?? []); } };
+			walk(doc.groups);
+			const button = leaves.find((f: any) => f.id === "tlsGenerate");
+			assert.ok(button && button.type === "button", "no generate button in the document");
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder]) await removeTree(gone);
+		}
+	});
+
+	test("a thread's token cannot generate the certificate", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-tls-generate-token-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-tls-generate-token-work-"));
+		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+		const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+		try {
+			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+			const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			const said = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" });
+			assert.equal(said.status, 200);
+			const child = await childEnvOf(daemon, stub.envFile);
+			const refused = await postAs(daemon, child.token, board.id, "/settings/tls/generate", {});
+			assert.equal(refused.status, 403);
+			assert.equal(refused.body, "a thread may not use that");
+			assert.equal(existsSync(join(stateHome, "tls")), false, "a thread generated a pair");
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
 		}
 	});
 

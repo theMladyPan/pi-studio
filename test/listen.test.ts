@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LOOPBACK, bindHost, boardUrls, isLoopback, localAddresses } from "../server/listen.ts";
+import { createPrivateKey, X509Certificate } from "node:crypto";
+import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { LOOPBACK, bindHost, bindHosts, bindSource, boardUrls, generateTlsPair, isLoopback, localAddresses, tlsConfig, validatePublishHost, validatePublishHosts } from "../server/listen.ts";
 
 /**
  * Which address the daemon opens decides who can reach the board, so each way of asking is pinned here:
@@ -70,4 +74,63 @@ test("the addresses a machine answers on leave out loopback and IPv6", () => {
 		}),
 		["10.0.0.4"],
 	);
+});
+
+test("the settings file is the third voice in the bind, behind the flag and the environment", () => {
+	assert.equal(bindHost([], {}, "0.0.0.0"), "0.0.0.0");
+	assert.equal(bindHost([], { PI_STUDIO_HOST: "192.168.1.5" }, "0.0.0.0"), "192.168.1.5");
+	assert.equal(bindHost(["--host", "10.0.0.4"], { PI_STUDIO_HOST: "192.168.1.5" }, "0.0.0.0"), "10.0.0.4");
+	assert.deepEqual(bindHosts([], {}, ["127.0.0.1", "192.168.1.20"]), ["127.0.0.1", "192.168.1.20"]);
+	assert.deepEqual(bindHosts([], { PI_STUDIO_HOST: "192.168.1.5" }, ["127.0.0.1"]), ["192.168.1.5"]);
+	assert.deepEqual(bindHosts([], {}, []), [LOOPBACK]);
+	assert.equal(bindSource([], {}, ["0.0.0.0"]), "the settings");
+	assert.equal(bindSource([], { PI_STUDIO_HOST: "192.168.1.5" }, ["0.0.0.0"]), "the environment");
+	assert.equal(bindSource(["--host", "10.0.0.4"], {}, ["0.0.0.0"]), "the flag");
+	assert.equal(bindSource([], {}, []), "loopback");
+});
+
+test("a stored publish address is this machine's own or nowhere", () => {
+	const interfaces = {
+		lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+		wlan0: [{ address: "192.168.1.20", family: "IPv4", internal: false }],
+	};
+	assert.equal(validatePublishHost("127.0.0.1", interfaces), "127.0.0.1");
+	assert.equal(validatePublishHost("0.0.0.0", interfaces), "0.0.0.0");
+	assert.equal(validatePublishHost("192.168.1.20", interfaces), "192.168.1.20");
+	for (const foreign of ["8.8.8.8", "192.168.1.99", "0.0.0.0 --no-open", "", "0.0.0.0\u0000"]) {
+		assert.throws(() => validatePublishHost(foreign, interfaces), /is not an address/, `accepted ${JSON.stringify(foreign)}`);
+	}
+	assert.deepEqual(validatePublishHosts(["127.0.0.1", "192.168.1.20", "192.168.1.20"], interfaces), ["127.0.0.1", "192.168.1.20"]);
+	assert.deepEqual(validatePublishHosts(["192.168.1.20", "0.0.0.0"], interfaces), ["0.0.0.0"]);
+	assert.throws(() => validatePublishHosts([], interfaces), /pick at least one address/);
+	assert.throws(() => validatePublishHosts(["8.8.8.8"], interfaces), /is not an address/);
+	assert.throws(() => validatePublishHosts("0.0.0.0", interfaces), /a list of addresses/);
+});
+
+const MISSING_PAIR = { cert: "/nonexistent-dir/cert.pem", key: "/nonexistent-dir/key.pem" };
+
+test("TLS is off until both files are named, and a half pair is one sentence", () => {
+	assert.equal(tlsConfig([], {}, MISSING_PAIR).enabled, false);
+	assert.throws(() => tlsConfig(["--tls-cert", "/tmp/cert.pem"], {}), /TLS needs both/);
+	assert.throws(() => tlsConfig([], { PI_STUDIO_TLS_KEY: "/tmp/key.pem" }), /TLS needs both/);
+	assert.throws(() => tlsConfig(["--tls-cert", "/tmp/no-such-cert.pem", "--tls-key", "/tmp/no-such-key.pem"], {}), /TLS files could not be read/);
+});
+
+test("the printed links follow the scheme the daemon speaks", () => {
+	assert.deepEqual(boardUrls("127.0.0.1", 4801, "abc123", undefined, "https"), ["https://127.0.0.1:4801/?token=abc123"]);
+});
+
+test("a generated pair parses, matches, and covers the names it was asked for", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-studio-tls-gen-"));
+	const made = generateTlsPair(dir, ["localhost", "127.0.0.1", "192.168.1.114"]);
+	const certificate = new X509Certificate(readFileSync(made.cert));
+	assert.ok(String(certificate.subjectAltName).includes("DNS:localhost"));
+	assert.ok(String(certificate.subjectAltName).includes("IP Address:127.0.0.1"));
+	assert.ok(String(certificate.subjectAltName).includes("IP Address:192.168.1.114"));
+	assert.equal(statSync(made.key).mode & 0o777, 0o600, "the key is readable by others");
+	const fromFile = tlsConfig(["--tls-cert", made.cert, "--tls-key", made.key], {});
+	assert.equal(fromFile.enabled, true);
+	// A different key is not the certificate's pair.
+	const other = generateTlsPair(join(dir, "other"), ["localhost"]);
+	assert.throws(() => tlsConfig(["--tls-cert", made.cert, "--tls-key", other.key], {}), /do not belong together/);
 });

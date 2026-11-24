@@ -82,12 +82,13 @@ test("the defaults document is five groups in the order the panel draws them", (
 	assert.deepEqual([document.title, document.subtitle, document.foot], [LINES.title, LINES.subtitle, LINES.foot]);
 	assert.deepEqual(
 		document.groups.map((group) => group.id),
-		["thread", "tools", "cards", "canvas", "prompts"],
+		["general", "thread", "tools", "cards", "canvas", "prompts"],
 	);
 	// Folded or not, and what the group is for, travels with it: the panel has no copy of these words.
 	assert.deepEqual(
 		document.groups.map((group) => [group.label, group.open, group.help]),
 		[
+			["general", true, "applies the next time the daemon starts"],
 			["thread", true, "the argv a new child starts with"],
 			["tools", true, "what a new child may touch"],
 			["cards", false, "cardsBlock(config) → the prompt"],
@@ -105,14 +106,17 @@ test("the two scopes build one tree, and part only where the prompts belong", ()
 	assert.equal(boardDocument.version, document.version);
 	// Every group but the prompts is the same document in both scopes: a setting is a setting wherever it
 	// is edited, and only the object the caller hands in decides what a control is worth.
-	const settingsOnly = (doc: any) => doc.groups.filter((group: any) => group.id !== "prompts");
+	const settingsOnly = (doc: any) => doc.groups.filter((group: any) => group.id !== "prompts" && group.id !== "general");
 	assert.deepEqual(withoutWrites(settingsOnly(boardDocument)), withoutWrites(settingsOnly(document)));
 	// The prompts group is the one place the pages part: the studio's files on the crossroads, which every
 	// board reads, and the two files a workspace carries on a board's own page.
 	assert.deepEqual(
 		boardDocument.groups.map((group) => group.id),
-		document.groups.map((group) => group.id),
+		["thread", "tools", "cards", "canvas", "prompts"],
 	);
+	// The publish choice is daemon-level, so the board's page never carries it.
+	assert.equal(document.groups.find((group: any) => group.id === "general")?.fields?.length, 3);
+	assert.equal(boardDocument.groups.find((group: any) => group.id === "general"), undefined);
 	const promptGroup = (doc: any) => doc.groups.find((group: any) => group.id === "prompts");
 	assert.deepEqual(
 		promptGroup(document).groups.map((group: any) => group.id),
@@ -124,10 +128,14 @@ test("the two scopes build one tree, and part only where the prompts belong", ()
 		["STUDIO.md", "AGENTS.md"],
 	);
 	assert.equal(promptGroup(boardDocument).groups, undefined);
-	// Sixteen setting leaves: six for the thread, two for the tools, six for the cards, two for the canvas.
+	// Nineteen setting leaves on the crossroads: the publish choices and their certificate button, six for the thread, two for
+	// the tools, six for the cards, two for the canvas.
 	assert.deepEqual(
 		settingLeaves.map((field) => field.id),
 		[
+			"publishAddress",
+			"publishAllowPlainHttp",
+			"tlsGenerate",
 			"model",
 			"helperModel",
 			"thinking",
@@ -146,10 +154,13 @@ test("the two scopes build one tree, and part only where the prompts belong", ()
 			"overviewMap",
 		],
 	);
-	assert.equal(settingLeaves.length, 16);
+	assert.equal(settingLeaves.length, 19);
 	assert.deepEqual(
 		settingLeaves.map((field) => field.label),
 		[
+			"publish address",
+			"allow plain http",
+			"generate certificate",
 			"model",
 			"helper model",
 			"thinking",
@@ -178,12 +189,13 @@ test("every setting leaf of the defaults writes to /defaults, and nothing else",
 	// any other and answered by the page.
 	for (const field of writtenLeaves) {
 		assert.ok(field.write, `${field.id} has no write`);
-		assert.equal(field.write.route, "/defaults", `${field.id} writes to ${field.write.route}`);
+		const expected = field.id === "tlsGenerate" ? "/settings/tls/generate" : field.id === "publishAddress" || field.id === "publishAllowPlainHttp" ? "/settings/general" : "/defaults";
+		assert.equal(field.write.route, expected, `${field.id} writes to ${field.write.route}`);
 		// A toggle is flipped where it stands, so it names no picker; everything else opens a list, except
 		// the editor, which is typed and filled in from the machine's own file dialog (`browse`).
-		if (field.type === "toggle" || field.browse) continue;
+		if (field.type === "toggle" || field.type === "button" || field.browse) continue;
 		assert.ok(
-			["model", "thinking", "path", "childIntegration", "tools", "verbosity", "audience", "code", "math", "charts", "refs"].includes(
+			["model", "thinking", "path", "childIntegration", "tools", "verbosity", "audience", "code", "math", "charts", "refs", "options"].includes(
 				field.pick,
 			),
 			`${field.id} opens no picker`,
@@ -220,7 +232,7 @@ test("the model leaf splits at the first slash, and one key carries the value ev
 	}
 	// The two model leaves are the only leaves that write two keys, so they are the only ones that need the halves.
 	assert.deepEqual(
-		writtenLeaves.filter((field) => Object.keys(field.write.body).length !== 1).map((field) => field.id),
+		writtenLeaves.filter((field) => Object.keys(field.write.body).length > 1).map((field) => field.id),
 		["model", "helperModel"],
 	);
 });
@@ -240,7 +252,7 @@ test("the board's document differs from the defaults' in the route a change goes
 	// The helper model is studio-wide too, so a board's page writes it where it is kept.
 	assert.equal(boardById.helperModel.write.route, "/defaults");
 	assert.deepEqual(boardById.helperModel.write.body, { helperProvider: "@head", helperModel: "@rest" });
-	for (const field of writtenLeaves.filter((one) => !["model", "thinking", "editor", "helperModel"].includes(one.id))) {
+	for (const field of writtenLeaves.filter((one) => !["model", "thinking", "editor", "helperModel", "publishAddress", "publishAllowPlainHttp", "tlsGenerate"].includes(one.id))) {
 		assert.equal(boardById[field.id].write.route, "/config", `${field.id} writes to ${boardById[field.id].write.route}`);
 		assert.deepEqual(boardById[field.id].write.body, field.write.body, `${field.id} changed its body with its route`);
 	}
@@ -322,4 +334,32 @@ test("a value nobody chose reads as the default rather than as an empty control"
 	assert.equal(freshById.cardsVerbosity.value, "normal");
 	assert.equal(freshById.cardsAudience.value, "programmer");
 	assert.equal(freshById.showCodeFragments.value, "some");
+});
+
+test("the general group carries the publish choice and the current address", () => {
+	const doc = settingsDocument({ scope: "defaults", values: { publish: { hosts: ["192.168.1.20"], allowPlainHttp: false } }, ...LINES });
+	const general = doc.groups.find((group) => group.id === "general");
+	assert.ok(general);
+	assert.deepEqual((general.fields ?? []).map((field) => field.id), ["publishAddress", "publishAllowPlainHttp", "tlsGenerate"]);
+	const byField = Object.fromEntries((general.fields ?? []).map((field) => [field.id, field]));
+	assert.equal(byField.publishAddress.type, "multi");
+	assert.deepEqual(byField.publishAddress.value, ["192.168.1.20"]);
+	const offered = byField.publishAddress.options!;
+	assert.ok(offered.includes("192.168.1.20"));
+	assert.ok(offered.includes("127.0.0.1"));
+	assert.ok(offered.includes("0.0.0.0"));
+	assert.equal(byField.publishAddress.labels![offered.indexOf("127.0.0.1")], "this machine only");
+	assert.equal(byField.publishAddress.labels![offered.indexOf("0.0.0.0")], "all interfaces");
+	assert.deepEqual(byField.publishAddress.write, { route: "/settings/general", body: { hosts: "@value" } });
+	assert.equal(byField.publishAllowPlainHttp.value, false);
+	assert.deepEqual(byField.publishAllowPlainHttp.write, { route: "/settings/general", body: { allowPlainHttp: "@value" } });
+	const button = (general.fields ?? []).find((field) => field.id === "tlsGenerate");
+	assert.ok(button);
+	assert.equal(button.type, "button");
+	assert.deepEqual(button.write, { route: "/settings/tls/generate", body: {} });
+	// Nobody chose yet: loopback and plain http, the behaviour every old install had.
+	const fresh = settingsDocument({ scope: "defaults", values: {}, ...LINES });
+	const freshGeneral = Object.fromEntries((fresh.groups.find((group) => group.id === "general")?.fields ?? []).map((field) => [field.id, field]));
+	assert.deepEqual(freshGeneral.publishAddress.value, ["127.0.0.1"]);
+	assert.equal(freshGeneral.publishAllowPlainHttp.value, true);
 });

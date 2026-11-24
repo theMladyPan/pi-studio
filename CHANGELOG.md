@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-25
+
+- feat: Add a general group to the crossroads settings: the addresses the daemon publishes on (this machine only, the machine's own interfaces, or all interfaces at once) and whether plain http may be spoken there, both kept in `daemon.json` and applied at the next start, plus a button that writes a self-signed certificate and key for this machine's addresses; with plain http off and a TLS certificate configured, the main port serves HTTPS and plain http redirects to it, and with plain http off and no TLS the daemon refuses to start beyond loopback, while loopback always keeps serving plain http.
+
 ## [0.9.0] - 2026-11-24
 
 - feat: Add an optional master password (`pi-studio password`) so a signed-out browser reaching the board through a reverse proxy can unlock it with a password from a password manager instead of copying the printed token link; the daemon stores only a salted scrypt hash, throttles wrong passwords behind a doubling lockout, answers a cross-site unlock with 403, and keeps the printed link working as break-glass.

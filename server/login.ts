@@ -104,12 +104,13 @@ export function endSession(cookieHeader: string | undefined): void {
  * request a TLS proxy said it carried: the daemon speaks plain http itself, and a browser drops a
  * Secure cookie from a plain http page without a word.
  */
-export function sessionCookie(id: string, forwardedProto: string | undefined): string {
+export function sessionCookie(id: string, forwardedProto: string | undefined, servedTls = false): string {
 	// A proxy writes the protocol in its own spelling, `HTTPS` as readily as `https`, and a chain of hops
 	// as `https, http` with the one nearest the browser first. The first item, in lowercase, is the word
-	// that says how this request was carried.
+	// that says how this request was carried. The daemon's own HTTPS listener says the same thing without
+	// any proxy, so `Secure` rides on either one.
 	const carried = String(forwardedProto ?? "").split(",")[0].trim().toLowerCase();
-	const secure = carried === "https" ? "; Secure" : "";
+	const secure = servedTls || carried === "https" ? "; Secure" : "";
 	return `${COOKIE}=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${id ? LIFETIME_SECONDS : 0}${secure}`;
 }
 
