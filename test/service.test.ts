@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { FIXED_PORT, installService, removeService, renderUnit, servicePath, serviceStatus, validatePort } from "../bin/service.mjs";
+import { FIXED_PORT, installService, removeService, renderUnit, servicePath, serviceStatus, validateHost, validatePort } from "../bin/service.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const temporaries: string[] = [];
@@ -43,14 +43,30 @@ test("the fixed port is accepted and anything else is refused in one sentence", 
 	}
 });
 
-test("the unit pins loopback, the fixed port, no browser and a restart", () => {
+test("a host is one address: the loopback pin and a LAN address pass, a sentence does not", () => {
+	assert.equal(validateHost("127.0.0.1"), "127.0.0.1");
+	assert.equal(validateHost("0.0.0.0"), "0.0.0.0");
+	assert.equal(validateHost(" 192.168.1.20 "), "192.168.1.20");
+	for (const bad of ["", "0.0.0.0 --no-open", "a b", true]) {
+		assert.throws(() => validateHost(bad), /host must be one address/, `accepted ${JSON.stringify(bad)}`);
+	}
+});
+
+test("the unit listens on all interfaces, the fixed port, no browser and a restart", () => {
 	const text = renderUnit({ launcher: "/home/u/.local/bin/pi-studio", port: FIXED_PORT, path: "/usr/bin:/bin" });
 	assert.match(text, /ExecStart="\/home\/u\/\.local\/bin\/pi-studio" --no-open/);
 	assert.match(text, /PI_STUDIO_PORT=4801/);
-	assert.match(text, /PI_STUDIO_HOST=127\.0\.0\.1/);
+	assert.match(text, /PI_STUDIO_HOST=0\.0\.0\.0/);
 	assert.match(text, /Restart=on-failure/);
 	assert.match(text, /WantedBy=default\.target/);
-	assert.ok(!text.includes("0.0.0.0"), "nothing here opens the board beyond this machine");
+	// A proxy on another machine cannot dial loopback, so the default must not pin it.
+	assert.ok(!text.includes("PI_STUDIO_HOST=127.0.0.1"), "the default must reach the LAN");
+});
+
+test("the unit can still be pinned to loopback on request", () => {
+	const text = renderUnit({ launcher: "/home/u/.local/bin/pi-studio", port: FIXED_PORT, host: "127.0.0.1", path: "/usr/bin:/bin" });
+	assert.match(text, /PI_STUDIO_HOST=127\.0\.0\.1/);
+	assert.match(text, /loopback only/);
 });
 
 test("the service sees the programs a login shell sees", () => {
@@ -73,11 +89,14 @@ test("install writes the unit and starts the user service", async () => {
 	assert.equal(result.port, FIXED_PORT);
 	assert.ok(existsSync(result.unitPath));
 	const unit = readFileSync(result.unitPath, "utf8");
-	assert.match(unit, /PI_STUDIO_HOST=127\.0\.0\.1/);
+	assert.match(unit, /PI_STUDIO_HOST=0\.0\.0\.0/);
 	const verbs = calls.map((call) => call.join(" "));
 	assert.ok(verbs.includes("systemctl --user daemon-reload"), `calls: ${verbs.join(" | ")}`);
-	assert.ok(verbs.includes("systemctl --user enable --now pi-studio.service"), `calls: ${verbs.join(" | ")}`);
-	assert.ok(lines.some((line) => line.includes("http://127.0.0.1:4801/")), `lines: ${lines.join(" | ")}`);
+	assert.ok(verbs.includes("systemctl --user enable pi-studio.service"), `calls: ${verbs.join(" | ")}`);
+	// Reinstall must restart, or a changed host never reaches the running daemon.
+	assert.ok(verbs.includes("systemctl --user restart pi-studio.service"), `calls: ${verbs.join(" | ")}`);
+	assert.ok(lines.some((line) => line.includes("all interfaces")), `lines: ${lines.join(" | ")}`);
+	assert.ok(lines.every((line) => !line.includes("http://127.0.0.1:4801/")), `lines: ${lines.join(" | ")}`);
 	assert.ok(lines.every((line) => !line.includes("tok")), "the token never reaches the terminal");
 });
 
@@ -114,8 +133,34 @@ test("status reports the installed port, not the default, after a custom-port in
 	});
 	const lines: string[] = [];
 	await serviceStatus({ flags: { "config-home": configHome }, run: running.run, out: (line: string) => lines.push(line) });
-	assert.ok(lines.some((line) => line.includes("http://127.0.0.1:9000/")), `lines: ${lines.join(" | ")}`);
+	assert.ok(lines.some((line) => line.includes(":9000/")), `lines: ${lines.join(" | ")}`);
+	assert.ok(lines.some((line) => line.includes("all interfaces")), `lines: ${lines.join(" | ")}`);
 	assert.ok(lines.every((line) => !line.includes("4801")), `lines: ${lines.join(" | ")}`);
+});
+
+test("install with --host 127.0.0.1 keeps the old loopback pin and says so", async () => {
+	const configHome = tempDir("pi-studio-service-config-");
+	const stateDir = tempDir("pi-studio-service-state-");
+	writeFileSync(join(stateDir, "daemon.json"), JSON.stringify({ token: "tok", port: FIXED_PORT }), "utf8");
+	const { run } = fakeRunner((argv) => {
+		if (argv[0] === "loginctl" && argv[1] === "show-user") return { status: 0, stdout: "Linger=yes" };
+		return { status: 0 };
+	});
+	const lines: string[] = [];
+	const result = await installService({ appRoot: root, flags: { "config-home": configHome, state: stateDir, host: "127.0.0.1" }, run, out: (line: string) => lines.push(line) });
+	assert.equal(result.host, "127.0.0.1");
+	assert.match(readFileSync(result.unitPath, "utf8"), /PI_STUDIO_HOST=127\.0\.0\.1/);
+	assert.ok(lines.some((line) => line.includes("http://127.0.0.1:4801/")), `lines: ${lines.join(" | ")}`);
+});
+
+test("install refuses a host that is not one address, before writing anything", async () => {
+	const configHome = tempDir("pi-studio-service-config-");
+	const { run, calls } = fakeRunner(() => ({ status: 0 }));
+	await assert.rejects(
+		installService({ appRoot: root, flags: { "config-home": configHome, host: "0.0.0.0 --no-open" }, run, out: () => {} }),
+		/host must be one address/,
+	);
+	assert.equal(calls.length, 0);
 });
 
 test("install leaves no unit behind when systemctl fails", async () => {
@@ -123,13 +168,13 @@ test("install leaves no unit behind when systemctl fails", async () => {
 	const stateDir = tempDir("pi-studio-service-state-");
 	writeFileSync(join(stateDir, "daemon.json"), JSON.stringify({ token: "tok", port: FIXED_PORT }), "utf8");
 	const { run } = fakeRunner((argv) => {
-		if (argv.includes("enable")) return { status: 1, stderr: "no such unit" };
+		if (argv.includes("enable") || argv.includes("restart")) return { status: 1, stderr: "no such unit" };
 		if (argv[0] === "loginctl") return { status: 0, stdout: "Linger=yes" };
 		return { status: 0 };
 	});
 	await assert.rejects(
 		installService({ appRoot: root, flags: { "config-home": configHome, state: stateDir }, run, out: () => {} }),
-		/enable --now/,
+		/enable pi-studio\.service/,
 	);
 	assert.ok(!existsSync(join(configHome, "systemd", "user", "pi-studio.service")), "a failed enable must not leave an orphan unit");
 	assert.ok(!existsSync(join(configHome, "systemd", "user", "pi-studio.service.tmp")), "no temp unit survives either");
@@ -169,7 +214,7 @@ test("status says whether the unit is there and whether it runs, without the tok
 	assert.equal(after.installed, true);
 	assert.equal(after.active, true);
 	assert.ok(lines.some((line) => line.includes("running")));
-	assert.ok(lines.some((line) => line.includes("http://127.0.0.1:4801/")));
+	assert.ok(lines.some((line) => line.includes(":4801/")));
 });
 
 test("an explicitly asked port that is taken fails instead of moving elsewhere", async () => {

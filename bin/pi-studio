@@ -70,10 +70,11 @@ if (command === "--version" || command === "-V" || command === "version") {
 		else if (positional[0] === "remove" || positional[0] === "uninstall") await removeService({ flags: installFlags });
 		else if (!positional[0] || positional[0] === "status") await serviceStatus({ flags: installFlags });
 		else {
-			console.error("usage: pi-studio service install (default port 4801, loopback only)");
+			console.error("usage: pi-studio service install (default port 4801, all interfaces)");
 			console.error("       pi-studio service status");
 			console.error("       pi-studio service remove");
 			console.error("       pi-studio service install --port <n>  to choose another fixed port");
+			console.error("       pi-studio service install --host 127.0.0.1  to keep it on this machine only");
 			process.exit(2);
 		}
 	} catch (error) {
