@@ -1,14 +1,17 @@
 // The systemd user service: install, status and remove for the per-user unit.
 //
-// The daemon keeps its loopback-only default here: a reverse proxy (NetBird, Caddy, nginx, …)
-// is the part that talks to the network, and the fixed port is its stable target. The unit pins
-// the port and the host in its own environment, so a stray PI_STUDIO_HOST in the login shell
-// can never widen the board beyond this machine while the service runs. No sudo, state folder
-// or install root is touched: this only writes one file under the user's systemd config folder
-// and drives the user manager.
+// The service listens on every interface (0.0.0.0) by default, so a reverse proxy on another
+// machine (NetBird and alike) — which cannot dial this machine's loopback — and other computers
+// on the LAN can reach the fixed port; `--host 127.0.0.1` pins loopback instead. A manual
+// `pi-studio` start keeps its loopback default; only the service widens it. The unit pins the
+// port and the host in its own environment, so a stray PI_STUDIO_HOST in the login shell can
+// never change the board's reach while the service runs. No sudo, state folder or install root
+// is touched: this only writes one file under the user's systemd config folder and drives the
+// user manager. The token still guards every data route; binding wide only decides who can
+// knock, never who gets in.
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, userInfo } from "node:os";
+import { homedir, networkInterfaces, userInfo } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { fail, stateDirOf } from "./runtime.mjs";
 
@@ -16,6 +19,8 @@ export const SERVICE_NAME = "pi-studio.service";
 /** The port every install uses unless asked otherwise: high, unprivileged, and the one the proxy points at. */
 export const FIXED_PORT = 4801;
 export const LOOPBACK = "127.0.0.1";
+/** The address the service listens on unless asked otherwise: every interface, LAN and overlay alike. */
+export const ALL_INTERFACES = "0.0.0.0";
 
 /** system-runner injection point: tests hand over a fake that records argv and never starts systemd. */
 function defaultRunner(argv) {
@@ -35,6 +40,29 @@ export function validatePort(value) {
 	const port = Number(value);
 	if (!Number.isInteger(port) || port < 1 || port > 65535) fail(`port must be a number from 1 to 65535, got ${JSON.stringify(value)}`);
 	return port;
+}
+
+/**
+ * One address to pin the service to, refused for the same reason the daemon refuses it in
+ * server/listen.ts: a value with a space in it is one argument nobody meant.
+ */
+export function validateHost(value) {
+	const host = typeof value === "string" ? value.trim() : "";
+	if (!host || /[\s\u0000-\u001f]/.test(host) || host.length > 253) {
+		fail(`host must be one address, such as ${LOOPBACK}, ${ALL_INTERFACES} or 192.168.1.20, got ${JSON.stringify(value)}`);
+	}
+	return host;
+}
+
+/** Every non-loopback IPv4 address this machine answers on — the LAN and NetBird addresses a proxy or another computer can dial. */
+export function localAddresses() {
+	const found = [];
+	for (const entries of Object.values(networkInterfaces())) {
+		for (const entry of entries ?? []) {
+			if (String(entry.family) === "IPv4" && !entry.internal) found.push(entry.address);
+		}
+	}
+	return found;
 }
 
 /** The folder the user manager reads units from, honouring XDG_CONFIG_HOME like the rest of the app. */
@@ -69,10 +97,10 @@ export function servicePath(flags = {}) {
 }
 
 /** The unit text for one install. Ports and addresses here are data, never shell: nothing is interpolated into a command. */
-export function renderUnit({ launcher, port, path }) {
+export function renderUnit({ launcher, port, host = ALL_INTERFACES, path }) {
 	return [
 		"[Unit]",
-		"Description=pi-studio board (loopback only; reach it through your reverse proxy)",
+		`Description=pi-studio board (${host === LOOPBACK ? "loopback only; reach it through your reverse proxy" : "on all interfaces, for LAN and reverse-proxy access"})`,
 		"After=network-online.target",
 		"Wants=network-online.target",
 		"",
@@ -80,7 +108,7 @@ export function renderUnit({ launcher, port, path }) {
 		"Type=simple",
 		`ExecStart="${launcher}" --no-open`,
 		`Environment=PI_STUDIO_PORT=${port}`,
-		`Environment=PI_STUDIO_HOST=${LOOPBACK}`,
+		`Environment=PI_STUDIO_HOST=${host}`,
 		`Environment="PATH=${path}"`,
 		"Restart=on-failure",
 		"RestartSec=2",
@@ -149,22 +177,43 @@ function portFromUnit(unitPath) {
 	}
 }
 
-/** Install (or reinstall) the unit, reload, enable linger and start the service. */
+/** The host a written unit names, so status and tips report the install that exists, not the default. */
+function hostFromUnit(unitPath) {
+	try {
+		const found = /PI_STUDIO_HOST=(\S+)/.exec(readFileSync(unitPath, "utf8"));
+		return found ? found[1] : ALL_INTERFACES;
+	} catch {
+		return ALL_INTERFACES;
+	}
+}
+
+/** Where a proxy or another computer should dial, for the address a unit actually binds. */
+function dialTip(host, port) {
+	if (host === LOOPBACK) return `http://${LOOPBACK}:${port}/`;
+	if (host !== ALL_INTERFACES) return `http://${host}:${port}/`;
+	const addresses = localAddresses();
+	return addresses.length ? addresses.map((address) => `http://${address}:${port}/`).join(" or ") : `http://<lan-address>:${port}/`;
+}
+
+/** Install (or reinstall) the unit, reload, enable linger and restart the service so a changed host or port takes effect. */
 export async function installService({ appRoot, flags = {}, run = defaultRunner, out = console.log }) {
 	requireLinux();
 	const port = validatePort(flags.port ?? FIXED_PORT);
+	const host = validateHost(flags.host ?? ALL_INTERFACES);
 	const launcher = serviceLauncher(appRoot, flags);
 	const unitPath = serviceUnitPath(flags);
 	mkdirSync(serviceUnitDir(flags), { recursive: true });
 	const tempPath = `${unitPath}.tmp`;
-	writeFileSync(tempPath, renderUnit({ launcher, port, path: servicePath(flags) }), "utf8");
+	writeFileSync(tempPath, renderUnit({ launcher, port, host, path: servicePath(flags) }), "utf8");
 	try {
 		renameSync(tempPath, unitPath);
 		const reloaded = await systemctl(run, "daemon-reload");
 		if (reloaded.status !== 0) fail(`systemctl --user daemon-reload failed: ${reloaded.stderr || reloaded.stdout}`);
 		await ensureLinger(run, out);
-		const started = await systemctl(run, "enable", "--now", SERVICE_NAME);
-		if (started.status !== 0) fail(`systemctl --user enable --now ${SERVICE_NAME} failed: ${started.stderr || started.stdout}`);
+		const enabled = await systemctl(run, "enable", SERVICE_NAME);
+		if (enabled.status !== 0) fail(`systemctl --user enable ${SERVICE_NAME} failed: ${enabled.stderr || enabled.stdout}`);
+		const started = await systemctl(run, "restart", SERVICE_NAME);
+		if (started.status !== 0) fail(`systemctl --user restart ${SERVICE_NAME} failed: ${started.stderr || started.stdout}`);
 	} catch (error) {
 		rmSync(tempPath, { force: true });
 		if (existsSync(unitPath)) {
@@ -174,16 +223,16 @@ export async function installService({ appRoot, flags = {}, run = defaultRunner,
 		throw error;
 	}
 	out(`pi-studio: service unit written to ${unitPath}`);
+	out(`pi-studio: listening on ${host === ALL_INTERFACES ? "all interfaces (LAN and NetBird included)" : host}, port ${port}`);
 	const stateDir = stateDirOf(flags);
 	const listening = await waitForPort(stateDir, port);
 	if (listening) {
-		out(`pi-studio: service is running on http://${LOOPBACK}:${port}/`);
-		out(`pi-studio: point your reverse proxy at http://${LOOPBACK}:${port}/ — the secret link is printed at boot and kept out of the address bar`);
+		out(`pi-studio: point your reverse proxy at ${dialTip(host, port)} — the secret link is printed at boot and kept out of the address bar`);
 	} else {
-		out(`pi-studio: service started; waiting for http://${LOOPBACK}:${port}/ — check: pi-studio service status`);
+		out(`pi-studio: service started; waiting for ${dialTip(host, port)} — check: pi-studio service status`);
 	}
 	out(`pi-studio: manage it with: pi-studio service status, pi-studio service remove`);
-	return { unitPath, port, launcher };
+	return { unitPath, port, host, launcher };
 }
 
 /** Report whether the service is installed and whether it is running. The token is never printed. */
@@ -197,8 +246,10 @@ export async function serviceStatus({ flags = {}, run = defaultRunner, out = con
 	const active = await systemctl(run, "is-active", SERVICE_NAME);
 	const running = active.status === 0 && active.stdout.trim() === "active";
 	out(`pi-studio: service installed at ${unitPath}`);
-	out(`pi-studio: state ${running ? "running" : "not running"} (loopback only)`);
-	if (running) out(`pi-studio: reverse proxy target http://${LOOPBACK}:${portFromUnit(unitPath)}/`);
+	const host = hostFromUnit(unitPath);
+	const port = portFromUnit(unitPath);
+	out(`pi-studio: state ${running ? "running" : "not running"} (${host === ALL_INTERFACES ? "all interfaces" : host})`);
+	if (running) out(`pi-studio: reverse proxy target ${dialTip(host, port)}`);
 	const enabled = await systemctl(run, "is-enabled", SERVICE_NAME);
 	if (enabled.stdout.trim() === "enabled") out(`pi-studio: enabled at boot (login)`);
 	return { installed: true, active: running, unitPath };

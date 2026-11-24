@@ -94,7 +94,7 @@ export PATH="$HOME/.local/share/pi-node/current/bin:$PATH"
 ```bash
 pi-studio --version                # the version, the commit and whether the build is official
 pi-studio password                 # set or change the master password for remote unlock
-pi-studio service install          # run as a per-user systemd service on fixed port 4801, loopback only
+pi-studio service install          # run as a per-user systemd service on fixed port 4801, on every interface
 pi-studio service status           # is the service installed and running
 pi-studio service remove           # stop and delete the service; boards and state stay
 pi-studio plugins reload           # restart every registered plugin in the running daemon, from the file as it stands
@@ -104,13 +104,17 @@ pi-studio uninstall
 ```
 
 `service install` needs Linux and no `sudo`: it writes your own systemd unit, switches on
-staying up after logout, starts the board on port 4801 and prints the address. The board still
-listens on this machine only — put a reverse proxy in front of it (NetBird, Caddy, nginx), point
-that proxy at `http://127.0.0.1:4801/`, and open the board through the proxy's address. The proxy
-must carry WebSocket upgrades and pass the original host and protocol on, which is what marks the
-login cookie as secure. The proxy must overwrite (not pass through) the `X-Forwarded-Host` header a
-client may carry, because the board trusts that header to know its own address.
-`service install --port <n>` picks another fixed port instead. Stop the
+staying up after logout, starts the board on port 4801 and prints the address. As a service the
+board listens on every interface — LAN and NetBird addresses included — because a reverse proxy on
+another machine cannot dial this machine's loopback. Point that proxy (NetBird, Caddy, nginx) at
+the machine's LAN or overlay address on port 4801, for example `http://192.168.1.114:4801/` or
+`http://100.1.1.136:4801/`, and open the board through the proxy's address. The proxy must carry
+WebSocket upgrades and pass the original host and protocol on, which is what marks the login
+cookie as secure. The proxy must overwrite (not pass through) the `X-Forwarded-Host` header a
+client may carry, because the board trusts that header to know its own address. Listening on every
+interface means anyone on the LAN who reaches the port can try the board, so keep it to a network
+you trust or behind the proxy, and run `service install --host 127.0.0.1` to go back to this
+machine only. `service install --port <n>` picks another fixed port instead. Stop the
 service with `service remove` before `uninstall`, which refuses while it runs; `update` installs
 the new version beside the running one, so reinstall the service (`service remove`, then
 `service install`) to pick it up. If the fixed port is taken by something else, the service keeps
@@ -288,7 +292,7 @@ steps are its own, and a flow a human pinned is a recipe it follows — and give
 [docs/boss-and-subagents.md](docs/boss-and-subagents.md) draws the three flows and says what each role
 may do.
 
-The daemon listens on loopback only, and every data route needs the token it printed.
+The daemon listens on loopback unless told otherwise, and every data route needs the token it printed.
 
 ## Checks
 
