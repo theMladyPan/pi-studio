@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-24
+
+- feat: Add an optional master password (`pi-studio password`) so a signed-out browser reaching the board through a reverse proxy can unlock it with a password from a password manager instead of copying the printed token link; the daemon stores only a salted scrypt hash, throttles wrong passwords behind a doubling lockout, answers a cross-site unlock with 403, and keeps the printed link working as break-glass.
+- feat: Add `pi-studio service install`, which installs the board as a per-user systemd service on the fixed port 4801, on every interface so a reverse proxy on another machine (NetBird and alike) and the LAN can reach it — it cannot dial loopback — so it stays up after logout and the proxy has one stable target to point at; `--host 127.0.0.1` keeps it on this machine only; reinstalling restarts the service so a changed address or port takes effect; the install also carries the shell's provider API keys into a user-only file the service reads, since systemd never sees a login shell's environment and pi children spawned by the service would otherwise start with no keys, and `service remove` deletes that file too; `pi-studio service status` reports whether it runs and `pi-studio service remove` stops and deletes it without touching boards or state, and an explicitly asked port that is taken now refuses instead of quietly moving elsewhere.
+
 ## [0.8.0] - 2026-11-21
 
 - feat: Sort the crossroads workspaces with a dropdown in the omnibar — recent first, oldest first, name A→Z or name Z→A — so the list can be scanned by name or by last touch instead of only newest first; the choice is kept in the browser and scratch stays at the top.

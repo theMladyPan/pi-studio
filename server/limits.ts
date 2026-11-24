@@ -140,3 +140,16 @@ export const SHELL_OUTPUT_CHARS = 20_000;
  * press just emptied. Short enough to press again, long enough for a signal to have done its work.
  */
 export const SCRATCH_SETTLE_MS = 250;
+
+/** How many consecutive wrong master passwords lock `/unlock`. */
+export const UNLOCK_FAILURES_BEFORE_LOCK = 5;
+
+/** The first lock lasts a minute; each further failure doubles it, capped here. */
+export const UNLOCK_LOCK_BASE_MS = 60_000;
+export const UNLOCK_LOCK_CAP_MS = 30 * 60_000;
+
+/** The unlock body is one password in JSON: anything beyond a few kilobytes is not one. */
+export const UNLOCK_BODY_BYTES = 4_096;
+
+/** A master password longer than this is not one: the cap bounds the hash input. */
+export const MAX_PASSWORD_CHARS = 1_024;

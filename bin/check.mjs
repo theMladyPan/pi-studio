@@ -51,7 +51,9 @@ const syntaxFiles = [
 	"bin/build-release.mjs",
 	"bin/build-plugins.mjs",
 	"bin/package-release.mjs",
+	"bin/auth.mjs",
 	"bin/release-notes.mjs",
+	"bin/service.mjs",
 ];
 
 /**

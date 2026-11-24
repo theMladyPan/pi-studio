@@ -577,6 +577,12 @@
       if (!response.ok) {
         // A 403 here is the session cookie gone or the token refused, and the daemon's own word for it is
         // "forbidden": the board says the sentence a human can act on, so this page says the same one.
+        // When the daemon offers a master password, the unlock page is the sentence instead: its form
+        // trades for the same session the printed link would have minted.
+        if (response.status === 403 && response.headers.get("x-pi-studio-unlock") === "1") {
+          window.location.replace("/unlock?next=" + encodeURIComponent("/"));
+          return;
+        }
         const said =
           response.status === 403
             ? "session expired or token refused — reopen the link pi printed"

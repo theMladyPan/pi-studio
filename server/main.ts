@@ -8,8 +8,9 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { INSTANCE, STATE_DIR, STATE_FILE, buildHash, readJsonFile, writeJsonFile } from "./paths.ts";
-import { createSession, endSession, hasSession, reloadLoginState, sessionCookie, token } from "./login.ts";
-import { answer, fail, rejectUpgrade, send, serveStatic, upgradeWebSocket } from "./http.ts";
+import { createSession, endSession, hasSession, passwordIsSet, reloadLoginState, sessionCookie, token, unlockLockSecondsLeft, verifyMasterPassword } from "./login.ts";
+import { MAX_PASSWORD_CHARS, UNLOCK_BODY_BYTES } from "./limits.ts";
+import { answer, fail, readBody, rejectUpgrade, send, serveStatic, upgradeWebSocket } from "./http.ts";
 import { activeConfig, activeHomeDefaults, describeWorkspace, ensureScratch, reloadWorkspaces, welcomeClients, workspaceById, workspaceList, workspaces } from "./workspaces.ts";
 import { boardFor, boardFrom, boards, flushBoard } from "./store.ts";
 import { boardSettingsValues, settingsDocument } from "./settings-document.ts";
@@ -343,6 +344,17 @@ export const server = createServer((req, res) => {
 				res.end();
 				return;
 			}
+			if (url.pathname === "/unlock") {
+				// The doorbell for a signed-out browser: the password form when one is set, and a plain
+				// sentence when none is, so nobody stares at a dead form.
+				if (!passwordIsSet()) {
+					res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
+					res.end("<!doctype html><html><head><meta charset=utf-8><title>pi-studio</title></head><body><p>No master password is set on this daemon. Open the link pi printed on this machine, or set one there with <code>pi-studio password</code>.</p></body></html>");
+					return;
+				}
+				serveStatic(res, "unlock.html", "text/html; charset=utf-8", { "X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'", "Referrer-Policy": "no-referrer" });
+				return;
+			}
 			const statics = {
 				"/": ["welcome.html", "text/html; charset=utf-8"],
 				"/welcome.js": ["welcome.js", "text/javascript; charset=utf-8"],
@@ -395,11 +407,56 @@ export const server = createServer((req, res) => {
 				return;
 			}
 		}
+		// The master's doorbell, before the caller gate: a signed-out browser has no cookie yet, and a
+		// cross-site form has no business trying passwords or slamming the lockout, so the origin check
+		// comes first. A correct password trades for the same session cookie the printed link mints.
+		if (req.method === "POST" && url.pathname === "/unlock") {
+			if (!sameOriginRequest(req.headers)) {
+				req.resume();
+				fail(res, 403, "cross-site request");
+				return;
+			}
+			const raw = await readBody(req, UNLOCK_BODY_BYTES);
+			if (raw === undefined) {
+				fail(res, 413, "body too large");
+				return;
+			}
+			let parsed;
+			try {
+				parsed = JSON.parse(raw);
+			} catch {
+				fail(res, 400, "bad json");
+				return;
+			}
+			const candidate = parsed?.password;
+			if (typeof candidate !== "string" || candidate.length === 0 || candidate.length > MAX_PASSWORD_CHARS) {
+				fail(res, 400, "bad password field");
+				return;
+			}
+			const verdict = await verifyMasterPassword(candidate);
+			if (verdict === "unset") {
+				fail(res, 404, "no master password is set");
+				return;
+			}
+			if (verdict === "locked") {
+				res.setHeader("Retry-After", String(unlockLockSecondsLeft()));
+				fail(res, 429, "locked — try again later");
+				return;
+			}
+			if (verdict !== "ok") {
+				fail(res, 401, "wrong password");
+				return;
+			}
+			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store", "Set-Cookie": sessionCookie(createSession(), req.headers["x-forwarded-proto"]) });
+			res.end("{}");
+			return;
+		}
 		const caller = callerFor(url.searchParams.get("token"), req.headers.cookie);
 		if (!caller) {
 			// A refused POST has to have its body taken off the wire, otherwise the client's next
 			// request rides the same socket into the leftovers and reads as a reset.
 			req.resume();
+			if (passwordIsSet()) res.setHeader("X-Pi-Studio-Unlock", "1");
 			fail(res, 403, "forbidden");
 			return;
 		}
@@ -980,7 +1037,14 @@ export function startListening(wanted, host = bindAddress) {
  * deserves one sentence rather than a stack from inside the socket.
  */
 function onListenError(error) {
-	if (error.code === "EADDRINUSE") return startListening(0, bindAddress);
+	if (error.code === "EADDRINUSE") {
+		const askedPort = String(process.env.PI_STUDIO_PORT ?? "").trim();
+		if (askedPort) {
+			console.error(`pi-studio: port ${askedPort} is already taken; the daemon is not moving elsewhere. Free it or pick another port.`);
+			process.exit(1);
+		}
+		return startListening(0, bindAddress);
+	}
 	if (error.code === "EADDRNOTAVAIL" || error.code === "ENOTFOUND") {
 		console.error(`pi-studio: this machine has no address ${bindAddress}. 0.0.0.0 answers on all of them; leaving --host off answers on this machine only.`);
 		return void process.exit(1);
@@ -1062,7 +1126,20 @@ export function start() {
 	};
 	process.on("SIGTERM", stop);
 	process.on("SIGINT", stop);
-	startListening(Number(process.env.PI_STUDIO_PORT) || lastPort(), host);
+	// An explicitly asked port is a promise: a proxy may already point at it, so a taken one is
+	// a failure with one sentence, never a quiet move to a port nobody else knows about.
+	const askedPort = String(process.env.PI_STUDIO_PORT ?? "").trim();
+	let wantedPort = 0;
+	if (askedPort) {
+		wantedPort = Number(askedPort);
+		if (!Number.isInteger(wantedPort) || wantedPort < 1 || wantedPort > 65535) {
+			console.error(`pi-studio: PI_STUDIO_PORT "${askedPort}" is not a port between 1 and 65535`);
+			process.exit(1);
+		}
+	} else {
+		wantedPort = lastPort();
+	}
+	startListening(wantedPort, host);
 	// The plugins the human registered start after the socket is open, so a plugin that never answers its
 	// handshake delays nothing the human is waiting for. Each start is its own: one that fails is a line
 	// on stderr and the rest of the roster runs. Nothing is started before this call, and nothing here
