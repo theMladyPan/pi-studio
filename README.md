@@ -146,9 +146,9 @@ bothers you. `pi-studio password --state <folder>` sets it in an instance that u
 
 ### Publish address and plain http
 
-The crossroads settings page has a **general** group: the address the daemon publishes on (this
-machine only, one of the machine's real interfaces, or all interfaces) and whether plain http may be
-spoken there. Both take effect the next time the daemon starts. Plain http is allowed by default, so
+The crossroads settings page has a **general** group: tick each address the daemon publishes on
+(this machine only, any of the machine's real interfaces, or all interfaces at once), and whether
+plain http may be spoken there. Both take effect the next time the daemon starts. Plain http is allowed by default, so
 an existing NetBird/RPC setup keeps working until you turn it off deliberately. Loopback always serves
 plain http, so the printed local link never breaks.
 

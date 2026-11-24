@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LOOPBACK, bindHost, bindSource, boardUrls, isLoopback, localAddresses, tlsConfig, validatePublishHost } from "../server/listen.ts";
+import { LOOPBACK, bindHost, bindHosts, bindSource, boardUrls, isLoopback, localAddresses, tlsConfig, validatePublishHost, validatePublishHosts } from "../server/listen.ts";
 
 /**
  * Which address the daemon opens decides who can reach the board, so each way of asking is pinned here:
@@ -76,10 +76,13 @@ test("the settings file is the third voice in the bind, behind the flag and the 
 	assert.equal(bindHost([], {}, "0.0.0.0"), "0.0.0.0");
 	assert.equal(bindHost([], { PI_STUDIO_HOST: "192.168.1.5" }, "0.0.0.0"), "192.168.1.5");
 	assert.equal(bindHost(["--host", "10.0.0.4"], { PI_STUDIO_HOST: "192.168.1.5" }, "0.0.0.0"), "10.0.0.4");
-	assert.equal(bindSource([], {}, "0.0.0.0"), "the settings");
-	assert.equal(bindSource([], { PI_STUDIO_HOST: "192.168.1.5" }, "0.0.0.0"), "the environment");
-	assert.equal(bindSource(["--host", "10.0.0.4"], {}, "0.0.0.0"), "the flag");
-	assert.equal(bindSource([], {}, undefined), "loopback");
+	assert.deepEqual(bindHosts([], {}, ["127.0.0.1", "192.168.1.20"]), ["127.0.0.1", "192.168.1.20"]);
+	assert.deepEqual(bindHosts([], { PI_STUDIO_HOST: "192.168.1.5" }, ["127.0.0.1"]), ["192.168.1.5"]);
+	assert.deepEqual(bindHosts([], {}, []), [LOOPBACK]);
+	assert.equal(bindSource([], {}, ["0.0.0.0"]), "the settings");
+	assert.equal(bindSource([], { PI_STUDIO_HOST: "192.168.1.5" }, ["0.0.0.0"]), "the environment");
+	assert.equal(bindSource(["--host", "10.0.0.4"], {}, ["0.0.0.0"]), "the flag");
+	assert.equal(bindSource([], {}, []), "loopback");
 });
 
 test("a stored publish address is this machine's own or nowhere", () => {
@@ -93,6 +96,11 @@ test("a stored publish address is this machine's own or nowhere", () => {
 	for (const foreign of ["8.8.8.8", "192.168.1.99", "0.0.0.0 --no-open", "", "0.0.0.0\u0000"]) {
 		assert.throws(() => validatePublishHost(foreign, interfaces), /is not an address/, `accepted ${JSON.stringify(foreign)}`);
 	}
+	assert.deepEqual(validatePublishHosts(["127.0.0.1", "192.168.1.20", "192.168.1.20"], interfaces), ["127.0.0.1", "192.168.1.20"]);
+	assert.deepEqual(validatePublishHosts(["192.168.1.20", "0.0.0.0"], interfaces), ["0.0.0.0"]);
+	assert.throws(() => validatePublishHosts([], interfaces), /pick at least one address/);
+	assert.throws(() => validatePublishHosts(["8.8.8.8"], interfaces), /is not an address/);
+	assert.throws(() => validatePublishHosts("0.0.0.0", interfaces), /a list of addresses/);
 });
 
 test("TLS is off until both files are named, and a half pair is one sentence", () => {

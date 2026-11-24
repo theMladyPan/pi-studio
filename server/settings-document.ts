@@ -51,7 +51,7 @@ export type SettingsPick =
 export type SettingsField = {
 	id: string;
 	label: string;
-	type: "combo" | "select" | "toggle" | "list" | "prompt" | "prose";
+	type: "combo" | "select" | "toggle" | "list" | "prompt" | "prose" | "multi";
 	value: string | boolean | string[];
 	pick?: SettingsPick;
 	/** The ids a picker offers, where the daemon already knows them. */
@@ -129,7 +129,7 @@ type SettingsValues = Partial<{
 	showMathFormulas: string;
 	showCharts: string;
 	showReferences: string;
-	publish?: { host: string; allowPlainHttp: boolean };
+	publish?: { hosts: string[]; allowPlainHttp: boolean };
 }>;
 
 /**
@@ -189,7 +189,7 @@ function routeFor(scope: SettingsInput["scope"], id: string): string {
  */
 function writeFor(scope: SettingsInput["scope"], id: string): { route: string; body: Record<string, string> } {
 	const route = routeFor(scope, id);
-	if (id === "publishAddress") return { route, body: { host: "@value" } };
+	if (id === "publishAddress") return { route, body: { hosts: "@value" } };
 	if (id === "publishAllowPlainHttp") return { route, body: { allowPlainHttp: "@value" } };
 	if (id === "model") return { route, body: { provider: "@head", model: "@rest" } };
 	if (id === "helperModel") return { route, body: { helperProvider: "@head", helperModel: "@rest" } };
@@ -287,12 +287,12 @@ function workspacePromptFields(): SettingsField[] {
  * control never shows a blank for a choice the page did not make.
  */
 function generalGroup(values: SettingsValues): SettingsGroup {
-	const current = values.publish?.host ?? LOOPBACK;
+	const current = values.publish?.hosts?.length ? values.publish.hosts : [LOOPBACK];
 	const own = localAddresses();
 	const options = [LOOPBACK, ...own, "0.0.0.0"];
-	if (!options.includes(current)) options.push(current);
+	for (const one of current) if (!options.includes(one)) options.push(one);
 	const labels = options.map((option) =>
-		option === LOOPBACK ? "this machine only" : option === "0.0.0.0" ? "all interfaces" : option === current && !own.includes(option) ? `${option} (current)` : option,
+		option === LOOPBACK ? "this machine only" : option === "0.0.0.0" ? "all interfaces" : current.includes(option) && !own.includes(option) ? `${option} (current)` : option,
 	);
 	return {
 		id: "general",
@@ -303,13 +303,13 @@ function generalGroup(values: SettingsValues): SettingsGroup {
 			{
 				id: "publishAddress",
 				label: "publish address",
-				type: "select",
+				type: "multi",
 				pick: "options",
 				options,
 				labels,
 				value: current,
-				help: "the address the daemon answers on after the next start",
-				write: { route: "/settings/general", body: { host: "@value" } },
+				help: "tick each address the daemon answers on after the next start",
+				write: { route: "/settings/general", body: { hosts: "@value" } },
 			},
 			{
 				id: "publishAllowPlainHttp",

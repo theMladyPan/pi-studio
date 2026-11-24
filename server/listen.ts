@@ -39,10 +39,10 @@ function argValue(argv: readonly string[], name: string): string {
 }
 
 /** Where the winning bind address came from, so the startup line can say it once. */
-export function bindSource(argv: readonly string[] = process.argv.slice(2), env: Record<string, string | undefined> = process.env, fileHost?: string): string {
+export function bindSource(argv: readonly string[] = process.argv.slice(2), env: Record<string, string | undefined> = process.env, fileHosts?: readonly string[]): string {
 	if (hostFromArgs(argv)) return "the flag";
 	if ((env.PI_STUDIO_HOST ?? "").trim()) return "the environment";
-	if ((fileHost ?? "").trim()) return "the settings";
+	if ((fileHosts ?? []).some((one) => one.trim())) return "the settings";
 	return "loopback";
 }
 
@@ -63,19 +63,39 @@ export function bindHost(argv: readonly string[] = process.argv.slice(2), env: R
 }
 
 /**
- * The daemon-level publish choice, kept in `daemon.json` beside the token: which address the daemon
+ * The addresses to listen on: the flag, then the environment, then the settings file's list, then this
+ * machine only. The flag and the environment name one address; the settings page may tick several, and
+ * the daemon answers on each of them.
+ */
+export function bindHosts(argv: readonly string[] = process.argv.slice(2), env: Record<string, string | undefined> = process.env, fileHosts?: readonly string[]): string[] {
+	const flag = (hostFromArgs(argv) || "").trim();
+	const environment = (env.PI_STUDIO_HOST ?? "").trim();
+	const filed = (fileHosts ?? []).map((one) => one.trim()).filter(Boolean);
+	const asked = flag || environment || filed[0] || "";
+	if (!asked) return [LOOPBACK];
+	if (/[\s\u0000-\u001f]/.test(asked) || asked.length > 253) {
+		throw new Error(`"${asked}" is not an address: give one address, such as ${LOOPBACK}, 0.0.0.0 or 192.168.1.20`);
+	}
+	if (flag || environment) return [asked];
+	return filed;
+}
+
+/**
+ * The daemon-level publish choice, kept in `daemon.json` beside the token: which addresses the daemon
  * publishes on and whether it may speak plain http there. The settings page writes it; the next daemon
  * start reads it. Only the shape is checked here — a stored address is answered for by the socket and
  * by the route that checks it before saving.
  */
-export type PublishConfig = { host: string; allowPlainHttp: boolean };
+export type PublishConfig = { hosts: string[]; allowPlainHttp: boolean };
 
 export function publishConfig(): PublishConfig {
 	const saved = readJsonFile<any>(STATE_FILE, null);
 	const stored = saved?.publish;
+	// Both spellings are read: `hosts` is what the page writes, `host` is what an older build wrote.
+	const hosts = Array.isArray(stored?.hosts) ? stored.hosts.filter((one: unknown) => typeof one === "string" && one) : typeof stored?.host === "string" && stored.host ? [stored.host] : [];
 	return {
 		// Empty means nothing was chosen, which the bind reads as loopback and the startup line names as such.
-		host: typeof stored?.host === "string" && stored.host ? stored.host : "",
+		hosts,
 		allowPlainHttp: stored?.allowPlainHttp !== false,
 	};
 }
@@ -83,7 +103,7 @@ export function publishConfig(): PublishConfig {
 /** Persist the publish choice without disturbing the token and port beside it. */
 export function savePublishConfig(next: PublishConfig): PublishConfig {
 	const saved = readJsonFile<any>(STATE_FILE, null) ?? {};
-	const kept = { host: next.host, allowPlainHttp: next.allowPlainHttp };
+	const kept = { hosts: next.hosts, allowPlainHttp: next.allowPlainHttp };
 	writeJsonFile(STATE_FILE, { ...saved, publish: kept });
 	return kept;
 }
@@ -104,6 +124,23 @@ export function validatePublishHost(host: unknown, interfaces: Interfaces = netw
 		throw new Error(`"${asked}" is not an address of this machine: give ${LOOPBACK}, 0.0.0.0${own.length ? ` or ${own.join(", ")}` : ""}`);
 	}
 	return asked;
+}
+
+/**
+ * Whether a settings write may name these addresses: this machine's own, one or several, ticked in the
+ * settings page. Duplicates go, and "all interfaces" makes the rest pointless, so it stands alone.
+ */
+export function validatePublishHosts(hosts: unknown, interfaces: Interfaces = networkInterfaces()): string[] {
+	if (!Array.isArray(hosts)) throw new Error("the publish addresses are a list of addresses, not one");
+	const own = localAddresses(interfaces);
+	const checked: string[] = [];
+	for (const one of hosts) {
+		const asked = validatePublishHost(one, interfaces);
+		if (!checked.includes(asked)) checked.push(asked);
+	}
+	if (!checked.length) throw new Error("pick at least one address to publish on");
+	if (checked.includes("0.0.0.0") || checked.includes("::")) return ["0.0.0.0"];
+	return checked;
 }
 
 /**

@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- feat: Add a general group to the crossroads settings: the daemon's publish address (this machine only, one of the machine's own interfaces, or all interfaces) and whether plain http may be spoken there, both kept in `daemon.json` and applied at the next start; with plain http off and a TLS certificate configured, the main port serves HTTPS and plain http redirects to it, and with plain http off and no TLS the daemon refuses to start beyond loopback, while loopback always keeps serving plain http. [t-0eeeefc5]
+- feat: Add a general group to the crossroads settings: the addresses the daemon publishes on (this machine only, the machine's own interfaces, or all interfaces at once) and whether plain http may be spoken there, both kept in `daemon.json` and applied at the next start; with plain http off and a TLS certificate configured, the main port serves HTTPS and plain http redirects to it, and with plain http off and no TLS the daemon refuses to start beyond loopback, while loopback always keeps serving plain http. [t-0eeeefc5]
 
 ## [0.9.0] - 2026-11-24
 

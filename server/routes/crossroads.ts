@@ -20,7 +20,7 @@ import { CARD_AUDIENCE, CARD_LEVELS, CARD_SHOWS, CARD_VERBOSITY } from "../card-
 import { CHILD_INTEGRATION } from "../integration.ts";
 import { PATH_NAMES } from "../child/modes.ts";
 import { settingsDocument } from "../settings-document.ts";
-import { bindHost, publishConfig, savePublishConfig, validatePublishHost } from "../listen.ts";
+import { bindHosts, publishConfig, savePublishConfig, validatePublishHosts } from "../listen.ts";
 import { spawn } from "node:child_process";
 
 
@@ -221,9 +221,10 @@ export async function onSettingsGeneral(req, res) {
 	if (!body) return;
 	const next = { ...publishConfig() };
 	let asked = false;
-	if (body.host !== undefined) {
+	// `hosts` is what the page sends; `host` is the older single-address spelling, still answered.
+	if (body.hosts !== undefined || body.host !== undefined) {
 		try {
-			next.host = validatePublishHost(body.host);
+			next.hosts = validatePublishHosts(body.hosts !== undefined ? body.hosts : [body.host]);
 		} catch (error) {
 			return void fail(res, 400, (error as Error).message);
 		}
@@ -252,16 +253,16 @@ export async function onSettingsDefaults(res) {
 	// would refuse falls back to loopback rather than taking the whole document down with it.
 	let effective;
 	try {
-		effective = bindHost(process.argv.slice(2), process.env, publish.host);
+		effective = bindHosts(process.argv.slice(2), process.env, publish.hosts);
 	} catch {
-		effective = publish.host || "127.0.0.1";
+		effective = publish.hosts.length ? publish.hosts : ["127.0.0.1"];
 	}
 	answer(
 		res,
 		200,
 		settingsDocument({
 			scope: "defaults",
-			values: { ...activeHomeDefaults(), publish: { host: effective, allowPlainHttp: publish.allowPlainHttp } },
+			values: { ...activeHomeDefaults(), publish: { hosts: effective, allowPlainHttp: publish.allowPlainHttp } },
 			title: "every new board",
 			subtitle: "what every board is born with",
 			foot: "a board keeps its own copy from the moment it is opened",

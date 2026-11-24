@@ -335,24 +335,25 @@ test("a value nobody chose reads as the default rather than as an empty control"
 });
 
 test("the general group carries the publish choice and the current address", () => {
-	const doc = settingsDocument({ scope: "defaults", values: { publish: { host: "192.168.1.20", allowPlainHttp: false } }, ...LINES });
+	const doc = settingsDocument({ scope: "defaults", values: { publish: { hosts: ["192.168.1.20"], allowPlainHttp: false } }, ...LINES });
 	const general = doc.groups.find((group) => group.id === "general");
 	assert.ok(general);
 	assert.deepEqual((general.fields ?? []).map((field) => field.id), ["publishAddress", "publishAllowPlainHttp"]);
 	const byField = Object.fromEntries((general.fields ?? []).map((field) => [field.id, field]));
-	assert.equal(byField.publishAddress.value, "192.168.1.20");
+	assert.equal(byField.publishAddress.type, "multi");
+	assert.deepEqual(byField.publishAddress.value, ["192.168.1.20"]);
 	const offered = byField.publishAddress.options!;
 	assert.ok(offered.includes("192.168.1.20"));
 	assert.ok(offered.includes("127.0.0.1"));
 	assert.ok(offered.includes("0.0.0.0"));
 	assert.equal(byField.publishAddress.labels![offered.indexOf("127.0.0.1")], "this machine only");
 	assert.equal(byField.publishAddress.labels![offered.indexOf("0.0.0.0")], "all interfaces");
-	assert.deepEqual(byField.publishAddress.write, { route: "/settings/general", body: { host: "@value" } });
+	assert.deepEqual(byField.publishAddress.write, { route: "/settings/general", body: { hosts: "@value" } });
 	assert.equal(byField.publishAllowPlainHttp.value, false);
 	assert.deepEqual(byField.publishAllowPlainHttp.write, { route: "/settings/general", body: { allowPlainHttp: "@value" } });
 	// Nobody chose yet: loopback and plain http, the behaviour every old install had.
 	const fresh = settingsDocument({ scope: "defaults", values: {}, ...LINES });
 	const freshGeneral = Object.fromEntries((fresh.groups.find((group) => group.id === "general")?.fields ?? []).map((field) => [field.id, field]));
-	assert.equal(freshGeneral.publishAddress.value, "127.0.0.1");
+	assert.deepEqual(freshGeneral.publishAddress.value, ["127.0.0.1"]);
 	assert.equal(freshGeneral.publishAllowPlainHttp.value, true);
 });

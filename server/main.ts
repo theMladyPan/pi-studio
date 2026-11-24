@@ -24,7 +24,7 @@ import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead,
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
-import { LOOPBACK, bindHost, bindSource, boardUrls, isLoopback, publishConfig, tlsConfig } from "./listen.ts";
+import { LOOPBACK, bindHosts, bindSource, boardUrls, isLoopback, publishConfig, tlsConfig } from "./listen.ts";
 import { onMode, onPath, onThread, onThreadSpawn } from "./routes/board/thread.ts";
 import { onAnswer, onAsk, onPause } from "./routes/board/answer.ts";
 import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.ts";
@@ -366,10 +366,11 @@ function hostHeaderHostname(value) {
  */
 export function httpsRedirectLocation(req, url) {
 	if (tlsPort <= 0 || plainHttpAllowed) return null;
-	if (isLoopback(bindAddress)) return null;
+	if (bindAddresses.every((one) => isLoopback(one))) return null;
 	if (servedTlsOf(req)) return null;
 	if (isLoopbackAddress(req.socket?.remoteAddress)) return null;
-	const hostname = hostHeaderHostname(req.headers?.host) || (bindAddress.includes(":") ? `[${bindAddress}]` : bindAddress);
+	const fallback = bindAddresses[0] ?? LOOPBACK;
+	const hostname = hostHeaderHostname(req.headers?.host) || (fallback.includes(":") ? `[${fallback}]` : fallback);
 	return `https://${hostname}:${tlsPort}${url.pathname}${url.search}`;
 }
 
@@ -1062,8 +1063,14 @@ export function shutdown() {
 	const done = () => {
 		void plugins.finally(() => process.exit(0));
 	};
-	server.close(done);
-	httpsServer?.close(done);
+	const bound = new Set([...mainServers, ...plainServers, server]);
+	for (const one of bound) {
+		try {
+			one.close(done);
+		} catch {
+			// A server that never opened is already gone.
+		}
+	}
 	// A socket that will not close must not keep a stopped daemon alive.
 	setTimeout(() => process.exit(0), 1000).unref();
 }
@@ -1087,25 +1094,55 @@ export function lastPort() {
 
 
 
-/** The address this daemon holds: this machine only, unless the entry was told otherwise. */
-let bindAddress = LOOPBACK;
+/** The addresses this daemon holds: this machine only, unless the entry was told otherwise. */
+let bindAddresses = [LOOPBACK];
+/** One listener per published address on the main port, and one per address on the plain neighbour. */
+let mainServers = [];
+let plainServers = [];
 
 
 
-export function startListening(wanted, host = bindAddress) {
-	bindAddress = host;
-	if (tlsOptions) {
-		httpsServer = createHttpsServer(tlsOptions, requestHandler);
-		httpsServer.on("tlsClientError", (error) => {
-			console.error(`pi-studio: a plain http request reached the https port: ${error.message || error}`);
-		});
-		httpsServer.on("upgrade", onUpgrade);
-		httpsServer.once("error", onListenError);
-		httpsServer.listen(wanted, host, onListening);
-		return;
+export function startListening(wanted, hosts = bindAddresses) {
+	// A retry after a refusal rebinds from scratch; what is already open goes first.
+	for (const one of [...mainServers, ...plainServers]) {
+		try {
+			one.close(() => {});
+		} catch {
+			// A server that never opened is already gone.
+		}
 	}
-	server.once("error", onListenError);
-	server.listen(wanted, host, onListening);
+	mainServers = [];
+	plainServers = [];
+	bindAddresses = Array.isArray(hosts) ? hosts : [hosts];
+	const bindOne = (address, onPort, done) => {
+		const bound = tlsOptions ? createHttpsServer(tlsOptions, requestHandler) : createServer(requestHandler);
+		if (tlsOptions) {
+			bound.on("tlsClientError", (error) => {
+				console.error(`pi-studio: a plain http request reached the https port: ${error.message || error}`);
+			});
+			httpsServer = bound;
+		}
+		bound.on("upgrade", onUpgrade);
+		bound.once("error", onListenError);
+		mainServers.push(bound);
+		bound.listen(onPort, address, done);
+	};
+	// One port for every address: the first bind learns it, the rest follow onto it, so a random port
+	// is shared rather than each address electing its own.
+	bindOne(bindAddresses[0], wanted, () => {
+		const actual = mainServers[0].address().port;
+		const rest = bindAddresses.slice(1);
+		if (!rest.length) {
+			onListening();
+			return;
+		}
+		let settled = 0;
+		for (const address of rest) {
+			bindOne(address, actual, () => {
+				if (++settled === rest.length) onListening();
+			});
+		}
+	});
 }
 
 
@@ -1122,45 +1159,49 @@ function onListenError(error) {
 			console.error(`pi-studio: port ${askedPort} is already taken; the daemon is not moving elsewhere. Free it or pick another port.`);
 			process.exit(1);
 		}
-		return startListening(0, bindAddress);
+		return startListening(0, bindAddresses);
 	}
 	if (error.code === "EADDRNOTAVAIL" || error.code === "ENOTFOUND") {
-		console.error(`pi-studio: this machine has no address ${bindAddress}. 0.0.0.0 answers on all of them; leaving --host off answers on this machine only.`);
+		console.error(`pi-studio: this machine has no address ${bindAddresses.join(", ")}. 0.0.0.0 answers on all of them; leaving --host off answers on this machine only.`);
 		return void process.exit(1);
 	}
-	console.error(`pi-studio: could not listen on ${bindAddress}: ${error.message || error}`);
+	console.error(`pi-studio: could not listen on ${bindAddresses.join(", ")}: ${error.message || error}`);
 	process.exit(1);
 }
 
 
 
 export function onListening() {
-	const mainServer = httpsServer ?? server;
-	port = mainServer.address().port;
+	port = mainServers[0].address().port;
 	if (tlsOptions) tlsPort = port;
 	const saved = readJsonFile(STATE_FILE, null) ?? {};
 	writeJsonFile(STATE_FILE, { ...saved, token, port, at: new Date().toISOString() });
-	const links = boardUrls(bindAddress, port, token, undefined, tlsOptions ? "https" : "http");
+	const scheme = tlsOptions ? "https" : "http";
+	const links = bindAddresses.flatMap((address) => boardUrls(address, port, token, undefined, scheme));
 	const url = links[0];
 	console.log(`pi-studio${INSTANCE ? ` [${INSTANCE}]` : ""} listening on ${url}`);
 	for (const link of links.slice(1)) console.log(`  also on ${link}`);
 	if (tlsOptions && port > 1) {
-		// The plain-http listener rides on the main port's neighbour: the whole board when plain http
-		// is allowed, and a redirect to HTTPS when it is not. Loopback links printed above stay on the
-		// HTTPS port, which answers there too.
+		// A plain-http listener rides on the main port's neighbour, on every published address: the
+		// whole board when plain http is allowed, and a redirect to HTTPS when it is not.
 		const plainPort = port - 1;
-		server.once("error", (error) => {
-			console.error(`pi-studio: plain http on ${plainPort} could not open: ${error.message || error}`);
-		});
-		server.listen(plainPort, bindAddress, () => {
-			console.log(`plain http on http://127.0.0.1:${plainPort}${plainHttpAllowed || isLoopback(bindAddress) ? "" : " (redirects to https)"}`);
-		});
+		for (const address of bindAddresses) {
+			const bound = createServer(requestHandler);
+			bound.on("upgrade", onUpgrade);
+			bound.once("error", (error) => {
+				console.error(`pi-studio: plain http on ${plainPort} could not open: ${error.message || error}`);
+			});
+			plainServers.push(bound);
+			bound.listen(plainPort, address, () => {
+				console.log(`plain http on http://127.0.0.1:${plainPort}${plainHttpAllowed || bindAddresses.every((one) => isLoopback(one)) ? "" : " (redirects to https)"}`);
+			});
+		}
 	}
 	// The link is a credential, and what it costs is worth knowing before it is shared.
 	console.log(`that link signs a browser in for 30 days and then leaves the address bar; the token is also in ${STATE_FILE}`);
-	if (!isLoopback(bindAddress)) {
-		if (tlsOptions) console.log(`open beyond this machine on ${bindAddress} over https: share the link only on a network you trust`);
-		else console.log(`open beyond this machine on ${bindAddress}: share the link only on a network you trust, and the session cookie travels as plain http unless a TLS proxy carries it`);
+	if (bindAddresses.some((one) => !isLoopback(one))) {
+		if (tlsOptions) console.log(`open beyond this machine on ${bindAddresses.join(", ")} over https: share the link only on a network you trust`);
+		else console.log(`open beyond this machine on ${bindAddresses.join(", ")}: share the link only on a network you trust, and the session cookie travels as plain http unless a TLS proxy carries it`);
 	}
 	// Which build is answering matters the moment a tab looks wrong, so it is said out loud.
 	console.log(`build ${buildHash()}${INSTANCE ? `, state ${STATE_DIR}` : ""}`);
@@ -1201,16 +1242,16 @@ export function start() {
 		console.error(`pi-studio: ${error.message}`);
 		process.exit(1);
 	}
-	let host;
+	let hosts;
 	let tls;
 	let publish;
 	try {
 		publish = publishConfig();
-		host = bindHost(process.argv.slice(2), process.env, publish.host);
-		console.log(`pi-studio: publishing on ${host} (from ${bindSource(process.argv.slice(2), process.env, publish.host)})`);
+		hosts = bindHosts(process.argv.slice(2), process.env, publish.hosts);
+		console.log(`pi-studio: publishing on ${hosts.join(", ")} (from ${bindSource(process.argv.slice(2), process.env, publish.hosts)})`);
 		tls = tlsConfig();
 		plainHttpAllowed = publish.allowPlainHttp !== false;
-		if (!isLoopback(host) && !plainHttpAllowed && !tls.enabled) {
+		if (hosts.some((one) => !isLoopback(one)) && !plainHttpAllowed && !tls.enabled) {
 			console.error("pi-studio: plain http is refused beyond this machine, so this daemon needs a TLS certificate or loopback; leaving allow plain http on serves plain http");
 			process.exit(1);
 		}
@@ -1245,7 +1286,7 @@ export function start() {
 	} else {
 		wantedPort = lastPort();
 	}
-	startListening(wantedPort, host);
+	startListening(wantedPort, hosts);
 	// The plugins the human registered start after the socket is open, so a plugin that never answers its
 	// handshake delays nothing the human is waiting for. Each start is its own: one that fails is a line
 	// on stderr and the rest of the roster runs. Nothing is started before this call, and nothing here
