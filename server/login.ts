@@ -126,10 +126,18 @@ type AuthRecord = { n: number; r: number; p: number; salt: string; hash: string 
 function authRecord(): AuthRecord | null {
 	const saved = readJsonFile<any>(AUTH_FILE, null);
 	if (!saved || typeof saved !== "object" || saved.algo !== "scrypt") return null;
+	// The bounds matter beyond tidiness: these numbers go straight into the hasher, so anything
+	// beyond what the CLI ever writes is treated as no password at all rather than fed in.
 	const { N, r, p, salt, hash } = saved as { N?: unknown; r?: unknown; p?: unknown; salt?: unknown; hash?: unknown };
-	if (!Number.isInteger(N) || !Number.isInteger(r) || !Number.isInteger(p) || (N as number) < 2 || (r as number) < 1 || (p as number) < 1) return null;
-	if (typeof salt !== "string" || typeof hash !== "string") return null;
-	return { n: N as number, r: r as number, p: p as number, salt, hash };
+	if (!Number.isInteger(N) || !Number.isInteger(r) || !Number.isInteger(p)) return null;
+	const n = N as number;
+	const rr = r as number;
+	const pp = p as number;
+	// scrypt needs N a power of two; the CLI writes 16384/8/1, and anything grander than these
+	// ceilings is not a hash this app meant to verify against.
+	if (n < 2 || n > 2 ** 20 || (n & (n - 1)) !== 0 || rr < 1 || rr > 32 || pp < 1 || pp > 16) return null;
+	if (typeof salt !== "string" || !/^[0-9a-f]{32}$/.test(salt) || typeof hash !== "string" || !/^[0-9a-f]{128}$/.test(hash)) return null;
+	return { n, r: rr, p: pp, salt, hash };
 }
 
 /** Whether a master password is set, so the form, the lockout answers and the 403 hint agree. */
@@ -149,7 +157,8 @@ let verifying = false;
 
 /** Seconds the lock still has to run, for the `Retry-After` on a 429. */
 export function unlockLockSecondsLeft(): number {
-	return Math.max(0, Math.ceil((lockedUntilMs - Date.now()) / 1000));
+	// A racing retry that was turned away mid-hash is told to wait a second, never zero.
+	return Math.max(1, Math.ceil((lockedUntilMs - Date.now()) / 1000));
 }
 
 /** One verdict per `/unlock` attempt: whether this candidate unlocks, is wrong, is locked out, or nothing is set at all. */

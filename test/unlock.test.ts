@@ -87,6 +87,25 @@ test("verify: a changed password resets the lockout; concurrent attempts are not
 	assert.ok(pair.includes("locked"), `one of the pair must be turned away unhashed: ${pair}`);
 });
 
+/** Out-of-bounds records the daemon must refuse as no password at all: a giant or fractional cost, or a salt and hash that are not the lengths the CLI writes, must never reach the hasher. */
+test("verify: a malformed record counts as no password set", async () => {
+	// Written after the verify tests loaded the module: the module re-reads the file each attempt.
+	const bad = (record: string) => writeFileSync(join(verifyStateDir, "auth.json"), record, "utf8");
+	bad(JSON.stringify({ v: 1, algo: "scrypt", N: 3, r: 8, p: 1, salt: "00".repeat(16), hash: "00".repeat(64) }));
+	assert.equal(await verifyMasterPassword(PASSWORD), "unset", "N that is not a power of two");
+	bad(JSON.stringify({ v: 1, algo: "scrypt", N: 2 ** 30, r: 8, p: 1, salt: "00".repeat(16), hash: "00".repeat(64) }));
+	assert.equal(await verifyMasterPassword(PASSWORD), "unset", "a cost beyond the ceiling");
+	bad(JSON.stringify({ v: 1, algo: "scrypt", N: 16384, r: 8, p: 1, salt: "0".repeat(31), hash: "00".repeat(64) }));
+	assert.equal(await verifyMasterPassword(PASSWORD), "unset", "a salt of the wrong length");
+	bad(JSON.stringify({ v: 1, algo: "scrypt", N: 16384, r: 8, p: 1, salt: "00".repeat(16), hash: "00".repeat(63) }));
+	assert.equal(await verifyMasterPassword(PASSWORD), "unset", "a hash of the wrong length");
+	assert.equal(passwordIsSet(), false);
+	// And a well-formed record again: the file is re-read, so the password is back at once.
+	writeRecord(verifyStateDir);
+	assert.equal(passwordIsSet(), true);
+	assert.equal(await verifyMasterPassword(PASSWORD), "ok");
+});
+
 test("the CLI writes a hash-only record and removes it; mismatched entries write nothing", async () => {
 	const stateDir = scratchDir("cli");
 	const asked: string[] = [];

@@ -149,7 +149,17 @@ function main() {
 	mkdirSync(join(out, "bin"), { recursive: true });
 	writeFileSync(join(out, "bin", "pi-studio"), launcher);
 	chmodSync(join(out, "bin", "pi-studio"), 0o755);
-	const helpers = [...new Set([...launcher.matchAll(/\.\/([a-z0-9.-]+\.mjs)/g)].map((found) => found[1]))];
+	const helpers = new Set();
+	const queue = [...launcher.matchAll(/\.\/([a-z0-9._-]+\.mjs)/g)].map((found) => found[1]);
+	while (queue.length) {
+		// Each helper's own imports ride along, so a helper imported only by another helper cannot
+		// be left behind either; a name the launcher mentions but the tree does not hold fails loudly.
+		const helper = queue.shift();
+		if (helpers.has(helper)) continue;
+		helpers.add(helper);
+		const text = readFileSync(join(root, "bin", helper), "utf8");
+		queue.push(...[...text.matchAll(/\.\/([a-z0-9._-]+\.mjs)/g)].map((found) => found[1]));
+	}
 	for (const helper of helpers) {
 		cpSync(join(root, "bin", helper), join(out, "bin", helper));
 		chmodSync(join(out, "bin", helper), 0o755);

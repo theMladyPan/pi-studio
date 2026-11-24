@@ -128,8 +128,8 @@ already wants.
 
 The printed link keeps working everywhere as break-glass, so a password can never lock you out of
 your own machine. Wrong passwords are throttled: after five, the form waits out a lock that starts
-at a minute and doubles, and a cross-site request cannot trigger the lock or try passwords at
-all. `pi-studio password remove` takes it back. Changing or removing it leaves browsers that are
+at a minute and doubles, and a request from another site cannot try passwords or trip that lock —
+a plain scripted client could only keep the form waiting, never open it. `pi-studio password remove` takes it back. Changing or removing it leaves browsers that are
 already signed in signed in until the daemon restarts, so restart it right after a change if that
 bothers you. `pi-studio password --state <folder>` sets it in an instance that uses that state folder.
 
