@@ -6,6 +6,7 @@
  * binding a socket. The one place that starts it is server.ts.
  */
 import { createServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { spawn } from "node:child_process";
 import { INSTANCE, STATE_DIR, STATE_FILE, buildHash, readJsonFile, writeJsonFile } from "./paths.ts";
 import { createSession, endSession, hasSession, passwordIsSet, reloadLoginState, sessionCookie, token, unlockLockSecondsLeft, verifyMasterPassword } from "./login.ts";
@@ -17,13 +18,13 @@ import { boardSettingsValues, settingsDocument } from "./settings-document.ts";
 import { boardMeta, cardsFor } from "./cards.ts";
 import { closedCards } from "./bus.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
-import { onDefaults, onForgetWorkspace, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults } from "./routes/crossroads.ts";
+import { onDefaults, onForgetWorkspace, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults, onSettingsGeneral } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
 import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead, onFileRename, onFileWrite, onFilesList } from "./routes/board/files.ts";
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
-import { LOOPBACK, bindHost, boardUrls, isLoopback } from "./listen.ts";
+import { LOOPBACK, bindHost, bindSource, boardUrls, isLoopback, publishConfig, tlsConfig } from "./listen.ts";
 import { onMode, onPath, onThread, onThreadSpawn } from "./routes/board/thread.ts";
 import { onAnswer, onAsk, onPause } from "./routes/board/answer.ts";
 import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.ts";
@@ -324,9 +325,63 @@ function startTerminalStream(req, socket, head) {
 	};
 }
 
-export const server = createServer((req, res) => {
+/** Native TLS, set by `start()` before the socket opens; null on a plain-http daemon. */
+let tlsOptions = null;
+/** The HTTPS listener, when TLS is on; the exported `server` stays the plain-http one. */
+let httpsServer = null;
+/** The HTTPS port plain-http redirects point at, once the main socket is open. */
+let tlsPort = 0;
+/** Whether plain http may be spoken beyond loopback, from the publish choice at start. */
+let plainHttpAllowed = true;
+
+/** Whether this request arrived on the daemon's own HTTPS listener. */
+function servedTlsOf(req) {
+	return Boolean(req?.socket?.encrypted);
+}
+
+/**
+ * Whether the other end of this socket is this machine. The Host header cannot say it — any peer can
+ * claim it — so the peer's address decides the loopback exemption.
+ */
+function isLoopbackAddress(address) {
+	const normalised = String(address ?? "").replace(/^::ffff:/, "");
+	return normalised === "127.0.0.1" || normalised === "::1";
+}
+
+/** The bare hostname from a Host header, port and brackets stripped for the redirect target. */
+function hostHeaderHostname(value) {
+	const header = String(value ?? "").trim();
+	if (!header) return "";
+	if (header.startsWith("[")) {
+		const close = header.indexOf("]");
+		return close === -1 ? header : header.slice(0, close + 1);
+	}
+	return header.split(":")[0];
+}
+
+/**
+ * Where a plain-http request beyond loopback goes when plain http is refused and TLS answers: the same
+ * path and query on the HTTPS port. Loopback requests and requests already on HTTPS never redirect,
+ * so the printed local link keeps working over plain http.
+ */
+export function httpsRedirectLocation(req, url) {
+	if (tlsPort <= 0 || plainHttpAllowed) return null;
+	if (isLoopback(bindAddress)) return null;
+	if (servedTlsOf(req)) return null;
+	if (isLoopbackAddress(req.socket?.remoteAddress)) return null;
+	const hostname = hostHeaderHostname(req.headers?.host) || (bindAddress.includes(":") ? `[${bindAddress}]` : bindAddress);
+	return `https://${hostname}:${tlsPort}${url.pathname}${url.search}`;
+}
+
+function requestHandler(req, res) {
 	void (async () => {
 		const url = requestUrl(req.url);
+		const httpsLocation = httpsRedirectLocation(req, url);
+		if (httpsLocation) {
+			res.writeHead(308, { Location: httpsLocation, "Cache-Control": "no-store" });
+			res.end();
+			return;
+		}
 		// Static assets carry no session data, so the token only guards the data routes.
 		if (req.method === "GET") {
 			// The link pi prints is traded for a cookie and sent back without the token. A wrong token earns
@@ -336,7 +391,7 @@ export const server = createServer((req, res) => {
 			if (asked && (url.pathname === "/" || /^\/w\/[0-9a-f]{6,64}\/?$/.test(url.pathname) || /^\/git\/[0-9a-f]{6,64}\/?$/.test(url.pathname)) && callerOf(asked)?.human) {
 				url.searchParams.delete("token");
 				res.writeHead(303, {
-					"Set-Cookie": sessionCookie(createSession(), req.headers["x-forwarded-proto"]),
+					"Set-Cookie": sessionCookie(createSession(), req.headers["x-forwarded-proto"], servedTlsOf(req)),
 					Location: url.pathname + url.search,
 					"Cache-Control": "no-store",
 					"Referrer-Policy": "no-referrer",
@@ -447,7 +502,7 @@ export const server = createServer((req, res) => {
 				fail(res, 401, "wrong password");
 				return;
 			}
-			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store", "Set-Cookie": sessionCookie(createSession(), req.headers["x-forwarded-proto"]) });
+			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store", "Set-Cookie": sessionCookie(createSession(), req.headers["x-forwarded-proto"], servedTlsOf(req)) });
 			res.end("{}");
 			return;
 		}
@@ -477,7 +532,7 @@ export const server = createServer((req, res) => {
 		if (req.method === "POST" && url.pathname === "/logout") {
 			req.resume();
 			endSession(req.headers.cookie);
-			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store", "Set-Cookie": sessionCookie("", req.headers["x-forwarded-proto"]) });
+			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store", "Set-Cookie": sessionCookie("", req.headers["x-forwarded-proto"], servedTlsOf(req)) });
 			res.end("{}");
 			return;
 		}
@@ -546,6 +601,10 @@ export const server = createServer((req, res) => {
 		// pi's levels, so the page needs nothing else to render a control per setting.
 		if (req.method === "GET" && url.pathname === "/settings/defaults") {
 			await onSettingsDefaults(res);
+			return;
+		}
+		if (req.method === "POST" && url.pathname === "/settings/general") {
+			await onSettingsGeneral(req, res);
 			return;
 		}
 		if (req.method === "POST" && url.pathname === "/workspace") {
@@ -946,11 +1005,17 @@ export const server = createServer((req, res) => {
 		if (!res.headersSent) fail(res, 500, "board error");
 		else res.end();
 	});
-});
+}
 
+export const server = createServer(requestHandler);
 
-
-server.on("upgrade", (req, socket, head) => {
+function onUpgrade(req, socket, head) {
+	// Upgrades never reach the request handler, so the plain-http refusal is answered here: a
+	// non-loopback plain socket is dropped rather than handed the board or the shell.
+	if (!plainHttpAllowed && tlsPort > 0 && !servedTlsOf(req) && !isLoopbackAddress(req.socket?.remoteAddress)) {
+		socket.destroy();
+		return;
+	}
 	let pathname = "";
 	try {
 		pathname = requestUrl(req.url).pathname;
@@ -959,7 +1024,9 @@ server.on("upgrade", (req, socket, head) => {
 	}
 	if (pathname === "/terminal") startTerminalStream(req, socket, head);
 	else startLiveStream(req, socket, head);
-});
+}
+
+server.on("upgrade", onUpgrade);
 
 /** Set once the daemon is on its way out, so a second signal does not flush and close everything twice. */
 let stopping = false;
@@ -992,9 +1059,11 @@ export function shutdown() {
 	// exit waits for it. The clock below is the end of that wait: a plugin that ignores `shutdown` is
 	// left to the operating system rather than keeping a stopped daemon alive.
 	const plugins = stopPluginsOnExit();
-	server.close(() => {
+	const done = () => {
 		void plugins.finally(() => process.exit(0));
-	});
+	};
+	server.close(done);
+	httpsServer?.close(done);
 	// A socket that will not close must not keep a stopped daemon alive.
 	setTimeout(() => process.exit(0), 1000).unref();
 }
@@ -1025,6 +1094,16 @@ let bindAddress = LOOPBACK;
 
 export function startListening(wanted, host = bindAddress) {
 	bindAddress = host;
+	if (tlsOptions) {
+		httpsServer = createHttpsServer(tlsOptions, requestHandler);
+		httpsServer.on("tlsClientError", (error) => {
+			console.error(`pi-studio: a plain http request reached the https port: ${error.message || error}`);
+		});
+		httpsServer.on("upgrade", onUpgrade);
+		httpsServer.once("error", onListenError);
+		httpsServer.listen(wanted, host, onListening);
+		return;
+	}
 	server.once("error", onListenError);
 	server.listen(wanted, host, onListening);
 }
@@ -1056,16 +1135,32 @@ function onListenError(error) {
 
 
 export function onListening() {
-	port = server.address().port;
-	writeJsonFile(STATE_FILE, { token, port, at: new Date().toISOString() });
-	const links = boardUrls(bindAddress, port, token);
+	const mainServer = httpsServer ?? server;
+	port = mainServer.address().port;
+	if (tlsOptions) tlsPort = port;
+	const saved = readJsonFile(STATE_FILE, null) ?? {};
+	writeJsonFile(STATE_FILE, { ...saved, token, port, at: new Date().toISOString() });
+	const links = boardUrls(bindAddress, port, token, undefined, tlsOptions ? "https" : "http");
 	const url = links[0];
 	console.log(`pi-studio${INSTANCE ? ` [${INSTANCE}]` : ""} listening on ${url}`);
 	for (const link of links.slice(1)) console.log(`  also on ${link}`);
+	if (tlsOptions && port > 1) {
+		// The plain-http listener rides on the main port's neighbour: the whole board when plain http
+		// is allowed, and a redirect to HTTPS when it is not. Loopback links printed above stay on the
+		// HTTPS port, which answers there too.
+		const plainPort = port - 1;
+		server.once("error", (error) => {
+			console.error(`pi-studio: plain http on ${plainPort} could not open: ${error.message || error}`);
+		});
+		server.listen(plainPort, bindAddress, () => {
+			console.log(`plain http on http://127.0.0.1:${plainPort}${plainHttpAllowed || isLoopback(bindAddress) ? "" : " (redirects to https)"}`);
+		});
+	}
 	// The link is a credential, and what it costs is worth knowing before it is shared.
 	console.log(`that link signs a browser in for 30 days and then leaves the address bar; the token is also in ${STATE_FILE}`);
 	if (!isLoopback(bindAddress)) {
-		console.log(`open beyond this machine on ${bindAddress}: share the link only on a network you trust, and the session cookie travels as plain http unless a TLS proxy carries it`);
+		if (tlsOptions) console.log(`open beyond this machine on ${bindAddress} over https: share the link only on a network you trust`);
+		else console.log(`open beyond this machine on ${bindAddress}: share the link only on a network you trust, and the session cookie travels as plain http unless a TLS proxy carries it`);
 	}
 	// Which build is answering matters the moment a tab looks wrong, so it is said out loud.
 	console.log(`build ${buildHash()}${INSTANCE ? `, state ${STATE_DIR}` : ""}`);
@@ -1107,8 +1202,19 @@ export function start() {
 		process.exit(1);
 	}
 	let host;
+	let tls;
+	let publish;
 	try {
-		host = bindHost();
+		publish = publishConfig();
+		host = bindHost(process.argv.slice(2), process.env, publish.host);
+		console.log(`pi-studio: publishing on ${host} (from ${bindSource(process.argv.slice(2), process.env, publish.host)})`);
+		tls = tlsConfig();
+		plainHttpAllowed = publish.allowPlainHttp !== false;
+		if (!isLoopback(host) && !plainHttpAllowed && !tls.enabled) {
+			console.error("pi-studio: plain http is refused beyond this machine, so this daemon needs a TLS certificate or loopback; leaving allow plain http on serves plain http");
+			process.exit(1);
+		}
+		if (tls.enabled) tlsOptions = { key: tls.keyData, cert: tls.certData };
 	} catch (error) {
 		console.error(`pi-studio: ${error.message}`);
 		process.exit(1);

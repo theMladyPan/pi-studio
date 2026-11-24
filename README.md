@@ -144,6 +144,20 @@ a plain scripted client could only keep the form waiting, never open it. `pi-stu
 already signed in signed in until the daemon restarts, so restart it right after a change if that
 bothers you. `pi-studio password --state <folder>` sets it in an instance that uses that state folder.
 
+### Publish address and plain http
+
+The crossroads settings page has a **general** group: the address the daemon publishes on (this
+machine only, one of the machine's real interfaces, or all interfaces) and whether plain http may be
+spoken there. Both take effect the next time the daemon starts. Plain http is allowed by default, so
+an existing NetBird/RPC setup keeps working until you turn it off deliberately. Loopback always serves
+plain http, so the printed local link never breaks.
+
+With plain http off and a TLS certificate configured (`--tls-cert`/`--tls-key` or
+`PI_STUDIO_TLS_CERT`/`PI_STUDIO_TLS_KEY`), the main port speaks HTTPS and the port below it answers
+plain http with a `308` redirect to HTTPS for every non-loopback request. With plain http off and no
+TLS, the daemon refuses to start beyond loopback rather than serving the board in the clear. The
+daemon needs no reverse proxy for this: Node's own HTTPS is the TLS endpoint.
+
 `update` refuses a downgrade, and refuses to replace a custom build unless you ask it to with
 `--replace-custom`. The new version is unpacked and tried before anything is switched over, the earlier
 version folders stay on disk, and a running daemon keeps running on the old one until you restart it.
