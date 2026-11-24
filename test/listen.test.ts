@@ -107,8 +107,10 @@ test("a stored publish address is this machine's own or nowhere", () => {
 	assert.throws(() => validatePublishHosts("0.0.0.0", interfaces), /a list of addresses/);
 });
 
+const MISSING_PAIR = { cert: "/nonexistent-dir/cert.pem", key: "/nonexistent-dir/key.pem" };
+
 test("TLS is off until both files are named, and a half pair is one sentence", () => {
-	assert.equal(tlsConfig([], {}).enabled, false);
+	assert.equal(tlsConfig([], {}, MISSING_PAIR).enabled, false);
 	assert.throws(() => tlsConfig(["--tls-cert", "/tmp/cert.pem"], {}), /TLS needs both/);
 	assert.throws(() => tlsConfig([], { PI_STUDIO_TLS_KEY: "/tmp/key.pem" }), /TLS needs both/);
 	assert.throws(() => tlsConfig(["--tls-cert", "/tmp/no-such-cert.pem", "--tls-key", "/tmp/no-such-key.pem"], {}), /TLS files could not be read/);

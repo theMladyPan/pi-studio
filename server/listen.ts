@@ -201,12 +201,12 @@ export function generateTlsPair(dir?: string, names?: string[]): { cert: string;
 	}
 }
 
-export function tlsConfig(argv: readonly string[] = process.argv.slice(2), env: Record<string, string | undefined> = process.env): TlsConfig {
+export function tlsConfig(argv: readonly string[] = process.argv.slice(2), env: Record<string, string | undefined> = process.env, generatedFiles: { cert: string; key: string } = tlsFilesOf()): TlsConfig {
 	let cert = (argValue(argv, "--tls-cert") || env.PI_STUDIO_TLS_CERT || "").trim();
 	let key = (argValue(argv, "--tls-key") || env.PI_STUDIO_TLS_KEY || "").trim();
 	if (!cert && !key) {
 		// The generated pair is the third voice, and it needs no environment to find it.
-		const files = tlsFilesOf();
+		const files = generatedFiles;
 		if (!existsSync(files.cert) && !existsSync(files.key)) return { enabled: false, cert: "", key: "", certData: Buffer.alloc(0), keyData: Buffer.alloc(0) };
 		cert = files.cert;
 		key = files.key;
