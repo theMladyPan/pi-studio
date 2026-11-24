@@ -980,7 +980,14 @@ export function startListening(wanted, host = bindAddress) {
  * deserves one sentence rather than a stack from inside the socket.
  */
 function onListenError(error) {
-	if (error.code === "EADDRINUSE") return startListening(0, bindAddress);
+	if (error.code === "EADDRINUSE") {
+		const askedPort = String(process.env.PI_STUDIO_PORT ?? "").trim();
+		if (askedPort) {
+			console.error(`pi-studio: port ${askedPort} is already taken; the daemon is not moving elsewhere. Free it or pick another port.`);
+			process.exit(1);
+		}
+		return startListening(0, bindAddress);
+	}
 	if (error.code === "EADDRNOTAVAIL" || error.code === "ENOTFOUND") {
 		console.error(`pi-studio: this machine has no address ${bindAddress}. 0.0.0.0 answers on all of them; leaving --host off answers on this machine only.`);
 		return void process.exit(1);
@@ -1062,7 +1069,20 @@ export function start() {
 	};
 	process.on("SIGTERM", stop);
 	process.on("SIGINT", stop);
-	startListening(Number(process.env.PI_STUDIO_PORT) || lastPort(), host);
+	// An explicitly asked port is a promise: a proxy may already point at it, so a taken one is
+	// a failure with one sentence, never a quiet move to a port nobody else knows about.
+	const askedPort = String(process.env.PI_STUDIO_PORT ?? "").trim();
+	let wantedPort = 0;
+	if (askedPort) {
+		wantedPort = Number(askedPort);
+		if (!Number.isInteger(wantedPort) || wantedPort < 1 || wantedPort > 65535) {
+			console.error(`pi-studio: PI_STUDIO_PORT "${askedPort}" is not a port between 1 and 65535`);
+			process.exit(1);
+		}
+	} else {
+		wantedPort = lastPort();
+	}
+	startListening(wantedPort, host);
 	// The plugins the human registered start after the socket is open, so a plugin that never answers its
 	// handshake delays nothing the human is waiting for. Each start is its own: one that fails is a line
 	// on stderr and the rest of the roster runs. Nothing is started before this call, and nothing here

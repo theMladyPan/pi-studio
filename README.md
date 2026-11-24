@@ -93,11 +93,25 @@ export PATH="$HOME/.local/share/pi-node/current/bin:$PATH"
 
 ```bash
 pi-studio --version                # the version, the commit and whether the build is official
+pi-studio service install          # run as a per-user systemd service on fixed port 4801, loopback only
+pi-studio service status           # is the service installed and running
+pi-studio service remove           # stop and delete the service; boards and state stay
 pi-studio plugins reload           # restart every registered plugin in the running daemon, from the file as it stands
 pi-studio update                   # the latest official release, checked before it is installed
 pi-studio update --replace-custom  # replace a copy you built from your own source
 pi-studio uninstall
 ```
+
+`service install` needs Linux and no `sudo`: it writes your own systemd unit, switches on
+staying up after logout, starts the board on port 4801 and prints the address. The board still
+listens on this machine only — put a reverse proxy in front of it (NetBird, Caddy, nginx), point
+that proxy at `http://127.0.0.1:4801/`, and open the board through the proxy's address. The proxy
+must carry WebSocket upgrades and pass the original host and protocol on, which is what marks the
+login cookie as secure. `service install --port <n>` picks another fixed port instead. Stop the
+service with `service remove` before `uninstall`, which refuses while it runs; `update` installs
+the new version beside the running one, so reinstall the service (`service remove`, then
+`service install`) to pick it up. If the fixed port is taken by something else, the service keeps
+retrying in the open — free the port or reinstall with another `--port`.
 
 `update` refuses a downgrade, and refuses to replace a custom build unless you ask it to with
 `--replace-custom`. The new version is unpacked and tried before anything is switched over, the earlier
