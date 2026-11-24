@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pi-studio — unlock</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: #111418; color: #e8eaed; }
+  main { width: min(92vw, 340px); padding: 28px 24px; border: 1px solid #2b3038; border-radius: 10px; background: #171b21; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  label { display: block; font-size: 14px; margin-bottom: 10px; }
+  input { width: 100%; box-sizing: border-box; padding: 10px; font-size: 16px; color: inherit; background: #0d1013; border: 1px solid #3a4048; border-radius: 6px; }
+  button { width: 100%; margin-top: 14px; padding: 10px; font-size: 16px; border: 0; border-radius: 6px; background: #2f6f4f; color: #fff; cursor: pointer; }
+  .hint { min-height: 1.5em; margin-top: 12px; font-size: 14px; color: #ffb86b; }
+</style>
+</head>
+<body>
+<main>
+  <h1>pi-studio</h1>
+  <form id="unlockForm">
+    <label for="password">Master password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required />
+    <button type="submit">Unlock</button>
+    <p class="hint" id="hint" role="status"></p>
+  </form>
+</main>
+<script>
+// The one door for a signed-out browser. A correct password trades for the same session cookie the
+// printed link mints; the password itself never touches the address bar or the proxy logs.
+const form = document.getElementById("unlockForm");
+const hint = document.getElementById("hint");
+const input = document.getElementById("password");
+
+// Only a path inside this daemon is a door back in. A same-origin URL whose path is not one of the
+// pages the token trade knows, a backslash, or anything else at all, lands on the shelf.
+function safeNext() {
+  const raw = new URLSearchParams(location.search).get("next") || "/";
+  if (raw.includes("\\") || raw.includes("\n")) return "/";
+  try {
+    const url = new URL(raw, location.origin);
+    if (url.origin !== location.origin) return "/";
+    url.searchParams.delete("token");
+    const path = url.pathname;
+    if (path === "/" || /^\/w\/[0-9a-f]{6,64}\/?$/.test(path) || /^\/git\/[0-9a-f]{6,64}\/?$/.test(path)) return url.pathname + url.search;
+  } catch { return "/"; }
+  return "/";
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const password = input.value;
+  input.value = "";
+  hint.textContent = "…";
+  try {
+    const response = await fetch("/unlock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (response.ok) {
+      location.replace(safeNext());
+      return;
+    }
+    if (response.status === 404) { hint.textContent = "No master password is set on this daemon. Open the link pi printed on this machine."; return; }
+    if (response.status === 429) { hint.textContent = `Too many tries — wait ${response.headers.get("Retry-After") || "a minute"} seconds.`; return; }
+    if (response.status === 403) { hint.textContent = "This request did not come from this page."; return; }
+    hint.textContent = "Wrong password.";
+  } catch { hint.textContent = "pi-studio did not answer."; }
+  input.focus();
+});
+input.focus();
+</script>
+</body>
+</html>

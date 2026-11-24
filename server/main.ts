@@ -8,8 +8,9 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { INSTANCE, STATE_DIR, STATE_FILE, buildHash, readJsonFile, writeJsonFile } from "./paths.ts";
-import { createSession, endSession, hasSession, reloadLoginState, sessionCookie, token } from "./login.ts";
-import { answer, fail, rejectUpgrade, send, serveStatic, upgradeWebSocket } from "./http.ts";
+import { createSession, endSession, hasSession, passwordIsSet, reloadLoginState, sessionCookie, token, unlockLockSecondsLeft, verifyMasterPassword } from "./login.ts";
+import { MAX_PASSWORD_CHARS, UNLOCK_BODY_BYTES } from "./limits.ts";
+import { answer, fail, readBody, rejectUpgrade, send, serveStatic, upgradeWebSocket } from "./http.ts";
 import { activeConfig, activeHomeDefaults, describeWorkspace, ensureScratch, reloadWorkspaces, welcomeClients, workspaceById, workspaceList, workspaces } from "./workspaces.ts";
 import { boardFor, boardFrom, boards, flushBoard } from "./store.ts";
 import { boardSettingsValues, settingsDocument } from "./settings-document.ts";
@@ -343,6 +344,17 @@ export const server = createServer((req, res) => {
 				res.end();
 				return;
 			}
+			if (url.pathname === "/unlock") {
+				// The doorbell for a signed-out browser: the password form when one is set, and a plain
+				// sentence when none is, so nobody stares at a dead form.
+				if (!passwordIsSet()) {
+					res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
+					res.end("<!doctype html><html><head><meta charset=utf-8><title>pi-studio</title></head><body><p>No master password is set on this daemon. Open the link pi printed on this machine, or set one there with <code>pi-studio password</code>.</p></body></html>");
+					return;
+				}
+				serveStatic(res, "unlock.html", "text/html; charset=utf-8", { "X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'", "Referrer-Policy": "no-referrer" });
+				return;
+			}
 			const statics = {
 				"/": ["welcome.html", "text/html; charset=utf-8"],
 				"/welcome.js": ["welcome.js", "text/javascript; charset=utf-8"],
@@ -395,11 +407,56 @@ export const server = createServer((req, res) => {
 				return;
 			}
 		}
+		// The master's doorbell, before the caller gate: a signed-out browser has no cookie yet, and a
+		// cross-site form has no business trying passwords or slamming the lockout, so the origin check
+		// comes first. A correct password trades for the same session cookie the printed link mints.
+		if (req.method === "POST" && url.pathname === "/unlock") {
+			if (!sameOriginRequest(req.headers)) {
+				req.resume();
+				fail(res, 403, "cross-site request");
+				return;
+			}
+			const raw = await readBody(req, UNLOCK_BODY_BYTES);
+			if (raw === undefined) {
+				fail(res, 413, "body too large");
+				return;
+			}
+			let parsed;
+			try {
+				parsed = JSON.parse(raw);
+			} catch {
+				fail(res, 400, "bad json");
+				return;
+			}
+			const candidate = parsed?.password;
+			if (typeof candidate !== "string" || candidate.length === 0 || candidate.length > MAX_PASSWORD_CHARS) {
+				fail(res, 400, "bad password field");
+				return;
+			}
+			const verdict = await verifyMasterPassword(candidate);
+			if (verdict === "unset") {
+				fail(res, 404, "no master password is set");
+				return;
+			}
+			if (verdict === "locked") {
+				res.setHeader("Retry-After", String(unlockLockSecondsLeft()));
+				fail(res, 429, "locked — try again later");
+				return;
+			}
+			if (verdict !== "ok") {
+				fail(res, 401, "wrong password");
+				return;
+			}
+			res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store", "Set-Cookie": sessionCookie(createSession(), req.headers["x-forwarded-proto"]) });
+			res.end("{}");
+			return;
+		}
 		const caller = callerFor(url.searchParams.get("token"), req.headers.cookie);
 		if (!caller) {
 			// A refused POST has to have its body taken off the wire, otherwise the client's next
 			// request rides the same socket into the leftovers and reads as a reset.
 			req.resume();
+			if (passwordIsSet()) res.setHeader("X-Pi-Studio-Unlock", "1");
 			fail(res, 403, "forbidden");
 			return;
 		}

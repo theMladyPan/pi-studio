@@ -14357,17 +14357,25 @@ function connect() {
     setLive(false, "pi not reachable — retrying");
     void (async () => {
       let signedIn = true;
+      // The refusal carries the offer when a master password is set: the unlock page then replaces the
+      // sentence, since its form trades for the same session the printed link would have minted.
+      let unlockOffered = false;
       const probe = new AbortController();
       const probeTimer = setTimeout(() => probe.abort(), 3_000);
       try {
         const response = await fetch(`/state?${auth}`, { cache: "no-store", signal: probe.signal });
         signedIn = response.status !== 401 && response.status !== 403;
+        unlockOffered = response.status === 403 && response.headers.get("x-pi-studio-unlock") === "1";
       } catch {
         signedIn = true;
       } finally {
         clearTimeout(probeTimer);
       }
       if (!signedIn) {
+        if (unlockOffered) {
+          window.location.replace("/unlock?next=" + encodeURIComponent(location.pathname));
+          return;
+        }
         setLive(false, "session expired or token refused — reopen the link pi printed");
         return;
       }
