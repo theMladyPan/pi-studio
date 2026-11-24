@@ -20,6 +20,7 @@ import { CARD_AUDIENCE, CARD_LEVELS, CARD_SHOWS, CARD_VERBOSITY } from "../card-
 import { CHILD_INTEGRATION } from "../integration.ts";
 import { PATH_NAMES } from "../child/modes.ts";
 import { settingsDocument } from "../settings-document.ts";
+import { bindHost, publishConfig, savePublishConfig, validatePublishHost } from "../listen.ts";
 import { spawn } from "node:child_process";
 
 
@@ -210,16 +211,51 @@ export async function onDefaults(req, res) {
 
 
 /**
+ * The daemon's publish choice: which address to answer on and whether plain http may be spoken there.
+ * It is daemon-level state, so it lives in `daemon.json` beside the token and is read at the next start,
+ * never in a board's config. The caller gate and the origin check in `server/main.ts` already keep
+ * threads and other sites out; this route only checks the words.
+ */
+export async function onSettingsGeneral(req, res) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const next = { ...publishConfig() };
+	let asked = false;
+	if (body.host !== undefined) {
+		try {
+			next.host = validatePublishHost(body.host);
+		} catch (error) {
+			return void fail(res, 400, (error as Error).message);
+		}
+		asked = true;
+	}
+	if (body.allowPlainHttp !== undefined) {
+		if (typeof body.allowPlainHttp !== "boolean") return void fail(res, 400, "allowPlainHttp must be true or false");
+		next.allowPlainHttp = body.allowPlainHttp;
+		asked = true;
+	}
+	if (!asked) return void fail(res, 400, "nothing to save");
+	savePublishConfig(next);
+	answer(res, 200, { publish: next });
+}
+
+
+
+/**
  * The crossroads' settings as one document: the same values as GET /defaults, as the tree a page draws.
  * A board keeps its own copy from the moment it is opened, which is what the foot says.
  */
 export async function onSettingsDefaults(res) {
+	const publish = publishConfig();
+	// The control shows the address the daemon is actually on, flag and environment included, so a
+	// choice made outside the page never reads as a blank.
+	const effective = bindHost(process.argv.slice(2), process.env, publish.host);
 	answer(
 		res,
 		200,
 		settingsDocument({
 			scope: "defaults",
-			values: activeHomeDefaults(),
+			values: { ...activeHomeDefaults(), publish: { host: effective, allowPlainHttp: publish.allowPlainHttp } },
 			title: "every new board",
 			subtitle: "what every board is born with",
 			foot: "a board keeps its own copy from the moment it is opened",

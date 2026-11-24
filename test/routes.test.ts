@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { request } from "node:http";import { tmpdir } from "node:os";
+import { request } from "node:http";
+import { request as httpsRequest } from "node:https";import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -3637,6 +3638,145 @@ describe("routes", { concurrency: 8 }, () => {
 		} finally {
 			daemon.child.kill();
 			for (const gone of [stateHome, folder]) await removeTree(gone);
+		}
+	});
+
+	test("the publish choice is saved on its own route and read back", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-publish-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-publish-work-"));
+		const daemon = await boot(stateHome);
+		try {
+			const saved = await post(daemon, "/settings/general", { host: "0.0.0.0", allowPlainHttp: false });
+			assert.equal(saved.status, 200, saved.body.slice(0, 200));
+			assert.deepEqual(JSON.parse(saved.body).publish, { host: "0.0.0.0", allowPlainHttp: false });
+			// Beside the token and the port, not in a board's config.
+			const stored = JSON.parse(readFileSync(join(stateHome, "daemon.json"), "utf8"));
+			assert.deepEqual(stored.publish, { host: "0.0.0.0", allowPlainHttp: false });
+			assert.ok(stored.token, "the token was disturbed");
+			// The settings document reads the choice back, and the address carries the current one.
+			const doc = JSON.parse((await get(daemon, `/settings/defaults?token=${daemon.token}`)).body);
+			const leaves: any[] = [];
+			const walk = (groups: any[]) => { for (const g of groups) { leaves.push(...(g.fields ?? [])); walk(g.groups ?? []); } };
+			walk(doc.groups);
+			const address = leaves.find((f: any) => f.id === "publishAddress");
+			const http = leaves.find((f: any) => f.id === "publishAllowPlainHttp");
+			assert.ok(address && http, "no publish leaves in the settings document");
+			assert.equal(http.value, false);
+			assert.equal(address.value, stored.publish.host);
+			assert.ok(address.options.includes(stored.publish.host));
+			// A foreign address and a non-boolean are one sentence each, and the choice stands.
+			assert.equal((await post(daemon, "/settings/general", { host: "8.8.8.8" })).status, 400);
+			assert.equal((await post(daemon, "/settings/general", { allowPlainHttp: "no" })).status, 400);
+			assert.equal((await post(daemon, "/settings/general", {})).status, 400);
+			const after = JSON.parse(readFileSync(join(stateHome, "daemon.json"), "utf8"));
+			assert.deepEqual(after.publish, { host: "0.0.0.0", allowPlainHttp: false });
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder]) await removeTree(gone);
+		}
+	});
+
+	test("a thread's token cannot write the publish choice", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-publish-token-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-publish-token-work-"));
+		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+		const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+		try {
+			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+			const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			const said = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" });
+			assert.equal(said.status, 200);
+			const child = await childEnvOf(daemon, stub.envFile);
+			const refused = await postAs(daemon, child.token, board.id, "/settings/general", { host: "0.0.0.0" });
+			assert.equal(refused.status, 403);
+			assert.equal(refused.body, "a thread may not use that");
+			const stored = JSON.parse(readFileSync(join(stateHome, "daemon.json"), "utf8"));
+			assert.equal(stored.publish, undefined, "a thread wrote the publish choice");
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
+		}
+	});
+
+	test("plain http beyond loopback redirects to https when TLS is on and http is refused", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-tls-"));
+		const certDir = mkdtempSync(join(tmpdir(), "pi-studio-tls-cert-"));
+		execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=localhost", "-keyout", join(certDir, "key.pem"), "-out", join(certDir, "cert.pem")]);
+		writeFileSync(join(stateHome, "daemon.json"), `${JSON.stringify({ token: "tls-token", publish: { host: "0.0.0.0", allowPlainHttp: false } })}\n`);
+		const child = spawn(process.execPath, [join(repo, "server.ts"), "--no-open"], {
+			cwd: repo,
+			env: { ...process.env, PI_STUDIO_STATE: stateHome, PI_STUDIO_PORT: "", PI_STUDIO_HOST: "0.0.0.0", PI_STUDIO_TLS_CERT: join(certDir, "cert.pem"), PI_STUDIO_TLS_KEY: join(certDir, "key.pem") },
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		try {
+			const lines = await new Promise<string>((resolve, reject) => {
+				let seen = "";
+				const timer = setTimeout(() => reject(new Error(`no tls listening line: ${seen.slice(-400)}`)), 20_000);
+				child.stdout.on("data", (chunk) => {
+					seen += String(chunk);
+					if (seen.includes("plain http on http://")) {
+						clearTimeout(timer);
+						resolve(seen);
+					}
+				});
+				child.on("exit", (code) => reject(new Error(`the daemon exited with ${code}: ${seen.slice(-400)}`)));
+			});
+			const httpsMatch = lines.match(/listening on https:\/\/[^:\s]+:(\d+)\//);
+			const plainMatch = lines.match(/plain http on http:\/\/[^:\s]+:(\d+)/);
+			assert.ok(httpsMatch && plainMatch, lines.slice(-400));
+			const httpsPort = Number(httpsMatch[1]);
+			const plainPort = Number(plainMatch[1]);
+			assert.equal(plainPort, httpsPort - 1);
+			const plain = (path: string, host: string) =>
+				new Promise<{ status: number; location: string }>((resolve, reject) => {
+					const req = request({ hostname: "127.0.0.1", port: plainPort, path, method: "GET", headers: { host }, agent: false }, (res) => {
+						res.resume();
+						res.on("end", () => resolve({ status: res.statusCode ?? 0, location: res.headers.location ?? "" }));
+					});
+					req.on("error", reject);
+					req.end();
+				});
+			// A non-loopback Host lands on the HTTPS port with path and query kept; loopback is served.
+			const redirected = await plain("/w/abc123?x=1", `fedora:${plainPort}`);
+			assert.equal(redirected.status, 308);
+			assert.equal(redirected.location, `https://fedora:${httpsPort}/w/abc123?x=1`);
+			const local = await plain("/", `127.0.0.1:${plainPort}`);
+			assert.equal(local.status, 200);
+			// The HTTPS port itself answers.
+			const secure = await new Promise<number>((resolve, reject) => {
+				const req = httpsRequest({ hostname: "127.0.0.1", port: httpsPort, path: "/", method: "GET", rejectUnauthorized: false }, (res) => {
+					res.resume();
+					res.on("end", () => resolve(res.statusCode ?? 0));
+				});
+				req.on("error", reject);
+				req.end();
+			});
+			assert.equal(secure, 200);
+		} finally {
+			child.kill();
+			for (const gone of [stateHome, certDir]) await removeTree(gone);
+		}
+	});
+
+	test("the daemon refuses a non-loopback bind with no TLS and plain http refused", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-tls-refuse-"));
+		writeFileSync(join(stateHome, "daemon.json"), `${JSON.stringify({ token: "tls-token", publish: { host: "0.0.0.0", allowPlainHttp: false } })}\n`);
+		const child = spawn(process.execPath, [join(repo, "server.ts"), "--no-open"], {
+			cwd: repo,
+			env: { ...process.env, PI_STUDIO_STATE: stateHome, PI_STUDIO_PORT: "", PI_STUDIO_HOST: "0.0.0.0" },
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		try {
+			const { code, stderr } = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+				let stderr = "";
+				child.stderr.on("data", (chunk) => (stderr += String(chunk)));
+				child.on("exit", (code) => resolve({ code, stderr }));
+			});
+			assert.equal(code, 1);
+			assert.match(stderr, /plain http is refused beyond this machine/);
+		} finally {
+			child.kill();
+			await removeTree(stateHome);
 		}
 	});
 

@@ -1105,7 +1105,7 @@
               [true, labels[labels.length - 1]],
               [false, labels[0]],
             ]
-          : options.map((option) => [option, String(option)]);
+          : options.map((option, index) => [option, field.labels?.[index] ?? String(option)]);
       const seg = el("div", "seg-row");
       seg.setAttribute("role", "group");
       seg.setAttribute("aria-label", field.label);

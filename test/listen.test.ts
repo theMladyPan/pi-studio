@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LOOPBACK, bindHost, boardUrls, isLoopback, localAddresses } from "../server/listen.ts";
+import { LOOPBACK, bindHost, bindSource, boardUrls, isLoopback, localAddresses, tlsConfig, validatePublishHost } from "../server/listen.ts";
 
 /**
  * Which address the daemon opens decides who can reach the board, so each way of asking is pinned here:
@@ -70,4 +70,38 @@ test("the addresses a machine answers on leave out loopback and IPv6", () => {
 		}),
 		["10.0.0.4"],
 	);
+});
+
+test("the settings file is the third voice in the bind, behind the flag and the environment", () => {
+	assert.equal(bindHost([], {}, "0.0.0.0"), "0.0.0.0");
+	assert.equal(bindHost([], { PI_STUDIO_HOST: "192.168.1.5" }, "0.0.0.0"), "192.168.1.5");
+	assert.equal(bindHost(["--host", "10.0.0.4"], { PI_STUDIO_HOST: "192.168.1.5" }, "0.0.0.0"), "10.0.0.4");
+	assert.equal(bindSource([], {}, "0.0.0.0"), "the settings");
+	assert.equal(bindSource([], { PI_STUDIO_HOST: "192.168.1.5" }, "0.0.0.0"), "the environment");
+	assert.equal(bindSource(["--host", "10.0.0.4"], {}, "0.0.0.0"), "the flag");
+	assert.equal(bindSource([], {}, undefined), "loopback");
+});
+
+test("a stored publish address is this machine's own or nowhere", () => {
+	const interfaces = {
+		lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+		wlan0: [{ address: "192.168.1.20", family: "IPv4", internal: false }],
+	};
+	assert.equal(validatePublishHost("127.0.0.1", interfaces), "127.0.0.1");
+	assert.equal(validatePublishHost("0.0.0.0", interfaces), "0.0.0.0");
+	assert.equal(validatePublishHost("192.168.1.20", interfaces), "192.168.1.20");
+	for (const foreign of ["8.8.8.8", "192.168.1.99", "0.0.0.0 --no-open", "", "0.0.0.0\u0000"]) {
+		assert.throws(() => validatePublishHost(foreign, interfaces), /is not an address/, `accepted ${JSON.stringify(foreign)}`);
+	}
+});
+
+test("TLS is off until both files are named, and a half pair is one sentence", () => {
+	assert.equal(tlsConfig([], {}).enabled, false);
+	assert.throws(() => tlsConfig(["--tls-cert", "/tmp/cert.pem"], {}), /TLS needs both/);
+	assert.throws(() => tlsConfig([], { PI_STUDIO_TLS_KEY: "/tmp/key.pem" }), /TLS needs both/);
+	assert.throws(() => tlsConfig(["--tls-cert", "/tmp/no-such-cert.pem", "--tls-key", "/tmp/no-such-key.pem"], {}), /TLS files could not be read/);
+});
+
+test("the printed links follow the scheme the daemon speaks", () => {
+	assert.deepEqual(boardUrls("127.0.0.1", 4801, "abc123", undefined, "https"), ["https://127.0.0.1:4801/?token=abc123"]);
 });
