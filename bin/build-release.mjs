@@ -141,14 +141,16 @@ function main() {
 	// The launcher imports its lifecycle helpers by relative path, so the staged tree must
 	// carry them too; the source-only install entry (bin/install.mjs) stays out. The doctor the
 	// launcher reaches for is compiled like the rest of the app, so its specifier is the second
-	// rewrite: both name a module the staged tree holds as JavaScript.
+	// rewrite: both name a module the staged tree holds as JavaScript. The list itself is read
+	// off the launcher, so the next helper cannot be forgotten the way two already were.
 	const launcher = readFileSync(join(root, "bin", "pi-studio"), "utf8")
 		.replaceAll("server.ts", "server.js")
 		.replaceAll("server/doctor.ts", "server/doctor.js");
 	mkdirSync(join(out, "bin"), { recursive: true });
 	writeFileSync(join(out, "bin", "pi-studio"), launcher);
 	chmodSync(join(out, "bin", "pi-studio"), 0o755);
-	for (const helper of ["runtime.mjs", "manage.mjs"]) {
+	const helpers = [...new Set([...launcher.matchAll(/\.\/([a-z0-9.-]+\.mjs)/g)].map((found) => found[1]))];
+	for (const helper of helpers) {
 		cpSync(join(root, "bin", helper), join(out, "bin", helper));
 		chmodSync(join(out, "bin", helper), 0o755);
 	}

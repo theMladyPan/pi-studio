@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- feat: Add an optional master password (`pi-studio password`) so a signed-out browser reaching the board through a reverse proxy can unlock it with a password from a password manager instead of copying the printed token link; the daemon stores only a salted scrypt hash, throttles wrong passwords behind a doubling lockout, answers a cross-site unlock with 403, and keeps the printed link working as break-glass. [t-0eeeefc5]
 - feat: Add `pi-studio service install`, which installs the board as a per-user systemd service on the fixed port 4801, loopback only, so it stays up after logout and a reverse proxy (NetBird and alike) has one stable target to point at; `pi-studio service status` reports whether it runs and `pi-studio service remove` stops and deletes it without touching boards or state, and an explicitly asked port that is taken now refuses instead of quietly moving elsewhere. [t-0eeeefc5]
 
 ## [0.8.0] - 2026-11-21

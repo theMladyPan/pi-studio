@@ -96,6 +96,12 @@ test("the staged tree carries the compiled app, runtime assets, and metadata —
 		"docs/boss-and-subagents.md",
 		"docs/plugins.md",
 		"bin/pi-studio",
+		"bin/runtime.mjs",
+		"bin/manage.mjs",
+		"bin/plugin-add.mjs",
+		"bin/plugins-reload.mjs",
+		"bin/service.mjs",
+		"bin/auth.mjs",
 		"package.json",
 		"build.json",
 	]) {

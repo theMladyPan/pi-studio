@@ -7,9 +7,12 @@
  * `owner` is a prefix of the token's hash: a daemon started with another token finds sessions that
  * belong to the old one and drops them, which is how editing `daemon.json` revokes every browser.
  */
-import { createHash } from "node:crypto";
+import { createHash, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { join } from "node:path";
+import { UNLOCK_FAILURES_BEFORE_LOCK, UNLOCK_LOCK_BASE_MS, UNLOCK_LOCK_CAP_MS } from "./limits.ts";
 import { STATE_DIR, STATE_FILE, randomToken, readJsonFile, writeJsonFile } from "./paths.ts";
+
+export const AUTH_FILE = join(STATE_DIR, "auth.json");
 
 const LIFETIME_SECONDS = 30 * 24 * 60 * 60;
 const MAX_SESSIONS = 32;
@@ -108,4 +111,80 @@ export function sessionCookie(id: string, forwardedProto: string | undefined): s
 	const carried = String(forwardedProto ?? "").split(",")[0].trim().toLowerCase();
 	const secure = carried === "https" ? "; Secure" : "";
 	return `${COOKIE}=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${id ? LIFETIME_SECONDS : 0}${secure}`;
+}
+
+// ---------- master password ------------------------------------------------
+
+/**
+ * The password file the CLI writes and this module reads on every `/unlock` attempt, so a password
+ * set while the daemon runs takes effect without a restart. Only a salted scrypt hash is stored:
+ * reading the file yields nothing that unlocks, and the cost parameters ride in the record so a
+ * later cost bump never strands an old hash. The printed token link still works as break-glass.
+ */
+type AuthRecord = { n: number; r: number; p: number; salt: string; hash: string };
+
+function authRecord(): AuthRecord | null {
+	const saved = readJsonFile<any>(AUTH_FILE, null);
+	if (!saved || typeof saved !== "object" || saved.algo !== "scrypt") return null;
+	const { N, r, p, salt, hash } = saved as { N?: unknown; r?: unknown; p?: unknown; salt?: unknown; hash?: unknown };
+	if (!Number.isInteger(N) || !Number.isInteger(r) || !Number.isInteger(p) || (N as number) < 2 || (r as number) < 1 || (p as number) < 1) return null;
+	if (typeof salt !== "string" || typeof hash !== "string") return null;
+	return { n: N as number, r: r as number, p: p as number, salt, hash };
+}
+
+/** Whether a master password is set, so the form, the lockout answers and the 403 hint agree. */
+export function passwordIsSet(): boolean {
+	return authRecord() !== null;
+}
+
+const scryptAsync = (password: string, salt: Buffer, keylen: number, options: ScryptOptions): Promise<Buffer> =>
+	new Promise((resolvePromise, reject) => scrypt(password, salt, keylen, options, (error, key) => (error ? reject(error) : resolvePromise(key))));
+const SCRYPT_MAXMEM = 64 * 1024 * 1024;
+
+let unlockFailures = 0;
+let lockedUntilMs = 0;
+let seenHash: string | null = null;
+/** One hash at a time: a burst of concurrent attempts is answered 429 without hashing, so nobody can farm CPU while the lockout counts. */
+let verifying = false;
+
+/** Seconds the lock still has to run, for the `Retry-After` on a 429. */
+export function unlockLockSecondsLeft(): number {
+	return Math.max(0, Math.ceil((lockedUntilMs - Date.now()) / 1000));
+}
+
+/** One verdict per `/unlock` attempt: whether this candidate unlocks, is wrong, is locked out, or nothing is set at all. */
+export async function verifyMasterPassword(candidate: string): Promise<"ok" | "wrong" | "locked" | "unset"> {
+	const record = authRecord();
+	if (!record) return "unset";
+	// A password changed while the daemon runs resets the lockout against the old hash.
+	if (record.hash !== seenHash) {
+		seenHash = record.hash;
+		unlockFailures = 0;
+		lockedUntilMs = 0;
+	}
+	if (lockedUntilMs > Date.now() || verifying) return "locked";
+	verifying = true;
+	try {
+		const derived = (await scryptAsync(candidate, Buffer.from(record.salt, "hex"), 64, {
+			N: record.n,
+			r: record.r,
+			p: record.p,
+			maxmem: SCRYPT_MAXMEM,
+		})) as Buffer;
+		const expected = Buffer.from(record.hash, "hex");
+		const ok = expected.length === derived.length && timingSafeEqual(derived, expected);
+		if (ok) {
+			unlockFailures = 0;
+			lockedUntilMs = 0;
+			return "ok";
+		}
+		unlockFailures += 1;
+		if (unlockFailures >= UNLOCK_FAILURES_BEFORE_LOCK) {
+			const span = Math.min(UNLOCK_LOCK_BASE_MS * 2 ** Math.max(0, unlockFailures - UNLOCK_FAILURES_BEFORE_LOCK), UNLOCK_LOCK_CAP_MS);
+			lockedUntilMs = Date.now() + span;
+		}
+		return "wrong";
+	} finally {
+		verifying = false;
+	}
 }

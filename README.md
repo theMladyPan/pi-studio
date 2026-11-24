@@ -93,6 +93,7 @@ export PATH="$HOME/.local/share/pi-node/current/bin:$PATH"
 
 ```bash
 pi-studio --version                # the version, the commit and whether the build is official
+pi-studio password                 # set or change the master password for remote unlock
 pi-studio service install          # run as a per-user systemd service on fixed port 4801, loopback only
 pi-studio service status           # is the service installed and running
 pi-studio service remove           # stop and delete the service; boards and state stay
@@ -107,11 +108,30 @@ staying up after logout, starts the board on port 4801 and prints the address. T
 listens on this machine only — put a reverse proxy in front of it (NetBird, Caddy, nginx), point
 that proxy at `http://127.0.0.1:4801/`, and open the board through the proxy's address. The proxy
 must carry WebSocket upgrades and pass the original host and protocol on, which is what marks the
-login cookie as secure. `service install --port <n>` picks another fixed port instead. Stop the
+login cookie as secure. The proxy must overwrite (not pass through) the `X-Forwarded-Host` header a
+client may carry, because the board trusts that header to know its own address.
+`service install --port <n>` picks another fixed port instead. Stop the
 service with `service remove` before `uninstall`, which refuses while it runs; `update` installs
 the new version beside the running one, so reinstall the service (`service remove`, then
 `service install`) to pick it up. If the fixed port is taken by something else, the service keeps
 retrying in the open — free the port or reinstall with another `--port`.
+
+### Master password (remote unlock)
+
+`pi-studio password` sets a master password on this machine, on the terminal, with echo off. The
+daemon stores only a salted scrypt hash of it, never the password itself. After that, opening the
+board signed out across your reverse proxy lands on a password form: your password manager fills
+it in one click (Bitwarden autofills the field), and the daemon trades a correct password for the
+same 30-day session cookie the printed link mints. The password never rides the address bar or
+the proxy logs — it travels only in the POST body, and hosting needs the same HTTPS your cookie
+already wants.
+
+The printed link keeps working everywhere as break-glass, so a password can never lock you out of
+your own machine. Wrong passwords are throttled: after five, the form waits out a lock that starts
+at a minute and doubles, and a cross-site request cannot trigger the lock or try passwords at
+all. `pi-studio password remove` takes it back. Changing or removing it leaves browsers that are
+already signed in signed in until the daemon restarts, so restart it right after a change if that
+bothers you. `pi-studio password --state <folder>` sets it in an instance that uses that state folder.
 
 `update` refuses a downgrade, and refuses to replace a custom build unless you ask it to with
 `--replace-custom`. The new version is unpacked and tried before anything is switched over, the earlier
