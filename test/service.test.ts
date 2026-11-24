@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { FIXED_PORT, installService, removeService, renderUnit, servicePath, serviceStatus, validateHost, validatePort } from "../bin/service.mjs";
+import { captureProviderEnv, FIXED_PORT, installService, removeService, renderEnvFile, renderUnit, servicePath, serviceStatus, validateHost, validatePort } from "../bin/service.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const temporaries: string[] = [];
@@ -61,6 +61,53 @@ test("the unit listens on all interfaces, the fixed port, no browser and a resta
 	assert.match(text, /WantedBy=default\.target/);
 	// A proxy on another machine cannot dial loopback, so the default must not pin it.
 	assert.ok(!text.includes("PI_STUDIO_HOST=127.0.0.1"), "the default must reach the LAN");
+});
+
+test("only provider keys are carried, and a key with a newline never is", () => {
+	const kept = captureProviderEnv({
+		OPENROUTER_API_KEY: "sk-or-1",
+		HF_TOKEN: "hf_1",
+		ANTHROPIC_OAUTH_TOKEN: "oat-1",
+		SWAN_API_KEY: "sk-1",
+		PATH: "/usr/bin",
+		PI_MODEL: "openrouter/x",
+		EMPTY_API_KEY: "",
+		BROKEN_API_KEY: "two\nlines",
+		NUMERIC_API_KEY: 42 as unknown as string,
+	});
+	assert.deepEqual(Object.keys(kept).sort(), ["ANTHROPIC_OAUTH_TOKEN", "HF_TOKEN", "OPENROUTER_API_KEY", "SWAN_API_KEY"]);
+	assert.equal(kept.OPENROUTER_API_KEY, "sk-or-1");
+});
+
+test("the env file quotes a value so systemd reads it verbatim", () => {
+	assert.equal(renderEnvFile({ B_KEY: 'a"b\\c d$e', A_TOKEN: "x" }), 'A_TOKEN="x"\nB_KEY="a\\"b\\\\c d$e"\n');
+});
+
+test("the unit reads the keys file and never a key itself", () => {
+	const text = renderUnit({ launcher: "/bin/pi-studio", port: FIXED_PORT, path: "/usr/bin", envFile: "/home/u/.config/systemd/user/pi-studio.env" });
+	assert.match(text, /EnvironmentFile=\/home\/u\/\.config\/systemd\/user\/pi-studio\.env/);
+	assert.ok(!/API_KEY=|_TOKEN=/.test(text), `a secret must not ride in the unit: ${text}`);
+});
+
+test("install carries the shell's provider keys into a user-only file", async () => {
+	const configHome = tempDir("pi-studio-service-config-");
+	const stateDir = tempDir("pi-studio-service-state-");
+	writeFileSync(join(stateDir, "daemon.json"), JSON.stringify({ token: "tok", port: FIXED_PORT }), "utf8");
+	const { run } = fakeRunner((argv) => {
+		if (argv[0] === "loginctl" && argv[1] === "show-user") return { status: 0, stdout: "Linger=yes" };
+		return { status: 0 };
+	});
+	const result = await installService({
+		appRoot: root,
+		flags: { "config-home": configHome, state: stateDir },
+		run,
+		out: () => {},
+		env: { OPENROUTER_API_KEY: "sk-or-test", PATH: "/usr/bin", PI_MODEL: "openrouter/x" },
+	});
+	assert.deepEqual(result.keys, ["OPENROUTER_API_KEY"]);
+	assert.equal(statSync(result.envPath).mode & 0o777, 0o600);
+	assert.equal(readFileSync(result.envPath, "utf8"), 'OPENROUTER_API_KEY="sk-or-test"\n');
+	assert.ok(!readFileSync(result.unitPath, "utf8").includes("sk-or-test"), "the key must not ride in the unit");
 });
 
 test("the unit can still be pinned to loopback on request", () => {
@@ -187,10 +234,13 @@ test("remove stops the unit and deletes only the unit", async () => {
 	mkdirSync(join(configHome, "systemd", "user"), { recursive: true });
 	const unitPath = join(configHome, "systemd", "user", "pi-studio.service");
 	writeFileSync(unitPath, "[Unit]\n", "utf8");
+	const envPath = join(configHome, "systemd", "user", "pi-studio.env");
+	writeFileSync(envPath, 'OPENROUTER_API_KEY="sk-or-test"\n', "utf8");
 	const { run, calls } = fakeRunner(() => ({ status: 0 }));
 	const result = await removeService({ flags: { "config-home": configHome }, run, out: () => {} });
 	assert.equal(result.removed, true);
 	assert.ok(!existsSync(unitPath));
+	assert.ok(!existsSync(envPath), "the keys file is removed with the service");
 	assert.ok(existsSync(join(stateDir, "daemon.json")), "state survives the removal");
 	assert.ok(calls.some((call) => call.join(" ") === "systemctl --user disable --now pi-studio.service"));
 	const idle = await removeService({ flags: { "config-home": configHome }, run, out: () => {} });

@@ -114,7 +114,14 @@ cookie as secure. The proxy must overwrite (not pass through) the `X-Forwarded-H
 client may carry, because the board trusts that header to know its own address. Listening on every
 interface means anyone on the LAN who reaches the port can try the board, so keep it to a network
 you trust or behind the proxy, and run `service install --host 127.0.0.1` to go back to this
-machine only. `service install --port <n>` picks another fixed port instead. Stop the
+machine only. `service install --port <n>` picks another fixed port instead.
+
+A systemd service never sees your login shell's environment, and pi reads its provider keys
+(`OPENROUTER_API_KEY` and friends) from there — so the install copies the keys it finds in the
+shell it runs from into `pi-studio.env` beside the unit (mode `0600`, never in the unit file),
+and the service reads them back from there. That is what lets the agents the daemon spawns find
+their keys. Change a key in your shell and run `service install` once more to carry it over;
+`service remove` deletes the keys file along with the unit. Stop the
 service with `service remove` before `uninstall`, which refuses while it runs; `update` installs
 the new version beside the running one, so reinstall the service (`service remove`, then
 `service install`) to pick it up. If the fixed port is taken by something else, the service keeps
