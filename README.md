@@ -109,7 +109,10 @@ listens on this machine only — put a reverse proxy in front of it (NetBird, Ca
 that proxy at `http://127.0.0.1:4801/`, and open the board through the proxy's address. The proxy
 must carry WebSocket upgrades and pass the original host and protocol on, which is what marks the
 login cookie as secure. `service install --port <n>` picks another fixed port instead. Stop the
-service with `service remove` before `update` or `uninstall`, which refuse while it runs.
+service with `service remove` before `uninstall`, which refuses while it runs; `update` installs
+the new version beside the running one, so reinstall the service (`service remove`, then
+`service install`) to pick it up. If the fixed port is taken by something else, the service keeps
+retrying in the open — free the port or reinstall with another `--port`.
 
 `update` refuses a downgrade, and refuses to replace a custom build unless you ask it to with
 `--replace-custom`. The new version is unpacked and tried before anything is switched over, the earlier

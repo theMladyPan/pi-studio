@@ -45,7 +45,7 @@ test("the fixed port is accepted and anything else is refused in one sentence", 
 
 test("the unit pins loopback, the fixed port, no browser and a restart", () => {
 	const text = renderUnit({ launcher: "/home/u/.local/bin/pi-studio", port: FIXED_PORT, path: "/usr/bin:/bin" });
-	assert.match(text, /ExecStart=\/home\/u\/\.local\/bin\/pi-studio --no-open/);
+	assert.match(text, /ExecStart="\/home\/u\/\.local\/bin\/pi-studio" --no-open/);
 	assert.match(text, /PI_STUDIO_PORT=4801/);
 	assert.match(text, /PI_STUDIO_HOST=127\.0\.0\.1/);
 	assert.match(text, /Restart=on-failure/);
@@ -101,6 +101,38 @@ test("install refuses a port that is not a port, before writing anything", async
 		/port must be a number/,
 	);
 	assert.equal(calls.length, 0);
+});
+
+test("status reports the installed port, not the default, after a custom-port install", async () => {
+	const configHome = tempDir("pi-studio-service-config-");
+	mkdirSync(join(configHome, "systemd", "user"), { recursive: true });
+	writeFileSync(join(configHome, "systemd", "user", "pi-studio.service"), renderUnit({ launcher: "/bin/pi-studio", port: 9000, path: "/usr/bin" }), "utf8");
+	const running = fakeRunner((argv) => {
+		if (argv.includes("is-active")) return { status: 0, stdout: "active" };
+		if (argv.includes("is-enabled")) return { status: 0, stdout: "enabled" };
+		return { status: 0 };
+	});
+	const lines: string[] = [];
+	await serviceStatus({ flags: { "config-home": configHome }, run: running.run, out: (line: string) => lines.push(line) });
+	assert.ok(lines.some((line) => line.includes("http://127.0.0.1:9000/")), `lines: ${lines.join(" | ")}`);
+	assert.ok(lines.every((line) => !line.includes("4801")), `lines: ${lines.join(" | ")}`);
+});
+
+test("install leaves no unit behind when systemctl fails", async () => {
+	const configHome = tempDir("pi-studio-service-config-");
+	const stateDir = tempDir("pi-studio-service-state-");
+	writeFileSync(join(stateDir, "daemon.json"), JSON.stringify({ token: "tok", port: FIXED_PORT }), "utf8");
+	const { run } = fakeRunner((argv) => {
+		if (argv.includes("enable")) return { status: 1, stderr: "no such unit" };
+		if (argv[0] === "loginctl") return { status: 0, stdout: "Linger=yes" };
+		return { status: 0 };
+	});
+	await assert.rejects(
+		installService({ appRoot: root, flags: { "config-home": configHome, state: stateDir }, run, out: () => {} }),
+		/enable --now/,
+	);
+	assert.ok(!existsSync(join(configHome, "systemd", "user", "pi-studio.service")), "a failed enable must not leave an orphan unit");
+	assert.ok(!existsSync(join(configHome, "systemd", "user", "pi-studio.service.tmp")), "no temp unit survives either");
 });
 
 test("remove stops the unit and deletes only the unit", async () => {

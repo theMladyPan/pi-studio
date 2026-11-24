@@ -7,7 +7,7 @@
 // or install root is touched: this only writes one file under the user's systemd config folder
 // and drives the user manager.
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { fail, stateDirOf } from "./runtime.mjs";
@@ -78,10 +78,10 @@ export function renderUnit({ launcher, port, path }) {
 		"",
 		"[Service]",
 		"Type=simple",
-		`ExecStart=${launcher} --no-open`,
+		`ExecStart="${launcher}" --no-open`,
 		`Environment=PI_STUDIO_PORT=${port}`,
 		`Environment=PI_STUDIO_HOST=${LOOPBACK}`,
-		`Environment=PATH=${path}`,
+		`Environment="PATH=${path}"`,
 		"Restart=on-failure",
 		"RestartSec=2",
 		"",
@@ -138,6 +138,17 @@ async function waitForPort(stateDir, port, tries = 20) {
 	return false;
 }
 
+/** The port a written unit names, so status reports the install that exists, not the default. */
+function portFromUnit(unitPath) {
+	try {
+		const found = /PI_STUDIO_PORT=(\d+)/.exec(readFileSync(unitPath, "utf8"));
+		const port = found ? Number(found[1]) : 0;
+		return Number.isInteger(port) && port > 0 && port < 65536 ? port : FIXED_PORT;
+	} catch {
+		return FIXED_PORT;
+	}
+}
+
 /** Install (or reinstall) the unit, reload, enable linger and start the service. */
 export async function installService({ appRoot, flags = {}, run = defaultRunner, out = console.log }) {
 	requireLinux();
@@ -145,13 +156,24 @@ export async function installService({ appRoot, flags = {}, run = defaultRunner,
 	const launcher = serviceLauncher(appRoot, flags);
 	const unitPath = serviceUnitPath(flags);
 	mkdirSync(serviceUnitDir(flags), { recursive: true });
-	writeFileSync(unitPath, renderUnit({ launcher, port, path: servicePath(flags) }), "utf8");
+	const tempPath = `${unitPath}.tmp`;
+	writeFileSync(tempPath, renderUnit({ launcher, port, path: servicePath(flags) }), "utf8");
+	try {
+		renameSync(tempPath, unitPath);
+		const reloaded = await systemctl(run, "daemon-reload");
+		if (reloaded.status !== 0) fail(`systemctl --user daemon-reload failed: ${reloaded.stderr || reloaded.stdout}`);
+		await ensureLinger(run, out);
+		const started = await systemctl(run, "enable", "--now", SERVICE_NAME);
+		if (started.status !== 0) fail(`systemctl --user enable --now ${SERVICE_NAME} failed: ${started.stderr || started.stdout}`);
+	} catch (error) {
+		rmSync(tempPath, { force: true });
+		if (existsSync(unitPath)) {
+			rmSync(unitPath, { force: true });
+			await systemctl(run, "daemon-reload");
+		}
+		throw error;
+	}
 	out(`pi-studio: service unit written to ${unitPath}`);
-	const reloaded = await systemctl(run, "daemon-reload");
-	if (reloaded.status !== 0) fail(`systemctl --user daemon-reload failed: ${reloaded.stderr || reloaded.stdout}`);
-	await ensureLinger(run, out);
-	const started = await systemctl(run, "enable", "--now", SERVICE_NAME);
-	if (started.status !== 0) fail(`systemctl --user enable --now ${SERVICE_NAME} failed: ${started.stderr || started.stdout}`);
 	const stateDir = stateDirOf(flags);
 	const listening = await waitForPort(stateDir, port);
 	if (listening) {
@@ -176,7 +198,7 @@ export async function serviceStatus({ flags = {}, run = defaultRunner, out = con
 	const running = active.status === 0 && active.stdout.trim() === "active";
 	out(`pi-studio: service installed at ${unitPath}`);
 	out(`pi-studio: state ${running ? "running" : "not running"} (loopback only)`);
-	if (running) out(`pi-studio: reverse proxy target http://${LOOPBACK}:${flags.port ?? FIXED_PORT}/`);
+	if (running) out(`pi-studio: reverse proxy target http://${LOOPBACK}:${portFromUnit(unitPath)}/`);
 	const enabled = await systemctl(run, "is-enabled", SERVICE_NAME);
 	if (enabled.stdout.trim() === "enabled") out(`pi-studio: enabled at boot (login)`);
 	return { installed: true, active: running, unitPath };
