@@ -9,8 +9,15 @@
 // is touched: this only writes one file under the user's systemd config folder and drives the
 // user manager. The token still guards every data route; binding wide only decides who can
 // knock, never who gets in.
+//
+// A systemd service never sees a login shell's environment, and pi reads its provider keys
+// (OPENROUTER_API_KEY and friends) from there — so without help every pi child the daemon spawns
+// starts keyless. The install therefore copies the shell's provider keys into `pi-studio.env`
+// beside the unit, mode 0600, and the unit reads it back with EnvironmentFile. Secrets stay out
+// of the unit file, where `systemctl cat` and `systemctl show` would print them. Changing a key
+// in the shell needs one more `service install` to carry it over.
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces, userInfo } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { fail, stateDirOf } from "./runtime.mjs";
@@ -76,6 +83,38 @@ export function serviceUnitPath(flags = {}) {
 	return join(serviceUnitDir(flags), SERVICE_NAME);
 }
 
+/** The file the unit reads its provider keys from: beside the unit, readable by this user only. */
+export function serviceEnvPath(flags = {}) {
+	return join(serviceUnitDir(flags), "pi-studio.env");
+}
+
+/**
+ * Every provider key in a shell environment: pi names them all `*_API_KEY`, `*_KEY` or `*_TOKEN`
+ * (OPENROUTER_API_KEY, HF_TOKEN, ANTHROPIC_OAUTH_TOKEN, …), so the suffix is the whole list and
+ * a new pi provider needs no change here. Empty values and multi-line values are left out — a
+ * key with a newline in it is not a key, and an env file cannot hold one anyway.
+ */
+export function captureProviderEnv(env = process.env) {
+	const kept = {};
+	for (const [name, value] of Object.entries(env)) {
+		if (typeof value !== "string" || !value || !/(_API_KEY|_KEY|_TOKEN)$/.test(name)) continue;
+		if (/[\r\n]/.test(value)) continue;
+		kept[name] = value;
+	}
+	return kept;
+}
+
+/**
+ * The env file's text: one `KEY="value"` per line, with the two characters a double-quoted
+ * systemd value must escape. systemd does not expand `$` in these files, so values go verbatim.
+ */
+export function renderEnvFile(keys) {
+	return Object.entries(keys)
+		.sort(([a], [b]) => a.localeCompare(b))
+		.map(([name, value]) => `${name}="${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`)
+		.join("\n") + "\n";
+}
+
 /** The launcher the unit starts: the installed command when there is one, else this copy's own. */
 export function serviceLauncher(appRoot, flags = {}) {
 	const installed = join(flags["bin-dir"] ? resolve(flags["bin-dir"]) : join(homedir(), ".local", "bin"), "pi-studio");
@@ -97,7 +136,7 @@ export function servicePath(flags = {}) {
 }
 
 /** The unit text for one install. Ports and addresses here are data, never shell: nothing is interpolated into a command. */
-export function renderUnit({ launcher, port, host = ALL_INTERFACES, path }) {
+export function renderUnit({ launcher, port, host = ALL_INTERFACES, path, envFile }) {
 	return [
 		"[Unit]",
 		`Description=pi-studio board (${host === LOOPBACK ? "loopback only; reach it through your reverse proxy" : "on all interfaces, for LAN and reverse-proxy access"})`,
@@ -107,6 +146,7 @@ export function renderUnit({ launcher, port, host = ALL_INTERFACES, path }) {
 		"[Service]",
 		"Type=simple",
 		`ExecStart="${launcher}" --no-open`,
+		...(envFile ? [`EnvironmentFile=${envFile}`] : []),
 		`Environment=PI_STUDIO_PORT=${port}`,
 		`Environment=PI_STUDIO_HOST=${host}`,
 		`Environment="PATH=${path}"`,
@@ -196,15 +236,20 @@ function dialTip(host, port) {
 }
 
 /** Install (or reinstall) the unit, reload, enable linger and restart the service so a changed host or port takes effect. */
-export async function installService({ appRoot, flags = {}, run = defaultRunner, out = console.log }) {
+export async function installService({ appRoot, flags = {}, run = defaultRunner, out = console.log, env = process.env }) {
 	requireLinux();
 	const port = validatePort(flags.port ?? FIXED_PORT);
 	const host = validateHost(flags.host ?? ALL_INTERFACES);
 	const launcher = serviceLauncher(appRoot, flags);
 	const unitPath = serviceUnitPath(flags);
+	const envPath = serviceEnvPath(flags);
+	// The shell's provider keys ride along in their own locked-down file, never in the unit.
+	const keys = captureProviderEnv(env);
 	mkdirSync(serviceUnitDir(flags), { recursive: true });
+	writeFileSync(envPath, renderEnvFile(keys), { encoding: "utf8", mode: 0o600 });
+	chmodSync(envPath, 0o600);
 	const tempPath = `${unitPath}.tmp`;
-	writeFileSync(tempPath, renderUnit({ launcher, port, host, path: servicePath(flags) }), "utf8");
+	writeFileSync(tempPath, renderUnit({ launcher, port, host, path: servicePath(flags), envFile: envPath }), "utf8");
 	try {
 		renameSync(tempPath, unitPath);
 		const reloaded = await systemctl(run, "daemon-reload");
@@ -216,6 +261,7 @@ export async function installService({ appRoot, flags = {}, run = defaultRunner,
 		if (started.status !== 0) fail(`systemctl --user restart ${SERVICE_NAME} failed: ${started.stderr || started.stdout}`);
 	} catch (error) {
 		rmSync(tempPath, { force: true });
+		rmSync(envPath, { force: true });
 		if (existsSync(unitPath)) {
 			rmSync(unitPath, { force: true });
 			await systemctl(run, "daemon-reload");
@@ -224,6 +270,10 @@ export async function installService({ appRoot, flags = {}, run = defaultRunner,
 	}
 	out(`pi-studio: service unit written to ${unitPath}`);
 	out(`pi-studio: listening on ${host === ALL_INTERFACES ? "all interfaces (LAN and NetBird included)" : host}, port ${port}`);
+	const names = Object.keys(keys).sort((a, b) => a.localeCompare(b));
+	out(names.length
+		? `pi-studio: ${names.length} provider keys carried into ${envPath} (0600) — re-run service install after changing keys in your shell`
+		: `pi-studio: no provider keys in this shell's environment — pi children will find no API keys; run install from a shell that has them`);
 	const stateDir = stateDirOf(flags);
 	const listening = await waitForPort(stateDir, port);
 	if (listening) {
@@ -232,7 +282,7 @@ export async function installService({ appRoot, flags = {}, run = defaultRunner,
 		out(`pi-studio: service started; waiting for ${dialTip(host, port)} — check: pi-studio service status`);
 	}
 	out(`pi-studio: manage it with: pi-studio service status, pi-studio service remove`);
-	return { unitPath, port, host, launcher };
+	return { unitPath, envPath, keys: names, port, host, launcher };
 }
 
 /** Report whether the service is installed and whether it is running. The token is never printed. */
@@ -255,7 +305,7 @@ export async function serviceStatus({ flags = {}, run = defaultRunner, out = con
 	return { installed: true, active: running, unitPath };
 }
 
-/** Stop, disable and delete the unit. State, boards and the install itself are untouched. */
+/** Stop, disable and delete the unit and its keys file. State, boards and the install itself stay. */
 export async function removeService({ flags = {}, run = defaultRunner, out = console.log }) {
 	requireLinux();
 	const unitPath = serviceUnitPath(flags);
@@ -266,8 +316,11 @@ export async function removeService({ flags = {}, run = defaultRunner, out = con
 	const stopped = await systemctl(run, "disable", "--now", SERVICE_NAME);
 	if (stopped.status !== 0) fail(`systemctl --user disable --now ${SERVICE_NAME} failed: ${stopped.stderr || stopped.stdout}`);
 	rmSync(unitPath, { force: true });
+	const envPath = serviceEnvPath(flags);
+	const hadKeys = existsSync(envPath);
+	rmSync(envPath, { force: true });
 	const reloaded = await systemctl(run, "daemon-reload");
 	if (reloaded.status !== 0) fail(`systemctl --user daemon-reload failed: ${reloaded.stderr || reloaded.stdout}`);
-	out(`pi-studio: service removed (${unitPath}); boards and state are untouched`);
+	out(`pi-studio: service removed (${unitPath})${hadKeys ? ", keys file removed too" : ""}; boards and state are untouched`);
 	return { removed: true, unitPath };
 }
