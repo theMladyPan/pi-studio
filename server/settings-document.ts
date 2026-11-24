@@ -51,7 +51,7 @@ export type SettingsPick =
 export type SettingsField = {
 	id: string;
 	label: string;
-	type: "combo" | "select" | "toggle" | "list" | "prompt" | "prose" | "multi";
+	type: "combo" | "select" | "toggle" | "list" | "prompt" | "prose" | "multi" | "button";
 	value: string | boolean | string[];
 	pick?: SettingsPick;
 	/** The ids a picker offers, where the daemon already knows them. */
@@ -318,6 +318,14 @@ function generalGroup(values: SettingsValues): SettingsGroup {
 				value: values.publish?.allowPlainHttp ?? true,
 				help: "plain http beyond this machine is refused when this is off and no TLS is configured",
 				write: { route: "/settings/general", body: { allowPlainHttp: "@value" } },
+			},
+			{
+				id: "tlsGenerate",
+				label: "generate certificate",
+				type: "button",
+				value: "",
+				help: "writes a self-signed certificate and key for this machine's addresses (replacing any generated pair); the daemon uses it after the next start, and a browser may ask to trust it",
+				write: { route: "/settings/tls/generate", body: {} },
 			},
 		],
 	};

@@ -18,7 +18,7 @@ import { boardSettingsValues, settingsDocument } from "./settings-document.ts";
 import { boardMeta, cardsFor } from "./cards.ts";
 import { closedCards } from "./bus.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
-import { onDefaults, onForgetWorkspace, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults, onSettingsGeneral } from "./routes/crossroads.ts";
+import { onDefaults, onForgetWorkspace, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults, onSettingsGeneral, onSettingsTlsGenerate } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
 import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead, onFileRename, onFileWrite, onFilesList } from "./routes/board/files.ts";
 import { rowWithThought } from "./thought.ts";
@@ -606,6 +606,10 @@ function requestHandler(req, res) {
 		}
 		if (req.method === "POST" && url.pathname === "/settings/general") {
 			await onSettingsGeneral(req, res);
+			return;
+		}
+		if (req.method === "POST" && url.pathname === "/settings/tls/generate") {
+			await onSettingsTlsGenerate(req, res);
 			return;
 		}
 		if (req.method === "POST" && url.pathname === "/workspace") {

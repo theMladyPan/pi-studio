@@ -1126,6 +1126,16 @@
         for (const [other, node] of buttons) node.setAttribute("aria-pressed", String(other === value));
       };
       line.append(seg);
+    } else if (field.type === "button") {
+      // A press, not a value: the daemon does the thing and the line says it is saved.
+      const button = el("button", "cfg-button", field.label);
+      button.type = "button";
+      button.disabled = disabled;
+      button.addEventListener("click", () => {
+        void commitWrite(entry, "");
+      });
+      entry.set = () => {};
+      line.append(button);
     } else if (field.type === "list") {
       listControl(field, entry, line);
     } else if (field.type === "multi") {

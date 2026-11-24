@@ -8,10 +8,13 @@
  *
  * Read the same way `--state` is (`server/paths.ts`), so both of a daemon's addresses are one habit.
  */
-import { networkInterfaces } from "node:os";
-import { readFileSync } from "node:fs";
+import { hostname, networkInterfaces } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
+import { isIP } from "node:net";
+import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { X509Certificate, createPrivateKey, createPublicKey } from "node:crypto";
-import { STATE_FILE, readJsonFile, writeJsonFile } from "./paths.ts";
+import { STATE_DIR, STATE_FILE, readJsonFile, writeJsonFile } from "./paths.ts";
 
 export const LOOPBACK = "127.0.0.1";
 
@@ -149,10 +152,65 @@ export function validatePublishHosts(hosts: unknown, interfaces: Interfaces = ne
  */
 export type TlsConfig = { enabled: boolean; cert: string; key: string; certData: Buffer; keyData: Buffer };
 
+/** The generated pair's home: the settings page writes it, and the daemon reads it at the next start. */
+export function tlsFilesOf(dir = join(STATE_DIR, "tls")): { cert: string; key: string } {
+	return { cert: join(dir, "cert.pem"), key: join(dir, "key.pem") };
+}
+
+/**
+ * A self-signed pair for this machine's own addresses, written for the daemon to use. OpenSSL builds
+ * the certificate: the browser wants subjectAltName entries for every name it may arrive by, which is
+ * why the published addresses ride along with localhost and the machine's own names.
+ */
+export function generateTlsPair(dir?: string, names?: string[]): { cert: string; key: string; names: string[] } {
+	const home = dir ?? join(STATE_DIR, "tls");
+	const files = tlsFilesOf(home);
+	const asked = [...new Set((names?.length ? names : []).map((one) => String(one).trim()).filter((one) => one && one !== "0.0.0.0" && one !== "::"))];
+	// "All interfaces" (or no names at all) still wants the names a browser may arrive by.
+	const wanted = asked.length ? asked : ["localhost", "127.0.0.1", hostname(), ...localAddresses()];
+	const san = wanted.map((one) => (isIP(one) ? `IP:${one}` : `DNS:${one}`)).join(",");
+	const certTmp = `${files.cert}.tmp`;
+	const keyTmp = `${files.key}.tmp`;
+	for (const one of [certTmp, keyTmp]) {
+		try {
+			unlinkSync(one);
+		} catch {
+			// A stale temporary is overwritten below.
+		}
+	}
+	try {
+		mkdirSync(home, { recursive: true, mode: 0o700 });
+		const args = ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "825", "-subj", "/CN=pi-studio", "-keyout", keyTmp, "-out", certTmp];
+		if (san) args.push("-addext", `subjectAltName=${san}`);
+		execFileSync("openssl", args, { stdio: "pipe", timeout: 30_000 });
+		chmodSync(keyTmp, 0o600);
+		chmodSync(certTmp, 0o644);
+		renameSync(keyTmp, files.key);
+		renameSync(certTmp, files.cert);
+		return { cert: files.cert, key: files.key, names: wanted };
+	} catch (error) {
+		for (const one of [certTmp, keyTmp]) {
+			try {
+				unlinkSync(one);
+			} catch {
+				// Nothing left to clean.
+			}
+		}
+		const detail = String((error as { stderr?: unknown })?.stderr ?? (error as Error).message ?? error).trim().split("\n").pop() ?? "";
+		throw new Error(`a certificate could not be generated: ${detail}`);
+	}
+}
+
 export function tlsConfig(argv: readonly string[] = process.argv.slice(2), env: Record<string, string | undefined> = process.env): TlsConfig {
-	const cert = (argValue(argv, "--tls-cert") || env.PI_STUDIO_TLS_CERT || "").trim();
-	const key = (argValue(argv, "--tls-key") || env.PI_STUDIO_TLS_KEY || "").trim();
-	if (!cert && !key) return { enabled: false, cert: "", key: "", certData: Buffer.alloc(0), keyData: Buffer.alloc(0) };
+	let cert = (argValue(argv, "--tls-cert") || env.PI_STUDIO_TLS_CERT || "").trim();
+	let key = (argValue(argv, "--tls-key") || env.PI_STUDIO_TLS_KEY || "").trim();
+	if (!cert && !key) {
+		// The generated pair is the third voice, and it needs no environment to find it.
+		const files = tlsFilesOf();
+		if (!existsSync(files.cert) && !existsSync(files.key)) return { enabled: false, cert: "", key: "", certData: Buffer.alloc(0), keyData: Buffer.alloc(0) };
+		cert = files.cert;
+		key = files.key;
+	}
 	if (!cert || !key) throw new Error("TLS needs both a certificate and a key: give --tls-cert and --tls-key, or PI_STUDIO_TLS_CERT and PI_STUDIO_TLS_KEY");
 	try {
 		const certData = readFileSync(cert);

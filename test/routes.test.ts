@@ -3841,4 +3841,51 @@ describe("routes", { concurrency: 8 }, () => {
 		}
 	});
 
+	test("the certificate button writes a pair the daemon reads at the next start", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-tls-generate-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-tls-generate-work-"));
+		const daemon = await boot(stateHome);
+		try {
+			const made = await post(daemon, "/settings/tls/generate", {});
+			assert.equal(made.status, 200, made.body.slice(0, 300));
+			const tls = JSON.parse(made.body).tls;
+			assert.ok(tls.cert.endsWith("/tls/cert.pem"), tls.cert);
+			assert.ok(tls.key.endsWith("/tls/key.pem"), tls.key);
+			assert.ok(Array.isArray(tls.names) && tls.names.length > 0, "no names in the answer");
+			assert.ok(!made.body.includes("PRIVATE KEY"), "the key rode in the answer");
+			assert.ok(existsSync(tls.cert) && existsSync(tls.key), "the pair was not written");
+			// The pair covers the address the document the page draws publishes on.
+			const doc = JSON.parse((await get(daemon, `/settings/defaults?token=${daemon.token}`)).body);
+			const leaves: any[] = [];
+			const walk = (groups: any[]) => { for (const g of groups) { leaves.push(...(g.fields ?? [])); walk(g.groups ?? []); } };
+			walk(doc.groups);
+			const button = leaves.find((f: any) => f.id === "tlsGenerate");
+			assert.ok(button && button.type === "button", "no generate button in the document");
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder]) await removeTree(gone);
+		}
+	});
+
+	test("a thread's token cannot generate the certificate", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-tls-generate-token-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-tls-generate-token-work-"));
+		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+		const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+		try {
+			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+			const threadId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			const said = await postTo(daemon, board.id, "/message", { cardId: threadId, text: "say one thing" });
+			assert.equal(said.status, 200);
+			const child = await childEnvOf(daemon, stub.envFile);
+			const refused = await postAs(daemon, child.token, board.id, "/settings/tls/generate", {});
+			assert.equal(refused.status, 403);
+			assert.equal(refused.body, "a thread may not use that");
+			assert.equal(existsSync(join(stateHome, "tls")), false, "a thread generated a pair");
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
+		}
+	});
+
 });

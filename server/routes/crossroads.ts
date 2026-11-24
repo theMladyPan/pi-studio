@@ -20,7 +20,7 @@ import { CARD_AUDIENCE, CARD_LEVELS, CARD_SHOWS, CARD_VERBOSITY } from "../card-
 import { CHILD_INTEGRATION } from "../integration.ts";
 import { PATH_NAMES } from "../child/modes.ts";
 import { settingsDocument } from "../settings-document.ts";
-import { bindHosts, publishConfig, savePublishConfig, validatePublishHosts } from "../listen.ts";
+import { bindHosts, generateTlsPair, publishConfig, savePublishConfig, validatePublishHosts } from "../listen.ts";
 import { spawn } from "node:child_process";
 
 
@@ -246,6 +246,30 @@ export async function onSettingsGeneral(req, res) {
  * The crossroads' settings as one document: the same values as GET /defaults, as the tree a page draws.
  * A board keeps its own copy from the moment it is opened, which is what the foot says.
  */
+/**
+ * The settings page's certificate button: a self-signed pair for the addresses the daemon publishes
+ * on, written under the state folder for the next start. The key never leaves the daemon; the answer
+ * carries only the paths and the names it covers.
+ */
+export async function onSettingsTlsGenerate(req, res) {
+	req.resume();
+	const publish = publishConfig();
+	let names;
+	try {
+		names = bindHosts(process.argv.slice(2), process.env, publish.hosts);
+	} catch {
+		names = publish.hosts;
+	}
+	try {
+		const made = generateTlsPair(undefined, names);
+		answer(res, 200, { tls: { cert: made.cert, key: made.key, names: made.names } });
+	} catch (error) {
+		return void fail(res, 500, (error as Error).message);
+	}
+}
+
+
+
 export async function onSettingsDefaults(res) {
 	const publish = publishConfig();
 	// The control shows the address the daemon is actually on, flag and environment included, so a

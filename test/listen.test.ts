@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LOOPBACK, bindHost, bindHosts, bindSource, boardUrls, isLoopback, localAddresses, tlsConfig, validatePublishHost, validatePublishHosts } from "../server/listen.ts";
+import { createPrivateKey, X509Certificate } from "node:crypto";
+import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { LOOPBACK, bindHost, bindHosts, bindSource, boardUrls, generateTlsPair, isLoopback, localAddresses, tlsConfig, validatePublishHost, validatePublishHosts } from "../server/listen.ts";
 
 /**
  * Which address the daemon opens decides who can reach the board, so each way of asking is pinned here:
@@ -112,4 +116,19 @@ test("TLS is off until both files are named, and a half pair is one sentence", (
 
 test("the printed links follow the scheme the daemon speaks", () => {
 	assert.deepEqual(boardUrls("127.0.0.1", 4801, "abc123", undefined, "https"), ["https://127.0.0.1:4801/?token=abc123"]);
+});
+
+test("a generated pair parses, matches, and covers the names it was asked for", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-studio-tls-gen-"));
+	const made = generateTlsPair(dir, ["localhost", "127.0.0.1", "192.168.1.114"]);
+	const certificate = new X509Certificate(readFileSync(made.cert));
+	assert.ok(String(certificate.subjectAltName).includes("DNS:localhost"));
+	assert.ok(String(certificate.subjectAltName).includes("IP Address:127.0.0.1"));
+	assert.ok(String(certificate.subjectAltName).includes("IP Address:192.168.1.114"));
+	assert.equal(statSync(made.key).mode & 0o777, 0o600, "the key is readable by others");
+	const fromFile = tlsConfig(["--tls-cert", made.cert, "--tls-key", made.key], {});
+	assert.equal(fromFile.enabled, true);
+	// A different key is not the certificate's pair.
+	const other = generateTlsPair(join(dir, "other"), ["localhost"]);
+	assert.throws(() => tlsConfig(["--tls-cert", made.cert, "--tls-key", other.key], {}), /do not belong together/);
 });

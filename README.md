@@ -152,8 +152,11 @@ plain http may be spoken there. Both take effect the next time the daemon starts
 an existing NetBird/RPC setup keeps working until you turn it off deliberately. Loopback always serves
 plain http, so the printed local link never breaks.
 
-With plain http off and a TLS certificate configured (`--tls-cert`/`--tls-key` or
-`PI_STUDIO_TLS_CERT`/`PI_STUDIO_TLS_KEY`), the main port speaks HTTPS and the port below it answers
+With plain http off and a TLS certificate configured, the main port speaks HTTPS: either your own pair
+(`--tls-cert`/`--tls-key` or `PI_STUDIO_TLS_CERT`/`PI_STUDIO_TLS_KEY`) or the self-signed pair the
+**generate certificate** button in that same group writes for this machine's addresses — no
+environment needed. A generated pair takes effect at the next start and a browser may ask to trust
+it; generating again replaces it. and the port below it answers
 plain http with a `308` redirect to HTTPS for every non-loopback request. With plain http off and no
 TLS, the daemon refuses to start beyond loopback rather than serving the board in the clear. The
 daemon needs no reverse proxy for this: Node's own HTTPS is the TLS endpoint.
