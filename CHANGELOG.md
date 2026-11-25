@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- feat: Download both files when a note's download press is hit — one press now saves the note's own markdown as `.md` beside the pdf the daemon lays out, under the same name save one extension, so the editable source and the page leave together instead of the page alone. [t-fa716db2]
 - feat: Add a `delete` key that triggers deleting the thread card you are reading — it opens the same sheet the card's trash button opens, listing the card, conversation, folder and branch that would go, so the key alone never removes anything; a card with no trash, such as a note or an open question, answers to no delete key either. [t-c83b8d71]
 
 ## [0.9.3] - 2026-11-25

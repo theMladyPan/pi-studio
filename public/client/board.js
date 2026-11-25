@@ -3448,11 +3448,11 @@ const OPEN_GLYPH =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6.4 1.8H1.9v8.3h8.3V5.6M7.2 1.8h3v3M10.2 1.8 5.4 6.6"/></svg>';
 
 /**
- * An arrow going down into a tray: the press that saves a note as a pdf. A page drawn around it at eleven
+ * An arrow going down into a tray: the press that downloads a note. A page drawn around it at eleven
  * pixels reads as a smudge, so the shape is the plain one every file manager uses for "save this", and the
- * button's own title says what the file is. Drawn for the reason the pin and the bin are.
+ * button's own title says what the files are. Drawn for the reason the pin and the bin are.
  */
-const PDF_GLYPH =
+const DOWNLOAD_GLYPH =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.7v5.4M3.8 5.2 6 7.4l2.2-2.2M2.2 8.4v2.1h7.6V8.4"/></svg>';
 
 function makeCard(data, quiet = false) {
@@ -3510,7 +3510,7 @@ function makeCard(data, quiet = false) {
     <span class="chip"></span>
     <button type="button" class="copy-id" title="copy this card's id">⧉</button>
     <button type="button" class="open-editor" title="open this file in the text editor" aria-label="open this file in the text editor">${OPEN_GLYPH}</button>
-    <button type="button" class="save-pdf" title="save this note as a pdf" aria-label="save this note as a pdf">${PDF_GLYPH}</button>
+    <button type="button" class="download-note" title="download this note as .md and .pdf" aria-label="download this note as .md and .pdf">${DOWNLOAD_GLYPH}</button>
     <button class="pin" title="pin this card" aria-label="pin this card">${PIN_GLYPH}</button>
     <button class="min" title="minimize this card" aria-label="minimize this card">▾</button>
     <button class="reply" title="ask a follow-up about this card" aria-label="ask a follow-up about this card">↩</button>
@@ -3604,11 +3604,12 @@ function makeCard(data, quiet = false) {
     event.stopPropagation();
     void openCardFile(entry);
   });
-  // A note leaves as a page: the daemon lays its markdown out and answers with the file, which the browser
-  // saves the way it saves anything. The press only asks, so a refusal is the daemon's sentence to say.
-  head.querySelector(".save-pdf").addEventListener("click", (event) => {
+  // A note leaves as two files: the daemon lays its markdown out and answers with the pdf, and the tab
+  // holds the markdown itself, which the browser saves the way it saves anything. The press only asks, so
+  // a refusal is the daemon's sentence to say.
+  head.querySelector(".download-note").addEventListener("click", (event) => {
     event.stopPropagation();
-    void saveCardPdf(entry);
+    void downloadCard(entry);
   });
   if (data.mini) setMini(card, true);
   capField(card, height);
@@ -4297,9 +4298,9 @@ function paintCard(entry, data) {
   // Only a source card holds a file, so only a source card offers the press that opens one.
   const openBtn = entry.head.querySelector(".open-editor");
   if (openBtn) openBtn.style.display = isSource ? "" : "none";
-  // A note is the one card that is a document, so it is the one that leaves as a pdf.
-  const pdfBtn = entry.head.querySelector(".save-pdf");
-  if (pdfBtn) pdfBtn.style.display = data.type === "note" ? "" : "none";
+  // A note is the one card that is a document, so it is the one that leaves as md and pdf.
+  const downloadBtn = entry.head.querySelector(".download-note");
+  if (downloadBtn) downloadBtn.style.display = data.type === "note" ? "" : "none";
   // A thread is sent without `pinned`, so its head shows no pin rather than one that forgets itself.
   const pinBtn = entry.head.querySelector(".pin");
   if (pinBtn) pinBtn.style.display = data.type === "sticky" ? "none" : "";
@@ -4835,14 +4836,32 @@ function downloadName(response) {
 }
 
 /**
- * The note as a page the browser takes. The daemon answers with the file itself, and the tab hands it to the
- * browser's own download: the folder is whichever that browser saves to, the receipt is its download list,
- * and nothing on this machine is written or opened by the board.
+ * One file the browser takes: a link nobody sees, pressed once, is the one way a script asks a browser to
+ * save a file, and the `download` name is what it saves it under. Returns the object url, which the caller
+ * releases once the bytes are the browser's.
  */
-async function saveCardPdf(entry) {
+function saveBlob(name, blob) {
+  const url = URL.createObjectURL(blob);
+  const link = el("a");
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  return url;
+}
+
+/**
+ * The note as two files the browser takes. The daemon answers with the pdf itself, and the tab already
+ * holds the card's own markdown, so the second file is built here from the same words the pdf was laid out
+ * from and named with the same name save one extension. Both are handed to the browser's own download:
+ * the folder is whichever that browser saves to, the receipt is its download list, and nothing on this
+ * machine is written or opened by the board.
+ */
+async function downloadCard(entry) {
   // Drawing a note's pictures runs a browser per picture, so a press takes a moment: the arrow says so and
   // stops taking presses until the answer is back, because a second press would start the work again.
-  const button = entry.head.querySelector(".save-pdf");
+  const button = entry.head.querySelector(".download-note");
   if (button?.disabled) return;
   if (button) {
     button.disabled = true;
@@ -4855,21 +4874,19 @@ async function saveCardPdf(entry) {
       body: JSON.stringify({ cardId: entry.id }),
     });
     if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
-    const name = downloadName(response);
-    const url = URL.createObjectURL(await response.blob());
-    // A link nobody sees, pressed once: that is the one way a script asks a browser to save a file, and the
-    // `download` name is what it saves it under.
-    const link = el("a");
-    link.href = url;
-    link.download = name;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    // The bytes are the browser's from here, so the object behind the link has nothing left to hold.
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    footNote(`pdf saved by the browser · ${name}`);
+    const pdfName = downloadName(response);
+    const mdName = pdfName.replace(/\.pdf$/i, ".md");
+    // Both files are ready before either is pressed, so a pdf that fails leaves no lone markdown behind.
+    const files = [
+      { name: mdName, blob: new Blob([entry.data.markdown ?? ""], { type: "text/markdown;charset=utf-8" }) },
+      { name: pdfName, blob: await response.blob() },
+    ];
+    const urls = files.map((file) => saveBlob(file.name, file.blob));
+    // The bytes are the browser's from here, so the objects behind the links have nothing left to hold.
+    setTimeout(() => urls.forEach((url) => URL.revokeObjectURL(url)), 60_000);
+    footNote(`md and pdf saved by the browser · ${mdName} · ${pdfName}`);
   } catch (error) {
-    footNote(`could not save the pdf: ${error.message || error}`, true);
+    footNote(`could not download the note: ${error.message || error}`, true);
   } finally {
     if (button) {
       button.disabled = false;

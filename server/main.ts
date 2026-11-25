@@ -918,7 +918,7 @@ function requestHandler(req, res) {
 				// Opening a file in the human's editor starts a program on their desktop, so this one is not in
 				// THREAD_ROUTES: a child may draw a card, and may not run what a card names.
 				"/card/open": onOpenCard,
-				// The press that saves a note as a pdf. What answers is the file itself, which the browser takes as a
+				// The press that downloads a note. What answers is the pdf itself, which the browser takes as a
 				// download, so this is not in THREAD_ROUTES: a child may write a card, and may not take a document
 				// out of the studio.
 				"/card/pdf": onCardPdf,

@@ -361,13 +361,13 @@
   .note-body blockquote p, .sticky-reply blockquote p { margin: 0 0 4px; }
   .note-body blockquote p:last-child, .sticky-reply blockquote p:last-child { margin-bottom: 0; }
   .note-body .tick { color: var(--green); cursor: pointer; }
-  .card .edit, .card .copy-id, .card .open-editor, .card .save-pdf { border: 0; background: transparent; color: var(--muted);
+  .card .edit, .card .copy-id, .card .open-editor, .card .download-note { border: 0; background: transparent; color: var(--muted);
     font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
-  .card .edit:hover, .card .copy-id:hover, .card .open-editor:hover, .card .save-pdf:hover { background: #21262d; color: var(--text); }
-  .card .open-editor, .card .save-pdf { display: flex; align-items: center; }
+  .card .edit:hover, .card .copy-id:hover, .card .open-editor:hover, .card .download-note:hover { background: #21262d; color: var(--text); }
+  .card .open-editor, .card .download-note { display: flex; align-items: center; }
   /* The press that makes a pdf runs a browser per picture, so it says it is working and takes no second press. */
-  .card .save-pdf.busy { opacity: .55; cursor: progress; }
-  .card .open-editor svg, .card .save-pdf svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
+  .card .download-note.busy { opacity: .55; cursor: progress; }
+  .card .open-editor svg, .card .download-note svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
     stroke-width: 1.2; stroke-linejoin: round; }
   /* A pin is the human's: the card is kept when the board has to make room, and no thread may close it.
      The glyph is drawn rather than typed so the pinned state can colour it amber, and it stays an
