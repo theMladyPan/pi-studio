@@ -3781,6 +3781,8 @@ describe("routes", { concurrency: 8 }, () => {
 			const redirected = await plain(lan, "/w/abc123?x=1", `fedora:${plainPort}`);
 			assert.equal(redirected.status, 308);
 			assert.equal(redirected.location, `https://fedora:${httpsPort}/w/abc123?x=1`);
+			// That loopback answer is exactly what a child gets from `childBaseUrl`: plain http on the
+			// neighbour, so its card tools keep working while the main port is HTTPS-only.
 			const local = await plain("127.0.0.1", "/", `127.0.0.1:${plainPort}`);
 			assert.equal(local.status, 200);
 			// A loopback caller claiming a foreign Host still gets the board: the peer address decides.

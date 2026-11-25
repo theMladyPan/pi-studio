@@ -254,3 +254,15 @@ export function boardUrls(host: string, port: number, token: string, interfaces?
 	// Loopback answers under either spelling of "everything", so the tab on this machine keeps its link.
 	return [link(LOOPBACK), ...localAddresses(interfaces).map(link)];
 }
+
+/**
+ * Where a child reaches the board. A child runs on this machine, so this is always loopback, and always
+ * plain http: with TLS on, the main port speaks HTTPS only, and the plain listener rides on its
+ * neighbour — the one this returns. Children never leave the machine, so TLS would guard nothing here
+ * while adding arguments the fetch has to lose against, and the token's own threat model already trusts
+ * this machine. The daemon and the child derive the same address from the same two facts, so they can
+ * never disagree about which scheme and port a card call needs.
+ */
+export function childBaseUrl(port: number, tlsEnabled: boolean): string {
+	return `http://${LOOPBACK}:${tlsEnabled ? port - 1 : port}`;
+}
