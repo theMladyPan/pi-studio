@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-- feat: Serve a plugin panel page with its declared script and style folded into it, so loading a panel is one request and nothing more: a sandboxed frame sends no cookie for a stylesheet or a script, and behind a sign-in gateway (a NetBird reverse proxy, Cloudflare Access, and their kin) those requests could only ever return a login challenge the frame cannot complete — panels now work through such a gateway with no per-path exception to arrange; the declared files stay served for anything that asks for them. [t-9cbe35c1]
+## [0.9.2] - 2026-11-25
+
+- feat: Serve a plugin panel page with its declared script and style folded into it, so loading a panel is one request and nothing more: a sandboxed frame sends no cookie for a stylesheet or a script, and behind a sign-in gateway (a NetBird reverse proxy, Cloudflare Access, and their kin) those requests could only ever return a login challenge the frame cannot complete — panels now work through such a gateway with no per-path exception to arrange; the declared files stay served for anything that asks for them.
 
 ## [0.9.1] - 2026-11-25
 
