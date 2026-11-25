@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Point threads at the board over loopback plain http on the daemon's own plain listener — the neighbour port when TLS is on, the main port when it is off — so card tools reach the board again after TLS moved the main port to HTTPS; children all run on this machine, where TLS would guard nothing, and the daemon now refuses to start when that plain listener cannot open rather than leaving children with nowhere to post. [t-dc5382f1]
+
 ## [0.9.2] - 2026-11-25
 
 - feat: Serve a plugin panel page with its declared script and style folded into it, so loading a panel is one request and nothing more: a sandboxed frame sends no cookie for a stylesheet or a script, and behind a sign-in gateway (a NetBird reverse proxy, Cloudflare Access, and their kin) those requests could only ever return a login challenge the frame cannot complete — panels now work through such a gateway with no per-path exception to arrange; the declared files stay served for anything that asks for them.
