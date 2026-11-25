@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-- fix: Point threads at the board over loopback plain http on the daemon's own plain listener — the neighbour port when TLS is on, the main port when it is off — so card tools reach the board again after TLS moved the main port to HTTPS; children all run on this machine, where TLS would guard nothing, and the daemon now refuses to start when that plain listener cannot open rather than leaving children with nowhere to post. [t-dc5382f1]
+## [0.9.3] - 2026-11-25
+
+- fix: Point threads at the board over loopback plain http on the daemon's own plain listener — the neighbour port when TLS is on, the main port when it is off — so card tools reach the board again after TLS moved the main port to HTTPS; children all run on this machine, where TLS would guard nothing, and the daemon now refuses to start when that plain listener cannot open rather than leaving children with nowhere to post.
 
 ## [0.9.2] - 2026-11-25
 
