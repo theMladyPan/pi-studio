@@ -4,7 +4,7 @@ import { createPrivateKey, X509Certificate } from "node:crypto";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LOOPBACK, bindHost, bindHosts, bindSource, boardUrls, generateTlsPair, isLoopback, localAddresses, tlsConfig, validatePublishHost, validatePublishHosts } from "../server/listen.ts";
+import { LOOPBACK, bindHost, bindHosts, bindSource, boardUrls, childBaseUrl, generateTlsPair, isLoopback, localAddresses, tlsConfig, validatePublishHost, validatePublishHosts } from "../server/listen.ts";
 
 /**
  * Which address the daemon opens decides who can reach the board, so each way of asking is pinned here:
@@ -42,6 +42,14 @@ test("loopback is recognised in the three ways it is written", () => {
 	assert.equal(isLoopback("::1"), true);
 	assert.equal(isLoopback("0.0.0.0"), false);
 	assert.equal(isLoopback("192.168.1.20"), false);
+});
+
+test("children dial loopback plain http, on the plain neighbour when TLS is on", () => {
+	assert.equal(childBaseUrl(4801, false), "http://127.0.0.1:4801");
+	// With TLS the main port speaks HTTPS only, so a plain fetch there dies before it reaches a route.
+	// The child has to use the plain listener on the port below, which is the same neighbour the
+	// daemon binds and the redirect tests below rely on.
+	assert.equal(childBaseUrl(4801, true), "http://127.0.0.1:4800");
 });
 
 test("one address prints one link, and the whole machine prints the local one first", () => {

@@ -24,7 +24,7 @@ import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead,
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
-import { LOOPBACK, bindHosts, bindSource, boardUrls, isLoopback, publishConfig, tlsConfig } from "./listen.ts";
+import { LOOPBACK, bindHosts, bindSource, boardUrls, childBaseUrl as childBaseUrlOf, isLoopback, publishConfig, tlsConfig } from "./listen.ts";
 import { onMode, onPath, onThread, onThreadSpawn } from "./routes/board/thread.ts";
 import { onAnswer, onAsk, onPause } from "./routes/board/answer.ts";
 import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.ts";
@@ -331,6 +331,8 @@ let tlsOptions = null;
 let httpsServer = null;
 /** The HTTPS port plain-http redirects point at, once the main socket is open. */
 let tlsPort = 0;
+/** The plain listener's port beside the HTTPS one, which is also where children reach the board. */
+let plainPort = 0;
 /** Whether plain http may be spoken beyond loopback, from the publish choice at start. */
 let plainHttpAllowed = true;
 
@@ -1083,6 +1085,15 @@ export function shutdown() {
 
 export let port = 0;
 
+/**
+ * The base URL children hand to the bridge: loopback plain http, on the plain listener next to the
+ * HTTPS one when TLS is on. Derived here from the live `port` and `tlsOptions`, so the address the
+ * daemon computed and the address a child dials have one owner.
+ */
+export function childBaseUrl(): string {
+	return childBaseUrlOf(port, Boolean(tlsOptions));
+}
+
 
 
 /**
@@ -1178,6 +1189,11 @@ function onListenError(error) {
 export function onListening() {
 	port = mainServers[0].address().port;
 	if (tlsOptions) tlsPort = port;
+	if (tlsOptions && port <= 1) {
+		// Port 1 has no neighbour below it, so no plain listener can carry children either.
+		console.error("pi-studio: TLS needs a main port above 1, because the plain listener rides on the port below it");
+		process.exit(1);
+	}
 	const saved = readJsonFile(STATE_FILE, null) ?? {};
 	writeJsonFile(STATE_FILE, { ...saved, token, port, at: new Date().toISOString() });
 	const scheme = tlsOptions ? "https" : "http";
@@ -1185,15 +1201,18 @@ export function onListening() {
 	const url = links[0];
 	console.log(`pi-studio${INSTANCE ? ` [${INSTANCE}]` : ""} listening on ${url}`);
 	for (const link of links.slice(1)) console.log(`  also on ${link}`);
-	if (tlsOptions && port > 1) {
+	if (tlsOptions) {
 		// A plain-http listener rides on the main port's neighbour, on every published address: the
-		// whole board when plain http is allowed, and a redirect to HTTPS when it is not.
-		const plainPort = port - 1;
+		// whole board when plain http is allowed, and a redirect to HTTPS when it is not. Children dial
+		// this listener, so it failing is not a shrug: the daemon hands every child a base URL, and a
+		// dead listener makes all of them fetch nowhere. Leaving is the honest answer.
+		plainPort = port - 1;
 		for (const address of bindAddresses) {
 			const bound = createServer(requestHandler);
 			bound.on("upgrade", onUpgrade);
 			bound.once("error", (error) => {
-				console.error(`pi-studio: plain http on ${plainPort} could not open: ${error.message || error}`);
+				console.error(`pi-studio: plain http on ${plainPort} could not open: ${error.message || error}; children point their card tools at it, so the daemon is leaving`);
+				process.exit(1);
 			});
 			plainServers.push(bound);
 			bound.listen(plainPort, address, () => {
