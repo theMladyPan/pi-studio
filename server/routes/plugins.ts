@@ -6,6 +6,10 @@
  * this is how a plugin gets work done. It is how a plugin puts a page in front of the human: the daemon
  * serves the files the plugin declared, and a frame on the board shows them. The frame is sandboxed with
  * no origin of its own, so it is handed no cookie and no token, and it cannot read the page around it.
+ * A page is served whole, its declared script and style folded into it, so loading a panel is one request
+ * and nothing more: a frame with no origin has no cookie to send for a stylesheet or a script, and a
+ * sign-in gateway in front of a remote board would otherwise answer each of those requests with a login
+ * challenge the frame can never complete.
  *
  * Everything it asks for travels one way: a message to the board, one POST here, and one call to the plugin.
  *
@@ -177,10 +181,112 @@ export async function onPluginReload(res: ServerResponse): Promise<void> {
 }
 
 /**
+ * What a declared file may land inside a served page as. A stylesheet lands in a style element and a
+ * script in a script; anything else — an image, a font — stays the request a panel makes of its own,
+ * because folding bytes into a page would only swell it.
+ */
+const VISUAL_INLINE: Record<string, "style" | "script"> = {
+	".css": "style",
+	".js": "script",
+	".mjs": "script",
+};
+
+/**
+ * A file's contents the way they sit inside the element they are folded into: the word that would close
+ * the element early - a script that says `</script>` in a string - is escaped, so the page keeps its own
+ * shape and the reader reads the same word it was handed. A folded script that opens with `<!--` and
+ * then names `<script` still closes its vessel: the tokenizer's double-escape state has no backslash
+ * that reaches it, so that edge stays the author's.
+ */
+function unclosable(text: string, close: string): string {
+	return text.replace(new RegExp(`</${close}`, "gi"), (found) => "<" + "\\/" + found.slice(2));
+}
+
+/**
+ * One attribute of a tag the way an author wrote it, quoted or bare. A page is a plugin's own, so a
+ * reference comes in the spellings authors reach for, and reading it back needs all of them.
+ */
+function tagAttribute(attrs: string, name: string): string | null {
+	const match = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(attrs);
+	if (!match) return null;
+	return (match[1] ?? match[2] ?? match[3] ?? "").trim();
+}
+
+/** The same attributes with one taken out, so a reference becomes a vessel pointing nowhere. */
+function withoutAttribute(attrs: string, name: string): string {
+	const kept = attrs.replace(new RegExp(`\\s*${name}\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s>]+)`, "i"), "");
+	// A self-closing marker a link carried has no meaning on the vessel, and on a style element it would
+	// leave the element reading as closed before its contents arrive.
+	return kept.replace(/\s*\/\s*$/, "");
+}
+
+/**
+ * The page a panel is served, with its declared script and style folded into it.
+ *
+ * A reference is resolved the way the browser would resolve it - against the address of the page being
+ * served, so `panel.css` beside `assets/panel.html` lands on `assets/panel.css` - and only a declared
+ * file may be folded in, in the element it was written for. Any reference outside the list keeps its own
+ * request, as before: whatever a plugin did not declare was never served, and still is not. A script
+ * the author deferred or asynced keeps its own request too, because an inline script ignores both
+ * and would run at the parse position, before the DOM it counts on exists.
+ */
+function inlinedPanelPage(name: string, file: string, body: Buffer, root: string, declaredFiles: readonly string[]): Buffer {
+	const declared = new Map<string, { tag: string; text: string }>();
+	for (const one of declaredFiles) {
+		const tag = VISUAL_INLINE[extname(one).toLowerCase()];
+		if (!tag) continue;
+		const full = resolvePluginFile(root, one);
+		if (!full) continue;
+		let text: string;
+		try {
+			text = readFileSync(full, "utf8");
+		} catch {
+			continue;
+		}
+		declared.set(one, { tag, text: unclosable(text, tag) });
+	}
+	if (declared.size === 0) return body;
+	const prefix = `${VISUAL_PREFIX}${encodeURIComponent(name)}/`;
+	const base = `http://127.0.0.1${prefix}${file}`;
+	const fold = (attrs: string, kind: "href" | "src", vessel: string): string | null => {
+		const ref = tagAttribute(attrs, kind);
+		if (ref === null || ref === "") return null;
+		let candidate: string;
+		try {
+			candidate = new URL(ref, base).pathname;
+		} catch {
+			return null;
+		}
+		if (!candidate.startsWith(prefix)) return null;
+		const found = declared.get(candidate.slice(prefix.length));
+		if (!found || found.tag !== vessel) return null;
+		return `<${vessel}${withoutAttribute(attrs, kind)}>${found.text}</${vessel}>`;
+	};
+	let page = body.toString("utf8");
+	// The matches below also fire inside an HTML comment, where a commented-out reference folds like a live
+	// one and a `-->` inside what folds would end the comment early. Hand-written panels do not comment
+	// their references out, so the edge is named here rather than handled.
+	page = page.replace(/<link\b((?:[^>"']|"[^"]*"|'[^']*')*)>/gi, (tag, attrs) => {
+		const rel = tagAttribute(attrs, "rel") ?? "";
+		if (!/(^|\s)stylesheet(\s|$)/i.test(rel)) return tag;
+		return fold(attrs, "href", "style") ?? tag;
+	});
+	// A script the author deferred or asynced keeps its own request: an inline script ignores both and
+	// would run at the parse position, before the DOM it counts on exists.
+	page = page.replace(/<script\b((?:[^>"']|"[^"]*"|'[^']*')*)>[\s\S]*?<\/script\s*>/gi, (tag, attrs) => {
+		if (/\bdefer\b|\basync\b/i.test(attrs)) return tag;
+		return fold(attrs, "src", "script") ?? tag;
+	});
+	return Buffer.from(page, "utf8");
+}
+
+/**
  * One file of one panel. The name in the path is the plugin's, and the rest of the path has to be one of
  * the files that plugin declared — a lookup in a list, not a path joined to a folder, so nothing outside
  * the list can be asked for however it is spelled. What is left is the filesystem's own answer, which
- * `resolvePluginFile` gives: a plain file inside the plugin's folder, never a link.
+ * `resolvePluginFile` gives: a plain file inside the plugin's folder, never a link. The entry page is
+ * served with its declared script and style folded into it, so the panel makes the one request it starts
+ * with and nothing more.
  */
 export function onVisualFile(res: ServerResponse, pathname: string): void {
 	const rest = pathname.slice(VISUAL_PREFIX.length);
@@ -206,6 +312,7 @@ export function onVisualFile(res: ServerResponse, pathname: string): void {
 		fail(res, 404, `the plugin's file cannot be read: ${(error as Error).message}`);
 		return;
 	}
+	if (type.startsWith("text/html")) body = inlinedPanelPage(name, file, body, panel.root, panel.visual.files);
 	const headers: Record<string, string> = {
 		"Content-Type": type,
 		"Cache-Control": "no-store",

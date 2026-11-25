@@ -124,8 +124,15 @@ no cookie, no storage, and no call of its own. The daemon serves only the files 
 one relative to the plugin's folder and each one a plain file there, and looking a request up in that
 list rather than joining a path. Those files are served without asking for a credential, because a
 document with an opaque origin has none to send: what they hold is a page, a script and a style, never a
-workspace's data. The list of doors and the one call a panel makes are the human's, and need the session
-the printed link left.
+workspace's data. The page is served with its declared script and style folded into it, so loading a
+panel is one request and nothing more: a frame with no origin can send no cookie for a stylesheet or a
+script, and a sign-in gateway in front of the daemon — a NetBird reverse proxy is the shape at hand —
+would otherwise answer each of those requests with a login challenge the frame can never complete, which
+is why a remote panel once failed while the board did not. A folded stylesheet resolves its own `url()` references against the page's address rather than the
+sheet's, so keep the sheet beside the page or write its references from the page's address. A declared
+file that is neither a script nor a style — an image or a font — stays its own request, and a panel that
+wants no request but its page should ship those inside the page itself. The list of doors and the one call a panel makes are the
+human's, and need the session the printed link left.
 
 The page and the board trade five messages: `pi-studio.host.hello` with a nonce, `pi-studio.visual.request`
 with that nonce and an id, `pi-studio.visual.result` or `pi-studio.visual.error` with the same id, and
