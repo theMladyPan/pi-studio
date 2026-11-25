@@ -321,9 +321,10 @@ commit's own account rather than on a check run now, the section below says so.
   keeps the one the card had. `POST /rename {cardId, title}` stores it on the card, or on the thread
   when the id names a thread, because a thread is drawn as a card of its own. The press that starts a
   rename belongs to the name, so the card does not also drag, and one press still drags it.
-- **A note leaves as a page.** A note's head carries the download press, and `POST /card/pdf {cardId}`
+- **A note leaves as two files.** A note's head carries the download press, and `POST /card/pdf {cardId}`
   answers with the PDF itself: `application/pdf`, `Content-Disposition: attachment`, a length, and the
-  bytes. The tab presses a link nobody sees, so the file is saved by the browser's own download, into
+  bytes; the tab holds the card's own markdown, so it saves that too as `.md` under the pdf's name save
+  one extension, and both go in the one press. The tab presses a link nobody sees, so each file is saved by the browser's own download, into
   whichever folder that browser uses, and the receipt is its download list. Nothing is written to this
   machine and nothing is started on it: an earlier version wrote `$TMPDIR/pi-studio/<title>-<id6>.pdf`
   and opened the desktop's folder browser on it, which meant asking `xdg-mime` which browser that was
