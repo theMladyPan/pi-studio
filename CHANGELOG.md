@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-25
+
+- feat: Serve a plugin panel page with its declared script and style folded into it, so loading a panel is one request and nothing more: a sandboxed frame sends no cookie for a stylesheet or a script, and behind a sign-in gateway (a NetBird reverse proxy, Cloudflare Access, and their kin) those requests could only ever return a login challenge the frame cannot complete — panels now work through such a gateway with no per-path exception to arrange; the declared files stay served for anything that asks for them.
+
 ## [0.9.1] - 2026-11-25
 
 - feat: Add a general group to the crossroads settings: the addresses the daemon publishes on (this machine only, the machine's own interfaces, or all interfaces at once) and whether plain http may be spoken there, both kept in `daemon.json` and applied at the next start, plus a button that writes a self-signed certificate and key for this machine's addresses; with plain http off and a TLS certificate configured, the main port serves HTTPS and plain http redirects to it, and with plain http off and no TLS the daemon refuses to start beyond loopback, while loopback always keeps serving plain http.

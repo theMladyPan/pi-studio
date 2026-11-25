@@ -451,13 +451,20 @@ test("the panels a daemon may show, its files, and the one call a panel makes", 
 
 		// The entry document, sandboxed by the daemon as well as by the frame that shows it. Every read here
 		// carries no credential at all, because that is what the frame's own reads carry: the document has an
-		// opaque origin, so `SameSite=Strict` keeps the session cookie out of the style and the script it asks
-		// for, and a panel served only to a caller arrives as a page with no style and no script.
+		// opaque origin, so `SameSite=Strict` keeps the session cookie out of anything it asks for. The page
+		// arrives whole - its declared style and script folded into it - because a frame with no origin has
+		// no way to ask for them at all, and a sign-in gateway in front would only answer with a challenge.
 		const page = await get(daemon, "/plugins/visual/example-panel/panel.html", "");
 		assert.equal(page.status, 200);
 		assert.match(page.type, /text\/html/);
 		assert.equal(page.csp, "sandbox allow-scripts");
 		assert.match(page.body, /example panel/);
+		// The style and the script the entry names are inside it now: their own words, and no reference
+		// asking for either of them again.
+		assert.match(page.body, /The example panel's own styles/);
+		assert.match(page.body, /pi-studio\.host\.hello/);
+		assert.doesNotMatch(page.body, /<link[^>]*panel\.css/);
+		assert.doesNotMatch(page.body, /<script[^>]*panel\.js/);
 		// The script and the style the entry loads, from the same list of files.
 		const script = await get(daemon, "/plugins/visual/example-panel/panel.js", "");
 		assert.equal(script.status, 200);
@@ -504,6 +511,73 @@ test("the panels a daemon may show, its files, and the one call a panel makes", 
 		assert.equal((await post(daemon, "/plugins/visual/request?plugin=example-panel", { workspace: "nope", method: "echo" })).status, 400);
 		assert.equal((await post(daemon, "/plugins/visual/request?plugin=plain", { workspace, method: "echo" })).status, 404);
 		assert.equal((await post(daemon, "/plugins/visual/request?plugin=example-panel", { workspace, method: "echo" }, "")).status, 403);
+	} finally {
+		daemon.child.kill("SIGTERM");
+		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);
+	}
+});
+
+test("a panel whose page lives in a subfolder folds in only what it declared, and escapes what would close it", async () => {
+	// A page a folder deeper than the plugin's root, with a module script, an undeclared sheet it names
+	// anyway, and a script that says its own closing word in a string.
+	const path = join(state, "plugins", "nested");
+	mkdirSync(join(path, "assets"), { recursive: true });
+	writeFileSync(join(path, "nested"), readFileSync(join(example, "panel-plugin.mjs")));
+	chmodSync(join(path, "nested"), 0o755);
+	writeFileSync(join(path, "plugin.json"), JSON.stringify({
+		name: "nested",
+		version: "1.0.0",
+		protocol: 1,
+		title: "nested panel",
+		visual: { entry: "assets/panel.html", files: ["assets/panel.html", "assets/panel.css", "assets/mod.js", "assets/close.js", "assets/deferred.js"] },
+	}));
+	writeFileSync(join(path, "assets", "panel.html"), [
+		"<!doctype html><title>nested panel</title>",
+		'<link rel="stylesheet" href="panel.css">',
+		'<link rel="stylesheet" href="./gone.css">',
+		'<script type="module" src="mod.js"></script>',
+		'<script src="close.js"></script>',
+		'<script defer src="deferred.js"></script>',
+		'<script async src="deferred.js"></script>',
+		"",
+	].join("\n"));
+	writeFileSync(join(path, "assets", "panel.css"), "/* nested styles */\n.x { color: red; }\n");
+	writeFileSync(join(path, "assets", "gone.css"), ".y { color: blue; }\n");
+	writeFileSync(join(path, "assets", "mod.js"), "export const nestedModule = 1;\n");
+	writeFileSync(join(path, "assets", "close.js"), 'export const closer = "</script>";\n');
+	writeFileSync(join(path, "assets", "deferred.js"), "export const deferredModule = 1;\n");
+	const daemon = await boot([{ name: "nested", installed: "nested", args: [] }]);
+	const gone = new Promise<void>((resolve) => daemon.child.once("exit", () => resolve()));
+	try {
+		// The roster is up before anything is asked for: a page request before then names no panel.
+		const listed = await listedPanels(daemon);
+		assert.equal(listed.status, 200);
+		const page = await get(daemon, "/plugins/visual/nested/assets/panel.html", "");
+		assert.equal(page.status, 200);
+		assert.equal(page.csp, "sandbox allow-scripts");
+		// A sheet beside the page in its own folder lands in it; the undeclared one keeps its reference,
+		// and its bytes are nowhere in the page.
+		assert.match(page.body, /nested styles/);
+		assert.doesNotMatch(page.body, /<link[^>]*panel\.css/);
+		assert.match(page.body, /href="\.\/gone\.css"/);
+		assert.ok(!page.body.includes(".y { color: blue"));
+		// A module stays a module while its source moves inline, and the closing word a script says in a
+		// string reads back escaped: the page still has exactly the closers it was served with.
+		assert.match(page.body, /<script[^>]*type="module"[^>]*>export const nestedModule/);
+		assert.doesNotMatch(page.body, /<script[^>]*mod\.js/);
+		assert.ok(!page.body.includes('export const closer = "</script>"'));
+		assert.ok(page.body.includes('export const closer = "<\\/script>"'));
+		assert.equal(page.body.split("</script>").length - 1, 4);
+		// The files themselves are still served, as they always were, word for word.
+		const raw = await get(daemon, "/plugins/visual/nested/assets/close.js", "");
+		assert.equal(raw.status, 200);
+		assert.ok(raw.body.includes('export const closer = "</script>"'));
+		// A script the author deferred or asynced is not folded: inline, it would ignore both and run at
+		// the parse position, before the DOM it counts on exists. The tags stay as written, and their
+		// bytes are nowhere in the page.
+		assert.ok(page.body.includes('<script defer src="deferred.js"></script>'));
+		assert.ok(page.body.includes('<script async src="deferred.js"></script>'));
+		assert.ok(!page.body.includes("export const deferredModule"));
 	} finally {
 		daemon.child.kill("SIGTERM");
 		await Promise.race([gone, new Promise((done) => setTimeout(done, 10_000))]);
