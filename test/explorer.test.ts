@@ -847,6 +847,16 @@ test("board keys wait behind an open header menu", () => {
 	assert.ok(panelUp.includes("headerMenus.some(({ menu }) => !menu.hidden)"), "an open header menu counts as a panel up");
 });
 
+test("the delete key triggers deleting the card being read, through the trash sheet", () => {
+	const board = readFileSync(BOARD, "utf8");
+	assert.ok(board.includes('{ keys: "delete"'), "the hotkeys map names the delete key");
+	const handler = board.slice(board.indexOf('event.key !== "Delete"'), board.indexOf('event.key !== "Delete"') + 700);
+	assert.ok(handler.includes("openRemoveSheet(record, trash)"), "the key opens the sheet the trash button opens, rather than removing at once");
+	assert.ok(handler.includes('record.card.querySelector(".trash")'), "only a card carrying the trash answers, so a note or a question has no delete");
+	assert.ok(handler.includes("typingSomewhere()"), "a field keeps its own keys");
+	assert.ok(handler.includes("panelUp()") && handler.includes("openSheet()"), "a panel or a sheet up keeps the key waiting");
+});
+
 test("conflict hunks are read with their two sides, and accepting one rewrites only it", () => {
 	const text = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> side\nafter\n";
 	const hunks = core.conflictHunks(text);

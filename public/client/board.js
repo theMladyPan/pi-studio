@@ -9629,6 +9629,7 @@ const SHORTCUTS = [
       { keys: "r", does: "name the card you are reading in the message you were writing" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
       { keys: "q", does: "close the card you are reading" },
+      { keys: "delete", does: "delete the thread card you are reading — it first says what would go" },
       { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the plugin panel, then the git graph, then the terminal, then the files drawer, or with nothing open, let go of the selected card" },
       { keys: "ctrl+z", does: "undo a close and put the card back" },
       { keys: "ctrl+m", does: "cycle the mode of the card you are reading: agent, plan, boss, discuss, then back on" },
@@ -13900,6 +13901,26 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   replyToCard(record);
+});
+
+// `delete` triggers deleting the card being read, and only that card: it opens the same sheet the
+// trash on its head opens, which previews what the removal would take and offers the remove press —
+// so the key itself never destroys anything. A card with no trash, a note or a question, has nothing
+// behind it to remove, so it has no delete either, the way the × does not go where its button cannot.
+// The guards are the ones `r`, `p` and `q` keep: a field, a panel, a sheet or a drawer surface keeps
+// its own keys, and the key is the forward-delete one alone, never backspace.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Delete" || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (typingSomewhere()) return;
+  if (panelUp() || drawerSurface()) return;
+  if (openSheet() || !atPick.hidden) return;
+  const active = document.querySelector(".card.active");
+  const record = active ? byId.get(active.dataset.id) : null;
+  if (!record) return;
+  const trash = record.card.querySelector(".trash");
+  if (!trash) return;
+  event.preventDefault();
+  void openRemoveSheet(record, trash);
 });
 
 // `ctrl+z` is the undo a close needs: the daemon holds the last cards a close removed, so one key puts
