@@ -283,6 +283,19 @@ body.kontainer-inspecting { cursor:col-resize; user-select:none; }
 #kontainerDrawer .k-task-dot { flex:none; font-weight:700; line-height:1.45; }
 #kontainerDrawer .k-task-label { min-width:0; }
 #kontainerDrawer .k-task-detail { flex:1 1 100%; margin-top:2px; font-size:11px; color:var(--k-red-soft); }
+#kontainerDrawer .k-task { cursor:pointer; }
+/* Task detail: the shared detail sheet, scoped to the drawer so the board's own Escape order never meets it. */
+#kontainerDrawer .k-detail { position:fixed; inset:0; z-index:2200; padding:40px 24px; background:rgba(1,4,9,.66); display:flex; align-items:center; justify-content:center; }
+#kontainerDrawer .k-detail[hidden] { display:none; }
+#kontainerDrawer .k-detail-panel { display:flex; flex-direction:column; width:min(880px,100%); max-height:100%; overflow:hidden; background:var(--k-card); border:1px solid var(--k-border-bright); border-radius:10px; box-shadow:0 18px 40px rgba(0,0,0,.55); }
+#kontainerDrawer .k-detail-head { display:flex; align-items:center; gap:8px; padding:8px 10px; flex:none; background:var(--k-head); border-bottom:1px solid var(--k-border); font:12px var(--k-mono); }
+#kontainerDrawer .k-detail-name { color:var(--k-text); font-weight:600; }
+#kontainerDrawer .k-detail-meta { color:var(--k-muted); font-size:11px; margin-left:auto; }
+#kontainerDrawer .k-detail-body { overflow:auto; min-height:0; padding:10px; display:flex; flex-direction:column; gap:10px; }
+#kontainerDrawer .k-detail section { display:flex; flex-direction:column; gap:4px; }
+#kontainerDrawer .k-detail h4 { margin:0; color:var(--k-muted); font:11px var(--k-mono); text-transform:uppercase; letter-spacing:.6px; }
+#kontainerDrawer .k-detail pre { margin:0; padding:8px; border:1px solid var(--k-border); border-radius:6px; background:#0d1117; color:#c9d1d9; font:11px/1.45 var(--k-mono); white-space:pre-wrap; overflow-wrap:anywhere; }
+#kontainerDrawer .k-detail .cut { color:var(--k-amber); font:11px var(--k-mono); }
 
 @media (max-width:1120px) { #kontainerDrawer .k-inspector { width:var(--k-insp-w, 300px); } #kontainerDrawer .k-grid { gap:32px; } }
 @media (max-width:960px) {

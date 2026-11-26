@@ -2,10 +2,11 @@
  * The drawer furniture the sliding drawers share, so the git drawer and the terminal drawer roll,
  * size and hand the keyboard back the same way rather than four times.
  *
- * Two pieces: `setTermHeight` for the shared terminal height (the terminal drawer and the strips
- * across the board are one height, the user's furniture), and `createSlidingDrawer` for the binary
- * shown state, `inert`, the body-class paint and the focus return. Each drawer keeps what is its own:
- * its shell lifecycle, its socket, its page lifecycle, its keys.
+ * Three pieces: `setTermHeight` for the shared terminal height (the terminal drawer and the strips
+ * across the board are one height, the user's furniture), `createSlidingDrawer` for the binary
+ * shown state, `inert`, the body-class paint and the focus return, and `createDetailSheet` with
+ * its `detailSection`/`detailBlock` for the modal that holds a row's full text (activity detail,
+ * task detail). Each drawer keeps what is its own: its shell lifecycle, its socket, its keys.
  */
 
 const TERM_MIN = 220;
@@ -100,4 +101,88 @@ export function createSlidingDrawer({ drawer, btn, bodyClass, openTitle, shutTit
   }
 
   return { isOpen: () => shown, toggle: () => (shown ? close() : open()), open, close };
+}
+
+export const DETAIL_CUT_NOTICE = "cut at 64 K characters by the board server";
+
+/** One titled block of monospace text, saying when the server cut it. */
+export function detailSection(title, text, cut) {
+  const box = document.createElement("section");
+  box.appendChild(document.createElement("h4")).textContent = title;
+  const pre = document.createElement("pre");
+  pre.textContent = text;
+  box.appendChild(pre);
+  if (cut) {
+    const notice = document.createElement("div");
+    notice.className = "cut";
+    notice.textContent = DETAIL_CUT_NOTICE;
+    box.appendChild(notice);
+  }
+  return box;
+}
+
+/** A titled block holding whatever a renderer built, so a diff, a picture or a note lands in the sheet. */
+export function detailBlock(title, node, cut) {
+  if (!node) return null;
+  const box = document.createElement("section");
+  box.appendChild(document.createElement("h4")).textContent = title;
+  box.appendChild(node);
+  if (cut) {
+    const notice = document.createElement("div");
+    notice.className = "cut";
+    notice.textContent = DETAIL_CUT_NOTICE;
+    box.appendChild(notice);
+  }
+  return box;
+}
+
+/**
+ * One detail modal for the life of the page or drawer: the shown flag on `root`, the head names
+ * and the scroll body it fills, the close press, the backdrop press and the Escape and Tab keys.
+ * The content itself stays with the caller — `detailSection`/`detailBlock` build it — so the
+ * activity rows and the task cards speak the same sheet without sharing a data shape.
+ */
+export function createDetailSheet({ root, name: nameEl, meta: metaEl, body: bodyEl, close: closeEl, onClose }) {
+  function isOpen() {
+    return Boolean(root) && !root.hidden;
+  }
+  /** Name and meta in the head, the panel up and taking the focus. The body is filled separately. */
+  function show({ name: title, meta: sub }) {
+    if (!root) return;
+    if (nameEl) nameEl.textContent = title ?? "";
+    if (metaEl) metaEl.textContent = sub ?? "";
+    root.hidden = false;
+    root.focus();
+  }
+  function setBody(nodes) {
+    if (bodyEl) bodyEl.replaceChildren(...nodes);
+  }
+  function hide() {
+    if (!root || root.hidden) return;
+    root.hidden = true;
+    if (bodyEl) bodyEl.replaceChildren();
+    onClose?.();
+  }
+  closeEl?.addEventListener("click", hide);
+  root?.addEventListener("click", (event) => {
+    if (event.target === root) hide();
+  });
+  root?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      hide();
+      return;
+    }
+    // The panel holds the keyboard while it is open, so tab cannot walk the board behind it. Two
+    // stops are inside: the close button and the body, and tab cycles between them both ways.
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const stops = [closeEl, bodyEl].filter(Boolean);
+      const at = stops.indexOf(document.activeElement);
+      const step = event.shiftKey ? stops.length - 1 : 1;
+      stops[at < 0 ? (event.shiftKey ? stops.length - 1 : 0) : (at + step) % stops.length].focus();
+    }
+  });
+  return { isOpen, show, setBody, hide };
 }

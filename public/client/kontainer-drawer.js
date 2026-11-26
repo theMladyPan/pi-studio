@@ -4,7 +4,7 @@
  * It keeps no state of its own beyond the session: every fact comes from `/kontainer/*` on the
  * daemon, refreshed over SSE plus the stats cadence the human picked (Eco/Balanced/Live).
  */
-import { bindDragHeight, createSlidingDrawer } from "./drawer-common.js";
+import { bindDragHeight, createDetailSheet, createSlidingDrawer, detailSection } from "./drawer-common.js";
 
 export function createKontainerDrawer({ workspace, typingSomewhere, openTerminalCommand, openWorkspaceFile }) {
   const drawer = document.getElementById("kontainerDrawer");
@@ -69,11 +69,16 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       <div class="k-sheet-head"><span class="k-sheet-title" id="kSheetTitle"></span><span class="k-grow"></span><button class="k-insp-close" id="kSheetClose" type="button" title="close (esc)">×</button></div>
       <div class="k-sheet-body" id="kSheetBody"></div><div class="k-sheet-foot" id="kSheetFoot"></div>
     </div></div>
+    <div class="k-detail" id="kTaskDetail" role="dialog" aria-modal="true" aria-labelledby="kTaskDetailName" tabindex="-1" hidden><div class="k-detail-panel">
+      <div class="k-detail-head"><span class="k-detail-name" id="kTaskDetailName"></span><span class="k-detail-meta" id="kTaskDetailMeta"></span><button class="k-insp-close" id="kTaskDetailClose" type="button" title="close (esc)">×</button></div>
+      <div class="k-detail-body" id="kTaskDetailBody" tabindex="0"></div>
+    </div></div>
     <div class="k-tasks" id="kTasks" role="status" aria-live="polite"></div>
     <div class="k-toast" id="kToast" role="status"></div>`;
 
   const viewport = $("kViewport"), stage = $("kStage"), wires = $("kWireLayer"), inspector = $("kInspector"), grip = $("kInspGrip");
   const searchInput = $("kSearch"), toolsBtn = $("kToolsBtn"), toolsMenu = $("kToolsMenu"), sheet = $("kSheet"), ctxMenu = $("kCtxMenu");
+  const taskDetail = createDetailSheet({ root: $("kTaskDetail"), name: $("kTaskDetailName"), meta: $("kTaskDetailMeta"), body: $("kTaskDetailBody"), close: $("kTaskDetailClose") });
   // The node menu hangs on the page body, where the tools that float over the board already live: a
   // drawer mid-roll carries a transform, and a transformed box is the containing block for its
   // `position:fixed` children, so a right press during the slide would place the menu 44px off against
@@ -240,14 +245,14 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   }
   async function postAction(payload, okMsg) {
     // A docker action is a task: it pops in blue while it runs, then turns green or red and
-    // stays two seconds. `exec.cmd` only builds a command string, so it never pops.
-    const task = payload?.action === "exec.cmd" ? null : startTask(okMsg || String(payload?.action || "action"));
+    // stays five seconds (longer while hovered). `exec.cmd` only builds a command string, so it never pops.
+    const task = payload?.action === "exec.cmd" ? null : startTask(okMsg || String(payload?.action || "action"), payload);
     try {
       const data = await apiText(`/kontainer/action?workspace=${encodeURIComponent(workspace || "")}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ runtime: state.runtime || undefined, ...payload }) });
       // The action route answers 200 either way, so its `ok` is the only verdict a failure carries.
       if (data?.ok === false) throw new Error(data?.error || "action failed");
       await loadState();
-      finishTask(task, true);
+      finishTask(task, true, data?.output);
       return data;
     } catch (error) {
       finishTask(task, false, error instanceof Error ? error.message : String(error));
@@ -276,32 +281,47 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     clearTimeout(task.timer);
     task.timer = setTimeout(() => task.card.remove(), 5000);
   }
-  function startTask(label) {
+  function startTask(label, payload) {
     const host = $("kTasks");
     if (!host) return null;
     const card = el("div", "k-task k-running");
+    card.title = "click for command and output";
     const dot = el("span", "k-task-dot", "●");
     const labelEl = el("span", "k-task-label", `${label}…`);
     card.append(dot, labelEl);
     host.append(card);
-    const task = { card, dot, labelEl, label, started: Date.now(), done: false, hovered: false, timer: null };
+    const task = { card, dot, labelEl, label, payload, output: null, status: "running", started: Date.now(), done: false, hovered: false, timer: null };
     card.addEventListener("mouseenter", () => { task.hovered = true; clearTimeout(task.timer); });
     card.addEventListener("mouseleave", () => { task.hovered = false; if (task.done) scheduleTaskRemoval(task); });
+    card.addEventListener("click", () => openTaskDetail(task));
     return task;
   }
-  function finishTask(task, ok, detail) {
+  function finishTask(task, ok, output) {
     if (!task) return;
     const secs = ((Date.now() - task.started) / 1000).toFixed(1);
+    task.secs = secs;
+    task.status = ok ? "done" : "failed";
+    task.output = typeof output === "string" ? output : null;
     task.card.classList.remove("k-running");
     task.card.classList.add(ok ? "k-done" : "k-failed");
     task.dot.textContent = ok ? "✓" : "✗";
     task.labelEl.textContent = `${task.label} · ${secs}s`;
     if (!ok) {
-      lastTaskFailure = { msg: String(detail || ""), at: Date.now() };
-      if (detail) task.card.append(el("div", "k-task-detail", String(detail)));
+      lastTaskFailure = { msg: String(output || ""), at: Date.now() };
+      if (output) task.card.append(el("div", "k-task-detail", String(output)));
     }
     task.done = true;
     if (!task.hovered) scheduleTaskRemoval(task);
+  }
+  /** The card's full record, in the shared detail sheet: what was asked, then what the engine said. */
+  function openTaskDetail(task) {
+    if (!task) return;
+    const input = JSON.stringify({ runtime: state.runtime || undefined, ...(task.payload ?? {}) }, null, 2);
+    const raw = task.status === "running" ? "still running" : (task.output || "(no output)");
+    const cut = raw.length > 64000;
+    const shown = cut ? raw.slice(-64000) : raw;
+    taskDetail.show({ name: task.label, meta: `${task.status}${task.secs ? ` · ${task.secs}s` : ""}` });
+    taskDetail.setBody([detailSection("input", input), detailSection(task.status === "failed" ? "error" : "output", shown, cut)]);
   }
   function toast(msg) {
     // A failed task already carries its error in red, so the caller's copy would be a second bubble.
@@ -1309,7 +1329,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     },
     afterClose() {
       // The menu is a page element now, so the roll has to take it down itself.
-      scrim.hidden = true; stopLive(); ctxClose();
+      scrim.hidden = true; stopLive(); ctxClose(); taskDetail.hide();
       if (!panelNameBefore) return;
       panelName.textContent = panelNameBefore.text;
       panelName.hidden = panelNameBefore.hidden;
@@ -1321,6 +1341,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
 
   function handleEscape() {
     if (!sliding.isOpen()) return false;
+    if (taskDetail.isOpen()) { taskDetail.hide(); return true; }
     if (!sheet.hidden) { sheet.hidden = true; return true; }
     if (!ctxMenu.hidden) { const id = ctxHeld?.id ?? state.selected?.id; ctxClose(); focusNode(id); return true; }
     if (!toolsMenu.hidden) { toolsMenu.hidden = true; toolsBtn.setAttribute("aria-expanded", "false"); return true; }
