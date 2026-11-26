@@ -119,6 +119,17 @@ test("the drawer reads a 200 that says ok:false as the failure it is", () => {
 	assert.match(kontainerCss, /#kontainerDrawer \* \{ animation: none !important; \}/, "and every animation inside it");
 });
 
+test("a long engine error wraps inside a rounded bubble", () => {
+	// A failed action quotes the engine verbatim, container ids and all, so the bubble is a box that
+	// wraps its text rather than a pill that clips a line running past its edge.
+	assert.match(kontainerCss, /#kontainerDrawer \.k-toast \{[^}]*border-radius:10px/, "the toast has rounded corners, not circled sides");
+	assert.doesNotMatch(kontainerCss, /#kontainerDrawer \.k-toast \{[^}]*border-radius:999px/, "which a pill radius would undo");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-toast \{[^}]*white-space:normal/, "its text wraps to a second line");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-toast \{[^}]*overflow-wrap:anywhere/, "and a container id with no space in it breaks");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-toast \{[^}]*font:12px\/1\.45 var\(--k-mono\)/, "its lines are spaced for reading");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-toast \{[^}]*max-width:min\(560px,90vw\)/, "it stops short of the screen edge");
+});
+
 /** The terminal drawer's `runCommand`, on the page it reads and the socket it writes to. */
 class FakeElement {
 	textContent = "";
