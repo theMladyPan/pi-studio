@@ -118,6 +118,14 @@ export function redact(text: string): string {
 	return out;
 }
 
+/**
+ * Colour and cursor moves made for a terminal, gone. A runner's output crosses into a buffer the terminal
+ * never sees, and its escapes would otherwise print as garbage characters in the drawer's expanded view.
+ */
+export function stripAnsi(text: string): string {
+	return String(text ?? "").replace(/\u001b\[[0-9;:]*[A-Za-z]|\u001b\][^\u0007]*\u0007/g, "");
+}
+
 // ---------- the ring ----------
 let nextId = 1;
 const ring: LogEntry[] = [];
@@ -135,7 +143,7 @@ export function snapshot(): LogEntry[] {
  */
 export function log(level: LogLevel | string, source: string, message: string, meta?: LogMeta, output?: string): LogEntry {
 	const name = String(source ?? "").trim() || "daemon";
-	const text = redact(String(message ?? "")).slice(0, LOG_MESSAGE_MAX);
+	const text = redact(stripAnsi(String(message ?? ""))).slice(0, LOG_MESSAGE_MAX);
 	const entry: LogEntry = {
 		id: nextId++,
 		ts: new Date().toISOString(),
@@ -143,7 +151,7 @@ export function log(level: LogLevel | string, source: string, message: string, m
 		source: redact(name).slice(0, SOURCE_MAX),
 		message: text,
 	};
-	const answered = output !== undefined ? redact(String(output)) : "";
+	const answered = output !== undefined ? redact(stripAnsi(String(output))) : "";
 	if (answered.trim()) entry.output = truncateOutput(answered);
 	if (meta && typeof meta === "object") {
 		const kept: LogMeta = {};
