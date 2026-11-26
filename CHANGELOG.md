@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- feat: Add a duplicate press to every card head — a thread comes back as a new instance with a new thread id, its turns and its session copied under a fresh session id so the conversation continues where the original left it, while the cards the original owns stay bound to it; a note, source or settled question comes back as a clone under a new id with no key and no saved place, answered by the same thread, and an open question or a thread with a run in progress is refused rather than copied mid-flight. [t-b0a651d5]
+
 - fix: Name every left drawer in the board header — the activity and source control drawers lose their own rail heads with their close buttons (Esc and the header doors still close them), the header's open-panel label now names files and source control as it already named activity and search, and the source control total its rail head carried is gone, its per-group counts already standing below. [t-faf0d460]
 
 - feat: Show a thread's short id in its card head and let a click on it copy the whole id — the first eight characters of the thread's id sit in the head's right-hand row in mono, hovering shows the full id, and a click copies the full id to the clipboard (the footer repeats it if the clipboard refuses), so the separate copy glyph is gone. [t-4a496c81]

@@ -3523,6 +3523,13 @@ const OPEN_GLYPH =
 const DOWNLOAD_GLYPH =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.7v5.4M3.8 5.2 6 7.4l2.2-2.2M2.2 8.4v2.1h7.6V8.4"/></svg>';
 
+/**
+ * Two squares, one behind the other: the duplicate press in a card head. Drawn for the same reason the
+ * pin and the bin are, so it is one monochrome shape at every size.
+ */
+const DUPLICATE_GLYPH =
+  '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4.2 4.2h5.6v5.6H4.2zM2 7.8V2.2h5.6"/></svg>';
+
 function makeCard(data, quiet = false) {
   const isSource = data.type === "source";
   const isQuestion = data.type === "question";
@@ -3579,6 +3586,7 @@ function makeCard(data, quiet = false) {
     ${kind === "sticky" ? `<span class="short-id" title="${data.id}">${String(data.id).slice(0, 8)}</span>` : ""}
     <button type="button" class="open-editor" title="open this file in the text editor" aria-label="open this file in the text editor">${OPEN_GLYPH}</button>
     <button type="button" class="download-note" title="download this note as .md and .pdf" aria-label="download this note as .md and .pdf">${DOWNLOAD_GLYPH}</button>
+    <button type="button" class="duplicate" title="duplicate this card" aria-label="duplicate this card">${DUPLICATE_GLYPH}</button>
     <button class="pin" title="pin this card" aria-label="pin this card">${PIN_GLYPH}</button>
     <button class="min" title="minimize this card" aria-label="minimize this card">▾</button>
     <button class="reply" title="ask a follow-up about this card" aria-label="ask a follow-up about this card">↩</button>
@@ -3681,6 +3689,12 @@ function makeCard(data, quiet = false) {
   head.querySelector(".download-note").addEventListener("click", (event) => {
     event.stopPropagation();
     void downloadCard(entry);
+  });
+  // A duplicate is asked of the daemon and drawn from its broadcast, so the press only sends the id: a
+  // thread comes back as a new card with a new id, and a plain card as a copy of itself.
+  head.querySelector(".duplicate").addEventListener("click", (event) => {
+    event.stopPropagation();
+    void duplicateCard(entry);
   });
   if (data.mini) setMini(card, true);
   capField(card, height);
@@ -4575,6 +4589,26 @@ function closeCard(entry) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ cardId: entry.id }),
   }).catch(() => {});
+}
+
+/**
+ * Duplicate a card: the daemon makes the copy and broadcasts it, so this only asks and says where the
+ * copy landed. A thread comes back as a new card of its own with a new id; the cards the original owns
+ * stay bound to it, and the copy carries the conversation it was forked with.
+ */
+async function duplicateCard(entry) {
+  try {
+    const response = await fetch(`/duplicate?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: entry.id }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const made = await response.json();
+    footNote(`duplicated · ${made.card?.title || entry.id}`);
+  } catch (error) {
+    footNote(`could not duplicate the card: ${error.message || error}`, true);
+  }
 }
 
 /** Remove a card from the board and let later cards fill the space it held. */

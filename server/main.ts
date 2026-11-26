@@ -35,7 +35,7 @@ import { onPrompt, onPromptWrite, onPrompts, onWorkspacePrompt, onWorkspacePromp
 import { flowDiagrams } from "./flow-diagrams.ts";
 import { onSkill } from "./routes/board/skill.ts";
 import { onCardPdf } from "./routes/board/pdf.ts";
-import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onThreadCollect, onUndo } from "./routes/board/lifecycle.ts";
+import { onClean, onCleanClosed, onClose, onDuplicate, onFragmentRemove, onFragments, onKill, onNew, onReopen, onRemove, onRemovePreview, onStop, onThreadCollect, onUndo } from "./routes/board/lifecycle.ts";
 import { onShell } from "./routes/board/shell.ts";
 import { onGitInit, onGitMsg, onGitPage } from "./routes/gitgraph.ts";
 import { onPluginRegistry, onPluginReload, onVisualFile, onVisualPanels, onVisualRequest, VISUAL_PREFIX } from "./routes/plugins.ts";
@@ -1016,6 +1016,9 @@ function requestHandler(req, res) {
 				"/message/drop": onMessageDrop,
 				"/layout": onLayout,
 				"/close": onClose,
+				// Duplicating a card makes a thread or a card, which is the human's press alone, so it
+				// is not in THREAD_ROUTES either.
+				"/duplicate": onDuplicate,
 				// A thread tidies the closed children it spawned, with the same proof a sweep asks for.
 				"/thread/collect": onThreadCollect,
 				"/reopen": onReopen,

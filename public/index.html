@@ -389,6 +389,13 @@
   .card .trash:hover { background: #21262d; color: #f85149; }
   .card .trash svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
     stroke-width: 1.2; stroke-linejoin: round; }
+  /* The duplicate press, drawn like the pin and the trash for the same reason: one monochrome shape
+     at every size, muted until the pointer is on it. */
+  .card .duplicate { border: 0; background: transparent; color: var(--muted); cursor: pointer;
+    padding: 2px 4px; border-radius: 4px; display: flex; align-items: center; }
+  .card .duplicate:hover { background: #21262d; color: var(--text); }
+  .card .duplicate svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
+    stroke-width: 1.2; stroke-linejoin: round; }
   /* A floor, because a textarea has no height of its own: without one the card would collapse to its
      minimum and the editor be a slit. */
   .note-edit { width: 100%; height: 100%; min-height: 200px; resize: none; border: 0; outline: none;
