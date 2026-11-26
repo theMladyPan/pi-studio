@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { LOG_CAPACITY, LOG_MESSAGE_MAX, LOG_OUTPUT_MAX, levelOf, levelPasses, log, logPluginLine, redact, snapshot, stripAnsi, subscribe, tapDaemon, truncateOutput } from "../server/logs.ts";
 import type { LogEntry } from "../server/logs.ts";
@@ -73,6 +74,16 @@ test("a secret in a command, a folder or a meta value is masked as well", () => 
 	assert.ok(!JSON.stringify(entry).includes("sk-abc"), "the header value in the command is masked");
 	assert.ok(!JSON.stringify(entry).includes("s3cret"), "the value beside a password name is masked");
 	assert.equal(entry.meta?.dur, 12, "a number is kept as a number");
+});
+
+const logsDrawerSource = readFileSync(new URL("../public/client/logs-drawer.js", import.meta.url), "utf8");
+const boardPage = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+
+test("a command with no answer says so dimly, instead of repeating the command in the output block", () => {
+	assert.match(logsDrawerSource, /full\.className = "empty";/, "the empty block is marked");
+	assert.match(logsDrawerSource, /full\.textContent = "\[no output\]";/, "the block says there was no output");
+	assert.doesNotMatch(logsDrawerSource, /entry\.output[^\n]*\? String\(entry\.output\) : String\(entry\.message/, "the block no longer falls back to the command text");
+	assert.match(boardPage, /#logsDrawer \.log-detail pre\.empty \{ color: var\(--muted\);/, "the placeholder is dimmed");
 });
 
 test("a filter shows its own level and every worse one, and nothing better", () => {

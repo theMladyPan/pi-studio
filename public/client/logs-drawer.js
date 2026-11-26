@@ -192,7 +192,15 @@ export function createLogsDrawer() {
     const detail = document.createElement("div");
     detail.className = "log-detail";
     const full = document.createElement("pre");
-    full.textContent = entry.output !== undefined && entry.output !== null && entry.output !== "" ? String(entry.output) : String(entry.message ?? "");
+    const hasOutput = entry.output !== undefined && entry.output !== null && entry.output !== "";
+    const hasMeta = entry.meta && typeof entry.meta === "object" && Object.keys(entry.meta).length > 0;
+    if (hasOutput) full.textContent = String(entry.output);
+    else if (hasMeta) {
+      // A command that answered nothing (an empty stash list, a quiet status) has no output to show:
+      // say so dimly instead of repeating the command that already stands in the head and the meta grid.
+      full.className = "empty";
+      full.textContent = "[no output]";
+    } else full.textContent = String(entry.message ?? "");
     const actions = document.createElement("div");
     actions.className = "actions";
     const copy = document.createElement("button");
