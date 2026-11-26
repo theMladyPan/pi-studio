@@ -247,6 +247,30 @@ test("statsFromPayload computes CPU percentage and memory", () => {
 	assert.equal(statsFromPayload({}).cpuPct, 0);
 });
 
+test("statsFromPayload measures CPU between samples by wall time", () => {
+	// Podman-shaped payload: precpu zero, system counter busy-only. Between samples it must still read 8 cores as 800%.
+	const payload = {
+		cpu_stats: { cpu_usage: { total_usage: 9_000_000_000 }, system_cpu_usage: 28_400_000_000, online_cpus: 16 },
+		precpu_stats: { cpu_usage: { total_usage: 0 } },
+		memory_stats: { usage: 512, limit: 2048 },
+	};
+	assert.equal(statsFromPayload(payload, { total: 1_000_000_000, atMs: 0 }, 1000).cpuPct, 800);
+	assert.equal(statsFromPayload(payload, { total: 1_000_000_000, atMs: 0 }, 2000).cpuPct, 400);
+	// A counter reset (container recreated) or a zero-length interval reads 0, never a spike.
+	assert.equal(statsFromPayload(payload, { total: 99_000_000_000, atMs: 0 }, 1000).cpuPct, 0);
+	assert.equal(statsFromPayload(payload, { total: 1_000_000_000, atMs: 1000 }, 1000).cpuPct, 0);
+});
+
+test("fetchStats measures CPU between its own polls", async () => {
+	const runtime = mockRuntime();
+	const samples = new Map<string, { total: number; atMs: number }>();
+	const first = await fetchStats(runtime, ["111111aaaaaa"], samples);
+	const second = await fetchStats(runtime, ["111111aaaaaa"], samples);
+	// The mock payload never advances, so the second poll has no CPU time delta.
+	assert.equal(first["111111aaaaaa"]?.cpuPct, 80);
+	assert.equal(second["111111aaaaaa"]?.cpuPct, 0);
+});
+
 test("fetchStats reads stats over the socket and skips failures", async () => {
 	const runtime = mockRuntime();
 	const stats = await fetchStats(runtime, ["111111aaaaaa", "missing-id"]);

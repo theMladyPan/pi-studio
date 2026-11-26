@@ -1042,10 +1042,35 @@ export function cpuPctFromStats(stats: unknown): number {
 	return (deltaTotal / deltaSystem) * online * 100;
 }
 
-export function statsFromPayload(stats: unknown): ContainerStats {
+/** One container CPU counter reading: nanoseconds of CPU time used, and when it was read. */
+export interface CpuSample {
+	total: number;
+	atMs: number;
+}
+
+function cpuTotalFromStats(stats: unknown): number {
+	return asNumber(asRecord(asRecord(asRecord(stats).cpu_stats).cpu_usage).total_usage);
+}
+
+/**
+ * CPU percent between two of our own polls, by wall time: CPU nanoseconds used
+ * since the previous poll, over the seconds elapsed. 100 is one busy core.
+ * Wall time, not the engine's system counter: Podman's `system_cpu_usage`
+ * counts busy time only, so the Docker formula overreads on Podman, and its
+ * one-shot `precpu_stats` is zero, which turns that formula into a lifetime
+ * average since the container started.
+ */
+export function cpuPctBetweenSamples(total: number, prev: CpuSample, nowMs: number): number {
+	const elapsedMs = nowMs - prev.atMs;
+	const delta = total - prev.total;
+	if (elapsedMs <= 0 || delta < 0) return 0;
+	return (delta / (elapsedMs * 1_000_000)) * 100;
+}
+
+export function statsFromPayload(stats: unknown, prev?: CpuSample, nowMs: number = Date.now()): ContainerStats {
 	const memory = asRecord(asRecord(stats).memory_stats);
 	return {
-		cpuPct: cpuPctFromStats(stats),
+		cpuPct: prev ? cpuPctBetweenSamples(cpuTotalFromStats(stats), prev, nowMs) : cpuPctFromStats(stats),
 		memUsed: asNumber(memory.usage),
 		memLimit: asNumber(memory.limit),
 	};
@@ -1054,8 +1079,12 @@ export function statsFromPayload(stats: unknown): ContainerStats {
 const STATS_CONCURRENCY = 4;
 const STATS_TIMEOUT_MS = 4000;
 
+/** Previous poll's counter per runtime and container, so CPU percent is measured between our own polls. */
+const prevCpuSamples = new Map<string, CpuSample>();
+const CPU_SAMPLE_TTL_MS = 15 * 60 * 1000;
+
 /** Per-container stats, at most 4 in flight; one bad container never fails the rest. */
-export async function fetchStats(runtime: Runtime, ids: string[]): Promise<Record<string, ContainerStats>> {
+export async function fetchStats(runtime: Runtime, ids: string[], samples: Map<string, CpuSample> = prevCpuSamples): Promise<Record<string, ContainerStats>> {
 	const out: Record<string, ContainerStats> = {};
 	let next = 0;
 	const worker = async (): Promise<void> => {
@@ -1063,13 +1092,27 @@ export async function fetchStats(runtime: Runtime, ids: string[]): Promise<Recor
 			const id = ids[next++];
 			try {
 				const payload = await requestJson(runtime, `/containers/${encodeURIComponent(id)}/stats?stream=false`, { timeoutMs: STATS_TIMEOUT_MS });
-				out[id] = statsFromPayload(payload);
+				const key = `${runtime.socketPath}\u0000${id}`;
+				const prev = samples.get(key);
+				const nowMs = Date.now();
+				// Podman's one-shot precpu is zero, so the precpu formula would read as a lifetime average;
+				// its first sample only sets the baseline. Docker keeps its precpu value for the first sample.
+				out[id] = prev
+					? statsFromPayload(payload, prev, nowMs)
+					: runtime.kind === "podman"
+						? { ...statsFromPayload(payload), cpuPct: 0 }
+						: statsFromPayload(payload);
+				samples.set(key, { total: cpuTotalFromStats(payload), atMs: nowMs });
 			} catch {
 				// Skipped: the UI simply shows no stats for this container.
 			}
 		}
 	};
 	await Promise.all(Array.from({ length: Math.min(STATS_CONCURRENCY, ids.length) }, () => worker()));
+	const cutoff = Date.now() - CPU_SAMPLE_TTL_MS;
+	for (const [key, sample] of samples) {
+		if (key.startsWith(`${runtime.socketPath}\u0000`) && sample.atMs < cutoff) samples.delete(key);
+	}
 	return out;
 }
 
