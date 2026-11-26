@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- feat: Add a 00 Sources · Definitions stratum to the kontainer drawer — the workspace's recognized compose files, Dockerfiles and Containerfiles read as definition cards with their service pills, quick actions and dashed wires into the images they build, a source inspector previews the file and its linked images, containers and build details, a right press offers the stack and build actions that node answers to without moving the selection, and opening a source closes the drawer and opens the file on the board; older payloads synthesize the stratum from the server's file lists instead of leaving it empty. [t-d9b0f266]
 - feat: Add a right-click menu to every kontainer drawer node — images, containers, ports, networks and volumes each offer the actions and the copies their inspector already carries, an item the node's own state rules out is greyed with its reason in the tooltip, a right press leaves the selection and the details panel as they stand — only `inspect` and `layers` open the panel — and `Esc` puts the keyboard back on the card the menu was opened on; the menu's `kill` arms the inspector's own button rather than leaving it reading `kill`, a keyboard press opens the menu on its card instead of the window's corner, a port's `open in browser` reaches an any-interface or IPv6 bind through a host a browser can dial, and a mount reads as `volume` or `bind` on its card and in its inspector rather than as the `vol` column it is drawn in. [t-181fd5fb] [t-9d342bd1]
 
 ## [0.10.0] - 2026-11-26

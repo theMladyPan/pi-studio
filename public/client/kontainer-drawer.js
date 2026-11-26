@@ -6,7 +6,7 @@
  */
 import { bindDragHeight, createSlidingDrawer } from "./drawer-common.js";
 
-export function createKontainerDrawer({ workspace, typingSomewhere, openTerminalCommand }) {
+export function createKontainerDrawer({ workspace, typingSomewhere, openTerminalCommand, openWorkspaceFile }) {
   const drawer = document.getElementById("kontainerDrawer");
   const scrim = document.getElementById("kontainerScrim");
   const btn = document.getElementById("kontainerBtn");
@@ -50,11 +50,13 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
         <div class="k-stage" id="kStage">
           <svg class="k-wires" id="kWireLayer" aria-hidden="true"></svg>
           <div class="k-grid">
+            <div class="k-stratum"><div class="k-stratum-head k-stratum-sources"><span class="k-stratum-label"><span class="k-idx">00</span> Sources · Definitions</span><span class="k-stratum-meta" id="kMetaSources"></span></div>
+              <div class="k-col-list" id="kSources"></div></div>
             <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label"><span class="k-idx">01</span> Images · Lineage</span><span class="k-stratum-meta" id="kMetaImages"></span></div>
               <div class="k-col-list" id="kImages"></div><div class="k-unused-tray" id="kUnusedTray" hidden></div></div>
             <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label"><span class="k-idx">02</span> Runtime · Containers</span><span class="k-stratum-meta" id="kMetaRuntime"></span></div>
               <div class="k-col-list" id="kRuntime"></div></div>
-            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label"><span class="k-idx">03</span> Wiring · Exposure &amp; State</span><span class="k-stratum-meta" id="kMetaWiring"></span></div>
+            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label"><span class="k-idx">03</span> Wiring</span><span class="k-stratum-meta" id="kMetaWiring"></span></div>
               <div class="k-col-list" id="kWiring"></div></div>
           </div>
         </div>
@@ -89,6 +91,47 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   const summary = () => topo().summary || {};
   const findImage = (id) => images().find((i) => i.id === id);
   const findCtr = (id) => containers().find((c) => c.id === id);
+  // Recognized workspace sources (00 Sources · Definitions). Older payloads carry only the file lists,
+  // so basic entries are synthesized from them rather than leaving the stratum empty.
+  const synthSource = (full, kind) => {
+    const folder = String(state.data?.workspaceFolder || "").replace(/\\/g, "/").replace(/\/+$/, "");
+    let rel = String(full || "").replace(/\\/g, "/");
+    if (folder && rel.startsWith(folder + "/")) rel = rel.slice(folder.length + 1);
+    else if (folder && rel.includes("/")) rel = rel.split("/").slice(-2).join("/");
+    const slash = rel.lastIndexOf("/");
+    const dir = slash >= 0 ? rel.slice(0, slash + 1) : "./";
+    const file = slash >= 0 ? rel.slice(slash + 1) : rel;
+    return {
+      id: `src:${rel}`, kind, relPath: rel, dir, file, mtimeMs: 0,
+      meta: kind === "compose" ? "compose file" : "dockerfile",
+      badge: kind === "compose" ? "stopped" : "unbuilt",
+      statusText: kind === "compose" ? "not started" : "not built yet",
+      unbuilt: true, edited: false, services: [], stages: [], baseImage: null,
+      exposedPorts: [], imageIds: [], containerIds: [], preview: "",
+    };
+  };
+  const sources = () => {
+    if (Array.isArray(state.data?.sources)) return state.data.sources;
+    const out = [];
+    for (const f of state.data?.composeFiles || []) out.push(synthSource(f, "compose"));
+    for (const f of state.data?.dockerfiles || []) out.push(synthSource(f, /^Containerfile/.test(f.split("/").pop() || "") ? "containerfile" : "dockerfile"));
+    return out;
+  };
+  const findSource = (id) => sources().find((s) => s.id === id);
+  // A build sheet preset tag: a Dockerfile in `services/api/` builds `api:latest`.
+  const suggestedTag = (src) => {
+    const dirParts = String(src.dir || "./").split("/").filter(Boolean);
+    let stem = String(src.file || "app");
+    if (stem === "Dockerfile" || stem === "Containerfile") stem = dirParts.pop() || "app";
+    else stem = stem.replace(/\..+$/, "");
+    const slug = stem.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "app";
+    return `${slug}:latest`;
+  };
+  // Open a source file on the board, or say its path when the board gave no door.
+  function openSourceFile(relPath) {
+    if (typeof openWorkspaceFile === "function") openWorkspaceFile(relPath);
+    else toast(relPath);
+  }
   // A container's own id first, then the image its tag now names: a stale container still points at a
   // build this engine no longer holds under that id, and the local image with its name is its lineage.
   const imageOfCtr = (c) => findImage(c.imageId) || images().find((i) => i.name === c.imageName) || null;
@@ -120,12 +163,21 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   function relatedSet(id) {
     if (!id) return null;
     const set = new Set([id]);
+    const src = findSource(id);
+    if (src) {
+      for (const imgId of src.imageIds || []) {
+        set.add(imgId);
+        containers().filter((c) => imageIdOfCtr(c) === imgId || (src.containerIds || []).includes(c.id)).forEach((c) => { set.add(c.id); ctrWires(c).forEach((w) => set.add(w)); });
+      }
+      for (const cid of src.containerIds || []) { const c = findCtr(cid); if (c) { set.add(c.id); ctrWires(c).forEach((w) => set.add(w)); } }
+      return set;
+    }
     const c = findCtr(id);
-    if (c) { const imgId = imageIdOfCtr(c); if (imgId) set.add(imgId); ctrWires(c).forEach((w) => set.add(w)); return set; }
+    if (c) { const imgId = imageIdOfCtr(c); if (imgId) set.add(imgId); ctrWires(c).forEach((w) => set.add(w)); sources().filter((s) => (s.containerIds || []).includes(c.id) || (s.imageIds || []).includes(imgId)).forEach((s) => set.add(s.id)); return set; }
     const img = findImage(id);
-    if (img) { containers().filter((x) => x.imageId === img.id || imgNameOf(x) === `${img.repo}:${img.tag}`).forEach((x) => { set.add(x.id); ctrWires(x).forEach((w) => set.add(w)); }); return set; }
+    if (img) { containers().filter((x) => x.imageId === img.id || imgNameOf(x) === `${img.repo}:${img.tag}`).forEach((x) => { set.add(x.id); ctrWires(x).forEach((w) => set.add(w)); }); sources().filter((s) => (s.imageIds || []).includes(img.id)).forEach((s) => set.add(s.id)); return set; }
     const w = wireNode(id);
-    if (w) containers().filter((x) => ctrWires(x).includes(id)).forEach((x) => { set.add(x.id); const imgId = imageIdOfCtr(x); if (imgId) set.add(imgId); });
+    if (w) containers().filter((x) => ctrWires(x).includes(id)).forEach((x) => { set.add(x.id); const imgId = imageIdOfCtr(x); if (imgId) set.add(imgId); sources().filter((s) => (s.containerIds || []).includes(x.id) || (s.imageIds || []).includes(imgId)).forEach((s) => set.add(s.id)); });
     return set;
   }
   function matches(node, kind) {
@@ -133,10 +185,17 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     if (q && !q.startsWith(">")) {
       const hay = kind === "image" ? `${node.repo}:${node.tag} ${node.name || ""} ${node.shortId || ""}`
         : kind === "container" ? `${node.name || ""} ${node.shortId || ""} ${node.statusText || ""} ${node.state || ""} ${imgNameOf(node)} ${node.composeProject || ""}`
+        : kind === "source" ? `${node.relPath || ""} ${node.kind || ""} ${node.meta || ""} ${node.statusText || ""} ${(node.services || []).map((s) => s.name).join(" ")} ${node.baseImage || ""}`
         : `${node.label || node.name || node.id} ${node.hostPort || ""} ${node.containerPort || ""} ${node.subnet || ""} ${node.source || ""}`;
       if (!hay.toLowerCase().includes(q)) return false;
     }
     if (state.filter === "all") return true;
+    if (kind === "source") {
+      if (state.filter === "running") return !node.unbuilt && (node.kind === "compose" ? node.services.some(s => s.state !== "down") || node.containerIds.some(cid => { const c = findCtr(cid); return c && isRunning(c); }) : node.imageIds.some(iid => containers().some(c => imageIdOfCtr(c) === iid && isRunning(c))));
+      if (state.filter === "issues") return node.edited || node.badge === "drift" || node.services?.some(s => s.state === "warn") || node.imageIds.some(iid => findImage(iid)?.drift);
+      if (state.filter === "unused") return !!node.unbuilt;
+      return true;
+    }
     if (state.filter === "running") return kind === "container" ? isRunning(node) : containers().some((c) => (kind === "image" ? (c.imageId === node.id || imgNameOf(c) === `${node.repo}:${node.tag}`) : ctrWires(c).includes(node.id)) && isRunning(c));
     if (state.filter === "issues") return kind === "container" ? isIssue(node) : kind === "image" ? (node.drift || containers().some((c) => (c.imageId === node.id || imgNameOf(c) === `${node.repo}:${node.tag}`) && isIssue(c))) : containers().some((c) => ctrWires(c).includes(node.id) && isIssue(c));
     if (state.filter === "unused") return kind === "image" ? isUnusedImg(node) : kind === "container" ? !isRunning(node) : false;
@@ -238,6 +297,9 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     $("kIssues").textContent = `${s.issues ?? containers().filter(isIssue).length} alerts`;
     $("kDisk").textContent = fmtBytes(s.totalImageBytes ?? images().reduce((a, i) => a + (i.sizeBytes || 0), 0));
     $("kDot").classList.toggle("bad", (s.issues ?? 0) > 0);
+    const composeCount = sources().filter((s) => s.kind === "compose").length;
+    const buildFileCount = sources().filter((s) => s.kind === "dockerfile" || s.kind === "containerfile").length;
+    $("kMetaSources").textContent = sources().length ? `${composeCount} compose · ${buildFileCount} file${buildFileCount === 1 ? "" : "s"}` : "0 files";
     $("kMetaImages").textContent = `${images().length} local`;
     const stacks = new Set(containers().map((c) => c.composeProject).filter(Boolean)).size;
     $("kMetaRuntime").textContent = `${stacks ? `${stacks} stack${stacks > 1 ? "s" : ""} · ` : ""}${containers().length} total`;
@@ -245,7 +307,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     renderRuntimeHost(); renderChips();
     const hint = $("kHint");
     const unavailable = state.data?.available === false;
-    const emptyWorkspace = !unavailable && state.scope === "workspace" && (s.workspaceContainers ?? 0) === 0 && (s.allContainers ?? 0) > 0;
+    const emptyWorkspace = !unavailable && state.scope === "workspace" && (s.workspaceContainers ?? 0) === 0 && (s.allContainers ?? 0) > 0 && sources().length === 0;
     hint.hidden = !unavailable && !emptyWorkspace;
     if (unavailable) {
       const retry = el("button", "k-mini-btn", "retry"); retry.type = "button"; retry.onclick = () => loadState();
@@ -267,12 +329,12 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     card.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       const cardKind = card.dataset.kind;
-      const node = cardKind === "wire" ? wireNode(id) : cardKind === "image" ? findImage(id) : findCtr(id);
+      const node = cardKind === "wire" ? wireNode(id) : cardKind === "image" ? findImage(id) : cardKind === "source" ? findSource(id) : findCtr(id);
       if (!node) return;
       // The press opens the menu and nothing else: the selection and the inspector are left as they were.
       ctxOpen(cardKind === "wire" ? { port: "port", net: "network", vol: "volume" }[node.kind] : cardKind, node, event, card);
     });
-    card.addEventListener("click", (e) => { e.stopPropagation(); state.selected = { kind: card.dataset.kind, id }; state.tab = card.dataset.kind === "image" ? "layers" : "logs"; state.armedKill = null; if (state.mode === "eco") fetchStats([id]); render(); });
+    card.addEventListener("click", (e) => { e.stopPropagation(); state.selected = { kind: card.dataset.kind, id }; state.tab = card.dataset.kind === "source" ? "preview" : card.dataset.kind === "image" ? "layers" : "logs"; state.armedKill = null; if (state.mode === "eco" && card.dataset.kind === "container") fetchStats([id]); render(); });
     card.addEventListener("mouseenter", () => { if (state.hovered?.id !== id) { state.hovered = { kind: card.dataset.kind, id }; paintFocus(); } });
     card.addEventListener("mouseleave", () => { if (state.hovered?.id === id) { state.hovered = null; paintFocus(); } });
   }
@@ -400,7 +462,31 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     ];
   }
 
-  const CTX_MENUS = { image: imageCtx, container: containerCtx, port: portCtx, network: networkCtx, volume: volumeCtx };
+  function sourceCtx(src) {
+    const run = (payload, okMsg) => () => postAction(payload, okMsg).catch((e) => toast(e.message));
+    const items = [
+      { id: "preview", label: "inspect", run: () => showTab("source", src.id, "preview") },
+      { id: "openFile", label: "open file", run: () => openSourceFile(src.relPath) },
+      { sep: true },
+    ];
+    if (src.kind === "compose") {
+      items.push(
+        { id: "up", label: "compose up -d", run: run({ action: "compose.up", file: src.relPath }, "compose up") },
+        { id: "restart", label: "compose restart", run: run({ action: "compose.restart", file: src.relPath }, "compose restarted") },
+        { id: "down", label: "compose down", danger: true, disabled: src.unbuilt, hint: "no stack containers are up", run: run({ action: "compose.down", file: src.relPath }, "compose down") },
+        { id: "logs", label: "compose logs ↗", run: () => execToTerminal({ mode: "compose-logs", composeFile: src.relPath }) },
+      );
+    } else {
+      items.push(
+        { id: "build", label: "build image…", run: () => openSheet("build", { dockerfile: src.relPath, context: src.dir === "./" ? "." : src.dir.replace(/\/$/, ""), tag: suggestedTag(src) }) },
+        { id: "buildNoCache", label: "build (no cache)…", run: () => openSheet("build", { dockerfile: src.relPath, context: src.dir === "./" ? "." : src.dir.replace(/\/$/, ""), tag: suggestedTag(src), noCache: true }) },
+      );
+    }
+    items.push({ sep: true }, { id: "copyPath", label: "copy path", run: () => copyText(src.relPath) });
+    return items;
+  }
+
+  const CTX_MENUS = { image: imageCtx, container: containerCtx, port: portCtx, network: networkCtx, volume: volumeCtx, source: sourceCtx };
 
   function ctxOpen(kind, entity, event, card) {
     const table = CTX_MENUS[kind];
@@ -472,8 +558,56 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const n = Math.max(1, img.layersCount || 1);
     for (let i = 0; i < n; i++) { const seg = el("span", "k-layer-seg"); seg.style.width = `${100 / n}%`; seg.style.background = LAYER_COLORS[i % LAYER_COLORS.length]; bar.append(seg); }
     card.append(top, sub, bar);
+    const jackL = el("span", "k-jack k-jack-l"); jackL.dataset.jack = `${img.id}-in`; card.append(jackL);
     const jack = el("span", "k-jack k-jack-r"); jack.dataset.jack = `${img.id}-out`; card.append(jack);
     focusClasses(card, img.id, related);
+    return card;
+  }
+  const srcBadgeCls = (src) => {
+    const b = String(src.badge || "");
+    if (b === "active" || b === "built") return "k-b-green";
+    if (b === "multi-stage") return "k-b-blue";
+    if (b === "edited" || b === "drift") return "k-b-amber";
+    return "k-b-muted";
+  };
+  function buildSourceCard(src, related) {
+    const card = el("div", `k-card k-src-card k-src-${src.kind}${src.unbuilt ? " k-src-unbuilt" : ""}`); card.dataset.nodeId = src.id; card.dataset.kind = "source";
+    const top = el("div", "k-src-top");
+    top.append(el("span", "k-src-icon", src.kind === "compose" ? "C" : src.kind === "dockerfile" ? "D" : "CF"));
+    const path = el("span", "k-src-path"); path.append(el("span", "k-src-dir", src.dir), document.createTextNode(src.file)); top.append(path);
+    top.append(el("span", "k-grow"), el("span", `k-badge ${srcBadgeCls(src)}`, src.badge || ""));
+    card.append(top, el("div", "k-src-meta", src.meta || ""));
+    if ((src.services || []).length) {
+      const pills = el("div", "k-src-pills");
+      for (const s of src.services) { const pill = el("span", "k-svc-pill"); pill.append(el("span", `k-mini-dot ${s.state}`), document.createTextNode(s.name)); pills.append(pill); }
+      card.append(pills);
+    }
+    const foot = el("div", "k-src-foot");
+    const stateText = el("span", `k-src-state${src.edited || src.badge === "drift" || src.badge === "edited" ? " k-warn" : src.badge === "active" || src.badge === "built" ? " k-ok" : ""}`, src.statusText || "");
+    const acts = el("span", "k-src-acts");
+    const openBtn = el("button", "k-mini-btn", "open"); openBtn.type = "button";
+    openBtn.onclick = (e) => { e.stopPropagation(); openSourceFile(src.relPath); };
+    acts.append(openBtn);
+    if (src.kind === "compose") {
+      if (src.unbuilt) {
+        const up = el("button", "k-mini-btn k-primary-mini", "up -d"); up.type = "button";
+        up.onclick = (e) => { e.stopPropagation(); postAction({ action: "compose.up", file: src.relPath }, "compose up").catch((err) => toast(err.message)); };
+        acts.append(up);
+      } else {
+        const restart = el("button", "k-mini-btn", "restart"); restart.type = "button";
+        restart.onclick = (e) => { e.stopPropagation(); postAction({ action: "compose.restart", file: src.relPath }, "compose restarted").catch((err) => toast(err.message)); };
+        const down = el("button", "k-mini-btn", "down"); down.type = "button";
+        down.onclick = (e) => { e.stopPropagation(); postAction({ action: "compose.down", file: src.relPath }, "compose down").catch((err) => toast(err.message)); };
+        acts.append(restart, down);
+      }
+    } else {
+      const build = el("button", "k-mini-btn k-primary-mini", src.unbuilt ? "build" : "rebuild"); build.type = "button";
+      build.onclick = (e) => { e.stopPropagation(); openSheet("build", { dockerfile: src.relPath, context: src.dir === "./" ? "." : src.dir.replace(/\/$/, ""), tag: suggestedTag(src) }); };
+      acts.append(build);
+    }
+    foot.append(stateText, acts); card.append(foot);
+    const jack = el("span", "k-jack k-jack-r"); jack.dataset.jack = `${src.id}-out`; card.append(jack);
+    focusClasses(card, src.id, related);
     return card;
   }
   function ctrStateClass(c) { return isIssue(c) && !isRunning(c) ? (c.exitCode > 0 || c.oomKilled ? "k-st-failed" : "k-st-warn") : isRunning(c) ? "k-st-running" : "k-st-stopped"; }
@@ -559,6 +693,17 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   }
   function renderTopology() {
     const related = relatedSet(state.hovered?.id || state.selected?.id);
+    const srcHost = $("kSources"); srcHost.replaceChildren();
+    const visibleSources = sources().filter((s) => matches(s, "source"));
+    if (!visibleSources.length) srcHost.append(el("div", "k-empty", sources().length ? "no sources match" : "no compose or containerfiles"));
+    else {
+      const groups = [["compose stacks", visibleSources.filter((s) => s.kind === "compose")], ["dockerfiles & containerfiles", visibleSources.filter((s) => s.kind === "dockerfile" || s.kind === "containerfile")]];
+      for (const [label, list] of groups) {
+        if (!list.length) continue;
+        srcHost.append(el("div", "k-wire-subhead", label));
+        list.forEach((s) => srcHost.append(buildSourceCard(s, related)));
+      }
+    }
     const imgHost = $("kImages"); imgHost.replaceChildren();
     const active = images().filter((i) => !isUnusedImg(i) && matches(i, "image"));
     const unused = images().filter((i) => isUnusedImg(i) && matches(i, "image"));
@@ -630,6 +775,26 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       wires.append(path);
     };
     const jack = (id) => stage.querySelector(`[data-jack="${CSS.escape(id)}"]`);
+    for (const s of sources().filter((one) => matches(one, "source"))) {
+      const srcOut = jack(`${s.id}-out`); if (!srcOut) continue;
+      const targets = [];
+      for (const imgId of s.imageIds || []) {
+        const imgIn = jack(`${imgId}-in`);
+        if (imgIn) targets.push({ img: findImage(imgId), node: imgIn, id: imgId });
+        else containers().filter((c) => imageIdOfCtr(c) === imgId).forEach((c) => { const ctrIn = jack(`${c.id}-in`); if (ctrIn) targets.push({ img: findImage(imgId), node: ctrIn, id: c.id }); });
+      }
+      if (!targets.length) for (const cid of s.containerIds || []) { const ctrIn = jack(`${cid}-in`); if (ctrIn) targets.push({ img: null, node: ctrIn, id: cid }); }
+      for (const { img, node, id } of targets) {
+        const hit = !related || (related.has(s.id) && related.has(id));
+        let stroke;
+        if (s.edited || img?.drift) stroke = "#d29922";
+        else if (s.kind === "compose") stroke = "#56d4dd";
+        else if (s.kind === "containerfile") stroke = "#d2a8ff";
+        else stroke = "#58a6ff";
+        const drift = s.edited || img?.drift ? "k-drift" : "";
+        mk(pointOf(srcOut), pointOf(node), stroke, hit && related ? "2.1" : "1.4", `k-src ${drift} ${related ? (hit ? "k-lit" : "k-dimmed") : ""}`);
+      }
+    }
     for (const c of containers()) {
       const ctrIn = jack(`${c.id}-in`), ctrOut = jack(`${c.id}-out`);
       if (!ctrIn || !ctrOut) continue;
@@ -715,9 +880,52 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     if (!state.selected) { inspector.classList.add("k-collapsed"); scheduleWires(); return; }
     inspector.classList.remove("k-collapsed");
     const { kind, id } = state.selected;
+    if (kind === "source") return renderSourceInspector(findSource(id));
     if (kind === "container") return renderContainerInspector(findCtr(id), refresh);
     if (kind === "image") return renderImageInspector(findImage(id), refresh);
     if (kind === "wire") return renderWireInspector(wireNode(id));
+  }
+  function renderSourceInspector(src) {
+    if (!src) { state.selected = null; return renderInspector(false); }
+    const actions = [];
+    if (src.kind === "compose") {
+      actions.push(actBtn("compose up -d", "k-primary", () => postAction({ action: "compose.up", file: src.relPath }, "compose up").catch((e) => toast(e.message))));
+      actions.push(actBtn("restart", "", () => postAction({ action: "compose.restart", file: src.relPath }, "compose restarted").catch((e) => toast(e.message))));
+      actions.push(actBtn("down", "", () => postAction({ action: "compose.down", file: src.relPath }, "compose down").catch((e) => toast(e.message))));
+      actions.push(actBtn("logs ↗", "", () => execToTerminal({ mode: "compose-logs", composeFile: src.relPath })));
+    } else {
+      actions.push(actBtn(src.unbuilt ? "build image" : "rebuild image", "k-primary", () => openSheet("build", { dockerfile: src.relPath, context: src.dir === "./" ? "." : src.dir.replace(/\/$/, ""), tag: suggestedTag(src) })));
+      actions.push(actBtn("no-cache build", "", () => openSheet("build", { dockerfile: src.relPath, context: src.dir === "./" ? "." : src.dir.replace(/\/$/, ""), tag: suggestedTag(src), noCache: true })));
+    }
+    actions.push(actBtn("open file", "", () => openSourceFile(src.relPath)));
+    inspector.append(inspHead(src.kind, src.relPath, actions));
+    inspector.append(tabs(["preview", "details"]));
+    const body = el("div", "k-insp-body"); inspector.append(body);
+    const linkedImages = (src.imageIds || []).map((imgId) => findImage(imgId)).filter(Boolean);
+    const linkedContainers = [...new Set([...(src.containerIds || []), ...containers().filter((c) => (src.imageIds || []).includes(imageIdOfCtr(c))).map((c) => c.id)])].map((cid) => findCtr(cid)).filter(Boolean);
+    const imageLink = (img) => { const b = el("button", "k-ctr-link", `${img.repo || "<none>"}:${img.tag || "<none>"}`); b.type = "button"; b.onclick = () => { state.selected = { kind: "image", id: img.id }; state.tab = "layers"; render(); }; return b; };
+    const ctrLink = (c) => { const b = el("button", "k-ctr-link", `${c.name || c.shortId} · ${c.statusText || c.state || ""}`); b.type = "button"; b.onclick = () => { state.selected = { kind: "container", id: c.id }; state.tab = "logs"; render(); }; return b; };
+    if (state.tab === "preview") {
+      const list = el("div", "k-kv-list");
+      list.append(kvRow("workspace path", src.relPath), kvRow("detected", src.mtimeMs ? fmtDate(src.mtimeMs) : "—"), kvRow("status", src.statusText || "—"));
+      body.append(list);
+      const box = el("div", "k-json"); box.textContent = src.preview || "(empty file)"; body.append(box);
+      if (linkedImages.length) { body.append(el("div", "k-wire-subhead", "linked images")); linkedImages.forEach((img) => body.append(imageLink(img))); }
+      return;
+    }
+    if (src.kind === "compose") {
+      body.append(el("div", "k-wire-subhead", "services"));
+      if (!(src.services || []).length) body.append(el("div", "k-empty", "no services detected"));
+      for (const s of src.services || []) { const b = el("button", "k-ctr-link", `${s.name} · ${s.state || ""}${s.image ? ` · ${s.image}` : ""}${s.dockerfile ? ` · ${s.dockerfile}` : ""}`); b.type = "button"; body.append(b); }
+    } else {
+      const list = el("div", "k-kv-list");
+      list.append(kvRow("base image", src.baseImage || "—"));
+      list.append(kvRow("build stages", (src.stages || []).length ? src.stages.join(", ") : "—"));
+      list.append(kvRow("exposed ports", (src.exposedPorts || []).length ? src.exposedPorts.join(", ") : "—"));
+      body.append(list);
+    }
+    if (linkedContainers.length) { body.append(el("div", "k-wire-subhead", "linked containers")); linkedContainers.forEach((c) => body.append(ctrLink(c))); }
+    if (linkedImages.length && state.tab === "details") { body.append(el("div", "k-wire-subhead", "linked images")); linkedImages.forEach((img) => body.append(imageLink(img))); }
   }
   function renderContainerInspector(c, refresh) {
     if (!c) { state.selected = null; return renderInspector(false); }
@@ -881,12 +1089,15 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     if (tool === "build") {
       title.textContent = "build Dockerfile";
       const files = [...(state.data?.dockerfiles || []), ...(state.data?.composeFiles || [])];
-      const df = field("Dockerfile", "kBuildFile", preset || files[0] || "./Dockerfile");
+      const presetObj = preset && typeof preset === "object" ? preset : null;
+      const presetFile = presetObj ? String(presetObj.dockerfile || "") : typeof preset === "string" ? preset : "";
+      const df = field("Dockerfile", "kBuildFile", presetFile || files[0] || "./Dockerfile");
       if (files.length > 1) { const dl = el("datalist"); dl.id = "kFiles"; files.forEach((f) => { const o = el("option"); o.value = f; dl.append(o); }); body.append(dl); df.setAttribute("list", "kFiles"); }
-      const tag = field("Image tag", "kBuildTag", preset && preset.includes(":") ? preset : "");
-      const noCache = check("no cache", "kBuildNoCache", false);
+      const ctx = field("Build Context", "kBuildContext", presetObj?.context || ".");
+      const tag = field("Image tag", "kBuildTag", presetObj?.tag || (presetFile && presetFile.includes(":") ? presetFile : ""));
+      const noCache = check("no cache", "kBuildNoCache", !!presetObj?.noCache);
       body.append(out);
-      finish("build image", () => postAction({ action: "build", dockerfile: df.value.trim(), tag: tag.value.trim() || undefined, noCache: noCache.checked }, `built ${tag.value || "image"}`));
+      finish("build image", () => postAction({ action: "build", dockerfile: df.value.trim(), context: ctx.value.trim() || ".", tag: tag.value.trim() || undefined, noCache: noCache.checked }, `built ${tag.value || "image"}`));
     } else if (tool === "registry") {
       title.textContent = "registry · search, pull, push, login";
       const q = field("Image reference or search term", "kRegQuery", preset || "");
