@@ -274,6 +274,10 @@ export type Sheet = {
 	text(face: Face, size: number, x: number, y: number, value: string): void;
 	box(x: number, y: number, width: number, height: number): void;
 	line(x1: number, y1: number, x2: number, y2: number, thickness: number): void;
+	/** A link to the address, over the rectangle [x1 y1 x2 y2] in points from the bottom-left. */
+	link(url: string, x1: number, y1: number, x2: number, y2: number): void;
+	/** The links this page drew, in the order it drew them: what the page has to declare. */
+	links(): { url: string; rect: [number, number, number, number] }[];
 	/** Pixels on the page, from the bottom left corner, the way every other drawing call places itself. */
 	image(x: number, y: number, width: number, height: number, picture: Picture): void;
 	/** The pictures this page drew, in the order it drew them: what the page has to declare. */
@@ -286,6 +290,7 @@ export type Sheet = {
 export function sheet(): Sheet {
 	const ops: string[] = [];
 	const drawn: Picture[] = [];
+	const linked: { url: string; rect: [number, number, number, number] }[] = [];
 	return {
 		paint(grey) {
 			ops.push(`${num(grey)} g`, `${num(grey)} G`);
@@ -308,6 +313,12 @@ export function sheet(): Sheet {
 			drawn.push(picture);
 			ops.push(`q ${num(width)} 0 0 ${num(height)} ${num(x)} ${num(y)} cm /Im${drawn.length} Do Q`);
 		},
+		link(url, x1, y1, x2, y2) {
+			linked.push({ url, rect: [x1, y1, x2, y2] });
+		},
+		links() {
+			return linked;
+		},
 		pictures() {
 			return drawn;
 		},
@@ -328,15 +339,15 @@ const FACE_ID: Record<Face, string> = {
 
 /**
  * The pages as one file: a catalog, a tree of pages, the five fonts, then each page and its stream, then
- * every picture the pages drew, and the table a reader looks everything up in.
+ * every picture and link the pages drew, and the table a reader looks everything up in.
  *
  * The text streams are written as they are rather than compressed, because a card is a few pages of text
  * and a file a person can open in an editor is worth more than the few kilobytes a deflate would save. A
  * picture is the exception: pixels are already the largest thing in the file, so they are deflated.
  */
 export function documentOf(sheets: Sheet[]): Buffer {
-	// 1 is the catalog, 2 the page tree, one object per face, two per page, then one per picture. A picture
-	// used on two pages is one object, so its bytes are paid for once.
+	// 1 is the catalog, 2 the page tree, one object per face, two per page, then one per picture and one
+	// per link. A picture used on two pages is one object, so its bytes are paid for once.
 	const firstFace = 3;
 	const firstPage = firstFace + FACES.length;
 	const firstPicture = firstPage + sheets.length * 2;
@@ -347,6 +358,10 @@ export function documentOf(sheets: Sheet[]): Buffer {
 	for (const one of sheets) {
 		for (const picture of one.pictures()) if (!pictures.has(picture)) pictures.set(picture, firstPicture + pictures.size);
 	}
+	// Where the first link object lands, and how many links each page drew before it.
+	const firstLink = firstPicture + pictures.size;
+	const linkCounts = sheets.map((one) => one.links().length);
+	const linkAt = (index: number) => firstLink + linkCounts.slice(0, index).reduce((sum, count) => sum + count, 0);
 
 	const objects: Buffer[] = [];
 	objects.push(Buffer.from("<< /Type /Catalog /Pages 2 0 R >>", "latin1"));
@@ -358,17 +373,29 @@ export function documentOf(sheets: Sheet[]): Buffer {
 		const stream = one.operators();
 		const fonts = FACES.map((face) => `/${FACE_ID[face]} ${firstFace + FACES.indexOf(face)} 0 R`).join(" ");
 		const xobjects = one.pictures().map((picture, at) => `/Im${at + 1} ${pictures.get(picture)} 0 R`).join(" ");
+		const annots = one.links().map((_link, at) => `${linkAt(index) + at} 0 R`).join(" ");
 		objects.push(
 			Buffer.from(
 				`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(PAGE_WIDTH)} ${num(PAGE_HEIGHT)}] ` +
 					`/Resources << /Font << ${fonts} >>${xobjects ? ` /XObject << ${xobjects} >>` : ""} >> ` +
-					`/Contents ${pageId(index) + 1} 0 R >>`,
+					`/Contents ${pageId(index) + 1} 0 R${annots ? ` /Annots [${annots}]` : ""} >>`,
 				"latin1",
 			),
 		);
 		objects.push(Buffer.from(`<< /Length ${Buffer.byteLength(stream, "latin1")} >>\nstream\n${stream}endstream`, "latin1"));
 	}
 	for (const [picture] of pictures) objects.push(pictureObject(picture));
+	for (const one of sheets) {
+		for (const { url, rect } of one.links()) {
+			objects.push(
+				Buffer.from(
+					`<< /Type /Annot /Subtype /Link /Rect [${num(rect[0])} ${num(rect[1])} ${num(rect[2])} ${num(rect[3])}] ` +
+						`/Border [0 0 0] /A << /S /URI /URI (${literal(encode(url))}) >> >>`,
+					"latin1",
+				),
+			);
+		}
+	}
 
 	const parts: Buffer[] = [Buffer.from("%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3\n", "latin1")];
 	const offsets: number[] = [];

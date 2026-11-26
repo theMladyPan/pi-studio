@@ -84,12 +84,15 @@ test("the file is a pdf a reader can open, with one page per sheet and a footer 
 	assert.ok(text.includes("1 0 obj"), "the catalog is an object");
 	assert.ok(text.includes("/MediaBox [0 0 595.28 841.89]"), "the page is A4");
 	assert.ok(text.includes("(page 1 / 1) Tj"), "the footer counts the pages");
+	assert.ok(text.includes("pi-studio") && text.includes("2025-03-14"), "and the foot names the workspace and the day");
 });
 
 test("the card's words are the page's words: title, headings, prose and list items", () => {
 	const text = textOf(card("## What the scan found\n\nThe sweep names the leftovers.\n\n- a card nobody read"));
 	assert.ok(text.includes("(a note) Tj"), "the title is drawn");
-	assert.ok(text.includes("(pi-studio \\(2025-03-14\\)") || text.includes("pi-studio"), "the line under the title says where the card came from");
+	// The workspace and the day sit in the foot of every page now, and the card's own id sits nowhere.
+	assert.ok(text.includes("pi-studio") && text.includes("2025-03-14"), "the foot says where the card came from");
+	assert.ok(!text.includes("abcdef01"), "the card id is not drawn");
 	assert.ok(text.includes("(scan) Tj") && text.includes("(found) Tj"), "a heading keeps its words");
 	assert.ok(text.includes("(sweep) Tj") && text.includes("(leftovers.) Tj"), "prose keeps its words");
 	assert.ok(text.includes("(nobody) Tj") && text.includes("(read) Tj"), "a list item keeps its words");
@@ -99,6 +102,15 @@ test("emphasis is drawn in the face it asked for, and inline code in the monospa
 	const text = textOf(card("a **bold** word and a `fixed` one"));
 	assert.match(text, /\/F2 [\d.]+ Tf\n1 0 0 1 [\d.]+ [\d.]+ Tm\n\(bold\) Tj/, "bold is the bold face");
 	assert.match(text, /\/F5 [\d.]+ Tf\n1 0 0 1 [\d.]+ [\d.]+ Tm\n\(fixed\) Tj/, "code is the monospaced face");
+});
+
+test("a link is drawn as its label alone, underlined and clickable, and its address is not text on the page", () => {
+	const text = textOf(card("see [the docs](https://example.com/docs) for more"));
+	assert.ok(text.includes("(the) Tj") && text.includes("(docs) Tj"), "the label is drawn");
+	// The address lives in the link annotation, the way it lives in the board's anchor, not after the label.
+	assert.ok(text.includes("/Subtype /Link"), "the link is an annotation");
+	assert.ok(text.includes("/URI (https://example.com/docs)"), "and it names the address");
+	assert.ok(!/\(https:\/\/example\.com\/docs\) Tj/.test(text), "but the address is not drawn as text");
 });
 
 test("a table keeps its header and every cell, and its rules line up", () => {
