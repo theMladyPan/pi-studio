@@ -56,9 +56,10 @@ export function bindDragHeight(grip, { bodyClass, resolvePx }) {
  * class that is the whole animation, the header button that says which way it stands, and the focus
  * return (a remembered element that is gone or hidden is no place to put the keyboard, so the owning
  * button takes it instead). `beforeOpen` and `afterOpen` hold what is each drawer's own: which src it
- * loads, which shell it connects, which page it focuses.
+ * loads, which shell it connects, which page it focuses. `afterClose` holds what leaves with the roll:
+ * which name the header stops showing.
  */
-export function createSlidingDrawer({ drawer, btn, bodyClass, openTitle, shutTitle, beforeOpen, afterOpen }) {
+export function createSlidingDrawer({ drawer, btn, bodyClass, openTitle, shutTitle, beforeOpen, afterOpen, afterClose }) {
   let shown = false;
   /** What had the focus before the drawer took it, so rolling the other way puts it back. */
   let back = null;
@@ -87,6 +88,7 @@ export function createSlidingDrawer({ drawer, btn, bodyClass, openTitle, shutTit
     shown = false;
     drawer.inert = true;
     paint();
+    afterClose?.();
     // A remembered `body` is no place to put the keyboard, so the button that owns the key takes it
     // instead — unless that button now lives in a shut toolbox menu, where a hidden element takes no
     // focus and the keyboard goes nowhere.

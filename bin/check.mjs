@@ -21,11 +21,17 @@
  * stage wrote it. Each stage's own lines are otherwise untouched.
  *
  *   node bin/check.mjs    # the gate; exit 1 if any stage failed
+ *
+ * The test stage is hashed, see bin/test-cache.mjs. A whole-suite entry
+ * skips the suite when nothing changed; per-file entries rerun only the test
+ * files whose imports changed. `PI_STUDIO_NO_CACHE=1` forces a full run.
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cacheDir, cacheEnabled, listTestFiles, perFileKey, readCache, wholeKey, writeCache } from "./test-cache.mjs";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const node = process.execPath;
@@ -36,6 +42,7 @@ const syntaxFiles = [
 	"public/client/board.js",
 	"public/client/drawer-common.js",
 	"public/client/git-drawer.js",
+	"public/client/kontainer-drawer.js",
 	"public/client/terminal-drawer.js",
 	"public/client/text-preview.js",
 	"public/client/diff-table.js",
@@ -44,6 +51,7 @@ const syntaxFiles = [
 	"bin/smoke.mjs",
 	"bin/check.mjs",
 	"bin/check-imports.mjs",
+	"bin/test-cache.mjs",
 	"bin/pi-studio",
 	"bin/runtime.mjs",
 	"bin/manage.mjs",
@@ -96,6 +104,40 @@ const tsc = join(repo, "node_modules", "typescript", "bin", "tsc");
 /** The local typescript, or the `tsc` on PATH as the old chain used, so a tree without its own install still type-checks the way it did. */
 const typesCommand = existsSync(tsc) ? [node, tsc] : ["tsc"];
 
+/**
+ * The test stage, cached. Each test file runs as its own `node --test`
+ * process, the same way a single `node --test` discovers them, but only when
+ * its per-file key misses. The pool matches the runner's own parallelism, so
+ * a cold run is near the uncached time. Every file runs even when another
+ * fails, so the summary names all of them.
+ */
+async function testStage() {
+	if (!cacheEnabled()) return (await run("test", node, ["--test", "--test-timeout=90000"])) === 0;
+	const dir = cacheDir(repo);
+	const wkey = wholeKey(repo);
+	const whole = readCache(dir, wkey);
+	if (whole !== null) {
+		process.stdout.write(`[test] whole cache hit ${wkey.slice(0, 12)} — suite skipped\n`);
+		return whole.exitCode === 0;
+	}
+	const entries = listTestFiles(repo).map((file) => ({ file, key: perFileKey(repo, file) }));
+	const pending = entries.filter((entry) => entry.key === null || readCache(dir, entry.key) === null);
+	if (entries.length > pending.length) process.stdout.write(`[test] ${entries.length - pending.length}/${entries.length} files cached\n`);
+	let ok = true;
+	let next = 0;
+	async function worker() {
+		while (next < pending.length) {
+			const entry = pending[next++];
+			const code = await run("test", node, ["--test", "--test-timeout=90000", join(repo, entry.file)]);
+			if (entry.key !== null) writeCache(dir, entry.key, code);
+			if (code !== 0) ok = false;
+		}
+	}
+	await Promise.all(Array.from({ length: Math.min(availableParallelism(), pending.length) }, worker));
+	writeCache(dir, wkey, ok ? 0 : 1);
+	return ok;
+}
+
 const stages = [
 	{
 		name: "syntax",
@@ -111,7 +153,7 @@ const stages = [
 	},
 	{
 		name: "test",
-		work: () => run("test", node, ["--test", "--test-timeout=90000"]).then((code) => code === 0),
+		work: testStage,
 	},
 	{
 		name: "smoke",

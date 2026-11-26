@@ -150,7 +150,16 @@ export function validatePublishHosts(hosts: unknown, interfaces: Interfaces = ne
  * Native TLS from Node's own https module: the certificate and key the daemon is started with. Neither
  * file is read until the daemon starts, and a half-given pair is one sentence rather than a socket error.
  */
-export type TlsConfig = { enabled: boolean; cert: string; key: string; certData: Buffer; keyData: Buffer };
+export type TlsConfig = { enabled: boolean; explicit: boolean; cert: string; key: string; certData: Buffer; keyData: Buffer };
+
+const TLS_OFF = { enabled: false, explicit: false, cert: "", key: "", certData: Buffer.alloc(0), keyData: Buffer.alloc(0) };
+
+/** Whether TLS was switched off on purpose: `--no-tls`, or `PI_STUDIO_TLS=0` (also `false`/`no`). */
+export function tlsOff(argv: readonly string[] = process.argv.slice(2), env: Record<string, string | undefined> = process.env): boolean {
+	if (argv.includes("--no-tls")) return true;
+	const asked = (env.PI_STUDIO_TLS ?? "").trim().toLowerCase();
+	return asked === "0" || asked === "false" || asked === "no";
+}
 
 /** The generated pair's home: the settings page writes it, and the daemon reads it at the next start. */
 export function tlsFilesOf(dir = join(STATE_DIR, "tls")): { cert: string; key: string } {
@@ -202,12 +211,17 @@ export function generateTlsPair(dir?: string, names?: string[]): { cert: string;
 }
 
 export function tlsConfig(argv: readonly string[] = process.argv.slice(2), env: Record<string, string | undefined> = process.env, generatedFiles: { cert: string; key: string } = tlsFilesOf()): TlsConfig {
+	if (tlsOff(argv, env)) return { ...TLS_OFF };
 	let cert = (argValue(argv, "--tls-cert") || env.PI_STUDIO_TLS_CERT || "").trim();
 	let key = (argValue(argv, "--tls-key") || env.PI_STUDIO_TLS_KEY || "").trim();
+	// A pair named on the command line or in the environment was asked for by name; the generated pair
+	// under the state folder is a fallback for publishing beyond this machine, not a demand for HTTPS
+	// on loopback, where a self-signed certificate only earns the browser a warning page.
+	const explicit = Boolean(cert || key);
 	if (!cert && !key) {
 		// The generated pair is the third voice, and it needs no environment to find it.
 		const files = generatedFiles;
-		if (!existsSync(files.cert) && !existsSync(files.key)) return { enabled: false, cert: "", key: "", certData: Buffer.alloc(0), keyData: Buffer.alloc(0) };
+		if (!existsSync(files.cert) && !existsSync(files.key)) return { ...TLS_OFF };
 		cert = files.cert;
 		key = files.key;
 	}
@@ -222,10 +236,22 @@ export function tlsConfig(argv: readonly string[] = process.argv.slice(2), env: 
 		const certificateKey = certificate.publicKey.export({ type: "spki", format: "der" });
 		const keyOfPrivate = createPublicKey(privateKey).export({ type: "spki", format: "der" });
 		if (!certificateKey.equals(keyOfPrivate)) throw new Error("the certificate and the key do not belong together");
-		return { enabled: true, cert, key, certData, keyData };
+		return { enabled: true, explicit, cert, key, certData, keyData };
 	} catch (error) {
 		throw new Error(`TLS files could not be read: ${(error as Error).message}`);
 	}
+}
+
+/**
+ * Whether this start actually serves HTTPS. A generated self-signed pair serves only beyond loopback:
+ * on this machine the printed local link is plain http, so `npm start` and `npm run dev` keep working
+ * without a certificate warning after a certificate was generated for the LAN. A pair named by flag or
+ * environment was asked for, so it serves HTTPS even on loopback.
+ */
+export function tlsApplies(tls: TlsConfig, hosts: readonly string[]): boolean {
+	if (!tls.enabled) return false;
+	if (tls.explicit) return true;
+	return hosts.some((one) => !isLoopback(one));
 }
 
 export function isLoopback(host: string): boolean {
@@ -245,8 +271,29 @@ export function localAddresses(interfaces: Interfaces = networkInterfaces()): st
 }
 
 /**
- * The links worth printing, in the order a human would try them: this machine first, then every other
- * address it answers on. One address when the daemon holds one, and the whole list when it holds all.
+ * The links to print for a whole start, in the order a human would try them. With TLS beyond loopback
+ * the first link is the plain-http loopback neighbour: this machine does not need the certificate, and
+ * a self-signed one would only put a warning between the human and the board. The addresses beyond
+ * this machine follow over HTTPS on the main port.
+ */
+export function boardLinks(hosts: readonly string[], port: number, token: string, tlsEnabled: boolean, interfaces?: Interfaces): string[] {
+	if (!tlsEnabled) return hosts.flatMap((one) => boardUrls(one, port, token, interfaces, "http"));
+	if (hosts.every((one) => isLoopback(one))) return hosts.flatMap((one) => boardUrls(one, port, token, interfaces, "https"));
+	if (port <= 1) return hosts.flatMap((one) => boardUrls(one, port, token, interfaces, "https"));
+	const local = `http://${LOOPBACK}:${port - 1}/?token=${token}`;
+	// "All interfaces" expands to this machine's addresses inside `boardUrls`, loopback included;
+	// the loopback HTTPS link is the one the plain neighbour replaces, so it goes here.
+	const remote = hosts
+		.filter((one) => !isLoopback(one))
+		.flatMap((one) => boardUrls(one, port, token, interfaces, "https"))
+		.filter((one) => !isLoopback(new URL(one).hostname));
+	return [local, ...remote];
+}
+
+/**
+ * The links worth printing for one address, in the order a human would try them: this machine first,
+ * then every other address it answers on. One address when the daemon holds one, and the whole list
+ * when it holds all.
  */
 export function boardUrls(host: string, port: number, token: string, interfaces?: Interfaces, scheme = "http"): string[] {
 	const link = (address: string) => `${scheme}://${address.includes(":") ? `[${address}]` : address}:${port}/?token=${token}`;

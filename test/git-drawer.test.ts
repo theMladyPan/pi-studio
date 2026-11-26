@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 /**
- * The drawer's bar, without a browser.
+ * The header label, without a browser.
  *
- * `public/client/git-drawer.js` reads six elements of the board's page and two listeners on `window`, so
- * a stand-in carrying exactly that much answers it. What this covers is the one thing the bar says: the
- * workspace name it is told, and the workspace id it falls back to until it hears one.
+ * `public/client/git-drawer.js` reads five elements of the board's page and two listeners on `window`, so
+ * a stand-in carrying exactly that much answers it. What this covers is the one thing the header label
+ * does: it is shown only while the drawer is open.
  */
 
 /** One element as far as the drawer touches it: its text, its classes, its attributes and its listeners. */
@@ -65,9 +65,9 @@ class FakeElement {
 	}
 }
 
-/** The board's page, as much of it as the drawer looks at, with `#gdWorkspace` left for the test. */
+/** The board's page, as much of it as the drawer looks at, with `#openPanelName` left for the test. */
 function standInPage() {
-	const ids = ["gitDrawer", "gitScrim", "gdFrame", "gdTab", "gdClose", "gitBtn", "gdWorkspace"];
+	const ids = ["gitDrawer", "gitScrim", "gdFrame", "gitBtn", "openPanelName"];
 	const elements = new Map(ids.map((id) => [id, new FakeElement()]));
 	Object.assign(globalThis, {
 		document: {
@@ -81,7 +81,7 @@ function standInPage() {
 		window: { addEventListener: () => {}, open: () => null },
 		location: { origin: "http://127.0.0.1" },
 	});
-	return elements.get("gdWorkspace") as FakeElement;
+	return elements.get("openPanelName") as FakeElement;
 }
 
 /** The module, loaded once with the stand-in page already in place. */
@@ -92,33 +92,29 @@ async function drawerFor(workspace: string) {
 			toggle: () => void;
 			open: () => void;
 			close: () => void;
-			setName: (name?: string) => void;
 		};
 	};
 	return module.createGitDrawer({ workspace, typingSomewhere: () => false });
 }
 
-test("the bar says the workspace id until it is told the name", async () => {
+test("the header label shows only while the drawer is open", async () => {
 	const label = standInPage();
 	const drawer = await drawerFor("b08b6688eaf9");
-	assert.equal(label.textContent, "· b08b6688eaf9");
-	drawer.setName("pi-studio");
-	assert.equal(label.textContent, "· pi-studio");
-	// A board that has heard no name yet keeps the id rather than dropping it for an empty bar.
-	drawer.setName();
-	assert.equal(label.textContent, "· b08b6688eaf9");
+	assert.equal(label.hidden, true, "nothing is visualized while no drawer is open");
+	drawer.toggle();
+	assert.equal(label.hidden, false, "rolling down names the open drawer");
+	drawer.toggle();
+	assert.equal(label.hidden, true, "rolling up takes the name with it");
 });
 
-test("being told the name keeps the members the board drives", async () => {
-	const label = standInPage();
+test("the drawer keeps the members the board drives", async () => {
+	standInPage();
 	const drawer = await drawerFor("b08b6688eaf9");
-	drawer.setName("pi-studio");
 	assert.equal(drawer.isOpen(), false);
 	drawer.toggle();
 	assert.equal(drawer.isOpen(), true, "one press rolls the drawer down");
 	drawer.toggle();
 	assert.equal(drawer.isOpen(), false, "and the next rolls it up");
-	assert.equal(label.textContent, "· pi-studio", "rolling the drawer changes nothing the bar says");
 });
 
 test("closing does not give the keyboard to a hidden toolbox button", async () => {

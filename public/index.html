@@ -361,13 +361,13 @@
   .note-body blockquote p, .sticky-reply blockquote p { margin: 0 0 4px; }
   .note-body blockquote p:last-child, .sticky-reply blockquote p:last-child { margin-bottom: 0; }
   .note-body .tick { color: var(--green); cursor: pointer; }
-  .card .edit, .card .copy-id, .card .open-editor, .card .save-pdf { border: 0; background: transparent; color: var(--muted);
+  .card .edit, .card .copy-id, .card .open-editor, .card .download-note { border: 0; background: transparent; color: var(--muted);
     font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
-  .card .edit:hover, .card .copy-id:hover, .card .open-editor:hover, .card .save-pdf:hover { background: #21262d; color: var(--text); }
-  .card .open-editor, .card .save-pdf { display: flex; align-items: center; }
+  .card .edit:hover, .card .copy-id:hover, .card .open-editor:hover, .card .download-note:hover { background: #21262d; color: var(--text); }
+  .card .open-editor, .card .download-note { display: flex; align-items: center; }
   /* The press that makes a pdf runs a browser per picture, so it says it is working and takes no second press. */
-  .card .save-pdf.busy { opacity: .55; cursor: progress; }
-  .card .open-editor svg, .card .save-pdf svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
+  .card .download-note.busy { opacity: .55; cursor: progress; }
+  .card .open-editor svg, .card .download-note svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
     stroke-width: 1.2; stroke-linejoin: round; }
   /* A pin is the human's: the card is kept when the board has to make room, and no thread may close it.
      The glyph is drawn rather than typed so the pinned state can colour it amber, and it stays an
@@ -522,6 +522,11 @@
   header .hint { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   header .sess { font: 13px var(--mono); color: var(--text); }
   header .sess b { color: var(--accent); font-weight: 600; }
+  /* The open drawer's name, between the workspace and the live state. It is hidden while no drawer
+     is open, so the header carries nothing for a panel that is not up. */
+  header .open-panel { font: 12px var(--mono); color: var(--text); white-space: nowrap;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  header .open-panel[hidden] { display: none; }
   /* A daemon booted on another state folder is a second instance, and says so beside the workspace. */
   header .sess .instance { margin-left: 6px; color: var(--amber); font-size: 11px; }
   header .stat { font: 12px var(--mono); color: var(--muted); background: #161b22;
@@ -572,7 +577,8 @@
   .drawer-shell { position: fixed; display: flex; flex-direction: column; }
   .drawer-slide { visibility: hidden;
     transition: transform 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms; }
-  body.git-open #gitDrawer, body.term-open #termDrawer, body:not(.rail-off) #drawers,
+  body.git-open #gitDrawer, body.term-open #termDrawer, body.kontainer-open #kontainerDrawer,
+  body:not(.rail-off) #drawers,
   #drawersRight.dock-on, #pluginDockTop.dock-on, #pluginDockBottom.dock-on {
     transform: none; visibility: visible;
     transition: transform 170ms cubic-bezier(.2,.9,.25,1); }
@@ -716,59 +722,55 @@
   .ggViewerLine_hunk { color: #79c0ff; }
   .ggViewerLine_meta { color: #8b949e; }
   .ggViewerEmpty { padding: 1.2em; color: var(--muted); }
-  /* The source control menu: one column, the board's own colours. */
-  #scMenu { position: fixed; z-index: 2400; min-width: 200px; padding: 4px;
+  /* The right-click menus for source control and the activity drawer: one column, the board's own colours. */
+  #scMenu, #actMenu { position: fixed; z-index: 2400; min-width: 180px; padding: 4px;
     background: #0d1420; border: 1px solid var(--border-bright); border-radius: 6px;
     box-shadow: 0 8px 28px rgba(0, 0, 0, .55); display: flex; flex-direction: column; }
-  #scMenu[hidden] { display: none; }
-  #scMenu button { font: 12px var(--mono); color: var(--text); background: none; border: none;
+  #scMenu { min-width: 200px; }
+  #scMenu[hidden], #actMenu[hidden] { display: none; }
+  #scMenu button, #actMenu button { font: 12px var(--mono); color: var(--text); background: none; border: none;
     border-radius: 4px; padding: 6px 10px; text-align: left; cursor: pointer; }
-  #scMenu button:hover, #scMenu button:focus-visible { background: #1a2230; }
-  #scMenu button.danger { color: #f85149; }
-  #railNow { padding: 0 8px 6px; display: flex; flex-direction: column; gap: 4px; }
-  /* A running row lives in its thread's card, so this strip holds only the runs whose card is closed. */
-  #railNow:empty { display: none; }
-  #railLog { flex: 1; overflow-y: auto; padding: 4px 8px 10px; display: flex; flex-direction: column; gap: 4px; }
-  /* Cards first: the rail is the map of a board too big to read on the canvas. The cap keeps
-     the activity feed below it visible however many cards there are. */
-  #railCards { flex: 0 1 auto; min-height: 0; max-height: 45%; overflow-y: auto;
-    padding: 0 8px 6px; display: flex; flex-direction: column; gap: 2px; }
-  #railCards:empty { display: none; }
-  /* Closed cards keep a row of their own: a card put away while it still holds a conversation is one
-     click from coming back, and the row is where that click lives. */
-  #railClosed { flex: 0 1 auto; min-height: 0; max-height: 30%; overflow-y: auto;
-    padding: 0 8px 6px; display: flex; flex-direction: column; gap: 2px; }
-  #railClosed:empty { display: none; }
-  #railCards .rail-card, #railClosed .rail-card { display: flex; align-items: center; gap: 6px; width: 100%; flex: none;
-    padding: 3px 6px; border: 1px solid transparent; border-radius: 6px; background: none;
-    color: inherit; font: inherit; text-align: left; cursor: pointer; }
-  #railCards .rail-card:hover, #railClosed .rail-card:hover { background: #0f141b; border-color: #1c2128; }
-  #railCards .rail-card:focus-visible, #railClosed .rail-card:focus-visible { outline: none; border-color: var(--accent-dim); }
-  #railCards .rail-card .dot, #railClosed .rail-card .dot { width: 6px; height: 6px; }
-  /* A card sits under the card it follows from: indented one step per level, with a rule down its left
-     edge so a fan of children reads as one thing and a child of a child is still legible as such. */
-  #railCards .rail-card.child { padding-left: calc(6px + var(--rail-depth, 1) * 9px);
-    border-left: 1px solid #1c2128; border-radius: 0 6px 6px 0; }
-  #railClosed .rail-card .dot { opacity: .55; }
-  #railCards .rail-title, #railClosed .rail-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; color: var(--text); }
-  #railClosed .rail-title { color: var(--muted); }
-  #railCards .rail-state, #railClosed .rail-state { flex: none; color: var(--muted); font-size: 11px; }
-  #railCards .rail-card.wants .rail-state { color: var(--pink); }
-  #railCards .rail-card.updated .rail-state { color: var(--accent); }
-  #railClosed .rail-card .rail-state { color: var(--accent); }
-  #railClosed .rail-card:hover .rail-title { color: var(--text); }
-  /* A closed row holds two presses: the row itself puts the card back, and the trash beside it throws the
-     thread away. The row is a wrapper rather than a button, because a button cannot hold a button, so the
-     reopen press fills what the row used to be and the look of the row does not move. */
-  #railClosed .rail-card { padding: 0; gap: 0; }
-  #railClosed .rail-open { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
+  #scMenu button:hover, #scMenu button:focus-visible,
+  #actMenu button:hover, #actMenu button:focus-visible { background: #1a2230; }
+  #scMenu button.danger, #actMenu button.danger { color: #f85149; }
+  /* One scroll container for the activity drawer: open cards, then the closed heading and closed cards. */
+  #railBody { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 8px 10px;
+    display: flex; flex-direction: column; gap: 2px; }
+  #railCards, #railClosed { display: flex; flex-direction: column; gap: 2px; flex: none; }
+  #railCards:empty, #railClosed:empty { display: none; }
+  #railClosedHead { padding: 10px 4px 4px; }
+  /* One unified row wrapper per card (open or closed), with an inline collapsible log for threads. */
+  #railBody .rail-thread { display: flex; flex-direction: column; gap: 2px; flex: none; }
+  #railBody .rail-thread.child { padding-left: calc(var(--rail-depth, 1) * 9px); }
+  #railBody .rail-card { display: flex; align-items: center; gap: 0; width: 100%; flex: none;
+    border: 1px solid transparent; border-radius: 6px; background: none; color: inherit; font: inherit; }
+  #railBody .rail-card:hover { background: #0f141b; border-color: #1c2128; }
+  #railBody .rail-card:focus-within { border-color: var(--accent-dim); }
+  #railBody .rail-thread.child > .rail-card { border-left: 1px solid #1c2128; border-radius: 0 6px 6px 0; }
+  #railBody .rail-thread-head { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
     padding: 3px 6px; border: 0; background: none; color: inherit; font: inherit; text-align: left;
     cursor: pointer; }
-  #railClosed .rail-open:focus-visible { outline: none; }
-  #railClosed .rail-card:focus-within { border-color: var(--accent-dim); }
-  /* The trash is the one press in this list that destroys work, so it stays muted until the pointer or the
-     keyboard reaches it, and the four-second question it asks is red for the same reason. */
+  #railBody .rail-thread-head:focus-visible { outline: none; }
+  #railBody .rail-thread.no-log .rail-thread-head { cursor: default; }
+  #railBody .rail-thread-head .chev { flex: none; width: 8px; text-align: center; color: var(--muted); }
+  #railBody .rail-thread-head .chev::before { content: "▾"; }
+  #railBody .rail-thread.folded .rail-thread-head .chev::before { content: "▸"; }
+  #railBody .rail-thread.no-log .rail-thread-head .chev::before { content: ""; }
+  #railBody .rail-card .dot { width: 6px; height: 6px; flex: none; }
+  #railClosed .rail-card .dot { opacity: .55; }
+  #railBody .rail-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--text); }
+  #railClosed .rail-title { color: var(--muted); }
+  #railClosed .rail-card:hover .rail-title { color: var(--text); }
+  #railBody .rail-thread-role { flex: none; font: 10px var(--mono); color: var(--accent);
+    background: rgba(88,166,255,.1); border: 1px solid rgba(88,166,255,.22); border-radius: 999px;
+    padding: 0 5px; }
+  #railBody .rail-thread-role[hidden] { display: none; }
+  #railBody .rail-state { flex: none; color: var(--muted); font-size: 11px; }
+  #railBody .rail-thread.wants > .rail-card .rail-state { color: var(--pink); }
+  #railBody .rail-thread.updated > .rail-card .rail-state { color: var(--accent); }
+  /* The trash is the one press in the closed list that destroys work, so it stays muted until the
+     pointer or the keyboard reaches it, and the four-second question it asks is red for the same reason. */
   #railClosed .rail-trash { flex: none; display: flex; align-items: center; align-self: stretch;
     padding: 0 6px; border: 0; border-radius: 0 6px 6px 0; background: transparent; color: var(--muted);
     font: 10px var(--mono); cursor: pointer; }
@@ -777,38 +779,17 @@
   #railClosed .rail-trash:disabled { cursor: default; opacity: .55; }
   #railClosed .rail-trash svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
     stroke-width: 1.2; stroke-linejoin: round; }
-  /* The closed list's own clean sits beside its count and wears the footer's clean button: it is the same
-     press over a shorter list, so it looks the same at the size the rail's head is set in. */
+  /* The closed list's own clean sits beside its label and wears the footer's clean button: it is the
+     same press over a shorter list, so it looks the same at the size the rail's head is set in. */
   #railClosedClean { margin-left: auto; font: 10.5px var(--mono); color: var(--muted);
     background: #161b22; border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px;
     cursor: pointer; }
   #railClosedClean:hover { color: var(--text); border-color: var(--border-bright); }
   #railClosedClean:disabled { cursor: default; opacity: .55; }
-  /* One foldable section per thread: the rail is a stack of conversations, not one long log. */
-  #railLog .rail-thread { display: flex; flex-direction: column; gap: 4px; flex: none; }
-  #railLog .rail-thread-head { display: flex; align-items: center; gap: 6px; width: 100%; flex: none;
-    padding: 2px 6px; background: transparent; border: 1px solid transparent; border-radius: 6px;
-    color: var(--muted); font: inherit; font-size: 11px; text-align: left; cursor: pointer; }
-  #railLog .rail-thread-head:hover { background: #0f141b; border-color: #1c2128; }
-  #railLog .rail-thread-head:focus-visible { outline: none; border-color: var(--accent-dim); }
-  #railLog .rail-thread-head .chev { flex: none; width: 8px; text-align: center; }
-  #railLog .rail-thread-head .chev::before { content: "▾"; }
-  #railLog .rail-thread.folded .rail-thread-head .chev::before { content: "▸"; }
-  #railLog .rail-thread-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; color: var(--text); }
-  #railLog .rail-thread-count { flex: none; }
-  #railLog .rail-thread-stats { flex: none; color: var(--muted); font: 10px var(--mono); }
-  #railLog .rail-thread-stats:empty { display: none; }
-  #railLog .rail-thread-role { flex: none; font: 10px var(--mono); color: var(--accent);
-    background: rgba(88,166,255,.1); border: 1px solid rgba(88,166,255,.22); border-radius: 999px;
-    padding: 0 5px; }
-  #railLog .rail-thread-role[hidden] { display: none; }
-  /* A child sits under the thread that spawned it: indented, and with a rule down its left edge so
-     the fan of children reads as one thing. */
-  #railLog .rail-thread.child { margin-left: 9px; }
-  #railLog .rail-thread.child > .rail-thread-head { border-left: 1px solid #1c2128; border-radius: 0 6px 6px 0; }
-  #railLog .rail-thread-body { display: flex; flex-direction: column; gap: 4px; }
-  #railLog .rail-thread.folded .rail-thread-body { display: none; }
+  #railBody .rail-thread-body { display: flex; flex-direction: column; gap: 4px; padding: 2px 0 4px 14px; }
+  #railBody .rail-thread.folded .rail-thread-body,
+  #railBody .rail-thread.no-log .rail-thread-body,
+  #railBody .rail-thread-body:empty { display: none; }
   .act { border-radius: 6px; padding: 5px 7px; background: #0f141b; border: 1px solid #1c2128;
     flex: none; }
   .act .top { display: flex; align-items: center; gap: 6px; }
@@ -1315,13 +1296,13 @@
      its size and its state and loading it again never happens. z-index 1500 sits above the header
      (10), the rail (8), the footer (40) and the transcript drawer (60), and below the
      pickers and header panels (2000), the prompt editor (2100) and the sheets (2200). */
+  /* The board's own footer (24px) stays visible under the drawer, so the drawer ends where it begins. */
   #gitDrawer {
-    top: 44px; left: 0; right: 0; height: calc(100vh - 44px); z-index: 1500;
+    top: 44px; left: 0; right: 0; height: calc(100vh - 44px - 24px); z-index: 1500;
     background: var(--bg);
     border-bottom: 1px solid var(--border-bright); box-shadow: 0 18px 48px rgba(0,0,0,.6);
     transform: translateY(-100%);
   }
-  #gitDrawer button:disabled { cursor: default; opacity: .5; }
   #gdFrame, #pvFrame { width: 100%; height: 100%; border: 0; display: block; background: var(--bg); }
   /* `display` on the id outranks the browser's own `[hidden]` rule, so a board with no folder hides the
      frame here rather than leaving an empty page over the drawer's notice. */
@@ -1333,7 +1314,7 @@
      area it dims. Only the git one fades with the same 170ms slide; the toolbox one is already heavy
      enough standing still. */
   #gitScrim, #pluginScrim { position: fixed; inset: 44px 0 0 0; z-index: 1499; background: rgba(1,4,9,.45); }
-  #gitScrim { opacity: 0; visibility: hidden;
+  #gitScrim { bottom: 24px; opacity: 0; visibility: hidden;
     transition: opacity 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms; }
   body.git-open #gitScrim { opacity: 1; visibility: visible; transition: opacity 170ms cubic-bezier(.2,.9,.25,1); }
   /* `hidden` is only the state before the drawer was ever rolled down, so a board that never opens one
@@ -1406,10 +1387,63 @@
   #filesPane .ex-act button:hover { background: rgba(90, 93, 94, .31); color: #ffffff; }
   #filesPane .ex-act button:disabled { opacity: .4; cursor: default; }
   #filesPane .ex-act button:focus-visible { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
-  #filesPane .ex-search { flex: none; padding: 0 8px 4px; }
-  #filesPane .ex-search input { width: 100%; font: 12px system-ui, -apple-system, "Segoe UI", sans-serif;
+  #filesPane .ex-search { flex: none; display: flex; gap: 6px; padding: 0 8px 4px; }
+  #filesPane .ex-search input { flex: 1; min-width: 0; font: 12px system-ui, -apple-system, "Segoe UI", sans-serif;
     color: #cccccc; background: #0d1117; border: 1px solid #30363d; border-radius: 2px; padding: 2px 6px; }
   #filesPane .ex-search input:focus { outline: none; border-color: var(--accent-dim); }
+  #filesPane .ex-search #exHiddenToggle { flex: none; font: 11px system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: #7d8590; background: transparent; border: 1px solid #30363d; border-radius: 2px; padding: 2px 8px; cursor: pointer; }
+  #filesPane .ex-search #exHiddenToggle:hover { color: #ffffff; }
+  #filesPane .ex-search #exHiddenToggle.on { color: #79c0ff; border-color: var(--accent-dim); background: rgba(56, 139, 253, .12); }
+  #filesPane .ex-search #exHiddenToggle:focus-visible { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
+  .ex-row .ex-find-where { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; color: #7d8590; font-size: 11px; }
+  .ex-row.ex-more { justify-content: center; color: #79c0ff; }
+  /* The search drawer: the files drawer's head and foot, the search box and its modes, and the
+     results grouped by file with the match picked out in each snippet. */
+  #searchPane { display: flex; flex-direction: column; flex: 1; min-height: 0;
+    font: 13px/18px system-ui, -apple-system, "Segoe UI", sans-serif; color: #e6edf3; }
+  #searchPane .ex-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 6px 4px 10px; }
+  #searchPane .ex-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e6edf3; font-size: 12px; }
+  #searchPane .ex-act { flex: none; display: flex; align-items: center; gap: 2px; }
+  #searchPane .ex-act button { width: 22px; height: 22px; padding: 0; display: grid; place-items: center;
+    background: transparent; border: 0; border-radius: 4px; color: #cccccc; cursor: pointer; }
+  #searchPane .ex-act button:hover { background: rgba(90, 93, 94, .31); color: #ffffff; }
+  #searchPane .ex-foot { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 10px;
+    border-top: 1px solid #21262d; color: #7d8590; font: 10px var(--mono); }
+  .sr-box { flex: none; padding: 4px 8px 6px; display: flex; flex-direction: column; gap: 6px; }
+  .sr-row { display: flex; gap: 6px; align-items: center; }
+  .sr-row input { flex: 1; min-width: 0; font: 12px system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: #cccccc; background: #0d1117; border: 1px solid #30363d; border-radius: 2px; padding: 2px 6px; }
+  .sr-row input:focus { outline: none; border-color: var(--accent-dim); }
+  .sr-modes { display: flex; gap: 2px; flex: none; }
+  .sr-modes button, .sr-mini { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; color: #7d8590;
+    background: transparent; border: 1px solid #30363d; border-radius: 2px; padding: 2px 6px; cursor: pointer; }
+  .sr-modes button:hover, .sr-mini:hover { color: #ffffff; }
+  .sr-modes button.on, .sr-mini.on { color: #79c0ff; border-color: var(--accent-dim); background: rgba(56, 139, 253, .12); }
+  .sr-modes button:focus-visible, .sr-mini:focus-visible { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
+  .sr-mini:disabled { opacity: .4; cursor: default; }
+  .sr-scope-label { flex: none; display: flex; align-items: center; gap: 6px; color: #7d8590; font-size: 11px; }
+  #srScope { flex: none; width: 34px; height: 18px; border-radius: 999px; border: 1px solid #30363d;
+    background: #161b22; position: relative; cursor: pointer; padding: 0; }
+  #srScope::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #7d8590; }
+  #srScope[aria-checked="true"] { background: rgba(56, 139, 253, .35); border-color: var(--accent-dim); }
+  #srScope[aria-checked="true"]::after { left: 18px; background: #79c0ff; }
+  .sr-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #7d8590; font: 11px var(--mono); }
+  .sr-status.bad { color: var(--red); }
+  #srList { flex: 1; min-height: 0; overflow: auto; outline: none; padding-bottom: 6px; }
+  .sr-file { font-weight: 600; }
+  .sr-file.dim { opacity: .45; }
+  .sr-file .sr-badge { flex: none; margin-left: auto; background: #30363d; border-radius: 999px; padding: 0 7px; font-size: 11px; color: #e6edf3; }
+  .sr-file .sr-chk { flex: none; accent-color: #388bfd; }
+  .sr-snip { display: flex; gap: 8px; padding: 1px 8px 1px 28px; color: #8b949e; cursor: pointer; }
+  .sr-snip:hover { background: rgba(90, 93, 94, .1); }
+  .sr-snip .sr-line { flex: none; color: #6e7681; font: 11px var(--mono); }
+  .sr-snip .sr-text { flex: 1; min-width: 0; font: 12px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .sr-snip mark { background: rgba(210, 153, 34, .35); color: #e6edf3; }
+  .sr-snip .sr-del { color: #f85149; text-decoration: line-through; }
+  .sr-snip .sr-ins { color: #3fb950; }
+  #srList .ex-note { padding: 6px 10px; color: #7d8590; font: 11px var(--mono); white-space: normal; }
+  #srList .ex-note.bad { color: var(--red); }
   #exTree { flex: 1; min-height: 0; overflow: auto; outline: none; padding-bottom: 6px; }
   #exTree:focus-visible { outline: none; }
   .ex-row { display: flex; align-items: center; gap: 4px; height: 22px; padding-right: 8px;
@@ -1575,18 +1609,23 @@
   @media (prefers-reduced-motion: reduce) {
     .card.fresh, .card.flash, header .live.working b, .act.running .dot, .composer .ctx-btn.hot::after { animation: none; }
     /* A roll down with no motion: the class still decides what is visible, it just arrives at once. */
-    #gitDrawer, #gitScrim, #drawers, #drawersRight, #pluginDockTop, #pluginDockBottom { transition: none; }
+    #gitDrawer, #gitScrim, #kontainerDrawer, #kontainerScrim, #drawers, #drawersRight, #pluginDockTop, #pluginDockBottom { transition: none; }
   }
 </style>
+<!-- The kontainer drawer's own sheet: every rule in it hangs off its drawer, its scrim or the body
+     class, so the board carries it without the two surfaces being able to reach each other. -->
+<link rel="stylesheet" href="/client/kontainer-drawer.css" />
 </head>
 <body>
 <header>
   <span class="brand" title="every keyboard shortcut is listed under settings"><img src="/favicon.svg" alt="pi-studio" width="24" height="24" /></span>
   <button class="sess" id="sess" type="button" title="switch workspace"></button>
+  <!-- The open drawer's name. Nothing is shown while no drawer is open. -->
+  <span class="open-panel" id="openPanelName" hidden>git graph</span>
+  <span class="grow"></span>
   <!-- Polite, so the state is spoken when it changes; the elapsed clock is decoration that ticks
        every second and is hidden, so it is never read out. -->
   <span class="live" id="live" role="status" aria-live="polite"><b aria-hidden="true"></b> <span id="liveText">connecting</span><span id="liveClock" aria-hidden="true"></span></span>
-  <span class="grow"></span>
   <!-- The context chip is also the compact button: the action sits on the number it changes,
        and the word appears on hover or focus so the row keeps its width at rest. -->
   <button class="stat" id="statCtx" title="compact the context, the same as /compact" hidden><span id="statCtxValue"></span><span class="act" aria-hidden="true">compact</span></button>
@@ -1596,11 +1635,11 @@
   <button id="reset">100%</button>
   <button id="housekeepingBtn" type="button" aria-haspopup="menu" aria-expanded="false" title="workspace housekeeping">housekeeping</button>
   <button id="toolboxBtn" type="button" aria-haspopup="menu" aria-expanded="false" title="files, source control, git graph, and terminal">toolbox</button>
-  <!-- The two drawers that stay in the header. One drawer is open at a time, and each door names the key that opens it. -->
+  <!-- The thread drawer that stays in the header. One drawer is open at a time, and the door names the key that opens it. -->
   <button id="activityBtn" type="button" aria-controls="drawerActivity" aria-expanded="false" title="show the activity drawer (a)">activity</button>
-  <button id="cardsBtn" type="button" aria-controls="drawerCards" aria-expanded="false" title="show the cards drawer (c)">cards</button>
+  <button id="searchBtn" type="button" aria-controls="drawerSearch" aria-expanded="false" title="show the search drawer (ctrl+f)">search</button>
   <!-- One door per plugin whose panel lives in the left drawers, filled in by board.js. The header's
-       own buttons are the style, so a door stands here exactly like activity and cards do. -->
+       own buttons are the style, so a door stands here exactly like activity does. -->
   <span id="pluginDrawerDoors" hidden></span>
   <button id="configBtn" title="board specific settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
 </header>
@@ -1622,6 +1661,7 @@
   <button id="sourceBtn" type="button" role="menuitem" aria-controls="drawerSource" aria-expanded="false" title="show the source control drawer (d)"><span>source control</span><span class="hm-key">d</span></button>
   <button id="gitBtn" type="button" role="menuitem" aria-expanded="false" aria-controls="gitDrawer" title="roll the git graph down (g)"><span>git graph</span><span class="hm-key">g</span></button>
   <button id="termBtn" type="button" role="menuitem" aria-expanded="false" aria-controls="termDrawer" title="roll the terminal drawer up from the bottom (x)"><span>terminal</span><span class="hm-key">x</span></button>
+  <button id="kontainerBtn" type="button" role="menuitem" aria-expanded="false" aria-controls="kontainerDrawer" title="roll the kontainer topology down (k)"><span>kontainer</span><span class="hm-key">k</span></button>
   <!-- One item per plugin that declared a panel, filled in by /client/board.js. The menu's own arrow keys
        walk whatever buttons it finds, so a door the daemon reports lands in the same list as these. -->
   <span id="pluginDoors" hidden></span>
@@ -1668,9 +1708,8 @@
 </div>
 
 <!-- The left drawers. One column, one width, one open at a time: `f` for the workspace's files, `a` for
-     what the agents are doing, `c` for the board's cards, `d` for source control. The rail's remembered
-     width and its hidden choice carry over, because this is the rail with doors on it rather than a
-     second place. -->
+     activity and cards, `d` for source control. The rail's remembered width and its open choice carry
+     over, because this is the rail with doors on it rather than a second place. -->
 <div id="drawers" class="drawer-shell drawer-slide">
   <section class="drawer" id="drawerFiles" aria-label="files" tabindex="-1">
     <div id="filesPane">
@@ -1684,7 +1723,7 @@
         </span>
       </div>
       <div class="ex-search"><input id="exFilter" type="text" spellcheck="false" autocomplete="off"
-        placeholder="filter by name…" aria-label="filter the tree by name" /></div>
+        placeholder="filter by name in all folders…" aria-label="filter file names in all folders" /><button type="button" id="exHiddenToggle" class="on" aria-pressed="true" title="show hidden files (dotfiles) in the name search">hidden</button></div>
       <!-- The tree is drawn by the client from /files: the daemon names the entries, this one says where
            they sit, what is selected, and what Git thinks of each. -->
       <div id="exTree" role="tree" aria-label="files in this workspace" tabindex="0"></div>
@@ -1695,15 +1734,12 @@
     </div>
   </section>
   <section class="drawer" id="drawerActivity" aria-label="activity" tabindex="-1">
-    <div class="rail-head">activity <b id="railRunning"></b><button type="button" class="rail-close" title="hide the drawer (esc)">«</button></div>
-    <div id="railNow"></div>
-    <div id="railLog"></div>
-  </section>
-  <section class="drawer" id="drawerCards" aria-label="cards" tabindex="-1">
-    <div class="rail-head">cards <b id="railCardCount"></b><button type="button" class="rail-close" title="hide the drawer (esc)">«</button></div>
-    <div id="railCards"></div>
-    <div class="rail-head" id="railClosedHead" hidden>closed <b id="railClosedCount"></b><button type="button" id="railClosedClean" title="delete the closed threads whose work is saved somewhere else, with their folders, branches and conversations">clean</button></div>
-    <div id="railClosed"></div>
+    <div class="rail-head">activity<button type="button" class="rail-close" title="hide the drawer (esc)">«</button></div>
+    <div id="railBody">
+      <div id="railCards"></div>
+      <div class="rail-head" id="railClosedHead" hidden>closed<button type="button" id="railClosedClean" title="delete the closed threads whose work is saved somewhere else, with their folders, branches and conversations">clean</button></div>
+      <div id="railClosed"></div>
+    </div>
   </section>
   <section class="drawer" id="drawerSource" aria-label="source control">
     <div class="rail-head">source control <b id="scCount"></b><button type="button" class="rail-close" title="hide the drawer (esc)">«</button></div>
@@ -1721,6 +1757,37 @@
     <div class="sc-list" id="scStaged"></div>
     <div class="sc-group"><span>Changes</span><b id="scChangesCount"></b><button type="button" id="scStageAll" title="stage every changed file">+ all</button></div>
     <div class="sc-list" id="scChanges"></div>
+  </section>
+  <section class="drawer" id="drawerSearch" aria-label="search" tabindex="-1">
+    <div id="searchPane">
+      <div class="ex-head">
+        <span class="ex-title" id="srTitle">search</span>
+        <span class="ex-act">
+          <button type="button" id="srRefresh" class="codicon codicon-refresh" aria-label="search again" title="search again"></button>
+          <button type="button" id="srCollapse" class="codicon codicon-collapse-all" aria-label="collapse every file" title="collapse every file"></button>
+        </span>
+      </div>
+      <div class="sr-box">
+        <div class="sr-row">
+          <input id="srQuery" type="text" spellcheck="false" autocomplete="off" placeholder="search…" aria-label="search file contents" />
+          <span class="sr-modes">
+            <button type="button" id="srCase" aria-pressed="false" title="match case">Aa</button><button type="button" id="srWord" aria-pressed="false" title="whole word">ab</button><button type="button" id="srRegex" aria-pressed="false" title="regular expression">.*</button>
+          </span>
+        </div>
+        <div class="sr-row" id="srReplaceRow" hidden>
+          <input id="srReplace" type="text" spellcheck="false" autocomplete="off" placeholder="replace…" aria-label="replace with" />
+          <label class="sr-scope-label" title="off: replace in every file shown; on: only in the files ticked below"><span>checked only</span><button type="button" id="srScope" role="switch" aria-checked="false" aria-label="replace only in checked files"></button></label>
+          <button type="button" id="srReplaceBtn" class="sr-mini" disabled>replace</button>
+        </div>
+        <div class="sr-row" id="srTopBar">
+          <button type="button" id="srReplaceToggle" class="sr-mini" aria-pressed="false" title="show the replace field">replace</button>
+          <button type="button" id="srHiddenToggle" class="sr-mini on" aria-pressed="true" title="show hidden files (dotfiles) in the search">hidden</button>
+          <span class="sr-status" id="srStatus" role="status"></span>
+        </div>
+      </div>
+      <div id="srList" role="tree" aria-label="search results" tabindex="0"></div>
+      <div class="ex-foot"><span id="srCount">nothing searched</span></div>
+    </div>
   </section>
   <div id="railGrip" class="drawer-grip" title="drag to resize"></div>
 </div>
@@ -1865,6 +1932,8 @@
 
 <!-- The source control drawer's right-click menu: what is worth offering for one file. -->
 <div id="scMenu" hidden role="menu" aria-label="file actions"></div>
+<!-- The activity drawer's right-click menu: reopen for a closed card, debug for a thread card. -->
+<div id="actMenu" hidden role="menu" aria-label="card actions"></div>
 
 <div id="viewport">
   <div id="world"></div>
@@ -1942,15 +2011,15 @@
      /client/git-drawer.js, which also knows whether this board has a folder to draw at all. -->
 <div id="gitScrim" hidden></div>
 <section id="gitDrawer" class="drawer-shell drawer-slide" aria-label="git graph" inert>
-  <div class="gd-bar drawer-bar">
-    <span class="gd-title drawer-title">git graph</span>
-    <span class="gd-workspace drawer-workspace" id="gdWorkspace"></span>
-    <span class="grow"></span>
-    <button id="gdTab" type="button" title="open the git graph in a tab of its own">open in tab &#8599;</button>
-    <button id="gdClose" type="button" title="roll the git graph up (g)">roll up (g)</button>
-  </div>
   <div class="gd-body drawer-body"><iframe id="gdFrame" title="git graph"></iframe></div>
 </section>
+
+<!-- The kontainer drawer: the Docker/Podman topology in a panel that rolls down under the header with
+     `k`. Nothing is inside it here, because the topology is the module's own markup and every fact in
+     it comes from `/kontainer/*`: /client/kontainer-drawer.js makes the bar, the three strata and the
+     sheets, and keeps what the human picked between rolls. -->
+<div id="kontainerScrim" hidden></div>
+<section id="kontainerDrawer" class="drawer-shell drawer-slide" aria-label="kontainer" inert></section>
 
 <!-- The plugin panel: a plugin's own page in a frame that rolls down under the header, opened from the
      door the toolbox lists for it. The frame is sandboxed with scripts and nothing else, so its document

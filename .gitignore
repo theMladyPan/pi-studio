@@ -6,3 +6,4 @@ dist/
 .history/
 release/
 .pi-studio/
+.cache/

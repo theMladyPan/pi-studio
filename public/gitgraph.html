@@ -17,12 +17,6 @@
 	</head>
 	<body>
 		<div id="topBar" hidden>
-			<section id="statusStrip" class="statusStrip" role="status" aria-label="Git Graph status" aria-live="polite" aria-atomic="true" aria-busy="false" data-state="ready">
-				<span id="statusSummary" class="statusSummary">
-					<span id="statusIndicator" class="statusIndicator" aria-hidden="true"></span>
-					<span id="statusText">Ready</span>
-				</span>
-			</section>
 			<div id="stashListSlot"></div>
 			<header id="controls" class="gitGraphToolbar" role="toolbar" aria-label="Git Graph controls">
 				<div id="repoControl" class="toolbarGroup" title="Repository">
@@ -60,6 +54,12 @@
 					<button id="pushTagsBtn" class="toolbarIconButton" type="button" title="Push all tags" aria-label="Push all tags" hidden><span class="toolbarIcon codicon codicon-arrow-up" aria-hidden="true"></span></button>
 					<button id="settingsBtn" class="toolbarIconButton" type="button" title="Repository &amp; graph settings" aria-label="Settings"><span class="toolbarIcon codicon codicon-gear" aria-hidden="true"></span></button>
 					<button id="refreshBtn" class="toolbarIconButton" type="button" title="Refresh (Ctrl+R)" aria-label="Refresh"><span class="toolbarIcon codicon codicon-refresh" aria-hidden="true"></span></button>
+					<!-- The drawer's own two presses, once the drawer's bar is gone: open this page in a tab
+				     of its own, or roll the drawer up. Hidden in a standalone tab, where there is no drawer. -->
+					<span id="drawerActions" class="drawerActions">
+						<button id="gdTab" type="button" title="open the git graph in a tab of its own">open in tab &#8599;</button>
+						<button id="gdClose" type="button" title="roll the git graph up (g)">roll up (g)</button>
+					</span>
 				</span>
 			</header>
 		</div>
@@ -70,6 +70,14 @@
 			<div id="commitTable"></div>
 		</main>
 		<div id="footer"></div>
+
+		<!-- The status strip, at the foot of the graph rather than above the toolbar. -->
+		<section id="statusStrip" class="statusStrip" role="status" aria-label="Git Graph status" aria-live="polite" aria-atomic="true" aria-busy="false" data-state="ready" hidden>
+			<span id="statusSummary" class="statusSummary">
+				<span id="statusIndicator" class="statusIndicator" aria-hidden="true"></span>
+				<span id="statusText">Ready</span>
+			</span>
+		</section>
 
 		<div id="contextMenu" role="menu" popover="auto"></div>
 		<dialog id="dialog" aria-labelledby="ggDialogTitle"></dialog>

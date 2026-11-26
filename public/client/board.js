@@ -7,6 +7,9 @@ import { createGitDrawer } from "./git-drawer.js";
 // The terminal drawer is a module of its own beside it: the panel, the socket to the daemon's
 // shell and the vendored terminal screen are a single subject, served by the same one rule.
 import { createTerminalDrawer } from "./terminal-drawer.js";
+// The kontainer drawer is the third of its kind: the Docker/Podman topology, the stats cadence the
+// human picked and the sheets that act on a container are one subject, behind the same one rule.
+import { createKontainerDrawer } from "./kontainer-drawer.js";
 // The tokenizer and the text surface are shared with the git graph's reader, so both pages colour a
 // file the same way: one implementation, imported by each.
 import { createTextPreview, escapeHtml, highlight } from "./text-preview.js";
@@ -39,6 +42,7 @@ let pendingJump = new URLSearchParams(location.search).get("jump") || "";
 const gitDrawer = createGitDrawer({ workspace, typingSomewhere });
 document.getElementById("gitBtn").addEventListener("click", () => {
   closeHeaderMenus();
+  kontainerDrawer.close();
   gitDrawer.toggle();
 });
 // One terminal drawer for the life of the page, beside the git one: the shell and the screen
@@ -46,8 +50,30 @@ document.getElementById("gitBtn").addEventListener("click", () => {
 const terminalDrawer = createTerminalDrawer({ workspace, typingSomewhere });
 document.getElementById("termBtn").addEventListener("click", () => {
   closeHeaderMenus();
+  kontainerDrawer.close();
   closeDocks("bottom");
   terminalDrawer.toggle();
+});
+// One kontainer drawer for the life of the page, beside the two above: it keeps no topology between
+// rolls, because a container that changed while it was down is not worth remembering — every fact is
+// read again from `/kontainer/*` on the way up.
+const kontainerDrawer = createKontainerDrawer({
+  workspace,
+  typingSomewhere,
+  // `exec ↗`, `logs ↗` and `compose logs -f` open the shell the terminal drawer owns: the topology
+  // rolls back down, the bottom strip rolls up, and the command is typed into the shell there.
+  openTerminalCommand: (cmd) => {
+    kontainerDrawer.close();
+    closeDocks("bottom");
+    terminalDrawer.runCommand(cmd);
+  },
+});
+document.getElementById("kontainerBtn").addEventListener("click", () => {
+  closeHeaderMenus();
+  closeDrawers();
+  gitDrawer.close();
+  terminalDrawer.close();
+  kontainerDrawer.toggle();
 });
 // The plugin panel: one sandboxed frame for the life of the page, the doors the toolbox lists for the
 // plugins that declared a panel, and the one call a panel is allowed to make.
@@ -279,6 +305,7 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
       paneFrame.src = panel.url;
     }
     if (gitDrawer.isOpen()) gitDrawer.close();
+    kontainerDrawer.close();
     if (side === "left") {
       closeDocks();
       explorerCore.drawerOpen(drawerState, key);
@@ -704,6 +731,25 @@ function exCleanPath(value) {
 /** `.git` is the repository's own bookkeeping, so the tree never lists it. A dot folder such as `.agents`
  *  is the human's and stays. */
 const exHidden = (name) => name === ".git";
+
+/** A dot name: the hidden files the name search's toggle decides whether to walk into. */
+const exDotName = (name) => typeof name === "string" && name.startsWith(".");
+
+/**
+ * The folders a path sits under, from the root down to the folder that holds it. Revealing a path in
+ * the tree opens exactly these, so the row the path names is on screen once they are read.
+ */
+function exAncestors(path) {
+  const clean = exCleanPath(path);
+  if (!clean) return [];
+  const out = [""];
+  let dir = "";
+  for (const part of clean.split("/").slice(0, -1)) {
+    dir = dir ? `${dir}/${part}` : part;
+    out.push(dir);
+  }
+  return out;
+}
 
 /**
  * The last step of a path, which is the folder's own name. The drawer's header says this, so a workspace
@@ -1211,7 +1257,7 @@ function exDrawerToggle(state, name) {
  * opens in stands over everything, a name being edited or a menu standing open goes before the drawer,
  * and the drawer goes before the card the board is reading.
  */
-const EX_ESCAPE_ORDER = ["editor", "confirm", "menu", "rename", "create", "sheet", "plugin", "git", "terminal", "drawer", "card"];
+const EX_ESCAPE_ORDER = ["editor", "confirm", "menu", "rename", "create", "sheet", "plugin", "git", "kontainer", "terminal", "drawer", "card"];
 
 function exEscapeTarget(open) {
   for (const one of EX_ESCAPE_ORDER) if (open?.[one]) return one;
@@ -1229,7 +1275,6 @@ function exBoardLetter(key, { shift = false, typing = false, panel = false, surf
   if (shifted) return "";
   if (lower === "d") return "source";
   if (lower === "a") return "activity";
-  if (lower === "c") return "cards";
   return "";
 }
 
@@ -1386,6 +1431,8 @@ function exSaveStatus(dirty) {
 const explorerCore = {
   join: exJoin,
   parentOf: exParentOf,
+  dotName: exDotName,
+  ancestors: exAncestors,
   depthOf: exDepthOf,
   under: exUnder,
   cleanPath: exCleanPath,
@@ -3448,11 +3495,11 @@ const OPEN_GLYPH =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6.4 1.8H1.9v8.3h8.3V5.6M7.2 1.8h3v3M10.2 1.8 5.4 6.6"/></svg>';
 
 /**
- * An arrow going down into a tray: the press that saves a note as a pdf. A page drawn around it at eleven
+ * An arrow going down into a tray: the press that downloads a note. A page drawn around it at eleven
  * pixels reads as a smudge, so the shape is the plain one every file manager uses for "save this", and the
- * button's own title says what the file is. Drawn for the reason the pin and the bin are.
+ * button's own title says what the files are. Drawn for the reason the pin and the bin are.
  */
-const PDF_GLYPH =
+const DOWNLOAD_GLYPH =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.7v5.4M3.8 5.2 6 7.4l2.2-2.2M2.2 8.4v2.1h7.6V8.4"/></svg>';
 
 function makeCard(data, quiet = false) {
@@ -3510,7 +3557,7 @@ function makeCard(data, quiet = false) {
     <span class="chip"></span>
     <button type="button" class="copy-id" title="copy this card's id">⧉</button>
     <button type="button" class="open-editor" title="open this file in the text editor" aria-label="open this file in the text editor">${OPEN_GLYPH}</button>
-    <button type="button" class="save-pdf" title="save this note as a pdf" aria-label="save this note as a pdf">${PDF_GLYPH}</button>
+    <button type="button" class="download-note" title="download this note as .md and .pdf" aria-label="download this note as .md and .pdf">${DOWNLOAD_GLYPH}</button>
     <button class="pin" title="pin this card" aria-label="pin this card">${PIN_GLYPH}</button>
     <button class="min" title="minimize this card" aria-label="minimize this card">▾</button>
     <button class="reply" title="ask a follow-up about this card" aria-label="ask a follow-up about this card">↩</button>
@@ -3604,11 +3651,12 @@ function makeCard(data, quiet = false) {
     event.stopPropagation();
     void openCardFile(entry);
   });
-  // A note leaves as a page: the daemon lays its markdown out and answers with the file, which the browser
-  // saves the way it saves anything. The press only asks, so a refusal is the daemon's sentence to say.
-  head.querySelector(".save-pdf").addEventListener("click", (event) => {
+  // A note leaves as two files: the daemon lays its markdown out and answers with the pdf, and the tab
+  // holds the markdown itself, which the browser saves the way it saves anything. The press only asks, so
+  // a refusal is the daemon's sentence to say.
+  head.querySelector(".download-note").addEventListener("click", (event) => {
     event.stopPropagation();
-    void saveCardPdf(entry);
+    void downloadCard(entry);
   });
   if (data.mini) setMini(card, true);
   capField(card, height);
@@ -3853,21 +3901,11 @@ function paintFooter() {
   footRun.textContent = [threads ? `${threads} thread${threads > 1 ? "s" : ""}` : "", running ? `${running} running` : "", msgs ? `${msgs} msgs` : "", tools ? `${tools} tools` : ""].filter(Boolean).join(" · ");
 }
 
-/** A section says what its thread costs and which role it plays. */
+/** Update every card row's role chip and order after runtime facts/meta settle. */
 function paintSections() {
-  for (const entry of railSections.values()) {
-    const held = threadFacts.get(entry.id);
-    const stats = held?.stats;
-    const bits = [];
-    if (stats?.context) bits.push(`${compact(stats.context)}${stats.contextMax ? `/${compact(stats.contextMax)}` : ""} ctx`);
-    if (stats?.cost) bits.push(`$${stats.cost < 1 ? stats.cost.toFixed(2) : compact(stats.cost)}`);
-    entry.head.children[3].textContent = bits.join(" · ");
-    // The role arrives with the thread's card, which can land after its first activity row.
-    const { role = "" } = threadMeta.get(entry.id) ?? {};
-    entry.roleEl.textContent = role;
-    entry.roleEl.hidden = !role;
-    orderRail();
-  }
+  for (const row of railRows.values()) paintRailRole(row);
+  for (const row of railClosedRows.values()) paintRailRole(row);
+  orderRailCards();
 }
 
 /**
@@ -4297,9 +4335,9 @@ function paintCard(entry, data) {
   // Only a source card holds a file, so only a source card offers the press that opens one.
   const openBtn = entry.head.querySelector(".open-editor");
   if (openBtn) openBtn.style.display = isSource ? "" : "none";
-  // A note is the one card that is a document, so it is the one that leaves as a pdf.
-  const pdfBtn = entry.head.querySelector(".save-pdf");
-  if (pdfBtn) pdfBtn.style.display = data.type === "note" ? "" : "none";
+  // A note is the one card that is a document, so it is the one that leaves as md and pdf.
+  const downloadBtn = entry.head.querySelector(".download-note");
+  if (downloadBtn) downloadBtn.style.display = data.type === "note" ? "" : "none";
   // A thread is sent without `pinned`, so its head shows no pin rather than one that forgets itself.
   const pinBtn = entry.head.querySelector(".pin");
   if (pinBtn) pinBtn.style.display = data.type === "sticky" ? "none" : "";
@@ -4835,14 +4873,32 @@ function downloadName(response) {
 }
 
 /**
- * The note as a page the browser takes. The daemon answers with the file itself, and the tab hands it to the
- * browser's own download: the folder is whichever that browser saves to, the receipt is its download list,
- * and nothing on this machine is written or opened by the board.
+ * One file the browser takes: a link nobody sees, pressed once, is the one way a script asks a browser to
+ * save a file, and the `download` name is what it saves it under. Returns the object url, which the caller
+ * releases once the bytes are the browser's.
  */
-async function saveCardPdf(entry) {
+function saveBlob(name, blob) {
+  const url = URL.createObjectURL(blob);
+  const link = el("a");
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  return url;
+}
+
+/**
+ * The note as two files the browser takes. The daemon answers with the pdf itself, and the tab already
+ * holds the card's own markdown, so the second file is built here from the same words the pdf was laid out
+ * from and named with the same name save one extension. Both are handed to the browser's own download:
+ * the folder is whichever that browser saves to, the receipt is its download list, and nothing on this
+ * machine is written or opened by the board.
+ */
+async function downloadCard(entry) {
   // Drawing a note's pictures runs a browser per picture, so a press takes a moment: the arrow says so and
   // stops taking presses until the answer is back, because a second press would start the work again.
-  const button = entry.head.querySelector(".save-pdf");
+  const button = entry.head.querySelector(".download-note");
   if (button?.disabled) return;
   if (button) {
     button.disabled = true;
@@ -4855,21 +4911,19 @@ async function saveCardPdf(entry) {
       body: JSON.stringify({ cardId: entry.id }),
     });
     if (!response.ok) throw new Error((await response.text()).slice(0, 160) || response.statusText);
-    const name = downloadName(response);
-    const url = URL.createObjectURL(await response.blob());
-    // A link nobody sees, pressed once: that is the one way a script asks a browser to save a file, and the
-    // `download` name is what it saves it under.
-    const link = el("a");
-    link.href = url;
-    link.download = name;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    // The bytes are the browser's from here, so the object behind the link has nothing left to hold.
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    footNote(`pdf saved by the browser · ${name}`);
+    const pdfName = downloadName(response);
+    const mdName = pdfName.replace(/\.pdf$/i, ".md");
+    // Both files are ready before either is pressed, so a pdf that fails leaves no lone markdown behind.
+    const files = [
+      { name: mdName, blob: new Blob([entry.data.markdown ?? ""], { type: "text/markdown;charset=utf-8" }) },
+      { name: pdfName, blob: await response.blob() },
+    ];
+    const urls = files.map((file) => saveBlob(file.name, file.blob));
+    // The bytes are the browser's from here, so the objects behind the links have nothing left to hold.
+    setTimeout(() => urls.forEach((url) => URL.revokeObjectURL(url)), 60_000);
+    footNote(`md and pdf saved by the browser · ${mdName} · ${pdfName}`);
   } catch (error) {
-    footNote(`could not save the pdf: ${error.message || error}`, true);
+    footNote(`could not download the note: ${error.message || error}`, true);
   } finally {
     if (button) {
       button.disabled = false;
@@ -5910,22 +5964,19 @@ document.getElementById("newPill").addEventListener("click", jumpToFresh);
 resetBtn.addEventListener("click", resetZoom);
 
 // ---------- activity rail ------------------------------------------------
-const railNow = document.getElementById("railNow");
-const railLog = document.getElementById("railLog");
-const railRunning = document.getElementById("railRunning");
+const railBody = document.getElementById("railBody");
 const actEls = new Map();
 /** A thought with no patch for this long is stalled, and its row says so with the clock. */
 const THOUGHT_STALL_MS = 3000;
 
 // ---------- the left drawers ---------------------------------------------
-// Three drawers share the rail's column: the workspace's files, what the agents are doing, and the
-// board's cards. One is open at a time, and the width and the hidden choice a human left on the old
-// rail are the ones these open with, because this is that rail with doors on it.
-const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards", source: "drawerSource" };
+// Four drawers share the rail's column: the workspace's files, activity (threads and cards),
+// source control, and search. One is open at a time, and the width and remembered open choice carry over.
+const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", source: "drawerSource", search: "drawerSearch" };
 const drawerState = explorerCore.drawers();
 // The plugin drawers off the other three edges: one strip per edge, one pane open per strip. The
 // strips are separate from the left column because the left column is the rail's (files, activity,
-// cards, source control), and a column or a strip is not part of it.
+// source control), and a column or a strip is not part of it.
 const DOCK_NAMES = { bottom: "pluginDockBottom", top: "pluginDockTop", right: "drawersRight" };
 const dockState = { bottom: "", top: "", right: "" };
 
@@ -5963,11 +6014,12 @@ function dockOpen() {
 }
 /** The doors in the header for plugins whose panel lives in this column, by drawer name. */
 const pluginDrawerDoors = {};
-// The three doors in the header, read before anything paints them.
+// The header doors, read before anything paints them.
 const filesBtn = document.getElementById("filesBtn");
 const activityBtn = document.getElementById("activityBtn");
-const cardsBtn = document.getElementById("cardsBtn");
 const sourceBtn = document.getElementById("sourceBtn");
+const searchBtn = document.getElementById("searchBtn");
+const openPanelName = document.getElementById("openPanelName");
 
 // The rail is the user's furniture: its width survives a reload, and so does whether a drawer is up.
 const RAIL_MIN = 160;
@@ -5983,19 +6035,34 @@ function railWidth(px) {
   return width;
 }
 
-/** Paint which drawer is up, and say so on the three doors in the header. */
+/** Paint which drawer is up, and say so on the doors in the header. */
 function paintDrawers() {
   document.body.classList.toggle("rail-off", !drawerState.open);
   for (const [name, id] of Object.entries(DRAWER_NAMES)) {
     const pane = document.getElementById(id);
     pane.classList.toggle("on", drawerState.open === name);
   }
-  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn, ...pluginDrawerDoors };
+  const doors = { files: filesBtn, activity: activityBtn, source: sourceBtn, search: searchBtn, ...pluginDrawerDoors };
   for (const [name, door] of Object.entries(doors)) {
     door.setAttribute("aria-expanded", drawerState.open === name ? "true" : "false");
   }
   // Files and source live in the toolbox menu, so the chip says when one of them is open.
   toolboxBtn.classList.toggle("has-open", drawerState.open === "files" || drawerState.open === "source");
+  // The header names the open drawer beside the workspace, the way the git graph names itself:
+  // the search drawer says "Search and replace" and the activity drawer says "activity" while up,
+  // and nothing while no drawer is. The git graph owns the same label while it is up, so it is only
+  // written here when it is not.
+  if (openPanelName && !gitDrawer.isOpen()) {
+    if (drawerState.open === "search") {
+      openPanelName.textContent = "Search and replace";
+      openPanelName.hidden = false;
+    } else if (drawerState.open === "activity") {
+      openPanelName.textContent = "activity";
+      openPanelName.hidden = false;
+    } else {
+      openPanelName.hidden = true;
+    }
+  }
   try {
     localStorage.setItem("board.railOff", drawerState.open ? "0" : "1");
   } catch {}
@@ -6003,11 +6070,20 @@ function paintDrawers() {
 
 /** Show one drawer. The door in the header and the keys toggle; this only opens. */
 function showDrawer(name) {
-  // The git graph covers the whole board, so it cannot stand over a drawer and be alive at both ends.
+  // The git graph and the kontainer topology cover the whole board, so neither can stand over a
+  // drawer and be alive at both ends.
   if (gitDrawer.isOpen()) gitDrawer.close();
+  kontainerDrawer.close();
   closeDocks();
   if (name === "files") exPrime();
   if (name === "source") scPrime();
+  if (name === "search") {
+    // The head names the folder being searched, so opening the drawer reads the root listing the
+    // files drawer reads, and the head is painted again once the root is known.
+    srPaintTitle();
+    void exPrime().then(() => srPaintTitle());
+    requestAnimationFrame(() => { srQueryEl?.focus(); srQueryEl?.select(); });
+  }
   explorerCore.drawerOpen(drawerState, name);
   paintDrawers();
 }
@@ -6015,10 +6091,16 @@ function showDrawer(name) {
 function toggleDrawer(name) {
   const open = drawerState.open === name;
   if (gitDrawer.isOpen()) gitDrawer.close();
+  kontainerDrawer.close();
   if (!open) closeDocks();
   explorerCore.drawerToggle(drawerState, name);
   if (!open && name === "files") exPrime();
   if (!open && name === "source") scPrime();
+  if (!open && name === "search") {
+    srPaintTitle();
+    void exPrime().then(() => srPaintTitle());
+    requestAnimationFrame(() => { srQueryEl?.focus(); srQueryEl?.select(); });
+  }
   paintDrawers();
 }
 
@@ -6034,17 +6116,16 @@ function closeDrawers() {
   }
 }
 
-// A board that never hid its rail opens on activity, which is the strip a human was reading before;
-// one whose rail was shut stays shut until a door is pressed.
+// Fresh boards start with the activity drawer closed; an explicit remembered open state still restores.
 function restoreDrawers() {
   let saved = 0;
-  let off = "0";
+  let off = null;
   try {
     saved = Number(localStorage.getItem("board.railWidth")) || 0;
-    off = localStorage.getItem("board.railOff") || "0";
+    off = localStorage.getItem("board.railOff");
   } catch {}
   if (saved) railWidth(saved);
-  if (off !== "1") drawerState.open = "activity";
+  if (off === "0") drawerState.open = "activity";
   paintDrawers();
 }
 restoreDrawers();
@@ -6056,13 +6137,13 @@ restoreDrawers();
 bindDragHeight(document.getElementById("dockGripBottom"), { bodyClass: "dock-resizing", resolvePx: (event) => setTermHeight(window.innerHeight - event.clientY) });
 bindDragHeight(document.getElementById("dockGripTop"), { bodyClass: "dock-resizing", resolvePx: (event) => setTermHeight(event.clientY - 44) });
 
-for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn })) {
+for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, source: sourceBtn, search: searchBtn })) {
   door.addEventListener("click", () => {
     closeHeaderMenus();
     toggleDrawer(name);
   });
 }
-// The header doors for plugins whose panel lives in this column: the same doors as activity and cards,
+// The header doors for plugins whose panel lives in this column: the same doors as activity,
 // added as the daemon lists them, and painted with the same aria-expanded the drawers keep.
 const pluginDrawer = createPluginPanelHost({ workspace, mode: "drawer" });
 for (const shut of document.querySelectorAll("#drawers .rail-close")) {
@@ -6714,14 +6795,86 @@ trFollowBtn.addEventListener("click", () => {
   trFollowBtn.classList.toggle("on", trFollow);
   if (trFollow) void trLoad();
 });
-// Right click a thread in the rail to read it. The section is the thread, so the press lands on a row
-// or on the head and names the same conversation either way.
-railLog.addEventListener("contextmenu", (event) => {
-  const section = event.target.closest(".rail-thread");
-  const threadId = section?.dataset.thread;
-  if (!threadId) return;
+// ---------- the activity row menu ----------------------------------------
+// Right-click a card row in the activity drawer: reopen for a closed card, debug (transcript) for
+// a thread card. Same look and keyboard walk as the source control menu.
+const actMenuEl = document.getElementById("actMenu");
+let actMenuPrior = null;
+
+function actCloseMenu() {
+  if (actMenuEl.hidden) return;
+  actMenuEl.hidden = true;
+  actMenuEl.replaceChildren();
+  const prior = actMenuPrior;
+  actMenuPrior = null;
+  if (prior instanceof HTMLElement && document.contains(prior)) prior.focus();
+}
+
+function actMenuItem(label, run) {
+  const button = el("button");
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", () => {
+    actCloseMenu();
+    void run();
+  });
+  return button;
+}
+
+function actOpenMenu(event, rowEl) {
+  const id = rowEl.dataset.id;
+  if (!id) return;
+  const closedInfo = railClosedData.get(id);
+  const entry = byId.get(id);
+  const isThread = Boolean(closedInfo) || entry?.data?.type === "sticky";
+  const items = [];
+  if (closedInfo) {
+    items.push(actMenuItem("reopen", () => reopenCard(closedInfo.row, closedInfo.name)));
+  }
+  if (isThread) {
+    items.push(actMenuItem("debug", () => trOpen(id)));
+  }
+  if (!items.length) return;
   event.preventDefault();
-  trOpen(threadId);
+  actMenuEl.replaceChildren(...items);
+  actMenuEl.hidden = false;
+  const width = actMenuEl.offsetWidth || 180;
+  const height = actMenuEl.offsetHeight || items.length * 32 + 12;
+  const x = Math.min(event.clientX, innerWidth - width - 8);
+  const y = Math.min(event.clientY, innerHeight - height - 8);
+  actMenuEl.style.left = `${Math.max(4, x)}px`;
+  actMenuEl.style.top = `${Math.max(4, y)}px`;
+  actMenuPrior = rowEl.querySelector(".rail-thread-head") || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  items[0].focus();
+}
+
+actMenuEl.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const buttons = [...actMenuEl.querySelectorAll("button")];
+  const at = buttons.indexOf(document.activeElement);
+  const step = event.key === "ArrowDown" ? 1 : -1;
+  buttons[(at + step + buttons.length) % buttons.length].focus();
+});
+
+document.addEventListener("click", (event) => {
+  if (!actMenuEl.hidden && !event.target.closest("#actMenu")) actCloseMenu();
+});
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (actMenuEl.hidden || event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    actCloseMenu();
+  },
+  true,
+);
+
+railBody.addEventListener("contextmenu", (event) => {
+  const rowEl = event.target.closest(".rail-thread");
+  if (!rowEl) return;
+  actOpenMenu(event, rowEl);
 });
 
 (() => {
@@ -6747,11 +6900,12 @@ railLog.addEventListener("contextmenu", (event) => {
   grip.addEventListener("pointercancel", stop);
 })();
 
-// The rail is the overview of the board: every card, newest first, with the one state worth
-// knowing. A row is the way back to its card.
+// The activity drawer lists every card, open then closed, one row wrapper per card id. A thread card
+// expands inline to show its settled activity log, collapsed by default.
 const railCards = document.getElementById("railCards");
-const railCardCount = document.getElementById("railCardCount");
 const railRows = new Map();
+/** Card ids whose settled log is currently expanded; collapsed by default. */
+const expandedCards = new Set();
 /** Arrival order of the rows, so a list that nests can still put the newest thread on top. */
 let cardSeq = 0;
 
@@ -6779,8 +6933,52 @@ function railState(entry) {
 }
 
 function paintRailCount() {
-  railCardCount.textContent = railRows.size ? String(railRows.size) : "";
   syncTicker();
+}
+
+function applyRowFold(row) {
+  const id = row.dataset.id;
+  const expandable = !row.classList.contains("no-log");
+  const open = expandable && expandedCards.has(id);
+  row.classList.toggle("folded", !open);
+  const head = row.querySelector(".rail-thread-head");
+  if (head) {
+    if (expandable) head.setAttribute("aria-expanded", open ? "true" : "false");
+    else head.removeAttribute("aria-expanded");
+  }
+}
+
+function paintRailRole(row) {
+  const id = row.dataset.id;
+  const roleEl = row.querySelector(".rail-thread-role");
+  if (!roleEl) return;
+  const { role = "" } = threadMeta.get(id) ?? {};
+  roleEl.textContent = role;
+  roleEl.hidden = !role;
+}
+
+/** Build the unified row wrapper shared by open and closed cards. */
+function makeRailRow(id, expandable) {
+  const wrap = el("section", "rail-thread");
+  wrap.dataset.id = id;
+  if (!expandable) wrap.classList.add("no-log");
+  const card = el("div", "rail-card");
+  const head = el("button", "rail-thread-head");
+  head.type = "button";
+  const roleEl = el("span", "rail-thread-role");
+  roleEl.hidden = true;
+  head.append(el("span", "chev"), el("span", "dot"), el("span", "rail-title"), roleEl, el("span", "rail-state"));
+  head.addEventListener("click", () => {
+    if (wrap.classList.contains("no-log")) return;
+    if (expandedCards.has(id)) expandedCards.delete(id);
+    else expandedCards.add(id);
+    applyRowFold(wrap);
+  });
+  card.append(head);
+  const body = el("div", "rail-thread-body");
+  wrap.append(card, body);
+  applyRowFold(wrap);
+  return wrap;
 }
 
 /** Just the state word and its tone, so the clock and a repaint share one writer. */
@@ -6788,23 +6986,26 @@ function paintRailState(entry) {
   const row = railRows.get(entry.id);
   if (!row) return;
   const { text, wants, updated } = railState(entry);
+  const head = row.querySelector(".rail-thread-head");
+  const titleEl = head.children[2];
+  const stateEl = head.children[4];
   // The clock calls this every second, so a word that has not changed must not touch the DOM.
-  if (row.children[2].textContent !== text) {
-    row.children[2].textContent = text;
+  if (stateEl.textContent !== text) {
+    stateEl.textContent = text;
     row.classList.toggle("wants", wants);
     row.classList.toggle("updated", updated);
-    row.title = `${row.children[1].textContent} · ${text}`;
+    head.title = `${titleEl.textContent} · ${text}`;
   }
 }
 
 /**
- * Where a card follows from: the thread that spawned it, or the card its own note was written for.
- * Both are kept, in that order, because a spawned thread whose card the board does not draw leaves
- * only the card it was written on to hang from.
+ * Where a card follows from: the thread that spawned it, the card its own note was written for,
+ * or the parent remembered in threadMeta.
  */
 const railParentsOf = (entry) => {
   const data = entry.data || {};
-  return [data.parentThread || "", data.threadRoot || ""].filter((id) => id && id !== entry.id);
+  const metaParent = threadMeta.get(entry.id)?.parent || "";
+  return [...new Set([data.parentThread || "", data.threadRoot || "", metaParent].filter((id) => id && id !== entry.id))];
 };
 
 /**
@@ -6816,22 +7017,21 @@ function syncRailCard(entry) {
   if (!entry) return;
   let row = railRows.get(entry.id);
   const parents = railParentsOf(entry).join(" ");
+  const isThread = entry.data?.type === "sticky";
   if (!row) {
-    row = el("button", "rail-card");
-    row.type = "button";
-    row.dataset.id = entry.id;
+    row = makeRailRow(entry.id, isThread);
     row.dataset.seq = String(++cardSeq);
-    row.append(el("span", "dot"), el("span", "rail-title"), el("span", "rail-state"));
-    row.addEventListener("click", () => {
-      const record = byId.get(row.dataset.id);
-      if (record) centerOn(record);
-    });
     railRows.set(entry.id, row);
     railCards.prepend(row);
+    flushPendingRows(entry.id, row);
   }
-  row.children[0].className = `dot ${dotKind(entry.data.type)}`;
-  row.children[1].textContent = entry.titleEl.textContent;
+  const head = row.querySelector(".rail-thread-head");
+  row.classList.toggle("no-log", !isThread);
+  head.children[1].className = `dot ${dotKind(entry.data.type)}`;
+  head.children[2].textContent = entry.titleEl.textContent;
+  paintRailRole(row);
   paintRailState(entry);
+  applyRowFold(row);
   paintRailCount();
   // A newborn row may be the child of one that is already here, and a card can be told where it
   // follows from after it landed, so the order is recomputed for both. It costs nothing while the
@@ -6842,6 +7042,13 @@ function syncRailCard(entry) {
 function dropRailCard(id) {
   const row = railRows.get(id);
   if (!row) return;
+  // Preserve any settled activity nodes buffered for this card in case it reappears as closed.
+  const body = row.querySelector(".rail-thread-body");
+  if (body?.childElementCount) {
+    const held = pendingRows.get(id) ?? [];
+    for (const node of [...body.children]) held.push(node);
+    pendingRows.set(id, held);
+  }
   row.remove();
   railRows.delete(id);
   paintRailCount();
@@ -6860,7 +7067,8 @@ function orderRailCards() {
   // what it found there.
   for (const [id, row] of railRows) {
     const entry = byId.get(id);
-    row.dataset.parent = entry ? railParentsOf(entry).join(" ") : "";
+    const parents = entry ? railParentsOf(entry) : [threadMeta.get(id)?.parent || ""].filter((p) => p && p !== id);
+    row.dataset.parent = parents.join(" ");
   }
   // The first of a row's parents that the rail still holds, so closing a parent hands its children
   // back to the next one it names, or makes them top rows of their own.
@@ -6897,36 +7105,38 @@ function clearRailCards() {
 }
 
 // A card the human closed while it still held a conversation is not gone: the board keeps it, and
-// the rail offers it back. The list is the board's, not this tab's, so a second tab sees the same
-// closed cards and the one that puts a card back takes the row from both.
+// the drawer offers it back via right-click (reopen) while left-click expands its settled log.
 const railClosed = document.getElementById("railClosed");
 const railClosedHead = document.getElementById("railClosedHead");
-const railClosedCount = document.getElementById("railClosedCount");
 const railClosedClean = document.getElementById("railClosedClean");
+const railClosedRows = new Map();
+const railClosedData = new Map();
 
 /** Redrawn whole: the list is short, and the server only says it when it changes. */
 function applyClosed(rows) {
+  // Park any settled rows sitting inside closed rows before replacing them.
+  for (const [id, oldRow] of railClosedRows) {
+    const body = oldRow.querySelector(".rail-thread-body");
+    if (body?.childElementCount) {
+      const held = pendingRows.get(id) ?? [];
+      for (const node of [...body.children]) held.push(node);
+      pendingRows.set(id, held);
+    }
+  }
   railClosed.replaceChildren();
+  railClosedRows.clear();
+  railClosedData.clear();
   for (const row of Array.isArray(rows) ? rows : []) {
-    // The row is a wrapper rather than a button, because it now carries two presses and a button cannot
-    // hold one. The reopen press fills the wrapper, so the row reads and clicks as it always did.
-    const wrap = el("div", "rail-card");
-    wrap.dataset.id = row.id;
-    const button = el("button", "rail-open");
-    button.type = "button";
+    const wrap = makeRailRow(row.id, true);
+    const card = wrap.querySelector(".rail-card");
+    const head = wrap.querySelector(".rail-thread-head");
     const name = row.title || "thread";
     const turns = Number(row.turns) || 0;
-    const dot = el("span", "dot");
-    dot.className = `dot ${dotKind("sticky")}`;
-    const title = el("span", "rail-title");
-    title.textContent = name;
-    const state = el("span", "rail-state");
-    // The row's one action is the reason it is here, so the action is what the row says.
-    state.textContent = "reopen";
-    button.append(dot, title, state);
-    button.title = `${name} · closed ${agoText(Date.now() - (Number(row.closedAt) || Date.now()))} ago · ${turns} turn${turns === 1 ? "" : "s"} · click to put it back`;
-    button.setAttribute("aria-label", `reopen the card ${name}`);
-    button.addEventListener("click", () => reopenCard(row, name));
+    head.children[1].className = `dot ${dotKind("sticky")}`;
+    head.children[2].textContent = name;
+    head.children[4].textContent = "closed";
+    head.title = `${name} · closed ${agoText(Date.now() - (Number(row.closedAt) || Date.now()))} ago · ${turns} turn${turns === 1 ? "" : "s"}`;
+    paintRailRole(wrap);
     // The trash is the only press in this list that destroys work: the thread, its conversation, the folder
     // it worked in and its branch all go. So it asks first, in the same four seconds as every such press,
     // and it names what it takes for a reader who never sees the tooltip.
@@ -6948,11 +7158,13 @@ function applyClosed(rows) {
       if (!receipt) trash.disabled = false;
       else footNote(removeReceipt(receipt, name));
     });
-    wrap.append(button, trash);
+    card.appendChild(trash);
+    railClosedRows.set(row.id, wrap);
+    railClosedData.set(row.id, { row, name });
     railClosed.appendChild(wrap);
+    flushPendingRows(row.id, wrap);
   }
   railClosedHead.hidden = railClosed.childElementCount === 0;
-  railClosedCount.textContent = railClosed.childElementCount ? String(railClosed.childElementCount) : "";
 }
 
 /**
@@ -7577,130 +7789,78 @@ function thoughtTail(text, keep = 180) {
   return tail.length < flat.length ? `…${tail}` : tail;
 }
 
-// Settled rows are filed under the thread that wrote them, one foldable section per thread, newest
-// thread on top. A row that is still running is read in its own thread's card, where its answer will
-// appear; the strip above the log holds it only when that card is not on this board, so a run is
-// never invisible and the log below is only ever about what has already happened.
-const railSections = new Map();
-/** A section the reader folded shut. Session only: a reload shows everything again. */
-const foldedSections = new Set();
+// Settled rows are filed under the thread card that wrote them (card id == thread id), collapsed
+// by default. A row that arrives before its card lands is buffered in `pendingRows` until the card
+// appears (open or closed). A running row stays only in its thread's canvas card live strip.
+const pendingRows = new Map();
 let heldRows = 0;
-
-function applyFold(entry) {
-  entry.section.classList.toggle("folded", foldedSections.has(entry.id));
-  entry.head.setAttribute("aria-expanded", foldedSections.has(entry.id) ? "false" : "true");
-}
 
 /** The rail's rows in the order they arrived, so the oldest is findable by its number. */
 let railSeq = 0;
 
-function railSection(row) {
-  const id = row.thread?.id || "";
-  let entry = railSections.get(id);
-  if (!entry) {
-    const section = el("section", "rail-thread");
-    const head = el("button", "rail-thread-head");
-    head.type = "button";
-    head.append(
-      el("span", "chev"),
-      el("span", "rail-thread-title"),
-      el("span", "rail-thread-count"),
-      el("span", "rail-thread-stats"),
-      el("span", "rail-thread-role"),
-    );
-    const body = el("div", "rail-thread-body");
-    section.append(head, body);
-    head.addEventListener("click", () => {
-      if (foldedSections.has(id)) foldedSections.delete(id);
-      else foldedSections.add(id);
-      applyFold(entry);
-    });
-    // The section says which thread it is, so a right click can read that thread's conversation.
-    section.dataset.thread = id;
-    entry = { section, head, body, id, title: "", roleEl: head.children[4], at: 0 };
-    entry.roleEl.hidden = true;
-    railSections.set(id, entry);
-    applyFold(entry);
-  }
-  const title = row.thread?.title || "earlier";
-  if (title !== entry.title) {
-    entry.title = title;
-    entry.head.children[1].textContent = title;
-    entry.head.title = title;
-  }
-  return entry;
+/** Find the open or closed card row that owns this thread's settled log. */
+function cardRowFor(threadId) {
+  if (!threadId) return null;
+  return railRows.get(threadId) || railClosedRows.get(threadId) || null;
 }
 
-/**
- * Where the sections sit. The thread that spoke last is on top, so a busy board reads as a stack of
- * conversations, and a child always sits directly under the master that spawned it. The log itself
- * stays a flat list, because trimming, folding and the replay all assume that, so the order is
- * recomputed and only the sections that are out of place are moved.
- */
-function orderRail() {
-  const parentOf = (entry) => threadMeta.get(entry.id)?.parent || "";
-  const ranked = [...railSections.values()].sort((a, b) => b.at - a.at);
-  const wanted = [];
-  for (const master of ranked) {
-    // A child is only nested while the section it hangs under is still there; a master whose own
-    // rows were trimmed away has no head left to sit under, so the child reads as a thread of its own.
-    const nested = Boolean(parentOf(master)) && railSections.has(parentOf(master));
-    master.section.classList.toggle("child", nested);
-    if (nested) continue;
-    wanted.push(master);
-    for (const kid of ranked) {
-      if (kid === master || parentOf(kid) !== master.id) continue;
-      kid.section.classList.add("child");
-      wanted.push(kid);
-    }
-  }
-  let cursor = railLog.firstElementChild;
-  for (const entry of wanted) {
-    if (entry.section === cursor) {
-      cursor = cursor.nextElementSibling;
-      continue;
-    }
-    railLog.insertBefore(entry.section, cursor);
-  }
+/** Move any buffered settled rows for `id` into the newly built card row, newest first. */
+function flushPendingRows(id, rowEl) {
+  const buffered = pendingRows.get(id);
+  if (!buffered?.length) return;
+  pendingRows.delete(id);
+  const body = rowEl.querySelector(".rail-thread-body");
+  if (!body) return;
+  buffered.sort((a, b) => Number(b.dataset.seq || 0) - Number(a.dataset.seq || 0));
+  for (const node of buffered) body.appendChild(node);
 }
 
-/** The oldest row in the log, whichever section it sits in. */
+/** The oldest settled row across all card logs and buffered rows. */
 function oldestRailRow() {
   let oldest = null;
   let at = Infinity;
-  for (const entry of railSections.values()) {
-    const row = entry.body.lastElementChild;
-    const seen = Number(row?.dataset.seq ?? NaN);
-    if (row && seen < at) {
-      oldest = row;
+  const check = (node) => {
+    const seen = Number(node?.dataset.seq ?? NaN);
+    if (node && seen < at) {
+      oldest = node;
       at = seen;
     }
+  };
+  for (const row of railRows.values()) check(row.querySelector(".rail-thread-body")?.lastElementChild);
+  for (const row of railClosedRows.values()) check(row.querySelector(".rail-thread-body")?.lastElementChild);
+  for (const list of pendingRows.values()) {
+    for (const node of list) check(node);
   }
   return oldest;
 }
 
-/** The log is a tail, not a history: the oldest row goes first, whatever section it belongs to. */
+/** The log is a tail, not a history: the oldest settled row goes first, capped at 200. */
 function trimRail() {
   while (heldRows > 200) {
     const row = oldestRailRow();
     if (!row) return;
     for (const [id, elem] of actEls) if (elem === row) actEls.delete(id);
-    const section = row.closest(".rail-thread");
-    row.remove();
-    heldRows--;
-    // A section with no rows left says nothing, so it goes: its children then sort as threads of
-    // their own instead of nesting under a head that is no longer there.
-    if (section && !section.querySelector(".rail-thread-body")?.childElementCount) {
-      section.remove();
-      for (const [id, entry] of railSections) if (entry.section === section) railSections.delete(id);
+    if (row.parentElement) {
+      row.remove();
+    } else {
+      for (const [tid, list] of pendingRows) {
+        const idx = list.indexOf(row);
+        if (idx >= 0) {
+          list.splice(idx, 1);
+          if (!list.length) pendingRows.delete(tid);
+          break;
+        }
+      }
     }
+    heldRows--;
   }
 }
 
 function clearRailLog() {
-  railLog.replaceChildren();
-  railSections.clear();
-  foldedSections.clear();
+  for (const row of railRows.values()) row.querySelector(".rail-thread-body")?.replaceChildren();
+  for (const row of railClosedRows.values()) row.querySelector(".rail-thread-body")?.replaceChildren();
+  pendingRows.clear();
+  expandedCards.clear();
   actEls.clear();
   heldRows = 0;
   // A live row can sit in a card, so a replay empties those boxes as well as the log.
@@ -7806,12 +7966,16 @@ function runningCount() {
 }
 
 /**
- * Where a running row is read: its thread's card while that card is here, and the rail strip when it is
- * not, so a run always has somewhere to be seen. Moving a node that is already home is not moving it.
+ * Where a running row is read: its thread's canvas card live strip while that card is open, and
+ * off-DOM in `actEls` when its card is closed.
  */
 function homeRunning(node) {
   const card = cardOfThread(node.dataset.thread);
-  const box = card ? card.live : railNow;
+  if (!card) {
+    if (node.parentElement) node.remove();
+    return;
+  }
+  const box = card.live;
   if (node.parentElement !== box) box.prepend(node);
 }
 
@@ -7842,27 +8006,44 @@ function applyActivity(row) {
   }
   const card = row.status === "running" ? cardOfThread(row.thread?.id) : null;
   const node = actRow(row, card !== null);
-  // The row carries when it arrived, so trimming can find the oldest one without trusting the order
-  // of the sections, which the rail reorders to keep a child under its master.
+  // The row carries when it arrived, so trimming can find the oldest one.
   node.dataset.seq = String(++railSeq);
-  if (previous) previous.remove();
+  if (previous) {
+    const wasSettled = previous.dataset.status !== "running";
+    if (previous.parentElement) {
+      previous.remove();
+    } else if (wasSettled) {
+      for (const [tid, list] of pendingRows) {
+        const idx = list.indexOf(previous);
+        if (idx >= 0) {
+          list.splice(idx, 1);
+          if (!list.length) pendingRows.delete(tid);
+          break;
+        }
+      }
+    }
+    if (wasSettled) heldRows = Math.max(0, heldRows - 1);
+  }
   actEls.set(row.id, node);
   if (row.status === "running") {
     homeRunning(node);
   } else {
-    const section = railSection(row);
-    section.body.prepend(node);
-    section.at = railSeq;
-    section.head.children[2].textContent = String(section.body.childElementCount);
-    // The thread that just spoke goes on top, so a board with many threads reads like a stack of
-    // conversations rather than one long line of tool calls. A child goes under its master instead.
-    orderRail();
-    heldRows++;
-    trimRail();
+    const threadId = row.thread?.id || "";
+    const ownerRow = cardRowFor(threadId);
+    const body = ownerRow && !ownerRow.classList.contains("no-log") ? ownerRow.querySelector(".rail-thread-body") : null;
+    if (body) {
+      body.prepend(node);
+    } else if (threadId) {
+      const held = pendingRows.get(threadId) ?? [];
+      held.push(node);
+      pendingRows.set(threadId, held);
+    }
+    if (body || threadId) {
+      heldRows++;
+      trimRail();
+    }
   }
   paintLive();
-  const running = runningCount();
-  railRunning.textContent = running ? String(running) : "";
   syncTicker();
 }
 
@@ -9614,8 +9795,8 @@ const SHORTCUTS = [
     rows: [
       { keys: "ctrl", does: "is ⌘ on a Mac, wherever this list says ctrl" },
       { keys: "f", does: "open the files drawer, and press it again to roll it up" },
+      { keys: "ctrl+f", does: "open the search drawer and focus its search field" },
       { keys: "a", does: "open the activity drawer, and press it again to roll it up" },
-      { keys: "c", does: "open the cards drawer, and press it again to roll it up" },
       { keys: "d", does: "open the source control drawer, and press it again to roll it up" },
       { keys: "shift+f", does: "fit every card on the screen" },
       { keys: "0", does: "back to real size, 100%" },
@@ -9624,12 +9805,14 @@ const SHORTCUTS = [
       { keys: "o", does: "flip the thread order, newest first or oldest first" },
       { keys: "g", does: "roll the git graph down, and press it again to roll it up" },
       { keys: "x", does: "roll the terminal drawer up from the bottom, and press it again to roll it down" },
+      { keys: "k", does: "roll the kontainer topology down, and press it again to roll it up" },
       { keys: "one letter per plugin", does: "open that plugin's panel — assigned in the crossroads settings under plugins" },
       { keys: "t", does: "start a new thread, on a board of threads with no card selected" },
       { keys: "r", does: "name the card you are reading in the message you were writing" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
       { keys: "q", does: "close the card you are reading" },
-      { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the plugin panel, then the git graph, then the terminal, then the files drawer, or with nothing open, let go of the selected card" },
+      { keys: "delete", does: "delete the thread card you are reading — it first says what would go" },
+      { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the plugin panel, then the git graph, then the kontainer topology, then the terminal, then the files drawer, or with nothing open, let go of the selected card" },
       { keys: "ctrl+z", does: "undo a close and put the card back" },
       { keys: "ctrl+m", does: "cycle the mode of the card you are reading: agent, plan, boss, discuss, then back on" },
     ],
@@ -9749,7 +9932,7 @@ function paintShortcuts() {
  * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too, and so does
  * a plugin's panel, whose page is the only thing the keyboard can reach while it is down.
  */
-const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen();
+const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen() || kontainerDrawer.isOpen();
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
@@ -11119,6 +11302,8 @@ const exState = {
   folders: new Map(),
   expanded: new Set([""]),
   filter: "",
+  findHidden: (() => { try { return localStorage.getItem("board.exShowHidden") !== "0"; } catch { return true; } })(),
+  find: { seq: 0, entries: [], total: 0, next: null, scanTruncated: false, scanned: 0, loading: false, error: "", warnings: [] },
   sel: explorerCore.selection(),
   clip: explorerCore.clipboard(),
   theme: null,
@@ -11202,6 +11387,8 @@ async function exLoad(dir, { quiet = false } = {}) {
           exTitleEl.textContent = label;
         }
         exTitleEl.title = exState.root || label;
+        // The search head names the same folder, so it follows the root once it is known.
+        srPaintTitle();
       }
       exPaint();
       after = page.next ?? "";
@@ -11254,19 +11441,18 @@ async function exRefreshTree() {
   exPaint();
 }
 
-/** The rows on screen, in the order they are drawn, filter included. */
+/** The rows on screen, in the order they are drawn, filter included. A name search draws its own rows. */
 function exVisibleRows() {
   const needle = exState.filter.trim().toLowerCase();
+  if (needle) return exState.find.entries.map((entry) => ({ entry, level: 0 }));
   const rows = [];
   const seen = new Set([""]);
   const walk = (dir, level) => {
     const listing = exState.folders.get(dir);
     if (!listing || listing.state === "new") return;
     for (const entry of listing.entries) {
-      const hit = !needle || entry.name.toLowerCase().includes(needle);
-      if (!hit) continue;
       rows.push({ entry, level });
-      const open = entry.dir && (exState.expanded.has(entry.path) || Boolean(needle));
+      const open = entry.dir && exState.expanded.has(entry.path);
       if (!open || seen.has(entry.path)) continue;
       seen.add(entry.path);
       if (exState.folders.has(entry.path)) walk(entry.path, level + 1);
@@ -11434,6 +11620,172 @@ function exDraftRow(dir) {
   return row;
 }
 
+// ---------- finding names in every folder ----------------------------------
+let exFindTimer = null;
+let exFindPress = { path: "", at: 0 };
+
+/** The name search set aside: its ticket moves on, so a reply already in the air is dropped. */
+function exFindClear() {
+  exState.find = { seq: exState.find.seq + 1, entries: [], total: 0, next: null, scanTruncated: false, scanned: 0, loading: false, error: "", warnings: [] };
+}
+
+/** One page of names from every folder. `from` is how many the drawer already holds. */
+async function exFindPage(seq, from) {
+  const needle = exState.filter.trim();
+  if (!needle || seq !== exState.find.seq) return;
+  exState.find.loading = true;
+  exPaint();
+  try {
+    const query = new URLSearchParams({ workspace, q: needle, hidden: exState.findHidden ? "1" : "0", from: String(from), limit: "200" });
+    const response = await fetch(`/files/find?${query.toString()}`);
+    if (seq !== exState.find.seq) return;
+    if (!response.ok) throw new Error((await response.text()).trim().slice(0, 160) || response.statusText);
+    const page = await response.json();
+    if (seq !== exState.find.seq) return;
+    const seen = new Set(exState.find.entries.map((entry) => entry.path));
+    for (const raw of Array.isArray(page?.entries) ? page.entries : []) {
+      if (!raw?.path || seen.has(raw.path)) continue;
+      seen.add(raw.path);
+      exState.find.entries.push({
+        name: String(raw.name ?? raw.path.slice(raw.path.lastIndexOf("/") + 1)),
+        path: raw.path,
+        dir: Boolean(raw.dir),
+        size: Number(raw.size) || 0,
+        mtime: Number(raw.mtime) || 0,
+        link: Boolean(raw.link),
+        git: "",
+      });
+    }
+    exState.find.total = Number(page?.total) || exState.find.entries.length;
+    exState.find.next = page?.next ?? null;
+    exState.find.scanTruncated = Boolean(page?.scanTruncated);
+    exState.find.scanned = Number(page?.scanned) || 0;
+    exState.find.warnings = Array.isArray(page?.settingsWarnings) ? page.settingsWarnings : [];
+    exState.find.error = "";
+  } catch (error) {
+    if (seq !== exState.find.seq) return;
+    exState.find.error = error.message || String(error);
+  }
+  exState.find.loading = false;
+  exPaint();
+}
+
+/** A fresh name search from the first page, chunk by chunk as the drawer scrolls. */
+async function exFindRun() {
+  const needle = exState.filter.trim();
+  if (!needle) {
+    exFindClear();
+    exPaint();
+    return;
+  }
+  exState.find.seq += 1;
+  exState.find.entries = [];
+  exState.find.total = 0;
+  exState.find.next = null;
+  exState.find.error = "";
+  await exFindPage(exState.find.seq, 0);
+}
+
+function exFindMore() {
+  if (!exState.find.next || exState.find.loading) return;
+  void exFindPage(exState.find.seq, Number(exState.find.next));
+}
+
+let exRevealTimer = null;
+let exRevealSeq = 0;
+
+/**
+ * The path in the tree: every folder above it open and read, the row selected. The filter that
+ * searched for it is cleared a beat later, not at once: clearing it now repaints the tree over the
+ * result row before a second press inside the press-again window could open it, and that press
+ * would land on whatever tree row sits under the cursor instead.
+ */
+async function exReveal(path, { expand = false } = {}) {
+  const clean = explorerCore.cleanPath(path);
+  if (!clean) return;
+  const seq = ++exRevealSeq;
+  clearTimeout(exRevealTimer);
+  for (const dir of explorerCore.ancestors(clean)) {
+    exState.expanded.add(dir);
+    if (exFolder(dir).state === "new") await exLoad(dir, { quiet: true });
+  }
+  const held = exEntry(clean);
+  if (expand && held?.dir) {
+    exState.expanded.add(clean);
+    if (exFolder(clean).state === "new") await exLoad(clean, { quiet: true });
+  }
+  explorerCore.select(exState.sel, clean);
+  exPaint();
+  if (!exEntry(clean)) footNote(`${clean} is gone from the folder`, true);
+  const needle = exState.filter;
+  exRevealTimer = setTimeout(() => {
+    // A new query or a new reveal took the field back: the tree stays as it is.
+    if (seq !== exRevealSeq || exState.filter !== needle) return;
+    exState.filter = "";
+    exFilterEl.value = "";
+    exFindClear();
+    exPaint();
+    exTreeEl.querySelector(`.ex-row[data-path="${CSS.escape(clean)}"]`)?.scrollIntoView({ block: "nearest" });
+    if (document.activeElement === exFilterEl || exTreeEl.contains(document.activeElement)) exTreeEl.focus();
+  }, 450);
+}
+
+/** One name-search row: the name, and the folder it lives in dim beside it. */
+function exFindRowEl(entry) {
+  const selected = exState.sel.paths.has(entry.path);
+  const row = el("div", `ex-row${entry.dir ? " dir" : " file"}${selected ? " sel" : ""}${exState.sel.lead === entry.path ? " lead" : ""}`);
+  row.dataset.path = entry.path;
+  row.dataset.dir = entry.dir ? "1" : "";
+  row.setAttribute("role", "treeitem");
+  row.title = entry.path;
+  row.setAttribute("aria-level", "1");
+  row.setAttribute("aria-selected", selected ? "true" : "false");
+  row.style.setProperty("--depth", "0");
+  row.append(el("span", "ex-twist blank"));
+  const icon = el("span", "ex-icon");
+  const seti = explorerCore.icon(exState.theme, entry);
+  if (entry.dir) icon.className = "ex-icon codicon codicon-folder";
+  else if (seti) {
+    icon.className = "ex-icon seti";
+    icon.textContent = seti.glyph;
+    if (seti.color) icon.style.color = seti.color;
+  } else icon.className = "ex-icon codicon codicon-file";
+  row.append(icon);
+  const label = el("span", "ex-label");
+  label.textContent = entry.name;
+  row.append(label);
+  const parent = explorerCore.parentOf(entry.path);
+  if (parent) {
+    const where = el("span", "ex-find-where");
+    where.textContent = `${parent}/`;
+    row.append(where);
+  }
+  row.addEventListener("click", () => {
+    const press = explorerCore.pressAgain(exFindPress, entry.path, Date.now());
+    exFindPress = press.next;
+    if (press.repeated) {
+      if (entry.dir) return void exReveal(entry.path, { expand: true });
+      const target = explorerCore.editTarget(entry);
+      if (target) return void exEditOpen(entry.path, target);
+      return void exReveal(entry.path);
+    }
+    void exReveal(entry.path);
+  });
+  row.addEventListener("contextmenu", async (event) => {
+    event.preventDefault();
+    await exReveal(entry.path);
+    exOpenMenu([entry.path], event.clientX, event.clientY);
+  });
+  row.setAttribute("draggable", "true");
+  row.addEventListener("dragstart", (event) => {
+    explorerCore.select(exState.sel, entry.path);
+    event.dataTransfer.effectAllowed = "copyMove";
+    event.dataTransfer.setData(explorerCore.PATH_MIME, explorerCore.dragPayload(workspace, [{ path: entry.path, dir: entry.dir }]));
+    event.dataTransfer.setData("text/plain", entry.path);
+  });
+  return row;
+}
+
 /** Paint the tree, and put the caret back in whichever name is being typed. */
 function exPaint() {
   const rows = [];
@@ -11441,6 +11793,32 @@ function exPaint() {
     const note = el("div", "ex-note bad");
     note.textContent = exState.trouble;
     rows.push(note);
+  }
+  const needle = exState.filter.trim().toLowerCase();
+  if (needle) {
+    const find = exState.find;
+    const note = el("div", find.error ? "ex-note bad" : "ex-note");
+    if (find.error) note.textContent = find.error;
+    else if (find.loading && !find.entries.length) note.textContent = "searching every folder…";
+    else if (!find.entries.length) note.textContent = `no name holds “${exState.filter.trim()}”`;
+    else {
+      note.textContent = `${find.total} name${find.total === 1 ? "" : "s"} hold “${exState.filter.trim()}”${find.loading ? "…" : ""}${find.scanTruncated ? ` — stopped after ${find.scanned} entries scanned` : ""}`;
+    }
+    rows.push(note);
+    for (const warning of find.warnings) {
+      const held = el("div", "ex-note bad");
+      held.textContent = warning;
+      rows.push(held);
+    }
+    const tree = find.entries.map((entry) => exFindRowEl(entry));
+    if (find.next) {
+      const more = el("div", "ex-row ex-more");
+      more.textContent = find.loading ? "loading more…" : `${find.total - find.entries.length} more — load more`;
+      more.addEventListener("click", () => exFindMore());
+      tree.push(more);
+    }
+    exTreeEl.replaceChildren(...rows, ...tree);
+    return;
   }
   const listing = exState.folders.get("");
   if (!listing || listing.state === "new") {
@@ -11453,7 +11831,6 @@ function exPaint() {
     rows.push(note);
   }
   const tree = [];
-  const needle = exState.filter.trim().toLowerCase();
   const seen = new Set([""]);
   const walk = (dir, level) => {
     const held = exState.folders.get(dir);
@@ -11466,9 +11843,8 @@ function exPaint() {
     }
     if (exState.draft?.dir === dir) tree.push(exDraftRow(dir));
     for (const entry of held.entries) {
-      if (needle && !entry.name.toLowerCase().includes(needle)) continue;
       tree.push(exRowEl(entry, level));
-      const open = entry.dir && (exState.expanded.has(entry.path) || Boolean(needle));
+      const open = entry.dir && exState.expanded.has(entry.path);
       if (!open || seen.has(entry.path)) continue;
       seen.add(entry.path);
       if (!exState.folders.has(entry.path)) continue;
@@ -12600,7 +12976,474 @@ exTreeEl.addEventListener("keydown", (event) => {
 // ---------- what the toolbar and the filter do ---------------------------
 exFilterEl.addEventListener("input", () => {
   exState.filter = exFilterEl.value;
+  clearTimeout(exFindTimer);
+  clearTimeout(exRevealTimer);
+  if (!exState.filter.trim()) {
+    exFindClear();
+    exPaint();
+    return;
+  }
+  exState.find.entries = [];
+  exState.find.loading = true;
   exPaint();
+  exFindTimer = setTimeout(() => void exFindRun(), 150);
+});
+
+const exHiddenToggleEl = document.getElementById("exHiddenToggle");
+function exPaintHiddenToggle() {
+  if (!exHiddenToggleEl) return;
+  exHiddenToggleEl.classList.toggle("on", exState.findHidden);
+  exHiddenToggleEl.setAttribute("aria-pressed", exState.findHidden ? "true" : "false");
+}
+exHiddenToggleEl?.addEventListener("click", () => {
+  exState.findHidden = !exState.findHidden;
+  try {
+    localStorage.setItem("board.exShowHidden", exState.findHidden ? "1" : "0");
+  } catch {}
+  exPaintHiddenToggle();
+  if (exState.filter.trim()) void exFindRun();
+});
+exPaintHiddenToggle();
+
+// The next chunk of names loads as the results scroll to their end, like the tree loads its pages.
+exTreeEl.addEventListener("scroll", () => {
+  if (!exState.filter.trim() || !exState.find.next || exState.find.loading) return;
+  if (exTreeEl.scrollTop + exTreeEl.clientHeight >= exTreeEl.scrollHeight - 40) exFindMore();
+});
+
+// ---------- the search drawer ----------------------------------------------
+// Full-text search over file contents, and a batch replace over the files it named. The drawer is
+// built in, so a hit opens in the files editor and a replace writes through the same routes a save
+// does; an external plugin panel could do neither. A replace never lands without the confirm sheet,
+// and it names what undo exists before it asks: a repository, or nothing.
+const srQueryEl = document.getElementById("srQuery");
+const srReplaceEl = document.getElementById("srReplace");
+const srReplaceRow = document.getElementById("srReplaceRow");
+const srReplaceToggleEl = document.getElementById("srReplaceToggle");
+const srReplaceBtn = document.getElementById("srReplaceBtn");
+const srScopeEl = document.getElementById("srScope");
+const srHiddenToggleEl = document.getElementById("srHiddenToggle");
+const srStatusEl = document.getElementById("srStatus");
+const srCountEl = document.getElementById("srCount");
+const srListEl = document.getElementById("srList");
+const srCaseEl = document.getElementById("srCase");
+const srWordEl = document.getElementById("srWord");
+const srRegexEl = document.getElementById("srRegex");
+
+const srTitleEl = document.getElementById("srTitle");
+
+const srState = {
+  seq: 0,
+  root: "",
+  home: "",
+  case: false,
+  word: false,
+  regex: false,
+  files: [],
+  totalFiles: 0,
+  totalMatches: 0,
+  repo: false,
+  loading: false,
+  error: "",
+  warnings: [],
+  truncated: false,
+  scanTruncated: false,
+  skippedBinary: 0,
+  skippedLarge: 0,
+  collapsed: new Set(),
+  unchecked: new Set(),
+  scopeChecked: false,
+  replaceOpen: false,
+  replacing: false,
+  replacedNote: "",
+  failedNote: "",
+};
+let srTimer = null;
+
+/** The files a replace would write: every editable file shown, or only the ticked ones. */
+function srTargets() {
+  return srState.files.filter((file) => file.editable !== false && (!srState.scopeChecked || !srState.unchecked.has(file.path)));
+}
+
+/** What one match becomes, for the preview: the replacement with a regular expression's `$` kept. */
+function srPreviewText(hit) {
+  const query = srQueryEl.value;
+  const replacement = srReplaceEl.value;
+  if (!srState.regex) return replacement;
+  const body = srState.word ? `\\b(?:${query})\\b` : query;
+  const flags = srState.case ? "y" : "iy";
+  try {
+    const sticky = new RegExp(body, flags);
+    sticky.lastIndex = hit.matchStart;
+    const match = sticky.exec(hit.text);
+    if (!match || match.index !== hit.matchStart) return replacement;
+    return match[0].replace(new RegExp(body, srState.case ? "" : "i"), replacement);
+  } catch {
+    return replacement;
+  }
+}
+
+/** One grouped file: the name and its count, then its snippet lines with the match picked out. */
+/** The head names the folder being searched, the way the files drawer's does: shortened to `~` inside
+ *  the home folder, with the folder's own name bold after the path to it. */
+function srPaintTitle() {
+  const root = srState.root || exState.root;
+  const home = srState.home || exState.home;
+  const label = explorerCore.shortPath(root, home) || root || "search";
+  srTitleEl.textContent = "";
+  const slash = label.lastIndexOf("/");
+  if (slash >= 0 && slash < label.length - 1) {
+    srTitleEl.append(label.slice(0, slash + 1));
+    const leaf = document.createElement("b");
+    leaf.textContent = label.slice(slash + 1);
+    srTitleEl.append(leaf);
+  } else {
+    srTitleEl.textContent = label;
+  }
+  srTitleEl.title = root || label;
+}
+
+function srPaint() {
+  srPaintTitle();
+  srCaseEl.classList.toggle("on", srState.case);
+  srCaseEl.setAttribute("aria-pressed", srState.case ? "true" : "false");
+  srWordEl.classList.toggle("on", srState.word);
+  srWordEl.setAttribute("aria-pressed", srState.word ? "true" : "false");
+  srRegexEl.classList.toggle("on", srState.regex);
+  srRegexEl.setAttribute("aria-pressed", srState.regex ? "true" : "false");
+  srHiddenToggleEl.classList.toggle("on", exState.findHidden);
+  srHiddenToggleEl.setAttribute("aria-pressed", exState.findHidden ? "true" : "false");
+  srReplaceRow.hidden = !srState.replaceOpen;
+  srReplaceToggleEl.classList.toggle("on", srState.replaceOpen);
+  srReplaceToggleEl.setAttribute("aria-pressed", srState.replaceOpen ? "true" : "false");
+  srScopeEl.setAttribute("aria-checked", srState.scopeChecked ? "true" : "false");
+  const targets = srTargets();
+  const targetMatches = targets.reduce((sum, file) => sum + file.count, 0);
+  srReplaceBtn.disabled = srState.replacing || srState.loading || !targets.length;
+  srReplaceBtn.textContent = srState.replacing ? "replacing…" : targets.length ? `replace ${targetMatches} in ${targets.length} file${targets.length === 1 ? "" : "s"}` : "replace";
+  const status = srStatusEl;
+  status.classList.toggle("bad", Boolean(srState.error));
+  if (srState.error) status.textContent = srState.error;
+  else if (srState.replacedNote) status.textContent = srState.replacedNote;
+  else if (srState.loading) status.textContent = "searching…";
+  else if (!srState.files.length) status.textContent = srQueryEl.value.trim() ? `no text holds “${srQueryEl.value.trim()}”` : "";
+  else {
+    const capped = srState.truncated || srState.scanTruncated ? " (capped)" : "";
+    status.textContent = `${srState.totalMatches} result${srState.totalMatches === 1 ? "" : "s"} in ${srState.totalFiles} file${srState.totalFiles === 1 ? "" : "s"}${capped}`;
+  }
+  srCountEl.textContent = srState.failedNote || (srState.files.length ? `${srState.totalMatches} matches · ${srState.totalFiles} files${srState.skippedBinary ? ` · ${srState.skippedBinary} binary skipped` : ""}${srState.skippedLarge ? ` · ${srState.skippedLarge} large skipped` : ""}` : "nothing searched");
+  const rows = [];
+  if (srState.failedNote) {
+    const note = el("div", "ex-note bad");
+    note.textContent = srState.failedNote;
+    rows.push(note);
+  }
+  for (const warning of srState.warnings) {
+    const note = el("div", "ex-note bad");
+    note.textContent = warning;
+    rows.push(note);
+  }
+  for (const file of srState.files) {
+    const collapsed = srState.collapsed.has(file.path);
+    const dim = srState.scopeChecked && srState.unchecked.has(file.path);
+    const head = el("div", `ex-row sr-file${dim ? " dim" : ""}`);
+    head.dataset.path = file.path;
+    head.setAttribute("role", "treeitem");
+    head.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    head.title = file.path;
+    head.tabIndex = -1;
+    const twist = el("span", `ex-twist codicon ${collapsed ? "codicon-chevron-right" : "codicon-chevron-down"}`);
+    head.append(twist);
+    const icon = el("span", "ex-icon");
+    const seti = explorerCore.icon(exState.theme, { name: file.path.slice(file.path.lastIndexOf("/") + 1), dir: false });
+    if (seti) {
+      icon.className = "ex-icon seti";
+      icon.textContent = seti.glyph;
+      if (seti.color) icon.style.color = seti.color;
+    } else icon.className = "ex-icon codicon codicon-file";
+    head.append(icon);
+    if (srState.scopeChecked) {
+      const box = el("input", "sr-chk");
+      box.type = "checkbox";
+      box.checked = !srState.unchecked.has(file.path);
+      box.title = `replace in ${file.path}`;
+      box.addEventListener("click", (event) => event.stopPropagation());
+      box.addEventListener("change", () => {
+        if (box.checked) srState.unchecked.delete(file.path);
+        else srState.unchecked.add(file.path);
+        srPaint();
+      });
+      head.append(box);
+    }
+    const label = el("span", "ex-label");
+    label.textContent = file.path;
+    head.append(label);
+    const badge = el("span", "sr-badge");
+    badge.textContent = String(file.count);
+    head.append(badge);
+    head.addEventListener("click", () => {
+      if (srState.collapsed.has(file.path)) srState.collapsed.delete(file.path);
+      else srState.collapsed.add(file.path);
+      srPaint();
+    });
+    head.addEventListener("dblclick", () => void srOpenFile(file, file.matches[0]?.line ?? 1));
+    rows.push(head);
+    if (collapsed) continue;
+    for (const hit of file.matches) {
+      const row = el("div", "sr-snip");
+      row.tabIndex = -1;
+      row.title = `${file.path}:${hit.line}`;
+      row.append(el("span", "sr-line"));
+      row.firstChild.textContent = String(hit.line);
+      const text = el("span", "sr-text");
+      const before = String(hit.text).slice(0, hit.matchStart);
+      const matched = String(hit.text).slice(hit.matchStart, hit.matchEnd);
+      const after = String(hit.text).slice(hit.matchEnd);
+      text.append(document.createTextNode(before));
+      if (srState.replaceOpen && srReplaceEl.value !== "") {
+        const del = el("span", "sr-del");
+        del.textContent = matched;
+        const ins = el("span", "sr-ins");
+        ins.textContent = srPreviewText(hit);
+        text.append(del, ins);
+      } else {
+        const mark = el("mark");
+        mark.textContent = matched;
+        text.append(mark);
+      }
+      text.append(document.createTextNode(after));
+      row.append(text);
+      row.addEventListener("click", () => void srOpenFile(file, hit.line));
+      rows.push(row);
+    }
+  }
+  srListEl.replaceChildren(...rows);
+}
+
+/** One search over file contents. A reply from a query already left behind is dropped. */
+async function srRun() {
+  const query = srQueryEl.value;
+  if (!query.trim()) {
+    srState.files = [];
+    srState.totalFiles = 0;
+    srState.totalMatches = 0;
+    srState.error = "";
+    srPaint();
+    return;
+  }
+  const seq = ++srState.seq;
+  srState.loading = true;
+  srState.error = "";
+  srState.replacedNote = "";
+  srState.failedNote = "";
+  srPaint();
+  try {
+    const params = new URLSearchParams({
+      workspace,
+      q: query,
+      case: srState.case ? "1" : "0",
+      word: srState.word ? "1" : "0",
+      regex: srState.regex ? "1" : "0",
+      hidden: exState.findHidden ? "1" : "0",
+    });
+    const response = await fetch(`/files/search?${params.toString()}`);
+    if (seq !== srState.seq) return;
+    const text = (await response.text()).trim();
+    if (!response.ok) throw new Error(text.slice(0, 160) || response.statusText);
+    const data = JSON.parse(text);
+    if (typeof data.root === "string" && data.root) srState.root = data.root;
+    if (typeof data.home === "string" && data.home) srState.home = data.home;
+    srState.files = Array.isArray(data.files) ? data.files : [];
+    srState.totalFiles = Number(data.totalFiles) || srState.files.length;
+    srState.totalMatches = Number(data.totalMatches) || 0;
+    srState.repo = Boolean(data.repo);
+    srState.truncated = Boolean(data.truncated);
+    srState.scanTruncated = Boolean(data.scanTruncated);
+    srState.skippedBinary = Number(data.skippedBinary) || 0;
+    srState.skippedLarge = Number(data.skippedLarge) || 0;
+    srState.warnings = Array.isArray(data.settingsWarnings) ? data.settingsWarnings : [];
+    srState.collapsed = new Set();
+    srState.unchecked = new Set();
+  } catch (error) {
+    if (seq !== srState.seq) return;
+    srState.error = error.message || String(error);
+  }
+  srState.loading = false;
+  srPaint();
+}
+
+/** A hit in the editor, at the line the match sits on. */
+async function srOpenFile(file, line) {
+  const target = explorerCore.editTarget({ dir: false, link: file.editable === false });
+  await exEditOpen(file.path, target);
+  if (!exEditorEl.hidden && exEditorDoc.path === file.path) exEditorPreview.setLine(line);
+}
+
+/** The question a batch replace asks, on the confirm sheet the permanent delete uses. */
+function srAskReplace(targets, matches) {
+  return new Promise((resolve) => {
+    const prior = document.activeElement;
+    const yesLabel = exConfirmYes.textContent;
+    const noLabel = exConfirmNo.textContent;
+    exConfirmTitle.textContent = `replace in ${targets.length} file${targets.length === 1 ? "" : "s"}`;
+    const note = el("p", "act-note");
+    const capped = srState.truncated || srState.scanTruncated ? " Only the files shown will be changed: the search was capped." : "";
+    note.textContent = `Replace ${matches} match${matches === 1 ? "" : "es"} of “${srQueryEl.value}” with “${srReplaceEl.value || "(nothing — the matches are deleted)"}” across ${targets.length} file${targets.length === 1 ? "" : "s"}.${capped}`;
+    const undo = el("p", "act-note");
+    undo.textContent = srState.repo
+      ? "There is no undo in the drawer. This workspace is a git repository, so tracked files can be reverted in Source Control or with git checkout."
+      : "There is no undo. This folder is not a git repository, so replaced files cannot be reverted automatically.";
+    const list = el("div", "cut");
+    const shown = targets.slice(0, 50).map((file) => `${file.path} (${file.count})`);
+    list.textContent = shown.join("\n") + (targets.length > 50 ? `\n…and ${targets.length - 50} more` : "");
+    exConfirmBody.replaceChildren(note, undo, list);
+    exConfirmYes.textContent = `replace ${matches} match${matches === 1 ? "" : "es"}`;
+    exConfirmNo.textContent = "cancel";
+    exConfirmEl.hidden = false;
+    exConfirmYes.focus();
+    const trap = (event) => {
+      if (event.key !== "Tab") return;
+      const stops = [...exConfirmEl.querySelectorAll("button:not([disabled])")];
+      if (!stops.length) return;
+      event.preventDefault();
+      const at = stops.indexOf(document.activeElement);
+      const step = event.shiftKey ? -1 : 1;
+      stops[(at + step + stops.length) % stops.length].focus();
+    };
+    exConfirmEl.addEventListener("keydown", trap);
+    const done = (answer) => {
+      exConfirmEl.removeEventListener("keydown", trap);
+      exConfirmEl.hidden = true;
+      exConfirmYes.onclick = null;
+      exConfirmNo.onclick = null;
+      exConfirmYes.textContent = yesLabel;
+      exConfirmNo.textContent = noLabel;
+      if (prior instanceof HTMLElement && document.contains(prior)) prior.focus();
+      else srQueryEl.focus();
+      resolve(answer);
+    };
+    exConfirmYes.onclick = () => done(true);
+    exConfirmNo.onclick = () => done(false);
+  });
+}
+
+/** The replace, confirmed: write the targets, say what landed and what did not, search again. */
+async function srDoReplace() {
+  const targets = srTargets();
+  if (!targets.length || srState.replacing) return;
+  const matches = targets.reduce((sum, file) => sum + file.count, 0);
+  if (!(await srAskReplace(targets, matches))) return;
+  srState.replacing = true;
+  srPaint();
+  try {
+    const outcome = await exPost("/files/replace", {
+      q: srQueryEl.value,
+      replacement: srReplaceEl.value,
+      case: srState.case,
+      word: srState.word,
+      regex: srState.regex,
+      files: targets.map((file) => ({ path: file.path, mtime: file.mtime, size: file.size })),
+    });
+    if (outcome.data && typeof outcome.data === "object" && Array.isArray(outcome.data.files)) {
+      const note = `replaced ${outcome.data.replacedMatches} match${outcome.data.replacedMatches === 1 ? "" : "es"} in ${outcome.data.replacedFiles} file${outcome.data.replacedFiles === 1 ? "" : "s"}`;
+      const failed = Array.isArray(outcome.data.failed) ? outcome.data.failed : [];
+      const failedNote = failed.length ? `${note}, ${failed.length} failed: ${failed.slice(0, 3).map((one) => `${one.path} — ${one.error}`).join("; ")}${failed.length > 3 ? `; and ${failed.length - 3} more` : ""}` : "";
+      await srRun();
+      srState.replacedNote = note;
+      srState.failedNote = failedNote;
+      srPaint();
+      footNote(failed.length ? failedNote : note, Boolean(failed.length));
+    } else {
+      srState.error = outcome.text || `the daemon answered ${outcome.status}`;
+      srPaint();
+    }
+  } catch (error) {
+    srState.error = error.message || String(error);
+    srPaint();
+  }
+  srState.replacing = false;
+  srPaint();
+}
+
+function srQueueRun() {
+  clearTimeout(srTimer);
+  srTimer = setTimeout(() => void srRun(), 250);
+}
+
+srQueryEl.addEventListener("input", srQueueRun);
+srQueryEl.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    clearTimeout(srTimer);
+    void srRun();
+  }
+});
+srReplaceEl.addEventListener("input", () => srPaint());
+srReplaceEl.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !srReplaceBtn.disabled) {
+    event.preventDefault();
+    void srDoReplace();
+  }
+});
+for (const [button, key] of [[srCaseEl, "case"], [srWordEl, "word"], [srRegexEl, "regex"]]) {
+  button.addEventListener("click", () => {
+    srState[key] = !srState[key];
+    srPaint();
+    if (srQueryEl.value.trim()) void srRun();
+  });
+}
+srReplaceToggleEl.addEventListener("click", () => {
+  srState.replaceOpen = !srState.replaceOpen;
+  srPaint();
+  if (srState.replaceOpen) srReplaceEl.focus();
+});
+srScopeEl.addEventListener("click", () => {
+  srState.scopeChecked = !srState.scopeChecked;
+  srPaint();
+});
+srReplaceBtn.addEventListener("click", () => void srDoReplace());
+srHiddenToggleEl.addEventListener("click", () => {
+  exState.findHidden = !exState.findHidden;
+  try {
+    localStorage.setItem("board.exShowHidden", exState.findHidden ? "1" : "0");
+  } catch {}
+  exPaintHiddenToggle();
+  srPaint();
+  if (srQueryEl.value.trim()) void srRun();
+});
+document.getElementById("srRefresh")?.addEventListener("click", () => void srRun());
+document.getElementById("srCollapse")?.addEventListener("click", () => {
+  for (const file of srState.files) srState.collapsed.add(file.path);
+  srPaint();
+});
+srListEl.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  const rows = [...srListEl.querySelectorAll(".sr-file, .sr-snip")];
+  if (!rows.length) return;
+  event.preventDefault();
+  const at = rows.indexOf(document.activeElement);
+  const next = rows[Math.max(0, Math.min(rows.length - 1, at + (event.key === "ArrowDown" ? 1 : -1)))];
+  next?.focus();
+});
+srPaint();
+
+// `ctrl+f` opens the search drawer and puts the caret in its field. It never takes the key from a
+// field being typed in, from the editor a file is open in, or from a panel or sheet already up.
+document.addEventListener("keydown", (event) => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+  if (event.key.toLowerCase() !== "f") return;
+  const inSearch = document.activeElement instanceof Element && document.activeElement.closest("#drawerSearch");
+  if (!inSearch) {
+    if (typingSomewhere()) return;
+    if (!exEditorEl.hidden) return;
+    if (panelUp() || openSheet() || !atPick.hidden || !exConfirmEl.hidden || !scDiffEl.hidden) return;
+    if (gitDrawer.isOpen() || terminalDrawer.isOpen() || pluginPanel.isOpen()) return;
+    if (exState.menu || exState.renaming || exState.draft) return;
+  }
+  event.preventDefault();
+  showDrawer("search");
+  srQueryEl.focus();
+  srQueryEl.select();
 });
 
 document.getElementById("exRefresh").addEventListener("click", () => void exRefreshTree());
@@ -13786,6 +14629,7 @@ const openSheet = () => document.querySelector(".sheet:not([hidden])");
  * open. A menu and a name being typed are.
  */
 const drawerSurface = () =>
+  !actMenuEl.hidden ||
   !scMenuEl.hidden ||
   !scDiffEl.hidden ||
   !exEditorEl.hidden ||
@@ -13805,6 +14649,7 @@ function exOpenSurfaces() {
     create: Boolean(exState.draft),
     sheet: Boolean(sheet),
     git: gitDrawer.isOpen(),
+    kontainer: kontainerDrawer.isOpen(),
     plugin: pluginPanel.isOpen(),
     terminal: terminalDrawer.isOpen(),
     drawer: Boolean(drawerState.open) || dockOpen(),
@@ -13851,6 +14696,7 @@ document.addEventListener("keydown", (event) => {
   // inside its page never reaches this handler, and comes back as the page's own `close` message.
   if (target === "plugin") return pluginPanel.close();
   if (target === "git") return gitDrawer.close();
+  if (target === "kontainer") return kontainerDrawer.handleEscape();
   if (target === "terminal") return terminalDrawer.close();
   // The files drawer is an overlay of the left column, so Escape rolls it up before it lets go of the
   // card the board is reading.
@@ -13900,6 +14746,26 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   replyToCard(record);
+});
+
+// `delete` triggers deleting the card being read, and only that card: it opens the same sheet the
+// trash on its head opens, which previews what the removal would take and offers the remove press —
+// so the key itself never destroys anything. A card with no trash, a note or a question, has nothing
+// behind it to remove, so it has no delete either, the way the × does not go where its button cannot.
+// The guards are the ones `r`, `p` and `q` keep: a field, a panel, a sheet or a drawer surface keeps
+// its own keys, and the key is the forward-delete one alone, never backspace.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Delete" || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (typingSomewhere()) return;
+  if (panelUp() || drawerSurface()) return;
+  if (openSheet() || !atPick.hidden) return;
+  const active = document.querySelector(".card.active");
+  const record = active ? byId.get(active.dataset.id) : null;
+  if (!record) return;
+  const trash = record.card.querySelector(".trash");
+  if (!trash) return;
+  event.preventDefault();
+  void openRemoveSheet(record, trash);
 });
 
 // `ctrl+z` is the undo a close needs: the daemon holds the last cards a close removed, so one key puts
@@ -14022,7 +14888,7 @@ document.addEventListener("keydown", (event) => {
   // A surface of the files drawer and the `@` list are their own: a board letter would move what is
   // out of reach.
   if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
-  // `f`, `a` and `c` are the drawers, and `shift+f` is the fit they took `f` from. One list decides,
+  // `f`, `a` and `d` are the drawers, and `shift+f` is the fit they took `f` from. One list decides,
   // so a letter the drawer owns never also moves the board.
   const letter = explorerCore.boardLetter(event.key, { shift: event.shiftKey });
   if (letter) {
@@ -14096,6 +14962,28 @@ document.addEventListener("keydown", (event) => {
   terminalDrawer.toggle();
 });
 
+// `k` rolls the kontainer topology down over the board. It is the one drawer letter that also rolls its
+// own drawer up, because the topology covers the board and takes the letters for its own filter and
+// tools while it is up: `panelUp` counts it, so this handler is the only place the letter still lands.
+// Every other way round keeps the guards the letters above keep — a field, a panel, a sheet or a
+// drawer's own surface keeps its keys — and the three drawers cover the same board, so the graph and
+// the terminal roll up as the topology comes down.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "k" || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (typingSomewhere()) return;
+  if (kontainerDrawer.isOpen()) {
+    event.preventDefault();
+    kontainerDrawer.close();
+    return;
+  }
+  if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
+  event.preventDefault();
+  closeDrawers();
+  gitDrawer.close();
+  terminalDrawer.close();
+  kontainerDrawer.open();
+});
+
 // ---------- transport ----------------------------------------------------
 // ---------- session header -----------------------------------------------
 const shortNum = (value) => {
@@ -14135,8 +15023,6 @@ function applyMeta(meta) {
   // The label names the workspace this tab belongs to; clicking it goes back to the crossroads,
   // where another one can be opened in a tab of its own.
   const folder = meta.workspace?.name || meta.folder || "session";
-  // The drawer's bar names the same workspace, and only falls back to its id while no name is known.
-  gitDrawer.setName(meta.workspace?.name);
   terminalDrawer.setName(meta.workspace?.name);
   const sess = document.getElementById("sess");
   sess.innerHTML = "";

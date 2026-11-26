@@ -1,6 +1,6 @@
 {
   "name": "pi-studio",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "private": true,
   "description": "A local daemon that owns pi agents: a workspace is a folder, a thread on its board is an agent.",
   "type": "module",
@@ -15,12 +15,12 @@
     "install:local": "node bin/install.mjs",
     "package": "node bin/package-release.mjs",
     "build:plugins": "node bin/build-plugins.mjs",
-    "start": "node server.ts",
+    "start": "node server.ts --host 127.0.0.1 --no-tls",
     "server": "node server.ts --no-open --host 0.0.0.0",
     "check": "node bin/check.mjs",
-    "dev": "node --watch server.ts --no-open",
+    "dev": "node --watch server.ts --no-open --host 127.0.0.1 --no-tls",
     "smoke": "node bin/smoke.mjs",
-    "dev:alt": "node --watch server.ts --no-open --state ~/.pi/agent/state/pi-studio-dev",
+    "dev:alt": "node --watch server.ts --no-open --host 127.0.0.1 --no-tls --state ~/.pi/agent/state/pi-studio-dev",
     "test": "node --test",
     "precheck": "node -e \"if(!require('fs').existsSync('node_modules/typescript/bin/tsc')){console.error('pi-studio: npm run check needs the dev dependency, so run npm ci once. The daemon itself needs nothing.');process.exit(1)}\""
   },

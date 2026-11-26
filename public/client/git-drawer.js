@@ -12,6 +12,9 @@
  * nothing else open. This file says two: `{ source: "pi-studio", type: "focus" }` to hand the page
  * the keyboard, and `{ source: "pi-studio", command: "refresh" }` to ask for a soft reload that keeps
  * the expanded commit and the scroll position.
+ *
+ * The drawer carries no bar of its own: the board header names the open drawer beside the workspace,
+ * and the page's own toolbar carries `open in tab` and `roll up`, so the panel is the page alone.
  */
 
 /**
@@ -24,20 +27,12 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
   const drawer = document.getElementById("gitDrawer");
   const scrim = document.getElementById("gitScrim");
   const frame = document.getElementById("gdFrame");
-  const tabBtn = document.getElementById("gdTab");
-  const closeBtn = document.getElementById("gdClose");
   const btn = document.getElementById("gitBtn");
-  const workspaceLabel = document.getElementById("gdWorkspace");
+  const nameLabel = document.getElementById("openPanelName");
 
-  /**
-   * The bar names the board the way a human knows it. A workspace id is a folder's identity in the
-   * state folder, not something anyone reads, so it is what the bar falls back to before the board has
-   * heard the name.
-   */
-  function setName(name) {
-    workspaceLabel.textContent = `· ${name || workspace}`;
-  }
-  setName("");
+  // The header label is shown only while the drawer is open; the workspace itself already stands
+  // in the header's own button, so the label names the drawer alone.
+  nameLabel.hidden = true;
 
   /** Has the frame ever been pointed at the page. The page is loaded once and kept after that. */
   let loaded = false;
@@ -48,7 +43,6 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
   // cannot answer. The drawer says so in the space the graph would have used.
   if (!workspace) {
     frame.hidden = true;
-    tabBtn.disabled = true;
     const note = document.createElement("p");
     note.className = "gd-note";
     note.textContent = "this board has no folder of its own, so there is no repository to draw";
@@ -93,11 +87,18 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
       scrim.hidden = false;
     },
     afterOpen() {
+      // The label is shared with the search drawer, which writes its own name into it while it is
+      // up: each drawer says its own name on the way up rather than trusting the last writer.
+      nameLabel.textContent = "git graph";
+      nameLabel.hidden = false;
       // The page takes the keyboard once it is alive. Before its first `ready` the board keeps it, so a
       // quick `g` or Escape still reaches the handlers that roll the drawer back up.
       if (ready) takeKeyboard();
       // The page still holds what it last drew, so every roll down asks it for the repository as it stands now.
       if (ready) refreshNow();
+    },
+    afterClose() {
+      nameLabel.hidden = true;
     },
   });
 
@@ -139,11 +140,5 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
     true,
   );
 
-  // The same named window the crossroads uses for boards: asking twice focuses the tab already open.
-  tabBtn.addEventListener("click", () => {
-    window.open(`/git/${encodeURIComponent(workspace)}`, `pi-studio-gitgraph-${workspace}`);
-  });
-  closeBtn.addEventListener("click", () => close());
-
-  return { isOpen: sliding.isOpen, toggle: sliding.toggle, open: sliding.open, close: sliding.close, setName };
+  return { isOpen: sliding.isOpen, toggle: sliding.toggle, open: sliding.open, close: sliding.close };
 }

@@ -89,6 +89,8 @@ type ExDeleteResult = {
 /** Everything the block hands the page, and therefore everything this file may drive. */
 type ExCore = {
 	sortEntries(entries: ExSortable[]): ExSortable[];
+	dotName(name: string): boolean;
+	ancestors(path: string): string[];
 	basename(path: string): string;
 	shortPath(path: string, home: string): string;
 	listing(): ExListing;
@@ -211,8 +213,8 @@ test("f, a and c each open their own drawer, and pressing one again rolls it up"
 	assert.equal(drawers.open, "activity", "opening another rolls the first one up");
 	core.drawerToggle(drawers, "activity");
 	assert.equal(drawers.open, "", "the same key rolls it back up");
-	core.drawerToggle(drawers, "cards");
-	assert.equal(drawers.open, "cards");
+	core.drawerToggle(drawers, "source");
+	assert.equal(drawers.open, "source");
 	core.drawerClose(drawers);
 	assert.equal(drawers.open, "");
 });
@@ -223,11 +225,11 @@ test("a plain f is the files drawer, and shift+f is the fit it took from plain f
 	assert.equal(core.boardLetter("F", { shift: true }), "fit", "a shifted key arrives upper case");
 	assert.equal(core.boardLetter("F"), "fit", "the capital is the shifted key, whatever the event says");
 	assert.equal(core.boardLetter("a"), "activity");
-	assert.equal(core.boardLetter("c"), "cards");
+	assert.equal(core.boardLetter("c"), "", "c no longer opens a drawer");
 	assert.equal(core.boardLetter("d"), "source");
 	assert.equal(core.boardLetter("D"), "", "a shifted d is not the drawer's key");
 	// Nothing else is taken by this list, so the board's other letters reach their own handlers.
-	for (const key of ["0", "m", "n", "o", "t", "g", "q", "p", "r"]) assert.equal(core.boardLetter(key), "", key);
+	for (const key of ["0", "m", "n", "o", "t", "g", "q", "p", "r", "c"]) assert.equal(core.boardLetter(key), "", key);
 });
 
 test("a letter waits while a field is typed in, a panel is open or the drawer's own surface is up", () => {
@@ -235,7 +237,6 @@ test("a letter waits while a field is typed in, a panel is open or the drawer's 
 		assert.equal(core.boardLetter("f", { [lock]: true }), "", `f waits for ${lock}`);
 		assert.equal(core.boardLetter("f", { [lock]: true, shift: true }), "", `shift+f waits for ${lock}`);
 		assert.equal(core.boardLetter("a", { [lock]: true }), "", `a waits for ${lock}`);
-		assert.equal(core.boardLetter("c", { [lock]: true }), "", `c waits for ${lock}`);
 		assert.equal(core.boardLetter("d", { [lock]: true }), "", `d waits for ${lock}`);
 	}
 	// And a shifted letter the list does not own does nothing rather than falling through.
@@ -282,6 +283,16 @@ test(".git is never listed and a dot folder such as .agents is", () => {
 		listing.entries.map((one) => one.path),
 		[".agents", "src"],
 	);
+});
+
+test("a dot name is a hidden name, and the folders above a path are its ancestors", () => {
+	assert.equal(core.dotName(".env"), true);
+	assert.equal(core.dotName(".agents"), true);
+	assert.equal(core.dotName("README.md"), false);
+	assert.equal(core.dotName(""), false);
+	assert.deepEqual(core.ancestors("docs/deep/README.md"), ["", "docs", "docs/deep"]);
+	assert.deepEqual(core.ancestors("README.md"), [""]);
+	assert.deepEqual(core.ancestors("../escape.txt"), []);
 });
 
 test("a folder of more than one page is read whole, once each, and in order", () => {
@@ -772,9 +783,9 @@ test("a path opens as the kind its last extension names, and everything else is 
 
 // ---------------------------------------------------------------- the page
 
-test("the three drawers and the tree exist in the page, and the old picker is gone", () => {
+test("the three drawers and the tree exist in the page, and the old picker and cards drawer are gone", () => {
 	const html = readFileSync(HTML, "utf8");
-	for (const id of ["drawerFiles", "drawerActivity", "drawerCards", "exTree", "exFilter", "exMenu", "exConfirm", "pickCount"]) {
+	for (const id of ["drawerFiles", "drawerActivity", "drawerSource", "drawerSearch", "srTitle", "srQuery", "srReplace", "srList", "railBody", "actMenu", "exTree", "exFilter", "exMenu", "exConfirm", "pickCount"]) {
 		assert.ok(html.includes(`id="${id}"`), `#${id} is in the page`);
 	}
 	// The editor a file opens in: its frame, the path it names, the surface it draws into, its status
@@ -788,20 +799,24 @@ test("the three drawers and the tree exist in the page, and the old picker is go
 	for (const id of ["exViewBody", "exViewToggle", "exViewSource", "exViewPreview", "exViewOpen"]) {
 		assert.ok(html.includes(`id="${id}"`), `#${id} is in the page`);
 	}
-	for (const gone of ['id="picker"', 'id="pickList"', 'id="pickFilter"', 'id="pickHidden"', 'id="railOpen"']) {
-		assert.ok(!html.includes(gone), `${gone} is gone with the picker`);
+	for (const gone of ['id="picker"', 'id="pickList"', 'id="pickFilter"', 'id="pickHidden"', 'id="railOpen"', 'id="drawerCards"', 'id="cardsBtn"', 'id="railNow"', 'id="railRunning"', 'id="railCardCount"', 'id="railClosedCount"']) {
+		assert.ok(!html.includes(gone), `${gone} is gone`);
 	}
 	const board = readFileSync(BOARD, "utf8");
-	for (const dangling of ["picker.hidden", "closePicker", "drawList(", "getElementById(\"picker\")", "railShown(", "railOpenCount"]) {
-		assert.ok(!board.includes(dangling), `no dangling picker or rail guard: ${dangling}`);
+	for (const dangling of ["picker.hidden", "closePicker", "drawList(", "getElementById(\"picker\")", "railShown(", "railOpenCount", "drawerCards", "cardsBtn", "railNow", "railRunning", "railCardCount", "railClosedCount"]) {
+		assert.ok(!board.includes(dangling), `no dangling reference: ${dangling}`);
 	}
 });
 
 test("the keys panel says what the keys do, including f as the drawer and shift+f as the fit", () => {
 	const board = readFileSync(BOARD, "utf8");
 	assert.ok(board.includes('{ keys: "f", does: "open the files drawer, and press it again to roll it up" }'));
+	assert.ok(board.includes('{ keys: "ctrl+f", does: "open the search drawer and focus its search field" }'));
+	assert.ok(board.includes('"Search and replace"'), "the header names the open search drawer, as the git graph names itself");
+	assert.ok(board.includes("function srPaintTitle()"), "the search head carries the workspace path, as the files head does");
+	assert.ok(board.includes("void exPrime().then(() => srPaintTitle())"), "opening the search drawer reads the root, so its head names the folder before any search runs");
 	assert.ok(board.includes('{ keys: "a", does: "open the activity drawer, and press it again to roll it up" }'));
-	assert.ok(board.includes('{ keys: "c", does: "open the cards drawer, and press it again to roll it up" }'));
+	assert.ok(!board.includes('{ keys: "c", does: "open the cards drawer, and press it again to roll it up" }'), "c no longer claims a cards drawer");
 	assert.ok(board.includes('{ keys: "shift+f", does: "fit every card on the screen" }'));
 	assert.ok(!board.includes('{ keys: "f", does: "fit every card on the screen" }'), "f no longer claims the fit");
 	// The map row still names its own key, which the project's own rule asks for. It is a leaf of the
@@ -815,10 +830,10 @@ test("the keys panel says what the keys do, including f as the drawer and shift+
 test("the header chips and the settings hold the map and the hotkeys", () => {
 	const html = readFileSync(HTML, "utf8");
 	const header = html.slice(html.indexOf("<header>"), html.indexOf("</header>"));
-	for (const id of ["viewBtn", "housekeepingBtn", "toolboxBtn", "reset", "newPill", "threadOrder", "statCtx", "activityBtn", "cardsBtn", "configBtn"]) {
+	for (const id of ["viewBtn", "housekeepingBtn", "toolboxBtn", "reset", "newPill", "threadOrder", "statCtx", "activityBtn", "searchBtn", "configBtn"]) {
 		assert.ok(header.includes(`id="${id}"`), `#${id} stays in the header`);
 	}
-	for (const gone of ["mapBtn", "keysBtn", "stack", "tidy", "fit", "cleanBtn", "leftBtn", "newBtn", "filesBtn", "sourceBtn", "gitBtn", "termBtn"]) {
+	for (const gone of ["mapBtn", "keysBtn", "cardsBtn", "stack", "tidy", "fit", "cleanBtn", "leftBtn", "newBtn", "filesBtn", "sourceBtn", "gitBtn", "termBtn"]) {
 		assert.ok(!header.includes(`id="${gone}"`), `#${gone} is out of the header`);
 	}
 	for (const [menu, ids] of [
@@ -845,6 +860,16 @@ test("board keys wait behind an open header menu", () => {
 	const board = readFileSync(BOARD, "utf8");
 	const panelUp = board.slice(board.indexOf("const panelUp"), board.indexOf("const panelUp") + 220);
 	assert.ok(panelUp.includes("headerMenus.some(({ menu }) => !menu.hidden)"), "an open header menu counts as a panel up");
+});
+
+test("the delete key triggers deleting the card being read, through the trash sheet", () => {
+	const board = readFileSync(BOARD, "utf8");
+	assert.ok(board.includes('{ keys: "delete"'), "the hotkeys map names the delete key");
+	const handler = board.slice(board.indexOf('event.key !== "Delete"'), board.indexOf('event.key !== "Delete"') + 700);
+	assert.ok(handler.includes("openRemoveSheet(record, trash)"), "the key opens the sheet the trash button opens, rather than removing at once");
+	assert.ok(handler.includes('record.card.querySelector(".trash")'), "only a card carrying the trash answers, so a note or a question has no delete");
+	assert.ok(handler.includes("typingSomewhere()"), "a field keeps its own keys");
+	assert.ok(handler.includes("panelUp()") && handler.includes("openSheet()"), "a panel or a sheet up keeps the key waiting");
 });
 
 test("conflict hunks are read with their two sides, and accepting one rewrites only it", () => {
