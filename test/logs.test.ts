@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LOG_CAPACITY, LOG_MESSAGE_MAX, LOG_OUTPUT_MAX, levelOf, levelPasses, log, logPluginLine, redact, snapshot, subscribe, tapDaemon, truncateOutput } from "../server/logs.ts";
+import { LOG_CAPACITY, LOG_MESSAGE_MAX, LOG_OUTPUT_MAX, levelOf, levelPasses, log, logPluginLine, redact, snapshot, stripAnsi, subscribe, tapDaemon, truncateOutput } from "../server/logs.ts";
 import type { LogEntry } from "../server/logs.ts";
 
 /**
@@ -42,6 +42,9 @@ test("a command's output rides on its line, head and tail, and a secret in it is
 	assert.ok(!String(masked.output).includes("should-not-be-seen"), "a secret never reaches the buffer");
 	const direct = truncateOutput("  a\n\n");
 	assert.equal(direct, "  a", "trimming touches the edges only");
+	assert.equal(stripAnsi("\u001b[4m>>>> Executing\u001b[0m\n"), ">>>> Executing\n", "terminal colour does not cross into the buffer");
+	const coloured = log("info", "podman", "podman compose restart", undefined, "\u001b[32mchatbot_chatbot_1\u001b[0m");
+	assert.equal(coloured.output, "chatbot_chatbot_1");
 });
 
 test("every shape a secret wears is masked on the way in, and the rest of the line is kept", () => {
