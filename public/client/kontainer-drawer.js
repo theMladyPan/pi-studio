@@ -299,7 +299,9 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     // A failed task already carries its error in red, so the caller's copy would be a second bubble.
     if (lastTaskFailure && String(msg) === lastTaskFailure.msg && Date.now() - lastTaskFailure.at < 2000) return;
     const t = $("kToast"); t.textContent = msg; t.classList.add("k-show");
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("k-show"), 3200);
+    $("kTasks")?.classList.add("k-lift");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.classList.remove("k-show"); $("kTasks")?.classList.remove("k-lift"); }, 3200);
   }
 
   /* ---------- render: bar ---------- */
