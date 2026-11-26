@@ -90,7 +90,7 @@ const EVENT_ERROR = /die|oom|health_status: unhealthy/;
  * appeared — can be found from the logs drawer (`l`) with the drawer shut. Ordinary churn stands at `debug`
  * because a build alone can put a hundred creates through the feed and the drawer's default view is `info`.
  */
-export function logEngineEvent(line: string, source = "kontainer"): void {
+export function logEngineEvent(line: string, source: string): void {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(line);

@@ -188,7 +188,8 @@ export function requestJson(runtime: EngineRuntime, path: string, opts: SocketRe
  * logged — it would flood the ring in seconds — but a refusal to fetch it is worth a `debug` line.
  */
 export function requestBuffer(runtime: EngineRuntime, path: string, opts: SocketRequestOptions = {}): Promise<Buffer> {
-	const command = `GET ${path}`;
+	const method = opts.method ?? "GET";
+	const command = `${method} ${path}`;
 	const source = engineSource(runtime);
 	const startedAt = Date.now();
 	return new Promise((resolve, reject) => {
@@ -196,7 +197,7 @@ export function requestBuffer(runtime: EngineRuntime, path: string, opts: Socket
 			{
 				socketPath: runtime.socketPath,
 				path,
-				method: opts.method ?? "GET",
+				method,
 				timeout: opts.timeoutMs ?? 15_000,
 				headers: { ...(opts.headers ?? {}) },
 			},
