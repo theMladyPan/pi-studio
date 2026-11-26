@@ -130,6 +130,27 @@ test("a long engine error wraps inside a rounded bubble", () => {
 	assert.match(kontainerCss, /#kontainerDrawer \.k-toast \{[^}]*max-width:min\(560px,90vw\)/, "it stops short of the screen edge");
 });
 
+test("docker actions pop as blue running tasks, then green or red", () => {
+	// The skeleton carries the queue beside the plain toast, and each action owes one card.
+	assert.match(kontainerSource, /<div class="k-tasks" id="kTasks" role="status" aria-live="polite"><\/div>/, "the queue hangs beside the toast");
+	assert.match(kontainerSource, /payload\?\.action === "exec\.cmd" \? null : startTask\(okMsg/, "only exec.cmd, which only builds a string, never pops");
+	assert.match(kontainerSource, /function startTask\(label\) \{/, "one starter makes one card");
+	assert.match(kontainerSource, /host\.append\(card\);/, "and appends it, so parallel actions stack rather than replace");
+	assert.match(kontainerSource, /function finishTask\(task, ok, detail\) \{/, "and one finisher closes it");
+	assert.match(kontainerSource, /setTimeout\(\(\) => task\.card\.remove\(\), 5000\);/, "five seconds after it finishes, on its own timer");
+	assert.match(kontainerSource, /card\.addEventListener\("mouseenter", \(\) => \{ task\.hovered = true; clearTimeout\(task\.timer\); \}\);/, "hovering pauses the countdown");
+	assert.match(kontainerSource, /card\.addEventListener\("mouseleave", \(\) => \{ task\.hovered = false; if \(task\.done\) scheduleTaskRemoval\(task\); \}\);/, "and leaving restarts it");
+	assert.match(kontainerSource, /if \(!task\.hovered\) scheduleTaskRemoval\(task\);/, "a task that finishes under the cursor waits for the cursor to leave");
+	assert.doesNotMatch(kontainerSource, /if \(okMsg\) toast\(okMsg\);/, "the old success toast is not left beside the queue");
+	assert.match(kontainerSource, /"k-task k-running"/, "running reads in its own blue");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-tasks \{ position:fixed; bottom:14px; right:14px/, "the queue pins to the toast's own corner");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-task\.k-running \{ border-color:var\(--k-accent\);/, "running is accented blue");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-task\.k-done \{ border-color:rgba\(63,185,80/, "done is green");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-task\.k-failed \{ border-color:rgba\(248,81,73/, "failed is red");
+	// A failed task already carries its error, so the caller's catch does not copy it.
+	assert.match(kontainerSource, /lastTaskFailure && String\(msg\) === lastTaskFailure\.msg/, "the plain toast bows out for the copy the task carries");
+});
+
 test("a right press on a card opens the node menu its kind answers to", () => {
 	// The menu is a body element of its own, beside the tools popover, and it starts hidden.
 	assert.match(kontainerSource, /<div class="k-ctx-menu" id="kCtxMenu" hidden role="menu" aria-label="node actions"><\/div>/, "the skeleton carries the menu");
