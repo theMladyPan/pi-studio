@@ -340,7 +340,8 @@ The daemon listens on loopback unless told otherwise, and every data route needs
 
 ```bash
 npm ci           # once; the checks and the build use the locked dev dependencies
-npm run check    # syntax, imports, tsc, node --test and the smoke suite, run in parallel
+npm run check    # syntax, imports, tsc, node --test and the smoke suite, run in parallel; scoped by the hash cache
+npm run check -- --full  # whole test suite, for merging into main
 npm test         # the unit and route tests on their own
 npm run smoke    # two daemons against scratch folders; exits 1 on the first failure
 npm run package  # the release assets: the tarball, its .sha256 and install.sh, under release/

@@ -21,6 +21,14 @@ prompts and decisions to multiple agents) to the board.
   must all pass. Targeted tests during development do not replace this gate. Use `npm ci` if the
   locked development dependencies need installing; a fresh thread worktree has no `node_modules`, so run
   `npm ci` in it once before the gate.
+- Check scope: the gate prints a `[scope]` line on every run (`bin/check-scope.mjs`). It reads
+  paths only and only advises; the content-hash cache stays the kernel that decides which tests
+  rerun. Never use `PI_STUDIO_NO_CACHE=1` casually — it is a back-compat alias for `--full`.
+  Work branches never force a full run (`npm run check` is the whole check). Merging into `dev`
+  forces a full run (`npm run check -- --full`) only for a serious core-logic change; docs and pure
+  style (`*.css`, `*.md`) never do. Anything in between, the thread inspects the diff and states why
+  a full run is owed. Merging into `main` always runs full (`npm run check -- --full`). A cached
+  replay counts as a pass; say which scope you used.
 
 ## Versioning
 

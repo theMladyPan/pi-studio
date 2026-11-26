@@ -19,8 +19,9 @@
  * Entries store only the exit code, never captured output. Replaying a log
  * would show stale timings and ids; replaying a verdict is what the gate
  * needs. Both passes and failures are cached, so a rerun on a known broken
- * tree is also instant. A flaky failure can therefore freeze — the escape
- * hatch is `PI_STUDIO_NO_CACHE=1 npm run check` or deleting `.cache/`.
+ * tree is also instant. A flaky failure can therefore freeze — the
+ * escape hatch is `node bin/check.mjs --full` (whole suite; for main merges)
+ * or deleting `.cache/`. `PI_STUDIO_NO_CACHE=1` stays as an alias for --full.
  *
  * Safety rules:
  *   - an unresolvable relative import makes that file uncacheable (it
@@ -39,7 +40,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const defaultRepo = dirname(here);
 
-/** `PI_STUDIO_NO_CACHE=1` or `PI_STUDIO_TEST_CACHE=off` forces a full run. */
+/** `PI_STUDIO_NO_CACHE=1` (alias for --full) or `PI_STUDIO_TEST_CACHE=off` forces a full run. */
 export function cacheEnabled(env = process.env) {
 	return env.PI_STUDIO_NO_CACHE !== "1" && env.PI_STUDIO_TEST_CACHE !== "off";
 }
