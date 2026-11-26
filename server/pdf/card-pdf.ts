@@ -713,9 +713,10 @@ function dayOf(at: number): string {
 }
 
 /**
- * The note as a PDF: a title line, the body in the card's own order, the footnotes numbered where the
- * body pointed at them, and a foot on every page — the title, the workspace and the day on the left and
- * the page count on the right — so a printed stack can be put back together.
+ * The note as a PDF: the body in the card's own order, the footnotes numbered where the body pointed
+ * at them, and a foot on every page — the card's name, the workspace and the day on the left and the
+ * page count on the right — so a printed stack can be put back together. The name lives in the foot only,
+ * where a stack carries it on every page, and not as a heading over the words.
  */
 export function notePdf(note: PdfNote): Buffer {
 	const page: Page = { sheets: [], sheet: sheet(), y: PAGE_HEIGHT - MARGIN };
@@ -724,18 +725,6 @@ export function notePdf(note: PdfNote): Buffer {
 	const notes: Notes = { defs: new Map(), order: [] };
 	const blocks = blocksOf(String(note.markdown ?? ""), notes);
 
-	page.sheet.paint(INK);
-	for (const line of wrap([{ text: title, face: "bold" }], HEADING[0].size, WIDTH)) {
-		page.y -= HEADING[0].lead;
-		drawPieces(page, line, HEADING[0].size, MARGIN, page.y + HEADING[0].lead * 0.3);
-	}
-
-	// The rule under the title is the only thing between the title and the body: where the card came
-	// from belongs in the foot, where a printed stack carries it on every page.
-	page.y -= 14;
-	page.sheet.paint(0.8);
-	page.sheet.line(MARGIN, page.y, PAGE_WIDTH - MARGIN, page.y, 0.7);
-	page.y -= 6;
 	page.sheet.paint(INK);
 
 	for (const block of blocks) {
