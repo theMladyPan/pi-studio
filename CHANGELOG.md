@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Name every left drawer in the board header — the activity and source control drawers lose their own rail heads with their close buttons (Esc and the header doors still close them), the header's open-panel label now names files and source control as it already named activity and search, and the source control total its rail head carried is gone, its per-group counts already standing below. [t-faf0d460]
+
 - feat: Show a thread's short id in its card head and let a click on it copy the whole id — the first eight characters of the thread's id sit in the head's right-hand row in mono, hovering shows the full id, and a click copies the full id to the clipboard (the footer repeats it if the clipboard refuses), so the separate copy glyph is gone. [t-4a496c81]
 - feat: Add a task queue to the kontainer drawer — each Docker or Podman action pops in blue while it runs, turns green or red when it finishes with its duration, and leaves five seconds after that (pausing while hovered, until the cursor leaves), so parallel actions stack instead of replacing one another; clicking a card opens its record in the detail sheet (what was asked, then what the engine said), which extracts the activity detail into the shared drawer furniture as one sheet with two instances; a failed task already carries its error, so the plain toast does not copy it. [t-25d86ad5]
 - feat: Bring the consumption figure back to the message field — input/output tokens, requests and cost sit in the field's own row, right of the chips and left of send/stop, the per-thread figure the merged activity drawer no longer carries. [t-8fb12696]

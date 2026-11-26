@@ -6073,15 +6073,13 @@ function paintDrawers() {
   // Files and source live in the toolbox menu, so the chip says when one of them is open.
   toolboxBtn.classList.toggle("has-open", drawerState.open === "files" || drawerState.open === "source");
   // The header names the open drawer beside the workspace, the way the git graph names itself:
-  // the search drawer says "Search and replace" and the activity drawer says "activity" while up,
-  // and nothing while no drawer is. The git graph owns the same label while it is up, so it is only
-  // written here when it is not.
+  // each left drawer says its own name there while up, and nothing while no drawer is. The git graph
+  // owns the same label while it is up, so it is only written here when it is not.
+  const PANEL_NAMES = { files: "files", activity: "activity", source: "source control", search: "Search and replace" };
   if (openPanelName && !gitDrawer.isOpen() && !kontainerDrawer.isOpen() && !logsDrawer.isOpen()) {
-    if (drawerState.open === "search") {
-      openPanelName.textContent = "Search and replace";
-      openPanelName.hidden = false;
-    } else if (drawerState.open === "activity") {
-      openPanelName.textContent = "activity";
+    const name = PANEL_NAMES[drawerState.open];
+    if (name) {
+      openPanelName.textContent = name;
       openPanelName.hidden = false;
     } else {
       openPanelName.hidden = true;
@@ -6183,7 +6181,6 @@ const scMessage = document.getElementById("scMessage");
 const scDraftBtn = document.getElementById("scDraft");
 const scCommitBtn = document.getElementById("scCommit");
 const scNote = document.getElementById("scNote");
-const scCount = document.getElementById("scCount");
 const scStagedHead = document.getElementById("scStagedHead");
 const scStagedCount = document.getElementById("scStagedCount");
 const scChangesCount = document.getElementById("scChangesCount");
@@ -6287,7 +6284,6 @@ function scPaint() {
   scStagedCount.textContent = scState.staged.length ? String(scState.staged.length) : "";
   scChangesCount.textContent = scState.changes.length ? String(scState.changes.length) : "";
   scMergeCount.textContent = scState.conflicts.length ? String(scState.conflicts.length) : "";
-  scCount.textContent = scState.staged.length + scState.changes.length + scState.conflicts.length ? String(scState.staged.length + scState.changes.length + scState.conflicts.length) : "";
   scMergeHead.hidden = !scState.conflicts.length;
   scStagedHead.hidden = !scState.staged.length;
   scStageAll.disabled = !scState.changes.length || scBusy || Boolean(scState.merge);
