@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Keep the models pi has listed in memory for six hours even when a read omits them, and treat a table that comes back more than a fifth smaller than the one known as a short read rather than a smaller machine — the known list stays, the picker says why, and pi is asked again after thirty seconds, so a slow answer from OpenRouter no longer refuses spawns for models that are still there. [t-3707e669]
+
 - feat: Download both files when a note's download press is hit — one press now saves the note's own markdown as `.md` beside the pdf the daemon lays out, under the same name save one extension, so the editable source and the page leave together instead of the page alone. [t-fa716db2]
 - feat: Add a `delete` key that triggers deleting the thread card you are reading — it opens the same sheet the card's trash button opens, listing the card, conversation, folder and branch that would go, so the key alone never removes anything; a card with no trash, such as a note or an open question, answers to no delete key either. [t-c83b8d71]
 - feat: Take the git drawer's own title bar away — the open drawer now names itself in the board header between the workspace and the live state, which moves to the right, its `open in tab` and `roll up` presses end the git graph's own toolbar, the status line sits at the foot of the graph, and the board's footer stays visible under the drawer, so the graph has the whole panel to itself. [t-f15b4da9]

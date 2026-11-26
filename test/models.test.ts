@@ -79,11 +79,54 @@ test("a failed read of pi's table keeps the models already known, and says why",
 		assert.match(failed.trouble, /could not load models\.json/, "the picker was not told why the read failed");
 
 		// A failed read is asked again on the next open, rather than kept for the ten minutes a good one is.
-		say(stub.sayFile, [["klotilda", "deepseek-ai/DeepSeek-V4.1-Flash-1017"]]);
+		// The good read answers from memory: it adds what it names and keeps what it omits, rather than
+		// spending the answer on the rows pi happened to print this time.
+		say(stub.sayFile, [["klotilda", "deepseek-ai/DeepSeek-V4.1-Flash-1017"], ["deepseek", "deepseek-flash"]]);
 		t.mock.timers.tick(31_000);
 		const healed = (await modelCatalog()) as unknown as Catalog;
-		assert.deepEqual(named(healed.models), ["klotilda/deepseek-ai/DeepSeek-V4.1-Flash-1017"]);
+		assert.deepEqual(named(healed.models), [
+			"deepseek/deepseek-flash",
+			"github-copilot/gemini-4-argon",
+			"klotilda/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+		]);
 		assert.ok(!healed.trouble, "a good read after a bad one still reported trouble");
+
+		// A clean read the memory cannot trust: a table more than a fifth smaller than the one known is
+		// a short read, not a smaller machine. It keeps the known list, says so, and is asked again after
+		// thirty seconds rather than becoming the truth for the whole memory window.
+		const bigger = [
+			["deepseek", "deepseek-flash"],
+			["github-copilot", "gemini-4-argon"],
+			...Array.from({ length: 8 }, (_, i) => ["openrouter", `a${i}`]),
+		] as string[][];
+		say(stub.sayFile, bigger);
+		t.mock.timers.tick(11 * 60_000);
+		const grown = (await modelCatalog()) as unknown as Catalog;
+		assert.equal(grown.models.length, 11, "a good read did not grow the memory");
+		assert.ok(!grown.trouble, "a larger read was reported as trouble");
+		say(stub.sayFile, [["openrouter", "a0"]]);
+		t.mock.timers.tick(11 * 60_000);
+		const short = (await modelCatalog()) as unknown as Catalog;
+		assert.equal(short.models.length, 11, "a short read spent the answer on its own table");
+		assert.match(short.trouble, /short table/, "the picker was not told a short table came back");
+
+		// The answer after the short one: a read that omits one model is trusted, and the omitted one
+		// stays for the rest of its six hours, because OpenRouter retires models rarely.
+		say(stub.sayFile, bigger.slice(0, 9));
+		t.mock.timers.tick(31_000);
+		const kept = (await modelCatalog()) as unknown as Catalog;
+		assert.equal(kept.models.length, 11, "a model a read omitted left the answer at once");
+		assert.ok(named(kept.models).includes("openrouter/a7"), "the omitted model is not named");
+		assert.ok(!kept.trouble, "a good read after a short one still reported trouble");
+
+		// Six hours unnamed is the one way a model leaves: another healthy read omits a row, and the rows
+		// that have gone unspoken for the whole window go with it.
+		say(stub.sayFile, bigger.slice(0, 9));
+		t.mock.timers.tick(6 * 60 * 60_000 + 60_000);
+		const faded = (await modelCatalog()) as unknown as Catalog;
+		assert.equal(faded.models.length, 9, "a model unnamed for six hours stayed in the answer");
+		assert.ok(!named(faded.models).includes("openrouter/a7"), "the faded model is still named");
+		assert.ok(!faded.trouble, "a good read after a quiet one still reported trouble");
 	} finally {
 		delete process.env.PI_MANAGED_INSTALL_ROOT;
 		await removeTree(stub.root);
