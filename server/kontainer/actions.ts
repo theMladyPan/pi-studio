@@ -161,6 +161,28 @@ const LIFECYCLE: Record<string, { method: string; suffix: string }> = {
 	remove: { method: "DELETE", suffix: "" },
 };
 
+/** The container's name, so the daemon log can say `restart container chatbot (9935864b)` instead of an id. Best effort: a container already gone simply has no name to give. */
+async function containerName(runtime: Runtime, id: string): Promise<string | null> {
+	try {
+		const inspected = asRecord(await requestJson(runtime, `/containers/${encodeURIComponent(id)}/json`));
+		const name = asString(inspected.Name) || asString(inspected.name);
+		return name ? name.replace(/^\//, "") : null;
+	} catch {
+		return null;
+	}
+}
+
+/** An image's first tag, so the daemon log says `remove image app:latest` instead of a digest. Best effort, like the container name above. */
+async function imageTag(runtime: Runtime, id: string): Promise<string | null> {
+	try {
+		const inspected = asRecord(await requestJson(runtime, `/images/${encodeURIComponent(id)}/json`));
+		const tags = Array.isArray(inspected.RepoTags) ? inspected.RepoTags.filter((tag): tag is string => typeof tag === "string") : [];
+		return tags.find((tag) => tag !== "<none>:<none>") ?? null;
+	} catch {
+		return null;
+	}
+}
+
 export async function handleAction(board: KontainerBoardLike, rawBody: unknown, opts: HandleActionOptions = {}): Promise<ActionResult> {
 	const body = asRecord(rawBody);
 	const action = asString(body.action);
@@ -183,8 +205,9 @@ export async function handleAction(board: KontainerBoardLike, rawBody: unknown, 
 		const id = body.id;
 		if (!isValidId(id)) return { ok: false, error: "a valid container id is required" };
 		const spec = LIFECYCLE[action];
+		const name = await containerName(runtime, id as string);
 		try {
-			const payload = await requestJson(runtime, `/containers/${encodeURIComponent(id as string)}${spec.suffix}`, { method: spec.method });
+			const payload = await requestJson(runtime, `/containers/${encodeURIComponent(id as string)}${spec.suffix}`, { method: spec.method, label: name ?? undefined, cwd: folder || undefined });
 			return { ok: true, output: typeof payload === "string" ? payload : payload === null ? "" : JSON.stringify(payload) };
 		} catch (error) {
 			return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -277,8 +300,9 @@ export async function handleAction(board: KontainerBoardLike, rawBody: unknown, 
 		const id = body.id;
 		if (!isValidImageId(id)) return { ok: false, error: "a valid image id is required" };
 		const query = body.force === true ? "?force=1" : "";
+		const label = typeof body.image === "string" && body.image ? body.image : (await imageTag(runtime, id as string)) ?? undefined;
 		try {
-			const payload = await requestJson(runtime, `/images/${encodeURIComponent(id as string)}${query}`, { method: "DELETE" });
+			const payload = await requestJson(runtime, `/images/${encodeURIComponent(id as string)}${query}`, { method: "DELETE", label, cwd: folder || undefined });
 			return { ok: true, output: payload === null ? "" : JSON.stringify(payload) };
 		} catch (error) {
 			return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -311,7 +335,7 @@ export async function handleAction(board: KontainerBoardLike, rawBody: unknown, 
 		const parts: string[] = [];
 		try {
 			for (const name of targets) {
-				const payload = asRecord(await requestJson(runtime, `/${name}/prune`, { method: "POST", body: "{}" }));
+				const payload = asRecord(await requestJson(runtime, `/${name}/prune`, { method: "POST", body: "{}", cwd: folder || undefined }));
 				const space = payload.SpaceReclaimed;
 				if (typeof space === "number") reclaimedBytes += space;
 				parts.push(`${name}: ${JSON.stringify(payload)}`);

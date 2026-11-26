@@ -104,6 +104,9 @@ export interface SocketRequestOptions {
 	body?: string;
 	timeoutMs?: number;
 	headers?: Record<string, string>;
+	/** Display hints for the daemon log line, never for the request: the resource's human name and the workspace it was asked from. */
+	label?: string;
+	cwd?: string;
 }
 
 /** What an engine caller may say about the runtime it talks to: the socket, and the CLI name when known. */
@@ -128,6 +131,59 @@ function engineError(status: number, body: Buffer): Error {
 	return new Error(`engine request failed (${status}): ${engineDetail(body) || "empty response"}`);
 }
 
+/** A 64-hex id or an image digest cut to the prefix every CLI prints; anything shorter is already a name. */
+function shortenId(segment: string): string {
+	if (segment.startsWith("sha256:")) return `sha256:${segment.slice(7, 19)}`;
+	if (/^[0-9a-f]{16,}$/.test(segment)) return segment.slice(0, 12);
+	return segment;
+}
+
+/**
+ * What an engine call did, in words a developer reads — `restart container chatbot (9935864b)` — instead of the
+ * wire path with its 64-hex id. The path itself survives in the line's `cmd` meta. `label` is the caller's
+ * human name for the resource when it knows one, so the short id becomes a parenthetical, not the headline.
+ */
+function engineDescription(method: string, path: string, label?: string): string {
+	const [pathname, query = ""] = path.split("?");
+	const segments = pathname.split("/").filter(Boolean).map((segment) => {
+		try {
+			return decodeURIComponent(segment);
+		} catch {
+			return segment;
+		}
+	});
+	const [head, name, tail] = segments;
+	const who = (id: string) => (label ? `${label} (${shortenId(id)})` : shortenId(id));
+	const forced = query.split("&").some((pair) => pair === "force=1" || pair === "force=true") ? " (forced)" : "";
+	// Collection endpoints have no resource in them: `GET /containers/json` lists, it inspects nothing.
+	if (method === "GET" && (name === "json" || !name)) {
+		return { containers: "list containers", images: "list images", networks: "list networks", volumes: "list volumes", events: "watch events" }[head] ?? `${method} ${pathname}`;
+	}
+	if (name === "prune" || tail === "prune") {
+		return `prune ${head === "system" ? "everything" : head}`;
+	}
+	if (head === "images" && name === "search") return "search images";
+	if (head === "containers" && name) {
+		if (method === "GET" && tail === "json") return `inspect container ${who(name)}`;
+		if (method === "GET" && tail === "logs") return `logs of container ${who(name)}`;
+		if (method === "GET" && !tail) return `inspect container ${who(name)}`;
+		const verb = { start: "start", stop: "stop", restart: "restart", kill: "kill", pause: "pause", unpause: "unpause", exec: "exec in" }[tail ?? ""];
+		if (verb && (method === "POST" || method === "DELETE")) return `${verb} container ${who(name)}`;
+		if (method === "DELETE" && !tail) return `remove container ${who(name)}`;
+		if (name === "create" && method === "POST") return `create container`;
+	}
+	if (head === "images" && name) {
+		if (method === "GET" && tail === "json") return `inspect image ${who(name)}`;
+		if (method === "GET" && tail === "history") return `history of image ${who(name)}`;
+		if (method === "DELETE" && !tail) return `remove image ${who(name)}${forced}`;
+		if (method === "GET" && !tail) return `inspect image ${who(name)}`;
+	}
+	if (head === "version") return "engine version";
+	if (head === "networks" && name && (tail === "connect" || tail === "disconnect")) return `${tail} network ${who(name)}`;
+	if (head === "volumes" && name && method === "GET") return `inspect volume ${who(name)}`;
+	return `${method} ${segments.map(shortenId).join("/")}`;
+}
+
 /**
  * One JSON request over the Engine socket. Throws on a non-2xx status. The call lands in the daemon's
  * log where a human can find it without the drawer open: a write is news (`info`, a failure is `error`),
@@ -136,9 +192,11 @@ function engineError(status: number, body: Buffer): Error {
 export function requestJson(runtime: EngineRuntime, path: string, opts: SocketRequestOptions = {}): Promise<unknown> {
 	const method = opts.method ?? "GET";
 	const command = `${method} ${path}`;
+	const what = engineDescription(method, path, opts.label);
 	const source = engineSource(runtime);
 	const startedAt = Date.now();
 	const isRead = method === "GET";
+	const meta = (exit: number | string, dur: number) => ({ cmd: command, exit, dur, ...(opts.cwd ? { cwd: opts.cwd } : {}) });
 	return new Promise((resolve, reject) => {
 		const req = request(
 			{
@@ -156,11 +214,11 @@ export function requestJson(runtime: EngineRuntime, path: string, opts: SocketRe
 					const status = res.statusCode ?? 500;
 					const dur = Date.now() - startedAt;
 					if (status >= 400) {
-						log(isRead ? "debug" : "error", source, `${command} · ${engineDetail(body).slice(0, 300) || `failed with ${status}`}`, { cmd: command, exit: status, dur });
+						log(isRead ? "debug" : "error", source, `${what} · ${engineDetail(body).slice(0, 300) || `failed with ${status}`}`, meta(status, dur));
 						reject(engineError(status, body));
 						return;
 					}
-					if (!isRead) log("info", source, command, { cmd: command, exit: status, dur });
+					if (!isRead) log("info", source, what, meta(status, dur));
 					if (body.length === 0) {
 						resolve(null);
 						return;
@@ -175,7 +233,7 @@ export function requestJson(runtime: EngineRuntime, path: string, opts: SocketRe
 		);
 		req.on("timeout", () => req.destroy(new Error("engine request timed out")));
 		req.on("error", (error) => {
-			log(isRead ? "debug" : "error", source, `${command} · ${(error as Error).message}`, { cmd: command, exit: "failed", dur: Date.now() - startedAt });
+			log(isRead ? "debug" : "error", source, `${what} · ${(error as Error).message}`, meta("failed", Date.now() - startedAt));
 			reject(error);
 		});
 		if (opts.body !== undefined) req.write(opts.body);
@@ -190,8 +248,10 @@ export function requestJson(runtime: EngineRuntime, path: string, opts: SocketRe
 export function requestBuffer(runtime: EngineRuntime, path: string, opts: SocketRequestOptions = {}): Promise<Buffer> {
 	const method = opts.method ?? "GET";
 	const command = `${method} ${path}`;
+	const what = engineDescription(method, path, opts.label);
 	const source = engineSource(runtime);
 	const startedAt = Date.now();
+	const meta = (exit: number | string, dur: number) => ({ cmd: command, exit, dur, ...(opts.cwd ? { cwd: opts.cwd } : {}) });
 	return new Promise((resolve, reject) => {
 		const req = request(
 			{
@@ -208,7 +268,7 @@ export function requestBuffer(runtime: EngineRuntime, path: string, opts: Socket
 					const body = Buffer.concat(chunks);
 					const status = res.statusCode ?? 500;
 					if (status >= 400) {
-						log("debug", source, `${command} · ${engineDetail(body).slice(0, 300) || `failed with ${status}`}`, { cmd: command, exit: status, dur: Date.now() - startedAt });
+						log("debug", source, `${what} · ${engineDetail(body).slice(0, 300) || `failed with ${status}`}`, meta(status, Date.now() - startedAt));
 						reject(engineError(status, body));
 						return;
 					}
@@ -218,7 +278,7 @@ export function requestBuffer(runtime: EngineRuntime, path: string, opts: Socket
 		);
 		req.on("timeout", () => req.destroy(new Error("engine request timed out")));
 		req.on("error", (error) => {
-			log("debug", source, `${command} · ${(error as Error).message}`, { cmd: command, exit: "failed", dur: Date.now() - startedAt });
+			log("debug", source, `${what} · ${(error as Error).message}`, meta("failed", Date.now() - startedAt));
 			reject(error);
 		});
 		req.end();
