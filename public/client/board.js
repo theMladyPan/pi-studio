@@ -8638,8 +8638,9 @@ function paintUsage(inst) {
   const output = Number(stats.output) || 0;
   const requests = Number(stats.messages) || 0;
   const cost = Number(stats.cost) || 0;
-  inst.usage.textContent = `${compact(input)}/${compact(output)} tok. (${compact(requests)} req.) ~ $${cost > 0 && cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`;
-  inst.usage.title = `Input ${input} tok · Output ${output} tok · ${requests} requests · $${cost.toFixed(2)}`;
+  const money = cost > 0 && cost < 0.01 ? `$${cost.toFixed(4)}` : `$${cost.toFixed(2)}`;
+  inst.usage.textContent = `${compact(input)}/${compact(output)} tok. (${compact(requests)} req.) ~ ${money}`;
+  inst.usage.title = `Input ${input} tok · Output ${output} tok · ${requests} requests · ${money}`;
 }
 
 async function compactField(inst) {
