@@ -4,7 +4,7 @@ The one list of what is open. `STATE.md` says what works; this says what does no
 says what it is, what it would touch, and what has to be settled before it can start. Line numbers are
 `dev` at `c723fc3`.
 
-Ten entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
+Nine entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
 something the board cannot do yet, **chore** is work on the code itself.
 
 Two decisions have to be answered by you before some of these can start, and each is named in the
@@ -20,11 +20,6 @@ to disk (`diskRow`, `server/bus.ts:136`), so a row from before a restart says th
 fetches its picture on demand or carries it.
 
 ## feat
-
-**Fork a thread.** The fork the composer offers answers only for a card that already has a thread
-behind it (`forkTarget`, `public/client/board.js:6757`); on a thread card the button stays hidden, and
-nothing anywhere reads or writes `forkedFrom`. A real fork copies the session file, marks the copy, and
-gives the new thread a card of its own. Touches the thread spawn and the session handling.
 
 **A card that renders a whole HTML page.** The files drawer's editor draws an opened HTML file ready:
 source or preview, in its own frame with scripts allowed and no origin of its own, so it cannot reach
