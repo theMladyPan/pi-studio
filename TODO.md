@@ -4,7 +4,7 @@ The one list of what is open. `STATE.md` says what works; this says what does no
 says what it is, what it would touch, and what has to be settled before it can start. Line numbers are
 `dev` at `c723fc3`.
 
-Thirteen entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
+Ten entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
 something the board cannot do yet, **chore** is work on the code itself.
 
 Two decisions have to be answered by you before some of these can start, and each is named in the
@@ -12,14 +12,6 @@ entry it blocks: where a screenshot's bytes live once the daemon has restarted, 
 microphone stays in the daemon or moves into the page.
 
 ## fix
-
-**A workspace whose folder is gone cannot be forgotten.** The picker says `folder missing` where a row's
-age would go (`public/welcome.js:330`), names the folder as missing on disk in the path line, and
-refuses to open it (`:367`), and the entry stays for ever, because no route removes a workspace at all:
-the daemon has `GET /workspaces` and `POST /workspace` and nothing else (`server/main.ts:283`, `:309`).
-The scratch row is the only row with a button that throws anything away, and it empties the folder
-rather than forgetting the entry. Touches the workspaces list on disk and the picker. To settle: whether
-forgetting a workspace also deletes its board file and its session folder, or only the entry.
 
 **A screenshot row loses its picture on restart.** Pictures are held in memory and stripped on the way
 to disk (`diskRow`, `server/bus.ts:136`), so a row from before a restart says the picture was not kept
@@ -34,38 +26,28 @@ behind it (`forkTarget`, `public/client/board.js:6757`); on a thread card the bu
 nothing anywhere reads or writes `forkedFrom`. A real fork copies the session file, marks the copy, and
 gives the new thread a card of its own. Touches the thread spawn and the session handling.
 
-**A card that renders a whole HTML page.** An opened file is shown as source text and nothing else. The
-board can already send a note out as a page the browser draws; it cannot draw one that came in. Touches
-the client's card bodies. To settle: how a page is sandboxed (its own frame with scripts off, or an
-inline document), the size cap, and what happens to a page that refers to a file beside it.
-
-**A debug view of the raw agent stream.** Only the last 1 000 characters of a child's errors are kept
-(`thread.stderrTail`, `server/child/run.ts:92`). Touches the child's run and the rail. To settle:
-whether it is a panel behind the settings switch or a route read by hand, since it prints everything a
-child says.
+**A card that renders a whole HTML page.** The files drawer's editor draws an opened HTML file ready:
+source or preview, in its own frame with scripts allowed and no origin of its own, so it cannot reach
+the page, the session or the daemon as the page; a page referring to a file beside it is read as source
+instead. What still shows source text only is a card: a source card holding an `.html` file, and any card
+body that might carry a page. Touches the client's card bodies. To settle: whether a card needs a drawn
+page at all, and if so which sandbox, size cap and beside-it rule the editor already lives with.
 
 **Usage totals beside a rail row's detail sheet.** The sheet shows status, exit code, tokens and time
 (`public/client/board.js:5524`) and nothing about what the call cost. The numbers exist per thread
 (`thread.stats`) and not per call. To settle: what a single tool call can honestly claim, since pi
 reports cost per session.
 
-**The Git Graph drawer still cannot reach a remote, and there are a few commands with no home here.**
-The local writes all answer now — branches, tags, checkout, merge, rebase, cherry-pick, revert, reset,
-dropping a commit, stash and clean — and so do the reads. What answers `This tab cannot do that yet.` is
-still one table: adding, editing and deleting a remote, deleting a remote branch, fetching a remote
-branch into a local one, pulling a branch, pushing a branch, pushing a tag on its own, the archive
-download, the configuration export, and the commands an editor or a third party would have served. Two
-local commands are refused by name for a reason of their own rather than by that table: an interactive
-rebase, which needs a terminal for the commit list, and dropping a merge commit, which git cannot rebase
-out of a history that joins two. The work is one table: every name in `UNAVAILABLE_COMMANDS` loses its
-entry in `server/git/gitgraph/dispatch.ts`, gets a branch in `answer` and a run in
-`server/git/gitgraph/actions.ts` behind it, and `UNAVAILABLE` shrinks by one with each commit; the
-archive download is a route of its own rather than a git run, because it writes a file a human then
-saves. Files are named rather than numbered here because these are all new, and `dev` has no line number
-for them yet. To settle: what the board says to a thread whose checkout moved under it while the thread
-was idle, because the live guard only knows a child that is running now, so a human merging or resetting
-an idle thread's tree moves it in silence. And whether a remote write reaches this daemon at all, which
-is the same question as where a push that needs a token gets that token.
+**The Git Graph drawer still cannot reach a few commands.** The remote writes now answer — adding,
+editing and deleting a remote, deleting a remote branch, fetching a remote branch into a local one,
+pulling, pushing a branch, pushing a tag on its own — in `server/git/gitgraph/actions.ts` behind the
+table in `server/git/gitgraph/dispatch.ts`. What still answers `This tab cannot do that yet.` is the
+archive download, the repository-configuration export, and the settings import and export the editor or a
+third party would have served. A push gets its token the way the shell's git would: the run inherits the
+daemon's environment, so an ssh key, an agent and a credential helper answer, and no terminal prompt
+stands in them (`server/git/exec.ts`). To settle: what the board says to a thread whose checkout moved
+under it while the thread was idle, because the live guard only knows a child that is running now, so a
+human merging or resetting an idle thread's tree moves it in silence.
 
 **Voice, on a card.** The `voice` extension drove the console by speech, and it was retired from the
 extensions repository rather than ported, because every one of its hooks checked `ctx.mode === "tui"`
@@ -90,14 +72,14 @@ children answer at once and a voice that reads all of them is a mess.
 
 ## chore
 
-**Let the type checker inspect the server.** `tsc` runs in `npm run check`, but 32 of the 58 daemon
-files carry `@ts-nocheck`, so it checks twenty-six of them. Measured by stripping every pragma: **775
+**Let the type checker inspect the server.** `tsc` runs in `npm run check`, but 34 of the 92 daemon
+files carry `@ts-nocheck`, so it checks fifty-eight of them. Measured by stripping every pragma: **775
 diagnostics under the strict config** (565 a parameter with no type) and **113 under
 `strict: false, noImplicitAny: false`**. Next commit: a loose pass in `check` that gates, then strict
 module by module.
 
-**Split the 10 812-line client module.** One file, up from 7 807 when it was last costed and 5 305
-before that, and the deepest change the app still needs. Three routes, cheapest first: the shared state
+**Split the 15 434-line client module.** One file, 15 434 lines now, up from 7 807 when it was last
+costed and 5 305 before that, and the deepest change the app still needs. Three routes, cheapest first: the shared state
 object inside the monolith (about 128 mechanical renames, nothing else moves); the three pure leaves
 first (markdown, escaping, small helpers — the only route that produces the client's first tests); or
 the full split into about twenty modules. Three rules were learned the hard way and are written down
