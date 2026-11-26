@@ -89,7 +89,8 @@ test("the file is a pdf a reader can open, with one page per sheet and a footer 
 
 test("the card's words are the page's words: title, headings, prose and list items", () => {
 	const text = textOf(card("## What the scan found\n\nThe sweep names the leftovers.\n\n- a card nobody read"));
-	assert.ok(text.includes("(a note) Tj"), "the title is drawn");
+	assert.ok(text.includes("(a note) Tj"), "the card's name is carried in the foot of the page");
+	assert.equal((text.match(/\(a note\) Tj/g) ?? []).length, 1, "but not again as a heading over the words");
 	// The workspace and the day sit in the foot of every page now, and the card's own id sits nowhere.
 	assert.ok(text.includes("pi-studio") && text.includes("2025-03-14"), "the foot says where the card came from");
 	assert.ok(!text.includes("abcdef01"), "the card id is not drawn");
