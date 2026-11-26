@@ -33,6 +33,8 @@ export type LogEntry = {
 	level: LogLevel;
 	source: string;
 	message: string;
+	/** The command's own answer, for the drawer's expanded view, when there is one. */
+	output?: string;
 	meta?: LogMeta;
 };
 
@@ -41,6 +43,9 @@ export const LOG_CAPACITY = 5000;
 
 /** How much of one message is kept. A stack trace fits; a runaway print does not. */
 export const LOG_MESSAGE_MAX = 8192;
+
+/** How much of one command's output is kept: the head and the tail, so a long answer still says how it began and where it ended. */
+export const LOG_OUTPUT_MAX = 2048;
 
 /** What one source is. It is the column the drawer shows, so it stays short and made of one word. */
 const SOURCE_MAX = 80;
@@ -71,6 +76,19 @@ export function levelOf(name: unknown): LogLevel {
 	if (word === "warning" || word === "warn") return "warning";
 	if (word === "debug") return "debug";
 	return "info";
+}
+
+/**
+ * What the drawer's expanded view may hold of a command's answer: everything when it fits, and when it does
+ * not, the head and the tail with the omission said out loud — a long `git log` still shows its first and
+ * last lines rather than disappearing behind a cap.
+ */
+export function truncateOutput(text: string): string {
+	const raw = String(text ?? "").replace(/\n+$/, "").replace(/^\n+/, "");
+	if (raw.length <= LOG_OUTPUT_MAX) return raw;
+	const half = Math.floor(LOG_OUTPUT_MAX / 2);
+	const omitted = raw.length - LOG_OUTPUT_MAX;
+	return `${raw.slice(0, half)}\n… ${omitted} chars omitted …\n${raw.slice(raw.length - half)}`;
 }
 
 // ---------- redaction ----------
@@ -112,9 +130,10 @@ export function snapshot(): LogEntry[] {
 
 /**
  * Write one line. Level, source and message are the three every source has; `meta` is what a command
- * behind the line can add. Nothing here throws: a log that can fail its caller is a log nobody writes.
+ * behind the line can add, and `output` is what that command answered, for commands that have an answer.
+ * Nothing here throws: a log that can fail its caller is a log nobody writes.
  */
-export function log(level: LogLevel | string, source: string, message: string, meta?: LogMeta): LogEntry {
+export function log(level: LogLevel | string, source: string, message: string, meta?: LogMeta, output?: string): LogEntry {
 	const name = String(source ?? "").trim() || "daemon";
 	const text = redact(String(message ?? "")).slice(0, LOG_MESSAGE_MAX);
 	const entry: LogEntry = {
@@ -124,6 +143,8 @@ export function log(level: LogLevel | string, source: string, message: string, m
 		source: redact(name).slice(0, SOURCE_MAX),
 		message: text,
 	};
+	const answered = output !== undefined ? redact(String(output)) : "";
+	if (answered.trim()) entry.output = truncateOutput(answered);
 	if (meta && typeof meta === "object") {
 		const kept: LogMeta = {};
 		for (const [key, value] of Object.entries(meta)) {

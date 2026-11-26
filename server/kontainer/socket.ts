@@ -265,11 +265,11 @@ export function requestJson(runtime: EngineRuntime, path: string, opts: SocketRe
 					const status = res.statusCode ?? 500;
 					const dur = Date.now() - startedAt;
 					if (status >= 400) {
-						log(isRead ? "debug" : "error", source, `${what} · ${engineDetail(body).slice(0, 300) || `failed with ${status}`}`, meta(status, dur));
+						log(isRead ? "debug" : "error", source, `${what} · ${engineDetail(body).slice(0, 300) || `failed with ${status}`}`, meta(status, dur), body.toString("utf8"));
 						reject(engineError(status, body));
 						return;
 					}
-					if (!isRead) log("info", source, what, meta(status, dur));
+					if (!isRead) log("info", source, what, meta(status, dur), body.toString("utf8"));
 					if (body.length === 0) {
 						resolve(null);
 						return;
@@ -318,7 +318,7 @@ export function requestBuffer(runtime: EngineRuntime, path: string, opts: Socket
 					const body = Buffer.concat(chunks);
 					const status = res.statusCode ?? 500;
 					if (status >= 400) {
-						log("debug", source, `${what} · ${engineDetail(body).slice(0, 300) || `failed with ${status}`}`, meta(status, Date.now() - startedAt));
+						log("debug", source, `${what} · ${engineDetail(body).slice(0, 300) || `failed with ${status}`}`, meta(status, Date.now() - startedAt), body.toString("utf8"));
 						reject(engineError(status, body));
 						return;
 					}

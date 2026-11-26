@@ -107,7 +107,7 @@ export function execFileRunner(cli: string, args: string[], opts: { cwd: string;
 				cwd: opts.cwd,
 				exit: code,
 				dur: Date.now() - startedAt,
-			});
+			}, output || undefined);
 			resolvePromise({ code, output: code === 0 ? output : output || (error as Error).message });
 		});
 	});
@@ -124,7 +124,7 @@ function loginRunner(cli: string, args: string[], password: string, cwd: string,
 			cwd,
 			exit: code,
 			dur: Date.now() - startedAt,
-		});
+		}, output || undefined);
 		return { code, output };
 	};
 	return new Promise((resolvePromise) => {

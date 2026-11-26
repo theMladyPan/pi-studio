@@ -114,12 +114,13 @@ export function runGit(cwd: string, args: readonly string[], options: GitExecOpt
 			// is otherwise only visible to whoever started the daemon. A run that printed to stderr and
 			// still succeeded is a warning, because that is usually the interesting one.
 			const said = stderrText.trim().split("\n")[0]?.slice(0, 300) ?? "";
+			const answered = [decode(stdout, stdoutBytes).trimEnd(), stderrText.trimEnd()].filter((part) => part.trim());
 			log(ok ? (said ? "warning" : "info") : "error", "git", `${command}${said ? ` · ${said}` : ""}`, {
 				cmd: command,
 				cwd,
 				exit: code ?? (timedOut ? "timed out" : "no code"),
 				dur: Date.now() - startedAt,
-			});
+			}, answered.length ? answered.join("\n") : undefined);
 			resolve({ ok, code, stdout: Buffer.concat(stdout, stdoutBytes), stderr: stderrText.trim(), timedOut, truncated });
 		};
 

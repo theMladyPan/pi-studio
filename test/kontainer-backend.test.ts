@@ -682,6 +682,7 @@ test("a container lifecycle write lands in the daemon log as the command a devel
 	assert.equal(line.meta?.cmd, "cd /ws/myproj docker start chatbot_chatbot_1");
 	assert.equal(line.meta?.exit, 204);
 	assert.equal(line.meta?.cwd, "/ws/myproj");
+	assert.equal(line.output, undefined, "a 204 answers nothing, so the view falls back to the command");
 	assert.ok(!snapshot().some((entry) => entry.message.startsWith("docker start 999999aaaaaa")), "the name lookup leaves no line of its own");
 });
 
@@ -693,6 +694,7 @@ test("a failed engine read is debug and a failed write is error, so polls stay o
 	const writeFailure = snapshot().find((entry) => entry.message.startsWith("docker start abc"));
 	assert.ok(readFailure && readFailure.level === "debug" && readFailure.meta?.exit === 500);
 	assert.ok(writeFailure && writeFailure.level === "error" && writeFailure.meta?.exit === 500);
+	assert.ok(writeFailure.output?.includes("engine is unhappy"), "the engine's own sentence rides on the line");
 });
 
 test("an image removal is logged with its tag and its forced flag", async () => {

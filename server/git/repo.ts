@@ -24,7 +24,7 @@ export function gitIn(folder, args, timeout = 5000) {
 			cwd: folder,
 			exit: out.status ?? "no code",
 			dur: Date.now() - startedAt,
-		});
+		}, [out.stdout ?? "", err].filter((part) => part.trim()).join("\n") || undefined);
 		return { ok: out.status === 0, out: (out.stdout ?? "").trim(), err };
 	} catch (error) {
 		log("error", "git", `${command} · ${error.message}`, { cmd: command, cwd: folder, dur: Date.now() - startedAt });
@@ -54,7 +54,7 @@ export function gitSoon(folder, args, timeout = 5000) {
 					cwd: folder,
 					exit: error ? (typeof error.code === "number" ? error.code : "failed") : 0,
 					dur: Date.now() - startedAt,
-				});
+				}, [String(stdout ?? ""), err].filter((part) => part.trim()).join("\n") || undefined);
 				done({ ok: !error, out: String(stdout ?? "").trim(), err });
 			},
 		);

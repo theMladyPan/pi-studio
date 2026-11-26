@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { gitText, runGit } from "../server/git/exec.ts";
+import { snapshot } from "../server/logs.ts";
 import { scratchRepo } from "../test-support/git.ts";
 
 test("a read answers what git said, in the folder it was asked about", async () => {
@@ -12,6 +13,8 @@ test("a read answers what git said, in the folder it was asked about", async () 
 		const top = await gitText(repo, ["rev-parse", "--show-toplevel"]);
 		assert.equal(top.ok, true, top.stderr);
 		assert.equal(realpathSync(top.text.trim()), realpathSync(repo));
+		const line = snapshot().find((entry) => entry.source === "git" && entry.message === "git rev-parse --show-toplevel");
+		assert.equal(realpathSync(String(line?.output)), realpathSync(repo), "the expanded view carries git's answer, not the command again");
 	} finally {
 		rmSync(repo, { recursive: true, force: true });
 	}
