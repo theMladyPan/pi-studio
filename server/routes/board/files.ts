@@ -1287,6 +1287,7 @@ export async function onFilesSearch(url: URL, res: ServerResponse, board: BoardF
 	const found = await walkSearch(root, wanted.matcher, showHidden);
 	answer(res, 200, {
 		root,
+		home: homedir(),
 		repo: found.repo,
 		q: url.searchParams.get("q") ?? "",
 		files: found.files,

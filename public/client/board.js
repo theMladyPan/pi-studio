@@ -6035,6 +6035,16 @@ function paintDrawers() {
   }
   // Files and source live in the toolbox menu, so the chip says when one of them is open.
   toolboxBtn.classList.toggle("has-open", drawerState.open === "files" || drawerState.open === "source");
+  // The header names the open drawer beside the workspace, the way the git graph names itself:
+  // the search drawer says "Search and replace" while it is up, and nothing while no drawer is.
+  // The git graph owns the same label while it is up, so it is only hidden here when it is not.
+  const openPanelName = document.getElementById("openPanelName");
+  if (drawerState.open === "search") {
+    openPanelName.textContent = "Search and replace";
+    openPanelName.hidden = false;
+  } else if (!gitDrawer.isOpen()) {
+    openPanelName.hidden = true;
+  }
   try {
     localStorage.setItem("board.railOff", drawerState.open ? "0" : "1");
   } catch {}
@@ -12888,8 +12898,12 @@ const srCaseEl = document.getElementById("srCase");
 const srWordEl = document.getElementById("srWord");
 const srRegexEl = document.getElementById("srRegex");
 
+const srTitleEl = document.getElementById("srTitle");
+
 const srState = {
   seq: 0,
+  root: "",
+  home: "",
   case: false,
   word: false,
   regex: false,
@@ -12938,7 +12952,27 @@ function srPreviewText(hit) {
 }
 
 /** One grouped file: the name and its count, then its snippet lines with the match picked out. */
+/** The head names the folder being searched, the way the files drawer's does: shortened to `~` inside
+ *  the home folder, with the folder's own name bold after the path to it. */
+function srPaintTitle() {
+  const root = srState.root || exState.root;
+  const home = srState.home || exState.home;
+  const label = explorerCore.shortPath(root, home) || root || "search";
+  srTitleEl.textContent = "";
+  const slash = label.lastIndexOf("/");
+  if (slash >= 0 && slash < label.length - 1) {
+    srTitleEl.append(label.slice(0, slash + 1));
+    const leaf = document.createElement("b");
+    leaf.textContent = label.slice(slash + 1);
+    srTitleEl.append(leaf);
+  } else {
+    srTitleEl.textContent = label;
+  }
+  srTitleEl.title = root || label;
+}
+
 function srPaint() {
+  srPaintTitle();
   srCaseEl.classList.toggle("on", srState.case);
   srCaseEl.setAttribute("aria-pressed", srState.case ? "true" : "false");
   srWordEl.classList.toggle("on", srState.word);
@@ -13085,6 +13119,8 @@ async function srRun() {
     const text = (await response.text()).trim();
     if (!response.ok) throw new Error(text.slice(0, 160) || response.statusText);
     const data = JSON.parse(text);
+    if (typeof data.root === "string" && data.root) srState.root = data.root;
+    if (typeof data.home === "string" && data.home) srState.home = data.home;
     srState.files = Array.isArray(data.files) ? data.files : [];
     srState.totalFiles = Number(data.totalFiles) || srState.files.length;
     srState.totalMatches = Number(data.totalMatches) || 0;
