@@ -13,10 +13,11 @@ import { Readable } from "node:stream";
 import { EventEmitter } from "node:events";
 import { after, before, test } from "node:test";
 
-const { demuxDockerLogs, discoverRuntimes } = await import("../server/kontainer/socket.ts");
+const { demuxDockerLogs, discoverRuntimes, requestJson } = await import("../server/kontainer/socket.ts");
 const { buildSources, buildTopology, fetchStats, getState, scanWorkspaceFiles, statsFromPayload } = await import("../server/kontainer/topology.ts");
 const { buildExecCommand, handleAction } = await import("../server/kontainer/actions.ts");
-const { onKontainerAction, onKontainerEvents, onKontainerState } = await import("../server/routes/kontainer.ts");
+const { logEngineEvent, onKontainerAction, onKontainerEvents, onKontainerState } = await import("../server/routes/kontainer.ts");
+const { snapshot } = await import("../server/logs.ts");
 import type { Runtime } from "../server/kontainer/socket.ts";
 
 const NOW = 1_700_000_000;
@@ -663,4 +664,61 @@ test("onKontainerEvents tells the tab when the engine fails mid-stream", async (
 		return res.chunks.join("");
 	});
 	assert.match(failed, /event: error\ndata: \{"error":"engine request failed \(500\): engine is unhappy"\}\n\n/);
+	assert.ok(snapshot().some((entry) => entry.level === "error" && entry.message.startsWith("events stream · engine request failed (500)")), "the mid-stream failure is one daemon line");
+});
+
+// ---------- engine calls and events in the daemon log ----------
+
+test("a container lifecycle write lands in the daemon log as info with its command", async () => {
+	const runtime = mockRuntime();
+	const result = await handleAction({ folder: "/ws/myproj" }, { action: "start", id: "999999aaaaaa", runtime: runtime.id }, { runtimes: [runtime] });
+	assert.equal(result.ok, true);
+	const line = snapshot().find((entry) => entry.message === "POST /containers/999999aaaaaa/start");
+	assert.ok(line, "the start is in the ring");
+	assert.equal(line.level, "info");
+	assert.equal(line.source, "docker");
+	assert.equal(line.meta?.cmd, "POST /containers/999999aaaaaa/start");
+	assert.equal(line.meta?.exit, 204);
+});
+
+test("a failed engine read is debug and a failed write is error, so polls stay out of the default view", async () => {
+	const brokenRuntime = { socketPath: brokenSockPath, cli: "docker" };
+	await assert.rejects(requestJson(brokenRuntime, "/containers/json"), /engine request failed \(500\)/);
+	await assert.rejects(requestJson(brokenRuntime, "/containers/abc/start", { method: "POST" }), /engine request failed \(500\)/);
+	const readFailure = snapshot().find((entry) => entry.message.startsWith("GET /containers/json"));
+	const writeFailure = snapshot().find((entry) => entry.message.startsWith("POST /containers/abc/start"));
+	assert.ok(readFailure && readFailure.level === "debug" && readFailure.meta?.exit === 500);
+	assert.ok(writeFailure && writeFailure.level === "error" && writeFailure.meta?.exit === 500);
+});
+
+test("logEngineEvent says a death out loud and ordinary churn at debug, and drops a line it cannot read", () => {
+	const beforeSeen = snapshot().length;
+	logEngineEvent('{"Type":"container","Action":"start","id":"abcdef1234567890","Actor":{"Attributes":{"name":"web"}}}', "docker");
+	logEngineEvent('{"Type":"container","Action":"die","id":"abcdef1234567890","Actor":{"Attributes":{"name":"web","exitCode":"1"}}}', "docker");
+	logEngineEvent("not json at all", "docker");
+	logEngineEvent("{}", "docker");
+	assert.equal(snapshot().length - beforeSeen, 2, "only the two readable events were written");
+	const churn = snapshot()[snapshot().length - 2];
+	const death = snapshot()[snapshot().length - 1];
+	assert.equal(churn.level, "debug");
+	assert.equal(churn.message, "container start web");
+	assert.equal(churn.source, "docker");
+	assert.equal(death.level, "error");
+	assert.match(death.message, /^container die web/);
+	assert.match(death.message, /exit 1/);
+});
+
+test("the events feed writes what the engine did as it forwards it", async () => {
+	const beforeSeen = snapshot().length;
+	const closedBefore = eventsClosed;
+	const req = new EventEmitter() as unknown as IncomingMessage;
+	const res = fakeResponse();
+	await withEngine(sockPath, async () => {
+		await onKontainerEvents(req, res as unknown as ServerResponse, new URL("http://daemon/kontainer/events?runtime=docker"), { folder: "/ws/myproj" });
+		await until(() => res.chunks.join("").includes("event: change"), "the first engine event");
+		(req as unknown as EventEmitter).emit("close");
+		await until(() => eventsClosed > closedBefore, "the engine stream to be destroyed");
+	});
+	const seen = snapshot().slice(beforeSeen);
+	assert.ok(seen.some((entry) => entry.level === "debug" && entry.message === "container start" && entry.source === "docker"), "the forwarded start is one debug line");
 });

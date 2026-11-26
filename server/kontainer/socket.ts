@@ -10,6 +10,7 @@ import type { ClientRequest } from "node:http";
 import { realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { log } from "../logs.ts";
 
 export type RuntimeKind = "docker" | "podman";
 export type RuntimeCli = "docker" | "podman";
@@ -105,23 +106,45 @@ export interface SocketRequestOptions {
 	headers?: Record<string, string>;
 }
 
-function engineError(status: number, body: Buffer): Error {
+/** What an engine caller may say about the runtime it talks to: the socket, and the CLI name when known. */
+export type EngineRuntime = { socketPath: string; cli?: string };
+
+/** The drawer's column for one engine line: the CLI name, so an API call reads beside the CLI call that would have made it. */
+function engineSource(runtime: EngineRuntime): string {
+	return runtime.cli ?? "kontainer";
+}
+
+/** The engine's own sentence in a body: the `message` field a refusal carries, or the trimmed body. */
+function engineDetail(body: Buffer): string {
 	let message = body.toString("utf8").trim();
 	try {
 		const parsed = JSON.parse(message) as { message?: string };
 		if (typeof parsed.message === "string" && parsed.message) message = parsed.message;
 	} catch {}
-	return new Error(`engine request failed (${status}): ${message || "empty response"}`);
+	return message;
 }
 
-/** One JSON request over the Engine socket. Throws on a non-2xx status. */
-export function requestJson(runtime: { socketPath: string }, path: string, opts: SocketRequestOptions = {}): Promise<unknown> {
+function engineError(status: number, body: Buffer): Error {
+	return new Error(`engine request failed (${status}): ${engineDetail(body) || "empty response"}`);
+}
+
+/**
+ * One JSON request over the Engine socket. Throws on a non-2xx status. The call lands in the daemon's
+ * log where a human can find it without the drawer open: a write is news (`info`, a failure is `error`),
+ * a read is only `debug` until it fails, because the drawer polls reads every second and a poll is not news.
+ */
+export function requestJson(runtime: EngineRuntime, path: string, opts: SocketRequestOptions = {}): Promise<unknown> {
+	const method = opts.method ?? "GET";
+	const command = `${method} ${path}`;
+	const source = engineSource(runtime);
+	const startedAt = Date.now();
+	const isRead = method === "GET";
 	return new Promise((resolve, reject) => {
 		const req = request(
 			{
 				socketPath: runtime.socketPath,
 				path,
-				method: opts.method ?? "GET",
+				method,
 				timeout: opts.timeoutMs ?? 15_000,
 				headers: { "Content-Type": "application/json", ...(opts.headers ?? {}) },
 			},
@@ -130,10 +153,14 @@ export function requestJson(runtime: { socketPath: string }, path: string, opts:
 				res.on("data", (chunk: Buffer) => chunks.push(chunk));
 				res.on("end", () => {
 					const body = Buffer.concat(chunks);
-					if ((res.statusCode ?? 500) >= 400) {
-						reject(engineError(res.statusCode ?? 500, body));
+					const status = res.statusCode ?? 500;
+					const dur = Date.now() - startedAt;
+					if (status >= 400) {
+						log(isRead ? "debug" : "error", source, `${command} · ${engineDetail(body).slice(0, 300) || `failed with ${status}`}`, { cmd: command, exit: status, dur });
+						reject(engineError(status, body));
 						return;
 					}
+					if (!isRead) log("info", source, command, { cmd: command, exit: status, dur });
 					if (body.length === 0) {
 						resolve(null);
 						return;
@@ -147,14 +174,23 @@ export function requestJson(runtime: { socketPath: string }, path: string, opts:
 			},
 		);
 		req.on("timeout", () => req.destroy(new Error("engine request timed out")));
-		req.on("error", reject);
+		req.on("error", (error) => {
+			log(isRead ? "debug" : "error", source, `${command} · ${(error as Error).message}`, { cmd: command, exit: "failed", dur: Date.now() - startedAt });
+			reject(error);
+		});
 		if (opts.body !== undefined) req.write(opts.body);
 		req.end();
 	});
 }
 
-/** One raw-buffer request over the Engine socket (container logs). */
-export function requestBuffer(runtime: { socketPath: string }, path: string, opts: SocketRequestOptions = {}): Promise<Buffer> {
+/**
+ * One raw-buffer request over the Engine socket (container logs). A container's own output is never
+ * logged — it would flood the ring in seconds — but a refusal to fetch it is worth a `debug` line.
+ */
+export function requestBuffer(runtime: EngineRuntime, path: string, opts: SocketRequestOptions = {}): Promise<Buffer> {
+	const command = `GET ${path}`;
+	const source = engineSource(runtime);
+	const startedAt = Date.now();
 	return new Promise((resolve, reject) => {
 		const req = request(
 			{
@@ -169,8 +205,10 @@ export function requestBuffer(runtime: { socketPath: string }, path: string, opt
 				res.on("data", (chunk: Buffer) => chunks.push(chunk));
 				res.on("end", () => {
 					const body = Buffer.concat(chunks);
-					if ((res.statusCode ?? 500) >= 400) {
-						reject(engineError(res.statusCode ?? 500, body));
+					const status = res.statusCode ?? 500;
+					if (status >= 400) {
+						log("debug", source, `${command} · ${engineDetail(body).slice(0, 300) || `failed with ${status}`}`, { cmd: command, exit: status, dur: Date.now() - startedAt });
+						reject(engineError(status, body));
 						return;
 					}
 					resolve(body);
@@ -178,7 +216,10 @@ export function requestBuffer(runtime: { socketPath: string }, path: string, opt
 			},
 		);
 		req.on("timeout", () => req.destroy(new Error("engine request timed out")));
-		req.on("error", reject);
+		req.on("error", (error) => {
+			log("debug", source, `${command} · ${(error as Error).message}`, { cmd: command, exit: "failed", dur: Date.now() - startedAt });
+			reject(error);
+		});
 		req.end();
 	});
 }
@@ -193,7 +234,7 @@ export interface SocketStreamHandle {
  * `close()` destroys the upstream request; the SSE route calls it the moment
  * the browser goes away, so nothing leaks when the drawer closes.
  */
-export function openSocketStream(runtime: { socketPath: string }, path: string, onChunk: (chunk: Buffer) => void, onError?: (error: Error) => void): SocketStreamHandle {
+export function openSocketStream(runtime: EngineRuntime, path: string, onChunk: (chunk: Buffer) => void, onError?: (error: Error) => void): SocketStreamHandle {
 	const req = request({ socketPath: runtime.socketPath, path, method: "GET", headers: { Accept: "application/json" } }, (res) => {
 		if ((res.statusCode ?? 500) >= 400) {
 			const chunks: Buffer[] = [];

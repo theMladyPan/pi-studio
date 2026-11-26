@@ -9,6 +9,7 @@ import { handleAction } from "../kontainer/actions.ts";
 import { discoverRuntimes, openSocketStream, resolveRuntime } from "../kontainer/socket.ts";
 import { fetchDetail, fetchDf, fetchStats, getState } from "../kontainer/topology.ts";
 import type { Scope } from "../kontainer/topology.ts";
+import { log } from "../logs.ts";
 
 export interface KontainerBoard {
 	folder: string;
@@ -81,6 +82,34 @@ export async function onKontainerDf(_req: IncomingMessage, res: ServerResponse, 
 
 const EVENT_FILTERS = encodeURIComponent(JSON.stringify({ type: ["container", "image", "network", "volume"] }));
 
+/** Actions a human would want said out loud even with the drawer shut: a container died, ran out of memory or went unhealthy. */
+const EVENT_ERROR = /die|oom|health_status: unhealthy/;
+
+/**
+ * One Engine event as one daemon line, so what the engine did on its own — a container that died, an image that
+ * appeared — can be found from the logs drawer (`l`) with the drawer shut. Ordinary churn stands at `debug`
+ * because a build alone can put a hundred creates through the feed and the drawer's default view is `info`.
+ */
+export function logEngineEvent(line: string, source = "kontainer"): void {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(line);
+	} catch {
+		return;
+	}
+	const record = (parsed ?? {}) as Record<string, unknown>;
+	const type = typeof record.Type === "string" ? record.Type : "";
+	const action = typeof record.Action === "string" ? record.Action : "";
+	if (!type || !action) return;
+	const actor = (record.Actor ?? {}) as Record<string, unknown>;
+	const attrs = (actor.Attributes ?? {}) as Record<string, unknown>;
+	const name = typeof attrs.name === "string" && attrs.name ? attrs.name : "";
+	const id = typeof record.id === "string" ? record.id.slice(0, 12) : "";
+	const who = name || id;
+	const exit = typeof attrs.exitCode === "string" && attrs.exitCode && attrs.exitCode !== "0" ? ` · exit ${attrs.exitCode}` : "";
+	log(EVENT_ERROR.test(action) ? "error" : "debug", source, `${type} ${action}${who ? ` ${who}` : ""}${exit}`, { cmd: "/events" });
+}
+
 /**
  * The live events feed. The upstream Engine stream is destroyed the moment
  * either side closes, so closing the drawer leaks no socket, timer or CPU.
@@ -95,6 +124,7 @@ export async function onKontainerEvents(req: IncomingMessage, res: ServerRespons
 		"X-Accel-Buffering": "no",
 	});
 	if (!runtime) {
+		log("error", "kontainer", "events: no Docker or Podman socket found", { cmd: "/events" });
 		res.write(`event: error\ndata: ${JSON.stringify({ error: "no Docker or Podman socket found" })}\n\n`);
 		res.end();
 		return;
@@ -113,6 +143,7 @@ export async function onKontainerEvents(req: IncomingMessage, res: ServerRespons
 	/** An engine that fails mid-stream ends the feed with an `error` event instead of a silent stall. */
 	const failStream = (error: Error) => {
 		if (closed) return;
+		log("error", runtime.cli ?? "kontainer", `events stream · ${error.message.slice(0, 300)}`, { cmd: "/events" });
 		if (ping) clearInterval(ping);
 		closed = true;
 		upstream?.close();
@@ -129,6 +160,7 @@ export async function onKontainerEvents(req: IncomingMessage, res: ServerRespons
 			const line = buffer.slice(0, newline).trim();
 			buffer = buffer.slice(newline + 1);
 			if (line && line.startsWith("{")) {
+				logEngineEvent(line, runtime.cli);
 				res.write(`event: change\ndata: ${line}\n\n`);
 			}
 			newline = buffer.indexOf("\n");
