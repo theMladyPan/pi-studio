@@ -69,6 +69,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       <div class="k-sheet-head"><span class="k-sheet-title" id="kSheetTitle"></span><span class="k-grow"></span><button class="k-insp-close" id="kSheetClose" type="button" title="close (esc)">×</button></div>
       <div class="k-sheet-body" id="kSheetBody"></div><div class="k-sheet-foot" id="kSheetFoot"></div>
     </div></div>
+    <div class="k-tasks" id="kTasks" role="status" aria-live="polite"></div>
     <div class="k-toast" id="kToast" role="status"></div>`;
 
   const viewport = $("kViewport"), stage = $("kStage"), wires = $("kWireLayer"), inspector = $("kInspector"), grip = $("kInspGrip");
@@ -238,12 +239,20 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     render();
   }
   async function postAction(payload, okMsg) {
-    const data = await apiText(`/kontainer/action?workspace=${encodeURIComponent(workspace || "")}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ runtime: state.runtime || undefined, ...payload }) });
-    // The action route answers 200 either way, so its `ok` is the only verdict a failure carries.
-    if (data?.ok === false) throw new Error(data?.error || "action failed");
-    if (okMsg) toast(okMsg);
-    await loadState();
-    return data;
+    // A docker action is a task: it pops in blue while it runs, then turns green or red and
+    // stays two seconds. `exec.cmd` only builds a command string, so it never pops.
+    const task = payload?.action === "exec.cmd" ? null : startTask(okMsg || String(payload?.action || "action"));
+    try {
+      const data = await apiText(`/kontainer/action?workspace=${encodeURIComponent(workspace || "")}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ runtime: state.runtime || undefined, ...payload }) });
+      // The action route answers 200 either way, so its `ok` is the only verdict a failure carries.
+      if (data?.ok === false) throw new Error(data?.error || "action failed");
+      await loadState();
+      finishTask(task, true);
+      return data;
+    } catch (error) {
+      finishTask(task, false, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
   }
   async function fetchStats(ids) {
     if (!ids.length || !workspace) return;
@@ -261,10 +270,46 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     } catch { /* stats are best-effort */ }
   }
 
-  /* ---------- toasts ---------- */
+  /* ---------- toasts & task queue ---------- */
+  let lastTaskFailure = null;
+  function scheduleTaskRemoval(task) {
+    clearTimeout(task.timer);
+    task.timer = setTimeout(() => task.card.remove(), 5000);
+  }
+  function startTask(label) {
+    const host = $("kTasks");
+    if (!host) return null;
+    const card = el("div", "k-task k-running");
+    const dot = el("span", "k-task-dot", "●");
+    const labelEl = el("span", "k-task-label", `${label}…`);
+    card.append(dot, labelEl);
+    host.append(card);
+    const task = { card, dot, labelEl, label, started: Date.now(), done: false, hovered: false, timer: null };
+    card.addEventListener("mouseenter", () => { task.hovered = true; clearTimeout(task.timer); });
+    card.addEventListener("mouseleave", () => { task.hovered = false; if (task.done) scheduleTaskRemoval(task); });
+    return task;
+  }
+  function finishTask(task, ok, detail) {
+    if (!task) return;
+    const secs = ((Date.now() - task.started) / 1000).toFixed(1);
+    task.card.classList.remove("k-running");
+    task.card.classList.add(ok ? "k-done" : "k-failed");
+    task.dot.textContent = ok ? "✓" : "✗";
+    task.labelEl.textContent = `${task.label} · ${secs}s`;
+    if (!ok) {
+      lastTaskFailure = { msg: String(detail || ""), at: Date.now() };
+      if (detail) task.card.append(el("div", "k-task-detail", String(detail)));
+    }
+    task.done = true;
+    if (!task.hovered) scheduleTaskRemoval(task);
+  }
   function toast(msg) {
+    // A failed task already carries its error in red, so the caller's copy would be a second bubble.
+    if (lastTaskFailure && String(msg) === lastTaskFailure.msg && Date.now() - lastTaskFailure.at < 2000) return;
     const t = $("kToast"); t.textContent = msg; t.classList.add("k-show");
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("k-show"), 3200);
+    $("kTasks")?.classList.add("k-lift");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.classList.remove("k-show"); $("kTasks")?.classList.remove("k-lift"); }, 3200);
   }
 
   /* ---------- render: bar ---------- */
