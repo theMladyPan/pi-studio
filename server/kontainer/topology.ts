@@ -375,7 +375,7 @@ export function buildTopology(input: BuildTopologyInput): Topology {
 			} else {
 				portWiring.set(key, {
 					id: `port:${key}`,
-					label: port.hostPort !== null ? `${port.hostIp ? `${port.hostIp}:` : ""}${port.hostPort} → ${port.containerPort}/${port.proto}` : `${port.containerPort}/${port.proto}`,
+					label: port.hostPort !== null ? `${port.hostIp ? `${port.hostIp}:` : ""}${port.hostPort} → ${port.containerPort}/${port.proto}` : `:${port.containerPort}/${port.proto} (unpublished)`,
 					hostIp: port.hostIp,
 					hostPort: port.hostPort,
 					containerPort: port.containerPort,
@@ -422,7 +422,7 @@ export function buildTopology(input: BuildTopologyInput): Topology {
 	const unused = images.filter((image) => !usedImageIds.has(image.id));
 	const summary: TopologySummary = {
 		running: visible.filter((c) => c.state === "running").length,
-		issues: visible.filter((c) => c.state === "dead" || c.health === "unhealthy" || (c.state === "exited" && c.exitCode !== null && c.exitCode !== 0)).length,
+		issues: visible.filter((c) => c.health === "unhealthy" || c.staleImage || c.oomKilled || (c.state === "exited" && c.exitCode !== null && c.exitCode !== 0) || c.state === "dead").length,
 		totalContainers: visible.length,
 		workspaceContainers: allContainers.filter((c) => c.inWorkspace).length,
 		allContainers: allContainers.length,

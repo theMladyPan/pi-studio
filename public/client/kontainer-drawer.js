@@ -13,7 +13,15 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
 
   const $ = (id) => drawer.querySelector(`#${id}`);
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
-  const fmtBytes = (b) => { if (b == null || !Number.isFinite(b)) return "—"; if (b < 1024) return `${b} B`; const u = ["KB", "MB", "GB", "TB"]; const i = Math.min(u.length - 1, Math.floor(Math.log(b) / Math.log(1024))); return `${(b / 1024 ** (i + 1)).toFixed(i ? 1 : 0)} ${u[i]}`; };
+  // Each threshold names its own divisor, so a size is never read in the unit above it (41 MB is not 0.0 GB).
+  const fmtBytes = (b) => {
+    if (b == null || !Number.isFinite(b)) return "—";
+    if (b < 1024) return `${b} B`;
+    if (b < 1024 ** 2) return `${(b / 1024).toFixed(0)} KB`;
+    if (b < 1024 ** 3) return `${(b / 1024 ** 2).toFixed(0)} MB`;
+    if (b < 1024 ** 4) return `${(b / 1024 ** 3).toFixed(2).replace(/\.00$/, "")} GB`;
+    return `${(b / 1024 ** 4).toFixed(2)} TB`;
+  };
   const fmtDate = (t) => { if (!t) return "—"; const d = new Date(t); return Number.isNaN(d) ? String(t) : d.toLocaleString(); };
   const store = { get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
 
@@ -78,10 +86,15 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   const summary = () => topo().summary || {};
   const findImage = (id) => images().find((i) => i.id === id);
   const findCtr = (id) => containers().find((c) => c.id === id);
+  // A container's own id first, then the image its tag now names: a stale container still points at a
+  // build this engine no longer holds under that id, and the local image with its name is its lineage.
+  const imageOfCtr = (c) => findImage(c.imageId) || images().find((i) => i.name === c.imageName) || null;
+  const imageIdOfCtr = (c) => imageOfCtr(c)?.id || c.imageId || "";
   const isRunning = (c) => ["running", "restarting"].includes(String(c.state || "").toLowerCase()) || /^up\b/i.test(c.statusText || "");
-  const isIssue = (c) => !isRunning(c) && (c.exitCode > 0 || c.oomKilled || ["unhealthy", "paused", "failed", "dead"].includes(String(c.health || c.state || "").toLowerCase()) || c.staleImage);
+  // The bar's count, this column's filter and the backend's `summary.issues` are one definition.
+  const isIssue = (c) => String(c.health || "").toLowerCase() === "unhealthy" || !!c.staleImage || !!c.oomKilled || (String(c.state || "").toLowerCase() === "exited" && c.exitCode !== null && c.exitCode !== 0) || String(c.state || "").toLowerCase() === "dead";
   const isUnusedImg = (i) => i.dangling || !i.inUse;
-  const imgNameOf = (c) => { const i = findImage(c.imageId); return i ? `${i.repo}:${i.tag}` : c.imageName || ""; };
+  const imgNameOf = (c) => { const i = imageOfCtr(c); return i ? `${i.repo}:${i.tag}` : c.imageName || ""; };
   const ctrWires = (c) => {
     const w = [];
     (wiring().ports || []).filter((p) => (p.containerIds || []).includes(c.id)).forEach((p) => w.push(p.id));
@@ -96,15 +109,18 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       const n = list.find((x) => x.id === id); if (n) return { ...n, kind };
     } return null;
   };
+  // The label the backend carries, so an unpublished port reads as one instead of `0.0.0.0:null`.
+  const wireLabel = (w) => w.kind === "port" ? (w.label || `${w.hostIp || "0.0.0.0"}:${w.hostPort} → ${w.containerPort}${w.proto ? `/${w.proto}` : ""}`)
+    : w.kind === "net" ? (w.name || w.id) : (w.label || w.source || w.id);
   function relatedSet(id) {
     if (!id) return null;
     const set = new Set([id]);
     const c = findCtr(id);
-    if (c) { if (c.imageId) set.add(c.imageId); ctrWires(c).forEach((w) => set.add(w)); return set; }
+    if (c) { const imgId = imageIdOfCtr(c); if (imgId) set.add(imgId); ctrWires(c).forEach((w) => set.add(w)); return set; }
     const img = findImage(id);
     if (img) { containers().filter((x) => x.imageId === img.id || imgNameOf(x) === `${img.repo}:${img.tag}`).forEach((x) => { set.add(x.id); ctrWires(x).forEach((w) => set.add(w)); }); return set; }
     const w = wireNode(id);
-    if (w) containers().filter((x) => ctrWires(x).includes(id)).forEach((x) => { set.add(x.id); if (x.imageId) set.add(x.imageId); });
+    if (w) containers().filter((x) => ctrWires(x).includes(id)).forEach((x) => { set.add(x.id); const imgId = imageIdOfCtr(x); if (imgId) set.add(imgId); });
     return set;
   }
   function matches(node, kind) {
@@ -330,7 +346,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const iconCls = w.kind === "port" ? `k-port${w.listening === false ? " k-unbound" : ""}` : w.kind === "net" ? "k-net" : "k-vol";
     const icon = el("span", `k-wire-icon ${iconCls}`, w.kind === "port" ? "⇄" : w.kind === "net" ? "⌘" : "▦");
     const info = el("div", "k-wire-info");
-    const title = w.kind === "port" ? `${w.hostIp || "0.0.0.0"}:${w.hostPort} → ${w.containerPort}${w.proto ? `/${w.proto}` : ""}` : w.kind === "net" ? (w.name || w.id) : (w.label || w.source || w.id);
+    const title = wireLabel(w);
     const meta = w.kind === "port" ? `${w.listening ? "listening" : "not listening"} · ${(w.containerIds || []).length} container(s)`
       : w.kind === "net" ? `${w.driver || ""} · ${w.subnet || ""} · ${(w.containerIds || []).length} container(s)`
       : `${w.kind || ""} · ${w.destination || ""}${w.rw === false ? " · ro" : ""} · ${(w.containerIds || []).length} container(s)`;
@@ -416,12 +432,12 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     for (const c of containers()) {
       const ctrIn = jack(`${c.id}-in`), ctrOut = jack(`${c.id}-out`);
       if (!ctrIn || !ctrOut) continue;
-      const imgOut = c.imageId ? jack(`${c.imageId}-out`) : null;
+      const img = imageOfCtr(c);
+      const imgOut = img ? jack(`${img.id}-out`) : null;
       if (imgOut) {
-        const hit = !related || (related.has(c.id) && related.has(c.imageId));
-        const img = findImage(c.imageId);
+        const hit = !related || (related.has(c.id) && related.has(img.id));
         let stroke = "#3fb950", anim = isRunning(c) ? "k-flow" : "";
-        if (img?.drift || c.staleImage) { stroke = "#d29922"; anim = "k-drift"; }
+        if (img.drift || c.staleImage) { stroke = "#d29922"; anim = "k-drift"; }
         else if (c.exitCode > 0 || c.oomKilled) { stroke = "#f85149"; anim = ""; }
         else if (!isRunning(c)) stroke = "#6e7681";
         mk(pointOf(imgOut), pointOf(ctrIn), stroke, hit && related ? "2.2" : "1.5", `${anim} ${related ? (hit ? "k-lit" : "k-dimmed") : ""}`);
@@ -527,7 +543,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   }
   function renderWireInspector(w) {
     if (!w) { state.selected = null; return renderInspector(false); }
-    const label = w.kind === "port" ? `${w.hostIp || "0.0.0.0"}:${w.hostPort} → ${w.containerPort}` : w.kind === "net" ? (w.name || w.id) : (w.label || w.source || w.id);
+    const label = wireLabel(w);
     inspector.append(inspHead("wire", label, []));
     const body = el("div", "k-insp-body"); inspector.append(body);
     const list = el("div", "k-kv-list");
@@ -759,7 +775,9 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     drawer, btn, bodyClass: "kontainer-open",
     openTitle: "roll kontainer up (k)", shutTitle: "roll kontainer down (k)",
     beforeOpen() { scrim.hidden = false; },
-    afterOpen() { loadState(); startLive(); scheduleWires(); },
+    // The state arrives before the cadence starts, so the first stats read finds the containers and the
+    // telemetry is there as the drawer lands instead of three seconds later.
+    async afterOpen() { await loadState(); if (!sliding.isOpen()) return; startLive(); scheduleWires(); },
     afterClose() { scrim.hidden = true; stopLive(); },
   });
   scrim.addEventListener("click", () => sliding.close());

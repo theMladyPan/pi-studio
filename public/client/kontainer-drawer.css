@@ -40,7 +40,7 @@ body.kontainer-open #kontainerScrim { opacity: 1; visibility: visible; transitio
 #kontainerDrawer .k-b-amber { color:#f0c05a; background:rgba(210,153,34,.16); border:1px solid rgba(210,153,34,.45); }
 #kontainerDrawer .k-b-red { color:var(--k-red-soft); background:rgba(248,81,73,.16); border:1px solid rgba(248,81,73,.45); }
 #kontainerDrawer .k-b-green { color:var(--k-green-soft); background:rgba(63,185,80,.14); border:1px solid rgba(63,185,80,.38); }
-#kontainerDrawer .k-b-muted { color:var(--k-muted); background:rgba(125,133,144,.12); border:1px solid rgba(125,133,144,.28); }
+#kontainerDrawer .k-b-muted { color:var(--k-muted); background:rgba(125,133,144,.12); border:1px solid rgba(125,133,144,.28); text-transform:none; } /* names a socket path, which keeps the case it has on disk */
 #kontainerDrawer .k-b-blue { color:var(--k-accent); background:rgba(88,166,255,.1); border:1px solid rgba(88,166,255,.25); }
 #kontainerDrawer .k-chip-group { display:inline-flex; align-items:center; gap:4px; }
 #kontainerDrawer .k-chip { font:11px var(--k-mono); color:var(--k-muted); background:transparent; border:1px solid transparent; border-radius:999px; padding:3px 9px; cursor:pointer; white-space:nowrap; transition:all .12s; }

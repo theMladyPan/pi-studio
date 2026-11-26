@@ -185,6 +185,19 @@ test("buildTopology detects stale-image drift", () => {
 	assert.equal(fresh?.staleImage, false);
 	assert.equal(topology.images.find((i) => i.id === "sha256:aaa111")?.drift, true);
 	assert.equal(topology.images.find((i) => i.id === "sha256:bbb222")?.drift, false);
+	// The drifted container stands on the image its tag now names, beside the container built from it,
+	// so that image is still in use and the drawer has an edge to draw the stale build along.
+	const local = topology.images.find((i) => i.id === "sha256:aaa111");
+	assert.deepEqual(local?.containerIds, ["111111aaaaaa", "333333cccccc"]);
+	assert.equal(local?.inUse, true);
+});
+
+test("buildTopology names an unpublished port as one instead of a null host port", () => {
+	const topology = buildTopology({ imagesRaw: IMAGES, containersRaw: CONTAINERS, folder: "/ws/myproj", scope: "all" });
+	const unpublished = topology.wiring.ports.find((p) => p.hostPort === null);
+	assert.equal(unpublished?.label, ":5432/tcp (unpublished)");
+	assert.equal(unpublished?.listening, false);
+	assert.deepEqual(unpublished?.containerIds, ["222222bbbbbb"]);
 });
 
 test("buildTopology scopes to the workspace and keeps global counts", () => {
@@ -213,6 +226,8 @@ test("buildTopology in all scope keeps every image and container", () => {
 	assert.equal(topology.images.length, 4);
 	assert.equal(topology.summary.totalImages, 4);
 	assert.equal(topology.summary.totalImageBytes, 4200);
+	// One definition of an issue: the stale build and the failed exit, not the healthy fresh one.
+	assert.equal(topology.summary.issues, 2);
 });
 
 // ---------- stats ----------
