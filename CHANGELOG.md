@@ -5,6 +5,7 @@
 - feat: Download both files when a note's download press is hit — one press now saves the note's own markdown as `.md` beside the pdf the daemon lays out, under the same name save one extension, so the editable source and the page leave together instead of the page alone. [t-fa716db2]
 - feat: Add a `delete` key that triggers deleting the thread card you are reading — it opens the same sheet the card's trash button opens, listing the card, conversation, folder and branch that would go, so the key alone never removes anything; a card with no trash, such as a note or an open question, answers to no delete key either. [t-c83b8d71]
 - feat: Take the git drawer's own title bar away — the open drawer now names itself in the board header between the workspace and the live state, which moves to the right, its `open in tab` and `roll up` presses end the git graph's own toolbar, the status line sits at the foot of the graph, and the board's footer stays visible under the drawer, so the graph has the whole panel to itself. [t-f15b4da9]
+- feat: Search file names in every folder from the files drawer — the filter walks the whole workspace in chunks instead of only the folders already open, so typing `README` finds every `README.md` on disk; a hidden toggle decides whether dotfiles join the walk, under the same excludes the tree shows, a click reveals the match in the tree, and the right-click menu works on a result as it does on a row. [t-c1c83fd2]
 
 ## [0.9.3] - 2026-11-25
 

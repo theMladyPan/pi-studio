@@ -30,6 +30,11 @@
  * does not hold the daemon's event loop while another board waits. What that cannot fix is said in
  * `moveNoClobber`: a folder is still checked and renamed, and an outside writer can win that window.
  *
+ * The name search (`/files/find`) walks the whole workspace for names holding the query, in chunks, under
+ * the same exclusions the listing shows, and keeps its answer for two seconds so the pages that follow
+ * it are slices of one walk rather than walks of their own. Dot names are in it only when the drawer
+ * asks for hidden files; `.git` is never in it.
+ *
  * What the listing shows is the workspace's own decision. The standard VS Code exclusions, this machine's
  * user settings and the board's own `.vscode/settings.json` are merged, and what they hide is gone before
  * a page is cut, so `total` and `next` count only what a human can see. Only the settings this surface
@@ -102,6 +107,18 @@ const STATUS_BYTES = 8 * 1024 * 1024;
 
 /** The editor holds one file at a time, and a file past this is not one an editor should open. */
 const MAX_FILE_BYTES = 512 * 1024;
+
+/** How many name matches one find walk keeps. Past it the walk stops keeping and says so, rather than holding a runaway list. */
+const MAX_FIND_MATCHES = 5000;
+
+/** How many entries one find walk scans before it stops and says so. A workspace past it is still searched, up to here. */
+const MAX_FIND_SCAN = 100_000;
+
+/** How long a find walk's answer is kept for the pages that follow it, in milliseconds. Two seconds covers a paged read and no longer. */
+const FIND_CACHE_MS = 2000;
+
+/** Entries between yields in a find walk, so a bulk walk never holds the daemon's event loop. */
+const FIND_YIELD_EVERY = 512;
 
 /**
  * The file kinds the browser itself can draw, by extension and nothing else: pictures, the one vector
@@ -910,6 +927,152 @@ export async function onFilesList(url: URL, res: ServerResponse, board: BoardFol
 		settings,
 		...(status.dirtyTruncated ? { dirtyTruncated: true } : {}),
 		...(warnings.length ? { settingsWarnings: warnings } : {}),
+	});
+}
+
+// ---------- finding names in every folder ----------
+
+/** One find walk's kept answer, so the pages after the first are slices and not walks of their own. */
+type FindCache = { at: number; matches: Entry[]; scanned: number; truncated: boolean; warnings: string[] };
+
+const findCache = new Map<string, FindCache>();
+
+/** Folders first, then names, then paths: one order for every page, so a page never re-sorts the last. */
+function byFind(a: Entry, b: Entry): number {
+	const named = byName(a, b);
+	return named !== 0 ? named : a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+}
+
+/** Whether git ignores this path or a folder above it, once `check-ignore` has named the ignored ones. */
+function ignoredPath(path: string, ignored: Set<string>): boolean {
+	let at = path;
+	for (;;) {
+		if (ignored.has(at)) return true;
+		const cut = at.lastIndexOf("/");
+		if (cut === -1) return false;
+		at = at.slice(0, cut);
+	}
+}
+
+/**
+ * Every name in the workspace holding `needle`, walked from the root in chunks. `.git` is never entered,
+ * a link out of the workspace is listed but never walked into, a folder already walked through its real
+ * path is not walked again, and the walk yields every few hundred entries so it never holds the loop.
+ * What `files.exclude` hides is not walked into, and dot names are walked into only when hidden files
+ * were asked for. Git's own ignore rules, when the workspace asks for them, are applied to the matches.
+ */
+async function walkFind(root: string, needle: string, showHidden: boolean): Promise<FindCache> {
+	const { settings, warnings } = explorerSettings(root);
+	const matches: Entry[] = [];
+	const visited = new Set<string>([root]);
+	const stack: { rel: string; abs: string }[] = [{ rel: "", abs: root }];
+	let scanned = 0;
+	let truncated = false;
+	let sinceYield = 0;
+	while (stack.length && !truncated) {
+		const { rel, abs } = stack.pop() as { rel: string; abs: string };
+		let dirents: Dirent[];
+		try {
+			dirents = await readdir(abs, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		const siblings = dirents.map((dirent) => dirent.name);
+		for (const dirent of dirents) {
+			const name = dirent.name;
+			if (name === ".git" || CONTROL_CHARS.test(name)) continue;
+			if (!showHidden && name.startsWith(".")) continue;
+			const path = rel ? `${rel}/${name}` : name;
+			if (excluded(path, name, siblings, settings.exclude)) continue;
+			let entry: Entry;
+			try {
+				entry = entryOf(path, name, join(abs, name));
+			} catch {
+				continue;
+			}
+			scanned++;
+			if (++sinceYield >= FIND_YIELD_EVERY) {
+				sinceYield = 0;
+				await new Promise((resolve) => setImmediate(resolve));
+			}
+			if (scanned > MAX_FIND_SCAN) {
+				truncated = true;
+				break;
+			}
+			if (name.toLowerCase().includes(needle)) {
+				if (matches.length < MAX_FIND_MATCHES) matches.push(entry);
+				else truncated = true;
+			}
+			if (!entry.dir) continue;
+			let real: string;
+			try {
+				real = realpathSync(join(abs, name));
+			} catch {
+				continue;
+			}
+			if (!inside(root, real) || visited.has(real)) continue;
+			visited.add(real);
+			stack.push({ rel: path, abs: real });
+		}
+	}
+	matches.sort(byFind);
+	const kept = warnings.slice();
+	let found = matches;
+	if (settings.excludeGitIgnore) {
+		const toplevel = await gitToplevel(root);
+		if (toplevel) {
+			const checks = await gitIgnored(root, toplevel, matches.map((entry) => entry.path));
+			if (checks.warning) kept.push(checks.warning);
+			found = matches.filter((entry) => !ignoredPath(entry.path, checks.ignored));
+		} else {
+			kept.push("explorer.excludeGitIgnore is on, but this folder is not a git checkout");
+		}
+	}
+	return { at: Date.now(), matches: found, scanned, truncated, warnings: kept };
+}
+
+/**
+ * Names holding `q` in every folder, in pages. `from` is how many matches the drawer already holds;
+ * `hidden=1` asks for dot names too. The first page walks, and the walk is kept for two seconds, so
+ * the pages after it are slices of one answer rather than walks of their own.
+ */
+export async function onFilesFind(url: URL, res: ServerResponse, board: BoardFolder): Promise<void> {
+	const root = realRoot(board);
+	if (!root) return void fail(res, 409, `no such folder: ${board.folder}`);
+	const needle = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+	if (!needle) return void fail(res, 400, "a name to search for is required");
+	const showHidden = url.searchParams.get("hidden") !== "0";
+	if (Buffer.byteLength(needle) > MAX_NAME_BYTES) {
+		answer(res, 200, { root, q: needle, hidden: showHidden, entries: [], total: 0, truncated: false, next: null, scanTruncated: false, scanned: 0 });
+		return;
+	}
+	const key = `${root}\u0000${needle}\u0000${showHidden ? "1" : "0"}`;
+	let held = findCache.get(key);
+	if (held && Date.now() - held.at >= FIND_CACHE_MS) {
+		findCache.delete(key);
+		held = undefined;
+	}
+	if (!held) {
+		held = await walkFind(root, needle, showHidden);
+		findCache.set(key, held);
+		for (const [name, one] of findCache) if (Date.now() - one.at >= FIND_CACHE_MS) findCache.delete(name);
+		while (findCache.size > 32) findCache.delete(findCache.keys().next().value as string);
+	}
+	const wanted = Number(url.searchParams.get("from"));
+	const from = Number.isInteger(wanted) && wanted > 0 ? Math.min(wanted, held.matches.length) : 0;
+	const page = held.matches.slice(from, from + pageLimit(url.searchParams.get("limit")));
+	const truncated = from + page.length < held.matches.length;
+	answer(res, 200, {
+		root,
+		q: needle,
+		hidden: showHidden,
+		entries: page,
+		total: held.matches.length,
+		truncated,
+		next: truncated && page.length ? String(from + page.length) : null,
+		scanTruncated: held.truncated,
+		scanned: held.scanned,
+		...(held.warnings.length ? { settingsWarnings: held.warnings } : {}),
 	});
 }
 

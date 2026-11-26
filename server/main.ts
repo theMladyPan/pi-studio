@@ -20,7 +20,7 @@ import { closedCards } from "./bus.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
 import { onDefaults, onForgetWorkspace, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults, onSettingsGeneral, onSettingsTlsGenerate } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
-import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead, onFileRename, onFileWrite, onFilesList } from "./routes/board/files.ts";
+import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead, onFileRename, onFileWrite, onFilesFind, onFilesList } from "./routes/board/files.ts";
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
@@ -656,6 +656,14 @@ function requestHandler(req, res) {
 		}
 		// The editor's read: one file of that same folder, with the line endings and the byte order mark it
 		// carries, so a save can put them back. A GET like `/files`, so `threadRefusal` keeps it to the human.
+		// Names holding a query in every folder: a walk in chunks, like `/files`, so `threadRefusal`
+		// keeps it to the human; a child reports in its last message instead of searching the human's files.
+		if (req.method === "GET" && url.pathname === "/files/find") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onFilesFind(url, res, board);
+			return;
+		}
 		if (req.method === "GET" && url.pathname === "/files/read") {
 			const board = boardFrom(url, res);
 			if (!board) return;

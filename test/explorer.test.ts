@@ -89,6 +89,8 @@ type ExDeleteResult = {
 /** Everything the block hands the page, and therefore everything this file may drive. */
 type ExCore = {
 	sortEntries(entries: ExSortable[]): ExSortable[];
+	dotName(name: string): boolean;
+	ancestors(path: string): string[];
 	basename(path: string): string;
 	shortPath(path: string, home: string): string;
 	listing(): ExListing;
@@ -282,6 +284,16 @@ test(".git is never listed and a dot folder such as .agents is", () => {
 		listing.entries.map((one) => one.path),
 		[".agents", "src"],
 	);
+});
+
+test("a dot name is a hidden name, and the folders above a path are its ancestors", () => {
+	assert.equal(core.dotName(".env"), true);
+	assert.equal(core.dotName(".agents"), true);
+	assert.equal(core.dotName("README.md"), false);
+	assert.equal(core.dotName(""), false);
+	assert.deepEqual(core.ancestors("docs/deep/README.md"), ["", "docs", "docs/deep"]);
+	assert.deepEqual(core.ancestors("README.md"), [""]);
+	assert.deepEqual(core.ancestors("../escape.txt"), []);
 });
 
 test("a folder of more than one page is read whole, once each, and in order", () => {

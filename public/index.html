@@ -1411,10 +1411,17 @@
   #filesPane .ex-act button:hover { background: rgba(90, 93, 94, .31); color: #ffffff; }
   #filesPane .ex-act button:disabled { opacity: .4; cursor: default; }
   #filesPane .ex-act button:focus-visible { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
-  #filesPane .ex-search { flex: none; padding: 0 8px 4px; }
-  #filesPane .ex-search input { width: 100%; font: 12px system-ui, -apple-system, "Segoe UI", sans-serif;
+  #filesPane .ex-search { flex: none; display: flex; gap: 6px; padding: 0 8px 4px; }
+  #filesPane .ex-search input { flex: 1; min-width: 0; font: 12px system-ui, -apple-system, "Segoe UI", sans-serif;
     color: #cccccc; background: #0d1117; border: 1px solid #30363d; border-radius: 2px; padding: 2px 6px; }
   #filesPane .ex-search input:focus { outline: none; border-color: var(--accent-dim); }
+  #filesPane .ex-search #exHiddenToggle { flex: none; font: 11px system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: #7d8590; background: transparent; border: 1px solid #30363d; border-radius: 2px; padding: 2px 8px; cursor: pointer; }
+  #filesPane .ex-search #exHiddenToggle:hover { color: #ffffff; }
+  #filesPane .ex-search #exHiddenToggle.on { color: #79c0ff; border-color: var(--accent-dim); background: rgba(56, 139, 253, .12); }
+  #filesPane .ex-search #exHiddenToggle:focus-visible { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
+  .ex-row .ex-find-where { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; color: #7d8590; font-size: 11px; }
+  .ex-row.ex-more { justify-content: center; color: #79c0ff; }
   #exTree { flex: 1; min-height: 0; overflow: auto; outline: none; padding-bottom: 6px; }
   #exTree:focus-visible { outline: none; }
   .ex-row { display: flex; align-items: center; gap: 4px; height: 22px; padding-right: 8px;
@@ -1691,7 +1698,7 @@
         </span>
       </div>
       <div class="ex-search"><input id="exFilter" type="text" spellcheck="false" autocomplete="off"
-        placeholder="filter by name…" aria-label="filter the tree by name" /></div>
+        placeholder="filter by name in all folders…" aria-label="filter file names in all folders" /><button type="button" id="exHiddenToggle" class="on" aria-pressed="true" title="show hidden files (dotfiles) in the name search">hidden</button></div>
       <!-- The tree is drawn by the client from /files: the daemon names the entries, this one says where
            they sit, what is selected, and what Git thinks of each. -->
       <div id="exTree" role="tree" aria-label="files in this workspace" tabindex="0"></div>

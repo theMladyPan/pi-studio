@@ -705,6 +705,25 @@ function exCleanPath(value) {
  *  is the human's and stays. */
 const exHidden = (name) => name === ".git";
 
+/** A dot name: the hidden files the name search's toggle decides whether to walk into. */
+const exDotName = (name) => typeof name === "string" && name.startsWith(".");
+
+/**
+ * The folders a path sits under, from the root down to the folder that holds it. Revealing a path in
+ * the tree opens exactly these, so the row the path names is on screen once they are read.
+ */
+function exAncestors(path) {
+  const clean = exCleanPath(path);
+  if (!clean) return [];
+  const out = [""];
+  let dir = "";
+  for (const part of clean.split("/").slice(0, -1)) {
+    dir = dir ? `${dir}/${part}` : part;
+    out.push(dir);
+  }
+  return out;
+}
+
 /**
  * The last step of a path, which is the folder's own name. The drawer's header says this, so a workspace
  * is named after the folder the human opened rather than after the route that reached it, and a flag such
@@ -1386,6 +1405,8 @@ function exSaveStatus(dirty) {
 const explorerCore = {
   join: exJoin,
   parentOf: exParentOf,
+  dotName: exDotName,
+  ancestors: exAncestors,
   depthOf: exDepthOf,
   under: exUnder,
   cleanPath: exCleanPath,
@@ -11137,6 +11158,8 @@ const exState = {
   folders: new Map(),
   expanded: new Set([""]),
   filter: "",
+  findHidden: (() => { try { return localStorage.getItem("board.exShowHidden") !== "0"; } catch { return true; } })(),
+  find: { seq: 0, entries: [], total: 0, next: null, scanTruncated: false, scanned: 0, loading: false, error: "", warnings: [] },
   sel: explorerCore.selection(),
   clip: explorerCore.clipboard(),
   theme: null,
@@ -11272,19 +11295,18 @@ async function exRefreshTree() {
   exPaint();
 }
 
-/** The rows on screen, in the order they are drawn, filter included. */
+/** The rows on screen, in the order they are drawn, filter included. A name search draws its own rows. */
 function exVisibleRows() {
   const needle = exState.filter.trim().toLowerCase();
+  if (needle) return exState.find.entries.map((entry) => ({ entry, level: 0 }));
   const rows = [];
   const seen = new Set([""]);
   const walk = (dir, level) => {
     const listing = exState.folders.get(dir);
     if (!listing || listing.state === "new") return;
     for (const entry of listing.entries) {
-      const hit = !needle || entry.name.toLowerCase().includes(needle);
-      if (!hit) continue;
       rows.push({ entry, level });
-      const open = entry.dir && (exState.expanded.has(entry.path) || Boolean(needle));
+      const open = entry.dir && exState.expanded.has(entry.path);
       if (!open || seen.has(entry.path)) continue;
       seen.add(entry.path);
       if (exState.folders.has(entry.path)) walk(entry.path, level + 1);
@@ -11452,6 +11474,172 @@ function exDraftRow(dir) {
   return row;
 }
 
+// ---------- finding names in every folder ----------------------------------
+let exFindTimer = null;
+let exFindPress = { path: "", at: 0 };
+
+/** The name search set aside: its ticket moves on, so a reply already in the air is dropped. */
+function exFindClear() {
+  exState.find = { seq: exState.find.seq + 1, entries: [], total: 0, next: null, scanTruncated: false, scanned: 0, loading: false, error: "", warnings: [] };
+}
+
+/** One page of names from every folder. `from` is how many the drawer already holds. */
+async function exFindPage(seq, from) {
+  const needle = exState.filter.trim();
+  if (!needle || seq !== exState.find.seq) return;
+  exState.find.loading = true;
+  exPaint();
+  try {
+    const query = new URLSearchParams({ workspace, q: needle, hidden: exState.findHidden ? "1" : "0", from: String(from), limit: "200" });
+    const response = await fetch(`/files/find?${query.toString()}`);
+    if (seq !== exState.find.seq) return;
+    if (!response.ok) throw new Error((await response.text()).trim().slice(0, 160) || response.statusText);
+    const page = await response.json();
+    if (seq !== exState.find.seq) return;
+    const seen = new Set(exState.find.entries.map((entry) => entry.path));
+    for (const raw of Array.isArray(page?.entries) ? page.entries : []) {
+      if (!raw?.path || seen.has(raw.path)) continue;
+      seen.add(raw.path);
+      exState.find.entries.push({
+        name: String(raw.name ?? raw.path.slice(raw.path.lastIndexOf("/") + 1)),
+        path: raw.path,
+        dir: Boolean(raw.dir),
+        size: Number(raw.size) || 0,
+        mtime: Number(raw.mtime) || 0,
+        link: Boolean(raw.link),
+        git: "",
+      });
+    }
+    exState.find.total = Number(page?.total) || exState.find.entries.length;
+    exState.find.next = page?.next ?? null;
+    exState.find.scanTruncated = Boolean(page?.scanTruncated);
+    exState.find.scanned = Number(page?.scanned) || 0;
+    exState.find.warnings = Array.isArray(page?.settingsWarnings) ? page.settingsWarnings : [];
+    exState.find.error = "";
+  } catch (error) {
+    if (seq !== exState.find.seq) return;
+    exState.find.error = error.message || String(error);
+  }
+  exState.find.loading = false;
+  exPaint();
+}
+
+/** A fresh name search from the first page, chunk by chunk as the drawer scrolls. */
+async function exFindRun() {
+  const needle = exState.filter.trim();
+  if (!needle) {
+    exFindClear();
+    exPaint();
+    return;
+  }
+  exState.find.seq += 1;
+  exState.find.entries = [];
+  exState.find.total = 0;
+  exState.find.next = null;
+  exState.find.error = "";
+  await exFindPage(exState.find.seq, 0);
+}
+
+function exFindMore() {
+  if (!exState.find.next || exState.find.loading) return;
+  void exFindPage(exState.find.seq, Number(exState.find.next));
+}
+
+let exRevealTimer = null;
+let exRevealSeq = 0;
+
+/**
+ * The path in the tree: every folder above it open and read, the row selected. The filter that
+ * searched for it is cleared a beat later, not at once: clearing it now repaints the tree over the
+ * result row before a second press inside the press-again window could open it, and that press
+ * would land on whatever tree row sits under the cursor instead.
+ */
+async function exReveal(path, { expand = false } = {}) {
+  const clean = explorerCore.cleanPath(path);
+  if (!clean) return;
+  const seq = ++exRevealSeq;
+  clearTimeout(exRevealTimer);
+  for (const dir of explorerCore.ancestors(clean)) {
+    exState.expanded.add(dir);
+    if (exFolder(dir).state === "new") await exLoad(dir, { quiet: true });
+  }
+  const held = exEntry(clean);
+  if (expand && held?.dir) {
+    exState.expanded.add(clean);
+    if (exFolder(clean).state === "new") await exLoad(clean, { quiet: true });
+  }
+  explorerCore.select(exState.sel, clean);
+  exPaint();
+  if (!exEntry(clean)) footNote(`${clean} is gone from the folder`, true);
+  const needle = exState.filter;
+  exRevealTimer = setTimeout(() => {
+    // A new query or a new reveal took the field back: the tree stays as it is.
+    if (seq !== exRevealSeq || exState.filter !== needle) return;
+    exState.filter = "";
+    exFilterEl.value = "";
+    exFindClear();
+    exPaint();
+    exTreeEl.querySelector(`.ex-row[data-path="${CSS.escape(clean)}"]`)?.scrollIntoView({ block: "nearest" });
+    if (document.activeElement === exFilterEl || exTreeEl.contains(document.activeElement)) exTreeEl.focus();
+  }, 450);
+}
+
+/** One name-search row: the name, and the folder it lives in dim beside it. */
+function exFindRowEl(entry) {
+  const selected = exState.sel.paths.has(entry.path);
+  const row = el("div", `ex-row${entry.dir ? " dir" : " file"}${selected ? " sel" : ""}${exState.sel.lead === entry.path ? " lead" : ""}`);
+  row.dataset.path = entry.path;
+  row.dataset.dir = entry.dir ? "1" : "";
+  row.setAttribute("role", "treeitem");
+  row.title = entry.path;
+  row.setAttribute("aria-level", "1");
+  row.setAttribute("aria-selected", selected ? "true" : "false");
+  row.style.setProperty("--depth", "0");
+  row.append(el("span", "ex-twist blank"));
+  const icon = el("span", "ex-icon");
+  const seti = explorerCore.icon(exState.theme, entry);
+  if (entry.dir) icon.className = "ex-icon codicon codicon-folder";
+  else if (seti) {
+    icon.className = "ex-icon seti";
+    icon.textContent = seti.glyph;
+    if (seti.color) icon.style.color = seti.color;
+  } else icon.className = "ex-icon codicon codicon-file";
+  row.append(icon);
+  const label = el("span", "ex-label");
+  label.textContent = entry.name;
+  row.append(label);
+  const parent = explorerCore.parentOf(entry.path);
+  if (parent) {
+    const where = el("span", "ex-find-where");
+    where.textContent = `${parent}/`;
+    row.append(where);
+  }
+  row.addEventListener("click", () => {
+    const press = explorerCore.pressAgain(exFindPress, entry.path, Date.now());
+    exFindPress = press.next;
+    if (press.repeated) {
+      if (entry.dir) return void exReveal(entry.path, { expand: true });
+      const target = explorerCore.editTarget(entry);
+      if (target) return void exEditOpen(entry.path, target);
+      return void exReveal(entry.path);
+    }
+    void exReveal(entry.path);
+  });
+  row.addEventListener("contextmenu", async (event) => {
+    event.preventDefault();
+    await exReveal(entry.path);
+    exOpenMenu([entry.path], event.clientX, event.clientY);
+  });
+  row.setAttribute("draggable", "true");
+  row.addEventListener("dragstart", (event) => {
+    explorerCore.select(exState.sel, entry.path);
+    event.dataTransfer.effectAllowed = "copyMove";
+    event.dataTransfer.setData(explorerCore.PATH_MIME, explorerCore.dragPayload(workspace, [{ path: entry.path, dir: entry.dir }]));
+    event.dataTransfer.setData("text/plain", entry.path);
+  });
+  return row;
+}
+
 /** Paint the tree, and put the caret back in whichever name is being typed. */
 function exPaint() {
   const rows = [];
@@ -11459,6 +11647,32 @@ function exPaint() {
     const note = el("div", "ex-note bad");
     note.textContent = exState.trouble;
     rows.push(note);
+  }
+  const needle = exState.filter.trim().toLowerCase();
+  if (needle) {
+    const find = exState.find;
+    const note = el("div", find.error ? "ex-note bad" : "ex-note");
+    if (find.error) note.textContent = find.error;
+    else if (find.loading && !find.entries.length) note.textContent = "searching every folder…";
+    else if (!find.entries.length) note.textContent = `no name holds “${exState.filter.trim()}”`;
+    else {
+      note.textContent = `${find.total} name${find.total === 1 ? "" : "s"} hold “${exState.filter.trim()}”${find.loading ? "…" : ""}${find.scanTruncated ? ` — stopped after ${find.scanned} entries scanned` : ""}`;
+    }
+    rows.push(note);
+    for (const warning of find.warnings) {
+      const held = el("div", "ex-note bad");
+      held.textContent = warning;
+      rows.push(held);
+    }
+    const tree = find.entries.map((entry) => exFindRowEl(entry));
+    if (find.next) {
+      const more = el("div", "ex-row ex-more");
+      more.textContent = find.loading ? "loading more…" : `${find.total - find.entries.length} more — load more`;
+      more.addEventListener("click", () => exFindMore());
+      tree.push(more);
+    }
+    exTreeEl.replaceChildren(...rows, ...tree);
+    return;
   }
   const listing = exState.folders.get("");
   if (!listing || listing.state === "new") {
@@ -11471,7 +11685,6 @@ function exPaint() {
     rows.push(note);
   }
   const tree = [];
-  const needle = exState.filter.trim().toLowerCase();
   const seen = new Set([""]);
   const walk = (dir, level) => {
     const held = exState.folders.get(dir);
@@ -11484,9 +11697,8 @@ function exPaint() {
     }
     if (exState.draft?.dir === dir) tree.push(exDraftRow(dir));
     for (const entry of held.entries) {
-      if (needle && !entry.name.toLowerCase().includes(needle)) continue;
       tree.push(exRowEl(entry, level));
-      const open = entry.dir && (exState.expanded.has(entry.path) || Boolean(needle));
+      const open = entry.dir && exState.expanded.has(entry.path);
       if (!open || seen.has(entry.path)) continue;
       seen.add(entry.path);
       if (!exState.folders.has(entry.path)) continue;
@@ -12618,7 +12830,39 @@ exTreeEl.addEventListener("keydown", (event) => {
 // ---------- what the toolbar and the filter do ---------------------------
 exFilterEl.addEventListener("input", () => {
   exState.filter = exFilterEl.value;
+  clearTimeout(exFindTimer);
+  clearTimeout(exRevealTimer);
+  if (!exState.filter.trim()) {
+    exFindClear();
+    exPaint();
+    return;
+  }
+  exState.find.entries = [];
+  exState.find.loading = true;
   exPaint();
+  exFindTimer = setTimeout(() => void exFindRun(), 150);
+});
+
+const exHiddenToggleEl = document.getElementById("exHiddenToggle");
+function exPaintHiddenToggle() {
+  if (!exHiddenToggleEl) return;
+  exHiddenToggleEl.classList.toggle("on", exState.findHidden);
+  exHiddenToggleEl.setAttribute("aria-pressed", exState.findHidden ? "true" : "false");
+}
+exHiddenToggleEl?.addEventListener("click", () => {
+  exState.findHidden = !exState.findHidden;
+  try {
+    localStorage.setItem("board.exShowHidden", exState.findHidden ? "1" : "0");
+  } catch {}
+  exPaintHiddenToggle();
+  if (exState.filter.trim()) void exFindRun();
+});
+exPaintHiddenToggle();
+
+// The next chunk of names loads as the results scroll to their end, like the tree loads its pages.
+exTreeEl.addEventListener("scroll", () => {
+  if (!exState.filter.trim() || !exState.find.next || exState.find.loading) return;
+  if (exTreeEl.scrollTop + exTreeEl.clientHeight >= exTreeEl.scrollHeight - 40) exFindMore();
 });
 
 document.getElementById("exRefresh").addEventListener("click", () => void exRefreshTree());
