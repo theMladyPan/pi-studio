@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- feat: Show a thread's short id beside the copy-id press on its card — the first eight characters of the thread's id sit left of the copy glyph, so a thread is named at a glance instead of only on hover, and the press still copies the whole id. [t-4a496c81]
 - feat: Add a task queue to the kontainer drawer — each Docker or Podman action pops in blue while it runs, turns green or red when it finishes with its duration, and leaves five seconds after that (pausing while hovered, until the cursor leaves), so parallel actions stack instead of replacing one another; a failed task already carries its error, so the plain toast does not copy it. [t-25d86ad5]
 - feat: Bring the consumption figure back to the message field — input/output tokens, requests and cost sit in the field's own row, right of the chips and left of send/stop, the per-thread figure the merged activity drawer no longer carries. [t-8fb12696]
 - feat: Add `report_status` and `get_board_status` so threads on a board cooperate on a fuzzy semaphore — a thread reports reading, writing, merging or system before the phase changes and pulls the board's phases before any merge, rebase or other operation that touches every worktree; a thread's first message also carries the others' phases as orientation, running children read by their role, and an unexpected finish leaves its error as a note where the board status can be read. [t-6b095df8]
