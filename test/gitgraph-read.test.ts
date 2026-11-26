@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { rmSync } from "node:fs";
@@ -420,17 +421,38 @@ test(
 	withHistory(async (repo) => {
 		// Most repositories carry no local identity: the global one is what git uses. Reading it with
 		// `--get` exits 1 and the daemon logged that as an error on every graph refresh.
-		git(repo, "config", "--unset", "user.name");
-		git(repo, "config", "--unset", "user.email");
-		const configErrors = () => snapshot().filter((entry) => entry.level === "error" && String(entry.meta?.cmd ?? entry.message).includes("config")).length;
-		const before = configErrors();
-		const info = await libreRepoInfo(repo, false);
-		assert.equal(info.config.userName.local, null);
-		assert.equal(info.config.userEmail.local, null);
-		assert.equal(configErrors(), before, "reading a missing identity logs no error");
-		// The local identity that is set still reads back, from the same list.
-		git(repo, "config", "user.email", "local@example.invalid");
-		const set = await libreRepoInfo(repo, false);
-		assert.equal(set.config.userEmail.local, "local@example.invalid");
+		// The global and system scopes are pinned to an empty file for this test: on a machine whose
+		// global config cannot be read (no HOME, an unreadable global file) the global list fails on
+		// its own and logs an error row, which would move the count below for a reason that has
+		// nothing to do with the identity read.
+		const home = mkdtempSync(join(tmpdir(), "pi-studio-home-"));
+		const emptyConfig = join(home, "gitconfig");
+		writeFileSync(emptyConfig, "");
+		const saved = { ...process.env };
+		process.env.HOME = home;
+		process.env.XDG_CONFIG_HOME = join(home, "xdg");
+		process.env.GIT_CONFIG_GLOBAL = emptyConfig;
+		process.env.GIT_CONFIG_SYSTEM = emptyConfig;
+		process.env.GIT_CONFIG_NOSYSTEM = "1";
+		try {
+			git(repo, "config", "--unset", "user.name");
+			git(repo, "config", "--unset", "user.email");
+			const configErrors = () => snapshot().filter((entry) => entry.level === "error" && String(entry.meta?.cmd ?? entry.message).includes("config")).length;
+			const before = configErrors();
+			const info = await libreRepoInfo(repo, false);
+			assert.equal(info.config.userName.local, null);
+			assert.equal(info.config.userEmail.local, null);
+			assert.equal(configErrors(), before, "reading a missing identity logs no error");
+			// The local identity that is set still reads back, from the same list.
+			git(repo, "config", "user.email", "local@example.invalid");
+			const set = await libreRepoInfo(repo, false);
+			assert.equal(set.config.userEmail.local, "local@example.invalid");
+		} finally {
+			for (const key of ["HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM"]) {
+				if (saved[key] === undefined) delete process.env[key];
+				else process.env[key] = saved[key];
+			}
+			rmSync(home, { recursive: true, force: true });
+		}
 	}),
 );

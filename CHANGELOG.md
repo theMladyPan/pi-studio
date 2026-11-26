@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Make the git identity test hermetic — the no-local-identity test now pins a throwaway home with empty global and system git configs for its own run, so a machine whose global config cannot be read no longer fails the gate there; the identity read itself is unchanged. [t-4bdf386c]
+
 ## [0.11.0] - 2026-11-26
 
 - fix: Draw container logs as plain text — ANSI colour and cursor sequences, carriage returns and backspaces from programs that write a terminal stream (a Python REPL, a progress bar) are stripped and collapsed on the server, so the logs tab reads as lines instead of literal `[1;35m` garbage; the terminal drawer still takes the raw stream through `tail in terminal`.
