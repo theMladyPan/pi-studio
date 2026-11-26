@@ -198,7 +198,9 @@ export function createLogsDrawer() {
     else if (hasMeta) {
       // A command that answered nothing (an empty stash list, a quiet status) has no output to show:
       // say so dimly instead of repeating the command that already stands in the head and the meta grid.
-      full.className = "empty";
+      // The class is `no-output` and not `empty`: the page's global `.empty` is a full-container
+      // centred placeholder, and its absolute, centred rules would stretch this block over the row.
+      full.className = "no-output";
       full.textContent = "[no output]";
     } else full.textContent = String(entry.message ?? "");
     const actions = document.createElement("div");
