@@ -20,11 +20,14 @@
  * Output is streamed with a `[stage]` prefix on every line, so a line during the run says which
  * stage wrote it. Each stage's own lines are otherwise untouched.
  *
- *   node bin/check.mjs    # the gate; exit 1 if any stage failed
+ *   node bin/check.mjs            # incremental gate; the hash cache decides which tests rerun
+ *   node bin/check.mjs --full    # whole test stage, for merging into main only
+ *                                # (`PI_STUDIO_NO_CACHE=1` is a back-compat alias for --full)
  *
  * The test stage is hashed, see bin/test-cache.mjs. A whole-suite entry
  * skips the suite when nothing changed; per-file entries rerun only the test
- * files whose imports changed. `PI_STUDIO_NO_CACHE=1` forces a full run.
+ * files whose imports changed. Scope advice (bin/check-scope.mjs) never
+ * widens or narrows that list; it only says whether a full run is owed.
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -32,9 +35,12 @@ import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cacheDir, cacheEnabled, listTestFiles, perFileKey, readCache, wholeKey, writeCache } from "./test-cache.mjs";
+import { scopeSummary, shouldForceFull } from "./check-scope.mjs";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const node = process.execPath;
+const fullFlag = process.argv.includes("--full");
+const forcedFull = shouldForceFull({ fullFlag });
 
 /** Every shipped JavaScript file, plus the entry the test suite type-checks. tsc never sees these. */
 const syntaxFiles = [
@@ -52,6 +58,7 @@ const syntaxFiles = [
 	"bin/smoke.mjs",
 	"bin/check.mjs",
 	"bin/check-imports.mjs",
+	"bin/check-scope.mjs",
 	"bin/test-cache.mjs",
 	"bin/pi-studio",
 	"bin/runtime.mjs",
@@ -113,7 +120,11 @@ const typesCommand = existsSync(tsc) ? [node, tsc] : ["tsc"];
  * fails, so the summary names all of them.
  */
 async function testStage() {
-	if (!cacheEnabled()) return (await run("test", node, ["--test", "--test-timeout=90000"])) === 0;
+	if (forcedFull) {
+		if (process.env.PI_STUDIO_NO_CACHE === "1") process.stdout.write("[test] NO_CACHE alias set — whole suite forced (use --full for main merges)\n");
+		else process.stdout.write("[test] --full set — whole suite forced\n");
+		return (await run("test", node, ["--test", "--test-timeout=90000"])) === 0;
+	}
 	const dir = cacheDir(repo);
 	const wkey = wholeKey(repo);
 	const whole = readCache(dir, wkey);
@@ -162,6 +173,8 @@ const stages = [
 	},
 ];
 
+console.log(scopeSummary(repo));
+console.log("");
 const results = await Promise.all(
 	stages.map(async (stage) => {
 		const started = Date.now();
