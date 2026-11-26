@@ -24,7 +24,7 @@ import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead,
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
-import { LOOPBACK, bindHosts, bindSource, boardUrls, childBaseUrl as childBaseUrlOf, isLoopback, publishConfig, tlsConfig } from "./listen.ts";
+import { LOOPBACK, bindHosts, bindSource, boardLinks, childBaseUrl as childBaseUrlOf, isLoopback, publishConfig, tlsApplies, tlsConfig, tlsOff } from "./listen.ts";
 import { onMode, onPath, onThread, onThreadSpawn } from "./routes/board/thread.ts";
 import { onAnswer, onAsk, onPause } from "./routes/board/answer.ts";
 import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.ts";
@@ -335,6 +335,8 @@ let tlsPort = 0;
 let plainPort = 0;
 /** Whether plain http may be spoken beyond loopback, from the publish choice at start. */
 let plainHttpAllowed = true;
+/** Last time a plain-http probe of the HTTPS port was logged, so probes do not flood the console. */
+let lastPlainHttpLog = 0;
 
 /** Whether this request arrived on the daemon's own HTTPS listener. */
 function servedTlsOf(req) {
@@ -1152,6 +1154,12 @@ export function startListening(wanted, hosts = bindAddresses) {
 		const bound = tlsOptions ? createHttpsServer(tlsOptions, requestHandler) : createServer(requestHandler);
 		if (tlsOptions) {
 			bound.on("tlsClientError", (error) => {
+				// A browser, a scanner or a health check typing plain http at the HTTPS port cannot be
+				// answered, so this is the only trace of it. One line a minute is enough for a local
+				// daemon; a line per probe would bury the startup lines it is meant to explain.
+				const now = Date.now();
+				if (now - lastPlainHttpLog < 60_000) return;
+				lastPlainHttpLog = now;
 				console.error(`pi-studio: a plain http request reached the https port: ${error.message || error}`);
 			});
 			httpsServer = bound;
@@ -1215,17 +1223,20 @@ export function onListening() {
 	}
 	const saved = readJsonFile(STATE_FILE, null) ?? {};
 	writeJsonFile(STATE_FILE, { ...saved, token, port, at: new Date().toISOString() });
-	const scheme = tlsOptions ? "https" : "http";
-	const links = bindAddresses.flatMap((address) => boardUrls(address, port, token, undefined, scheme));
+	if (tlsOptions) plainPort = port - 1;
+	const links = boardLinks(bindAddresses, port, token, Boolean(tlsOptions));
 	const url = links[0];
 	console.log(`pi-studio${INSTANCE ? ` [${INSTANCE}]` : ""} listening on ${url}`);
 	for (const link of links.slice(1)) console.log(`  also on ${link}`);
 	if (tlsOptions) {
+		// Said here, in order, rather than in a listen callback that lands somewhere in the middle of
+		// the startup lines: this machine uses the plain neighbour at the port below, and plain
+		// requests from beyond this machine redirect to HTTPS when plain http is refused there.
+		console.log(`plain http on http://127.0.0.1:${plainPort} (this machine only${plainHttpAllowed ? "" : "; plain http from other addresses redirects to https"})`);
 		// A plain-http listener rides on the main port's neighbour, on every published address: the
 		// whole board when plain http is allowed, and a redirect to HTTPS when it is not. Children dial
 		// this listener, so it failing is not a shrug: the daemon hands every child a base URL, and a
 		// dead listener makes all of them fetch nowhere. Leaving is the honest answer.
-		plainPort = port - 1;
 		for (const address of bindAddresses) {
 			const bound = createServer(requestHandler);
 			bound.on("upgrade", onUpgrade);
@@ -1234,9 +1245,7 @@ export function onListening() {
 				process.exit(1);
 			});
 			plainServers.push(bound);
-			bound.listen(plainPort, address, () => {
-				console.log(`plain http on http://127.0.0.1:${plainPort}${plainHttpAllowed || bindAddresses.every((one) => isLoopback(one)) ? "" : " (redirects to https)"}`);
-			});
+			bound.listen(plainPort, address);
 		}
 	}
 	// The link is a credential, and what it costs is worth knowing before it is shared.
@@ -1293,11 +1302,13 @@ export function start() {
 		console.log(`pi-studio: publishing on ${hosts.join(", ")} (from ${bindSource(process.argv.slice(2), process.env, publish.hosts)})`);
 		tls = tlsConfig();
 		plainHttpAllowed = publish.allowPlainHttp !== false;
-		if (hosts.some((one) => !isLoopback(one)) && !plainHttpAllowed && !tls.enabled) {
+		if (hosts.some((one) => !isLoopback(one)) && !plainHttpAllowed && !tlsApplies(tls, hosts)) {
 			console.error("pi-studio: plain http is refused beyond this machine, so this daemon needs a TLS certificate or loopback; leaving allow plain http on serves plain http");
 			process.exit(1);
 		}
-		if (tls.enabled) tlsOptions = { key: tls.keyData, cert: tls.certData };
+		if (tlsApplies(tls, hosts)) tlsOptions = { key: tls.keyData, cert: tls.certData };
+		else if (tls.enabled) console.log("pi-studio: a generated certificate is set, but this start publishes on loopback only, so it serves plain http here; publish beyond loopback to use it, or name a pair with --tls-cert/--tls-key to serve https on loopback");
+		else if (tlsOff(process.argv.slice(2), process.env)) console.log("pi-studio: TLS is off (--no-tls), serving plain http");
 	} catch (error) {
 		console.error(`pi-studio: ${error.message}`);
 		process.exit(1);

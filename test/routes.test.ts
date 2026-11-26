@@ -3759,12 +3759,14 @@ describe("routes", { concurrency: 8 }, () => {
 				});
 				child.on("exit", (code) => reject(new Error(`the daemon exited with ${code}: ${seen.slice(-400)}`)));
 			});
-			const httpsMatch = lines.match(/listening on https:\/\/[^:\s]+:(\d+)\//);
+			const httpsMatch = lines.match(/(?:listening on|also on) https:\/\/[^:\s]+:(\d+)\//);
 			const plainMatch = lines.match(/plain http on http:\/\/[^:\s]+:(\d+)/);
 			assert.ok(httpsMatch && plainMatch, lines.slice(-400));
 			const httpsPort = Number(httpsMatch[1]);
 			const plainPort = Number(plainMatch[1]);
 			assert.equal(plainPort, httpsPort - 1);
+			// The printed local link is the plain neighbour, not the HTTPS port a browser would warn on.
+			assert.match(lines, new RegExp(`listening on http://127\\.0\\.0\\.1:${plainPort}/`));
 			const plain = (hostname: string, path: string, host: string) =>
 				new Promise<{ status: number; location: string }>((resolve, reject) => {
 					const req = request({ hostname, port: plainPort, path, method: "GET", headers: { host }, agent: false }, (res) => {
@@ -3801,6 +3803,24 @@ describe("routes", { concurrency: 8 }, () => {
 		} finally {
 			child.kill();
 			for (const gone of [stateHome, certDir]) await removeTree(gone);
+		}
+	});
+
+	test("a generated certificate does not turn a loopback start into https", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-tls-loopback-"));
+		mkdirSync(join(stateHome, "tls"), { recursive: true });
+		execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=localhost", "-keyout", join(stateHome, "tls", "key.pem"), "-out", join(stateHome, "tls", "cert.pem")]);
+		writeFileSync(join(stateHome, "daemon.json"), `${JSON.stringify({ token: "a1b2c3d4e5f6a7b8", publish: { hosts: ["127.0.0.1"], allowPlainHttp: false } })}\n`);
+		const daemon = await boot(stateHome, { PI_STUDIO_HOST: "127.0.0.1" });
+		try {
+			// The printed link answers over plain http on its own port: no certificate warning, and
+			// no plain request has to find a neighbour port to reach the board on this machine.
+			const page = await fetch(`${daemon.base}/`);
+			assert.equal(page.status, 200);
+			assert.equal(daemon.base.startsWith("http://127.0.0.1:"), true, daemon.base);
+		} finally {
+			daemon.child.kill();
+			await removeTree(stateHome);
 		}
 	});
 
