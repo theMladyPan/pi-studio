@@ -92,6 +92,7 @@ document.getElementById("logsBtn").addEventListener("click", () => {
   gitDrawer.close();
   terminalDrawer.close();
   kontainerDrawer.close();
+  closeDocks("right");
   logsDrawer.toggle();
 });
 // The plugin panel: one sandboxed frame for the life of the page, the doors the toolbox lists for the
@@ -331,6 +332,7 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
       paintDrawers();
     } else {
       if (side === "bottom" && terminalDrawer.isOpen()) terminalDrawer.close();
+      if (side === "right") logsDrawer.close();
       explorerCore.drawerClose(drawerState);
       paintDrawers();
       dockState[side] = key;
@@ -6071,7 +6073,7 @@ function paintDrawers() {
   // the search drawer says "Search and replace" and the activity drawer says "activity" while up,
   // and nothing while no drawer is. The git graph owns the same label while it is up, so it is only
   // written here when it is not.
-  if (openPanelName && !gitDrawer.isOpen()) {
+  if (openPanelName && !gitDrawer.isOpen() && !kontainerDrawer.isOpen() && !logsDrawer.isOpen()) {
     if (drawerState.open === "search") {
       openPanelName.textContent = "Search and replace";
       openPanelName.hidden = false;
@@ -15060,6 +15062,7 @@ document.addEventListener("keydown", (event) => {
   }
   if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
   event.preventDefault();
+  closeDocks("right");
   logsDrawer.open();
 });
 

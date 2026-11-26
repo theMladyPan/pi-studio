@@ -81,8 +81,10 @@ export function levelOf(name: unknown): LogLevel {
  * redacted line still says which key, which header and which endpoint were the problem.
  */
 const SECRETS: readonly [RegExp, string][] = [
-	// `SOMETHING_API_KEY=abc`, `GITHUB_TOKEN: ghp_x`, `SSH_KEY = "…"` — with or without quotes.
-	[/\b([A-Za-z0-9_]*(?:API_KEY|_TOKEN|_KEY|PASSWORD|SECRET))\b(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,;"']+)/gi, "$1$2***"],
+	// `SOMETHING_API_KEY=abc`, `GITHUB_TOKEN: ghp_x`, `?token=…` in the startup url the tap captures, `secret=…` — with or without quotes.
+	[/\b([A-Za-z0-9_-]*(?:api[_-]?key|token|secret|password|passwd|pwd|_key))\b(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,;&"']+)/gi, "$1$2***"],
+	// `--password hunter2`, `--token <val>` on a command line, where the value follows a space rather than `=`.
+	[/ (--(?:password|token|api[-_]?key|secret)(?:-stdin)?\s+)("[^"]*"|'[^']*'|\S+)/gi, "$1***"],
 	// `Authorization: Bearer abc.def` and a bare `Bearer abc.def`.
 	[/\b(Bearer)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 ***"],
 	// `password=hunter2`, in a url, a command line or a form body.
@@ -155,6 +157,14 @@ export function subscribe(listener: (entry: LogEntry) => void): () => void {
 const TAP_CHUNK_MAX = 64 * 1024;
 
 let tapped = false;
+let inTap = false;
+let origErr: typeof process.stderr.write | null = null;
+
+/** Write one line to the real stderr without going through the tap, so it is printed without logging again. */
+export function stderrThrough(text: string): void {
+	const out = origErr ?? process.stderr.write.bind(process.stderr);
+	out.call(process.stderr, String(text ?? ""));
+}
 
 /**
  * Write everything the daemon prints into the log as well, and keep printing it where it always went.
@@ -171,11 +181,19 @@ export function tapDaemon(): void {
 	tapped = true;
 	const out = process.stdout.write.bind(process.stdout);
 	const err = process.stderr.write.bind(process.stderr);
+	origErr = err;
 	const tap = (write: typeof process.stdout.write, level: LogLevel) =>
 		((chunk: unknown, encoding?: unknown, done?: unknown) => {
 			const text = String(chunk ?? "");
-			for (const line of text.split("\n")) {
-				if (line.trim()) log(level, "daemon", line.slice(0, TAP_CHUNK_MAX));
+			if (!inTap) {
+				inTap = true;
+				try {
+					for (const line of text.split("\n")) {
+						if (line.trim()) log(level, "daemon", line.slice(0, TAP_CHUNK_MAX));
+					}
+				} finally {
+					inTap = false;
+				}
 			}
 			return write(chunk as string, encoding as BufferEncoding, done as () => void);
 		}) as typeof process.stdout.write;
@@ -191,7 +209,23 @@ export function logPluginLine(line: string): void {
 	const text = String(line ?? "").trim();
 	if (!text) return;
 	const named = /^pi-studio: plugin (\S+) /.exec(text);
-	log(/did not start|is not usable/.test(text) ? "error" : "info", named ? `plugin:${named[1]}` : "plugin", text);
+	const bracketed = /^\[plugin:([^\]]+)\]\s*/.exec(text);
+	let level: LogLevel;
+	let source: string;
+	if (named) {
+		level = /did not start|is not usable/.test(text) ? "error" : "info";
+		source = `plugin:${named[1]}`;
+	} else if (bracketed) {
+		level = /did not start|is not usable|error|fail/i.test(text) ? "error" : "warning";
+		source = `plugin:${bracketed[1]}`;
+	} else {
+		level = /did not start|is not usable/.test(text) ? "error" : "info";
+		source = "plugin";
+	}
+	log(level, source, text);
+	// The manager hands a line back and expects it on stderr as well, for the terminal and the journal.
+	// It goes through the untapped writer, so the tap stays out of its own plugin lines.
+	stderrThrough(text.endsWith("\n") ? text : `${text}\n`);
 }
 
 /**

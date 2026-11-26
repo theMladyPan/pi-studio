@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LOG_CAPACITY, LOG_MESSAGE_MAX, levelOf, levelPasses, log, redact, snapshot, subscribe } from "../server/logs.ts";
+import { LOG_CAPACITY, LOG_MESSAGE_MAX, levelOf, levelPasses, log, logPluginLine, redact, snapshot, subscribe, tapDaemon } from "../server/logs.ts";
 import type { LogEntry } from "../server/logs.ts";
 
 /**
@@ -93,4 +93,79 @@ test("a subscriber sees the line as it is written, with the shape the drawer dra
 	// An ISO stamp is what the snapshot and the stream both carry, so a row can be read in the browser
 	// without a date the daemon never wrote.
 	for (const entry of snapshot()) assert.equal(new Date(entry.ts).toISOString(), entry.ts);
+});
+
+test("a master token printed in a startup url is masked, and a command-line password too", () => {
+	// The tap captures the daemon's own startup line with the master token in the query. A bare `token=`
+	// has no leading underscore, so the old pattern missed it and the buffer kept the key it exists to hide.
+	const masked = redact("pi-studio listening on http://127.0.0.1:4801/?token=deadbeef12345678 other");
+	assert.ok(!masked.includes("deadbeef12345678"), "the startup token is masked");
+	assert.ok(masked.includes("token"), "the name stays");
+	assert.ok(!redact("docker login --password hunter2").includes("hunter2"), "a space-separated password is masked");
+	assert.ok(!redact("git --token abc123").includes("abc123"), "a space-separated token flag is masked");
+});
+
+test("a plugin runtime line is named by its plugin, not folded into the daemon", () => {
+	const seen: LogEntry[] = [];
+	const stop = subscribe((entry) => seen.push(entry));
+	logPluginLine("[plugin:scratch] dropped 2 frames over the 1MB limit\n");
+	logPluginLine("pi-studio: plugin scratch is not usable: bad url\n");
+	stop();
+	const runtime = seen.find((entry) => entry.message.includes("dropped 2 frames"));
+	assert.equal(runtime?.source, "plugin:scratch");
+	assert.equal(runtime?.level, "warning");
+	const startup = seen.find((entry) => entry.message.includes("is not usable"));
+	assert.equal(startup?.source, "plugin:scratch");
+	assert.equal(startup?.level, "error");
+});
+
+test("the tap keeps the terminal line and adds it once, without looping", () => {
+	tapDaemon();
+	process.stderr.write("pi-studio: plugin-loop-check\n");
+	const one = snapshot().filter((entry) => entry.message === "pi-studio: plugin-loop-check");
+	assert.equal(one.length, 1);
+	assert.equal(one[0].source, "daemon");
+	assert.equal(one[0].level, "error");
+});
+
+test("a child's own POST lands with its thread source, redacted", async () => {
+	const { onLog, onLogs } = await import("../server/routes/logs.ts");
+	const fakeReq = (body: string) => {
+		const handlers: Record<string, Array<(chunk?: Buffer) => void>> = {};
+		return {
+			on(event: string, fn: (chunk?: Buffer) => void) {
+				(handlers[event] ||= []).push(fn);
+				if (event === "end") queueMicrotask(() => { handlers["data"]?.forEach((run) => run(Buffer.from(body))); handlers["end"]?.forEach((run) => run()); });
+			},
+		};
+	};
+	const fakeRes = () => {
+		let status = 0;
+		const parts: string[] = [];
+		return {
+			writeHead(next: number) { status = next; },
+			end(payload?: string) { if (payload) parts.push(String(payload)); },
+			get status() { return status; },
+			get payload() { return parts.join(""); },
+		};
+	};
+	const caller = { human: false, board: { id: "board-a" }, thread: { id: "abcd1234" } };
+	const res = fakeRes();
+	await onLog(fakeReq(JSON.stringify({ level: "warn", source: "scout", message: "said PGTOKEN=should-not-see" })) as any, res as any, null, caller as any);
+	assert.equal(res.status, 200);
+	const id = JSON.parse(res.payload).id;
+	const kept = snapshot().find((entry) => entry.id === id);
+	assert.equal(kept?.source, "child:abcd1234 scout");
+	assert.equal(kept?.level, "warning");
+	assert.ok(!JSON.stringify(kept).includes("should-not-see"));
+	const empty = fakeRes();
+	await onLog(fakeReq(JSON.stringify({ level: "info", message: "  " })) as any, empty as any, null, caller as any);
+	assert.equal(empty.status, 400);
+	// The snapshot carries the same entries the drawer paints, oldest first.
+	const snap = fakeRes();
+	onLogs(snap as any);
+	assert.equal(snap.status, 200);
+	const { entries } = JSON.parse(snap.payload);
+	assert.ok(Array.isArray(entries));
+	assert.ok(entries.length > 0, "the snapshot is not empty");
 });

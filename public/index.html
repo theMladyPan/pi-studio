@@ -1376,6 +1376,8 @@
     background: #0a0f16; border-left: 1px solid var(--border); box-shadow: -18px 0 48px rgba(0,0,0,.6);
     transform: translateX(100%); font: 12px var(--mono);
   }
+  #logsGrip { top: 0; bottom: 0; left: 0; width: 6px; cursor: col-resize; }
+  body.rail-resizing #logsGrip { background: var(--accent-dim); }
   #logsDrawer .logs-sub { font: 11px var(--mono); color: var(--muted); min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #logsDrawer .logs-live { display: flex; align-items: center; gap: 5px; color: var(--green);
@@ -2141,6 +2143,7 @@
      keeps the filter, the paused tail and the expanded line between rolls; nothing inside is markup from
      the log, because a line is text from a source nobody here controls. -->
 <section id="logsDrawer" class="drawer-shell drawer-slide" aria-label="daemon logs" inert>
+  <div id="logsGrip" class="drawer-grip" title="drag to resize"></div>
   <div class="drawer-bar">
     <span class="drawer-title">logs</span>
     <span class="logs-sub" id="logsSub" title="what every source writes: the daemon's own output, git, docker, children, plugins and the models">daemon stdout+stderr · git · docker · children · llm</span>
@@ -2153,7 +2156,7 @@
   </div>
   <div class="logs-filters">
     <div class="logs-seg" role="group" aria-label="verbosity">
-      <button type="button" data-filter="error" aria-pressed="false" title="errors and warnings">err+warn<span class="logs-n" id="logsNWarn"></span></button>
+      <button type="button" data-filter="error" aria-pressed="false" title="errors and warnings">err+warning<span class="logs-n" id="logsNWarn"></span></button>
       <button type="button" data-filter="info" aria-pressed="true" title="errors, warnings and what the daemon did">info<span class="logs-n" id="logsNInfo"></span></button>
       <button type="button" data-filter="debug" aria-pressed="false" title="everything, including the small reads">debug<span class="logs-n" id="logsNDebug"></span></button>
     </div>

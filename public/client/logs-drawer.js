@@ -15,7 +15,7 @@
  */
 
 /** The roll itself is the shared sliding drawer: the class, the button and the focus return. */
-import { createSlidingDrawer } from "./drawer-common.js";
+import { bindDragHeight, createSlidingDrawer } from "./drawer-common.js";
 
 /** How much of a message the shut row shows before the expansion is the only way to read the rest. */
 const SHUT_CHARS = 120;
@@ -25,6 +25,9 @@ const ROW_LIMIT = 5000;
 
 /** Where the human left the verbosity. It is furniture, so a reload opens at the same filter. */
 const FILTER_KEY = "board.logsFilter";
+
+/** The width the human dragged the drawer to. Same furniture the rail's width is. */
+const WIDTH_KEY = "board.logsWidth";
 
 /** Worst first, the way the filter reads: a filter shows its own rank and every worse one. */
 const RANK = { error: 0, warning: 1, info: 2, debug: 3 };
@@ -67,6 +70,20 @@ export function createLogsDrawer() {
   const nDebug = document.getElementById("logsNDebug");
   const filters = [...document.querySelectorAll("#logsDrawer .logs-seg button")];
   const nameLabel = document.getElementById("openPanelName");
+  const grip = document.getElementById("logsGrip");
+  // The width is furniture, like the rail's: a reload opens at the width it was left.
+  try {
+    const saved = Number(localStorage.getItem(WIDTH_KEY)) || 0;
+    if (saved >= 320) drawer.style.width = `${Math.min(Math.round(saved), Math.floor(window.innerWidth * 0.85))}px`;
+  } catch {}
+  bindDragHeight(grip, {
+    bodyClass: "rail-resizing",
+    resolvePx: (event) => {
+      const width = Math.max(320, Math.min(Math.floor(window.innerWidth * 0.85), Math.floor(window.innerWidth - event.clientX)));
+      drawer.style.width = `${width}px`;
+      try { localStorage.setItem(WIDTH_KEY, String(width)); } catch {}
+    },
+  });
 
   /** Every line the daemon has streamed, oldest first. The daemon's ring is 5000; this follows it. */
   let entries = [];

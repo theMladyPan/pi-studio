@@ -971,6 +971,14 @@ function requestHandler(req, res) {
 			return;
 		}
 		if (req.method === "POST") {
+			// A child's own line in the daemon's log, redacted and capped where every other line is. It is in
+			// THREAD_ROUTES because saying what a thread is doing is its own business; the drawer is the
+			// human's to read. It is read here rather than from `routing`, so a human caller needs no
+			// `?workspace=`: the thread check above already proved its board.
+			if (url.pathname === "/log") {
+				await onLog(req, res, null, caller);
+				return;
+			}
 			// One call a panel's frame makes. The plugin is the one whose panel is on screen, and the
 			// workspace is resolved here from this daemon's own list, so a page never names a folder.
 			if (url.pathname === "/plugins/visual/request") {
@@ -996,10 +1004,6 @@ function requestHandler(req, res) {
 				// out of the studio.
 				"/card/pdf": onCardPdf,
 				"/skill": onSkill,
-				// A child's own line in the daemon's log, redacted and capped where every other line is. It is in
-				// THREAD_ROUTES because saying what a thread is doing is the thread's own business; the drawer
-				// is the human's to read.
-				"/log": onLog,
 				"/card/ask": onAsk,
 				"/edit": onEdit,
 				"/rename": onRename,
