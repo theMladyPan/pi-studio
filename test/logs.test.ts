@@ -80,10 +80,11 @@ const logsDrawerSource = readFileSync(new URL("../public/client/logs-drawer.js",
 const boardPage = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 
 test("a command with no answer says so dimly, instead of repeating the command in the output block", () => {
-	assert.match(logsDrawerSource, /full\.className = "empty";/, "the empty block is marked");
+	assert.match(logsDrawerSource, /full\.className = "no-output";/, "the empty block is marked");
+	assert.doesNotMatch(logsDrawerSource, /full\.className = "empty";/, "the block does not wear the page's global empty-placeholder class");
 	assert.match(logsDrawerSource, /full\.textContent = "\[no output\]";/, "the block says there was no output");
 	assert.doesNotMatch(logsDrawerSource, /entry\.output[^\n]*\? String\(entry\.output\) : String\(entry\.message/, "the block no longer falls back to the command text");
-	assert.match(boardPage, /#logsDrawer \.log-detail pre\.empty \{ color: var\(--muted\);/, "the placeholder is dimmed");
+	assert.match(boardPage, /#logsDrawer \.log-detail pre\.no-output \{ color: var\(--muted\);/, "the placeholder is dimmed");
 });
 
 test("a filter shows its own level and every worse one, and nothing better", () => {
