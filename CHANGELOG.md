@@ -2,9 +2,10 @@
 
 ## [Unreleased]
 
-- fix: Stop the TLS redirect test racing the daemon — the test now retries a refused first connect to the plain neighbour for a few seconds, since the daemon prints the line before the listener finishes binding; the redirect itself is unchanged. [t-4bdf386c]
+## [0.11.1] - 2026-11-26
 
-- fix: Make the git identity test hermetic — the no-local-identity test now pins a throwaway home with empty global and system git configs for its own run, so a machine whose global config cannot be read no longer fails the gate there; the identity read itself is unchanged. [t-4bdf386c]
+- fix: Stop the TLS redirect test racing the daemon — the test now retries a refused first connect to the plain neighbour for a few seconds, since the daemon prints the line before the listener finishes binding; the redirect itself is unchanged.
+- fix: Make the git identity test hermetic — the no-local-identity test now pins a throwaway home with empty global and system git configs for its own run, so a machine whose global config cannot be read no longer fails the gate there; the identity read itself is unchanged.
 
 ## [0.11.0] - 2026-11-26
 
