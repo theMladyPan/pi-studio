@@ -114,7 +114,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     if (Array.isArray(state.data?.sources)) return state.data.sources;
     const out = [];
     for (const f of state.data?.composeFiles || []) out.push(synthSource(f, "compose"));
-    for (const f of state.data?.dockerfiles || []) out.push(synthSource(f, /^Containerfile/.test(f.split("/").pop() || "") ? "containerfile" : "dockerfile"));
+    for (const f of state.data?.dockerfiles || []) out.push(synthSource(f, /containerfile/i.test(f.split("/").pop() || "") ? "containerfile" : "dockerfile"));
     return out;
   };
   const findSource = (id) => sources().find((s) => s.id === id);
@@ -216,13 +216,20 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     try {
       const data = await apiText(qs());
       state.data = data;
-      if (data.available === false) { showUnavailable(data.reason || "no container runtime is available"); return; }
+      if (data.available === false) { showUnavailable(data.reason || "no container runtime is available", data); return; }
       if (data.activeRuntime && !state.runtime) state.runtime = data.activeRuntime;
       render();
     } catch (e) { toast(`kontainer: ${e.message}`); }
   }
-  function showUnavailable(reason) {
-    state.data = { available: false, reason, runtimes: [], topology: { images: [], containers: [], wiring: { ports: [], networks: [], volumes: [] }, summary: {} } };
+  function showUnavailable(reason, existing = null) {
+    state.data = {
+      available: false, reason, runtimes: existing?.runtimes || [],
+      workspaceFolder: existing?.workspaceFolder || "",
+      composeFiles: existing?.composeFiles || [],
+      dockerfiles: existing?.dockerfiles || [],
+      sources: Array.isArray(existing?.sources) ? existing.sources : [],
+      topology: { images: [], containers: [], wiring: { ports: [], networks: [], volumes: [] }, summary: {} },
+    };
     render();
   }
   async function postAction(payload, okMsg) {
@@ -907,7 +914,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const ctrLink = (c) => { const b = el("button", "k-ctr-link", `${c.name || c.shortId} · ${c.statusText || c.state || ""}`); b.type = "button"; b.onclick = () => { state.selected = { kind: "container", id: c.id }; state.tab = "logs"; render(); }; return b; };
     if (state.tab === "preview") {
       const list = el("div", "k-kv-list");
-      list.append(kvRow("workspace path", src.relPath), kvRow("detected", src.mtimeMs ? fmtDate(src.mtimeMs) : "—"), kvRow("status", src.statusText || "—"));
+      list.append(kvRow("workspace path", src.relPath), kvRow("summary", src.meta || "—"), kvRow("modified", src.mtimeMs ? fmtDate(src.mtimeMs) : "—"), kvRow("status", src.statusText || "—"));
       body.append(list);
       const box = el("div", "k-json"); box.textContent = src.preview || "(empty file)"; body.append(box);
       if (linkedImages.length) { body.append(el("div", "k-wire-subhead", "linked images")); linkedImages.forEach((img) => body.append(imageLink(img))); }
@@ -916,7 +923,18 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     if (src.kind === "compose") {
       body.append(el("div", "k-wire-subhead", "services"));
       if (!(src.services || []).length) body.append(el("div", "k-empty", "no services detected"));
-      for (const s of src.services || []) { const b = el("button", "k-ctr-link", `${s.name} · ${s.state || ""}${s.image ? ` · ${s.image}` : ""}${s.dockerfile ? ` · ${s.dockerfile}` : ""}`); b.type = "button"; body.append(b); }
+      for (const s of src.services || []) {
+        const label = `${s.name} · ${s.state || ""}${s.image ? ` · ${s.image}` : ""}${s.dockerfile ? ` · ${s.dockerfile}` : ""}`;
+        const buildSrc = s.dockerfile ? findSource(`src:${s.dockerfile}`) : null;
+        if (buildSrc) {
+          const b = el("button", "k-ctr-link", label); b.type = "button";
+          b.onclick = () => { state.selected = { kind: "source", id: buildSrc.id }; state.tab = "preview"; render(); };
+          body.append(b);
+        } else {
+          const row = el("div", "k-ctr-link", label); row.style.cursor = "default";
+          body.append(row);
+        }
+      }
     } else {
       const list = el("div", "k-kv-list");
       list.append(kvRow("base image", src.baseImage || "—"));
@@ -1087,11 +1105,13 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       wrap.append(input, document.createTextNode(label)); body.append(wrap); return input;
     };
     if (tool === "build") {
-      title.textContent = "build Dockerfile";
       const files = [...(state.data?.dockerfiles || []), ...(state.data?.composeFiles || [])];
       const presetObj = preset && typeof preset === "object" ? preset : null;
       const presetFile = presetObj ? String(presetObj.dockerfile || "") : typeof preset === "string" ? preset : "";
-      const df = field("Dockerfile", "kBuildFile", presetFile || files[0] || "./Dockerfile");
+      const chosenFile = presetFile || files[0] || "./Dockerfile";
+      const isCf = /containerfile/i.test(chosenFile.split("/").pop() || "");
+      title.textContent = isCf ? "build Containerfile" : "build Dockerfile";
+      const df = field(isCf ? "Containerfile / Dockerfile" : "Dockerfile", "kBuildFile", chosenFile);
       if (files.length > 1) { const dl = el("datalist"); dl.id = "kFiles"; files.forEach((f) => { const o = el("option"); o.value = f; dl.append(o); }); body.append(dl); df.setAttribute("list", "kFiles"); }
       const ctx = field("Build Context", "kBuildContext", presetObj?.context || ".");
       const tag = field("Image tag", "kBuildTag", presetObj?.tag || (presetFile && presetFile.includes(":") ? presetFile : ""));

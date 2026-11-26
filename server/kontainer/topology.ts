@@ -837,11 +837,11 @@ interface ParsedComposeEntry {
 	services: ResolvedComposeService[];
 }
 
-export function buildSources(opts: { folder: string; topology: Topology | null }): KontainerSource[] {
+export function buildSources(opts: { folder: string; topology: Topology | null; entries?: WorkspaceEntry[] }): KontainerSource[] {
 	const folder = opts.folder;
 	const topology = opts.topology ?? null;
 	if (!folder) return [];
-	const entries = scanWorkspaceEntries(folder);
+	const entries = opts.entries ?? scanWorkspaceEntries(folder);
 	const images = topology?.images ?? [];
 	const containers = topology?.containers ?? [];
 	const parsedCompose: ParsedComposeEntry[] = [];
@@ -1156,7 +1156,15 @@ export interface StateOptions {
 }
 
 export async function getState(opts: StateOptions): Promise<KontainerState> {
-	const { composeFiles, dockerfiles } = scanWorkspaceFiles(opts.folder);
+	const entries = scanWorkspaceEntries(opts.folder);
+	const composeFiles: string[] = [];
+	const dockerfiles: string[] = [];
+	for (const entry of entries) {
+		if (entry.kind === "compose") composeFiles.push(entry.abs);
+		else dockerfiles.push(entry.abs);
+	}
+	composeFiles.sort();
+	dockerfiles.sort();
 	const runtimes = opts.runtimes ?? discoverRuntimes();
 	const base: KontainerState = {
 		available: false,
@@ -1167,21 +1175,21 @@ export async function getState(opts: StateOptions): Promise<KontainerState> {
 		workspaceFolder: opts.folder,
 		composeFiles,
 		dockerfiles,
-		sources: buildSources({ folder: opts.folder, topology: null }),
+		sources: [],
 		scope: opts.scope,
 		topology: null,
 	};
 	if (runtimes.length === 0) {
-		return { ...base, reason: "no Docker or Podman socket found" };
+		return { ...base, sources: buildSources({ folder: opts.folder, topology: null, entries }), reason: "no Docker or Podman socket found" };
 	}
 	const runtime = resolveRuntime(runtimes, opts.runtimeId ?? null);
-	if (!runtime) return { ...base, reason: "no Docker or Podman socket found" };
+	if (!runtime) return { ...base, sources: buildSources({ folder: opts.folder, topology: null, entries }), reason: "no Docker or Podman socket found" };
 	try {
 		const { engineVersion, topology } = await fetchTopology(runtime, opts.folder, opts.scope);
-		return { ...base, available: true, reason: null, activeRuntime: runtime.id, engineVersion, topology, sources: buildSources({ folder: opts.folder, topology }) };
+		return { ...base, available: true, reason: null, activeRuntime: runtime.id, engineVersion, topology, sources: buildSources({ folder: opts.folder, topology, entries }) };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		return { ...base, reason: message };
+		return { ...base, sources: buildSources({ folder: opts.folder, topology: null, entries }), reason: message };
 	}
 }
 

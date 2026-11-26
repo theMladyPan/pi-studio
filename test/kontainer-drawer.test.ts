@@ -306,8 +306,10 @@ test("the build sheet takes a preset object with a build context", () => {
 	assert.match(kontainerSource, /Array\.isArray\(state\.data\?\.sources\)/, "older payloads synthesize sources instead of crashing");
 });
 
-test("an empty workspace hint stays accurate when sources are recognized", () => {
+test("an empty workspace hint stays accurate when sources are recognized, and unavailable runtimes keep their scanned sources", () => {
 	assert.match(kontainerSource, /\(s\.workspaceContainers \?\? 0\) === 0 && \(s\.allContainers \?\? 0\) > 0 && sources\(\)\.length === 0/, "sources suppress the every-container claim");
+	assert.match(kontainerSource, /if \(data\.available === false\) \{ showUnavailable\(data\.reason \|\| "no container runtime is available", data\); return; \}/, "showUnavailable receives the state payload");
+	assert.match(kontainerSource, /sources: Array\.isArray\(existing\?\.sources\) \? existing\.sources : \[\],/, "and preserves recognized sources when no engine socket is up");
 });
 
 /** The terminal drawer's `runCommand`, on the page it reads and the socket it writes to. */
