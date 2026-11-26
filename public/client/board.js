@@ -2,7 +2,7 @@
 // The git drawer is a module of its own: the panel, its focus and the two messages its page trades
 // with this one are a single subject, and this file is long enough already. The daemon serves every
 // `/client/*.js` by one rule, so a new module beside this one loads without a table to edit.
-import { bindDragHeight, setTermHeight } from "./drawer-common.js";
+import { bindDragHeight, createDetailSheet, detailBlock, detailSection, setTermHeight } from "./drawer-common.js";
 import { createGitDrawer } from "./git-drawer.js";
 // The terminal drawer is a module of its own beside it: the panel, the socket to the daemon's
 // shell and the vendored terminal screen are a single subject, served by the same one rule.
@@ -7367,6 +7367,7 @@ const actPanelName = document.getElementById("actDetailName");
 const actPanelMeta = document.getElementById("actDetailMeta");
 const actPanelBody = document.getElementById("actDetailBody");
 const actPanelClose = document.getElementById("actDetailClose");
+const actSheet = createDetailSheet({ root: actPanel, name: actPanelName, meta: actPanelMeta, body: actPanelBody, close: actPanelClose });
 /** The row the panel belongs to, or null while it is closed. */
 let actPanelId = null;
 /** When the last fetch was sent, so a streaming row cannot ask faster than four times a second. */
@@ -7376,25 +7377,10 @@ let actPanelTimer = 0;
 const PANEL_CUT_NOTICE = "cut at 64 K characters by the board server";
 
 /** One titled block of monospace text, saying when the server cut it. */
-function panelSection(title, text, cut) {
-  const box = el("section");
-  box.appendChild(el("h4")).textContent = title;
-  const pre = el("pre");
-  pre.textContent = text;
-  box.appendChild(pre);
-  if (cut) box.appendChild(el("div", "cut")).textContent = PANEL_CUT_NOTICE;
-  return box;
-}
+const panelSection = detailSection;
 
 /** A titled block holding whatever a renderer built, so a diff, a picture or a note lands in the sheet. */
-function panelBlock(title, node, cut) {
-  if (!node) return null;
-  const box = el("section");
-  box.appendChild(el("h4")).textContent = title;
-  box.appendChild(node);
-  if (cut) box.appendChild(el("div", "cut")).textContent = PANEL_CUT_NOTICE;
-  return box;
-}
+const panelBlock = detailBlock;
 
 /** Argument rows: the name of the thing, then what it was. */
 function panelFields(pairs) {
@@ -7728,48 +7714,23 @@ function openActPanel(row) {
   if (!row) return;
   clearTimeout(actPanelTimer);
   actPanelId = row.id;
-  actPanel.hidden = false;
-  actPanelName.textContent = row.kind === "reply" ? "answer" : row.kind === "thinking" ? "thinking" : row.tool || "tool";
-  actPanelMeta.textContent = String(row.status || "");
+  actSheet.show({
+    name: row.kind === "reply" ? "answer" : row.kind === "thinking" ? "thinking" : row.tool || "tool",
+    meta: String(row.status || ""),
+  });
   actPanelBody.replaceChildren();
-  // The panel itself takes the focus, so a second Enter goes nowhere instead of closing what just
-  // opened. Tab walks in from here.
-  actPanel.focus();
   void fetchActDetail(row.id);
 }
 
 function closeActPanel() {
-  if (actPanel.hidden) return;
+  if (!actSheet.isOpen()) return;
   const id = actPanelId;
   actPanelId = null;
   clearTimeout(actPanelTimer);
-  actPanel.hidden = true;
-  actPanelBody.replaceChildren();
+  actSheet.hide();
   // The row may have been rebuilt while the panel was up, so the focus goes to the one there now.
   actEls.get(id)?.focus();
 }
-
-actPanelClose.addEventListener("click", closeActPanel);
-actPanel.addEventListener("click", (event) => {
-  if (event.target === actPanel) closeActPanel();
-});
-actPanel.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    event.stopPropagation();
-    closeActPanel();
-    return;
-  }
-  // The panel holds the keyboard while it is open, so tab cannot walk the board behind it. Two
-  // stops are inside: the close button and the body, and tab cycles between them both ways.
-  if (event.key === "Tab") {
-    event.preventDefault();
-    const stops = [actPanelClose, actPanelBody];
-    const at = stops.indexOf(document.activeElement);
-    const step = event.shiftKey ? stops.length - 1 : 1;
-    stops[at < 0 ? (event.shiftKey ? stops.length - 1 : 0) : (at + step) % stops.length].focus();
-  }
-});
 
 /**
  * A thought's count leads, then its rate while it runs or the time it took once it ends. A tilde

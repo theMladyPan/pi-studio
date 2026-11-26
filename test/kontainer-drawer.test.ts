@@ -17,6 +17,7 @@ const board = readFileSync(new URL("../public/client/board.js", import.meta.url)
 const terminalSource = readFileSync(new URL("../public/client/terminal-drawer.js", import.meta.url), "utf8");
 const kontainerSource = readFileSync(new URL("../public/client/kontainer-drawer.js", import.meta.url), "utf8");
 const kontainerCss = readFileSync(new URL("../public/client/kontainer-drawer.css", import.meta.url), "utf8");
+const drawerCommonSource = readFileSync(new URL("../public/client/drawer-common.js", import.meta.url), "utf8");
 
 test("the page carries the drawer, its scrim, its stylesheet and the door in the toolbox", () => {
 	assert.match(page, /<link rel="stylesheet" href="\/client\/kontainer-drawer\.css" \/>/, "the board links the drawer's own stylesheet");
@@ -134,9 +135,9 @@ test("docker actions pop as blue running tasks, then green or red", () => {
 	// The skeleton carries the queue beside the plain toast, and each action owes one card.
 	assert.match(kontainerSource, /<div class="k-tasks" id="kTasks" role="status" aria-live="polite"><\/div>/, "the queue hangs beside the toast");
 	assert.match(kontainerSource, /payload\?\.action === "exec\.cmd" \? null : startTask\(okMsg/, "only exec.cmd, which only builds a string, never pops");
-	assert.match(kontainerSource, /function startTask\(label\) \{/, "one starter makes one card");
+	assert.match(kontainerSource, /function startTask\(label, payload\) \{/, "one starter makes one card");
 	assert.match(kontainerSource, /host\.append\(card\);/, "and appends it, so parallel actions stack rather than replace");
-	assert.match(kontainerSource, /function finishTask\(task, ok, detail\) \{/, "and one finisher closes it");
+	assert.match(kontainerSource, /function finishTask\(task, ok, output\) \{/, "and one finisher closes it");
 	assert.match(kontainerSource, /setTimeout\(\(\) => task\.card\.remove\(\), 5000\);/, "five seconds after it finishes, on its own timer");
 	assert.match(kontainerSource, /card\.addEventListener\("mouseenter", \(\) => \{ task\.hovered = true; clearTimeout\(task\.timer\); \}\);/, "hovering pauses the countdown");
 	assert.match(kontainerSource, /card\.addEventListener\("mouseleave", \(\) => \{ task\.hovered = false; if \(task\.done\) scheduleTaskRemoval\(task\); \}\);/, "and leaving restarts it");
@@ -149,6 +150,27 @@ test("docker actions pop as blue running tasks, then green or red", () => {
 	assert.match(kontainerCss, /#kontainerDrawer \.k-task\.k-failed \{ border-color:rgba\(248,81,73/, "failed is red");
 	// A failed task already carries its error, so the caller's catch does not copy it.
 	assert.match(kontainerSource, /lastTaskFailure && String\(msg\) === lastTaskFailure\.msg/, "the plain toast bows out for the copy the task carries");
+});
+
+test("task cards open their record in the shared detail sheet", () => {
+	// The sheet is one implementation in the drawer furniture, with two instances: the board's
+	// activity detail and the drawer's task detail speak the same modal instead of two copies.
+	assert.match(drawerCommonSource, /export function createDetailSheet\(/, "the sheet is made in the shared furniture");
+	assert.match(drawerCommonSource, /export function detailSection\(/, "and its titled text block");
+	assert.match(drawerCommonSource, /export function detailBlock\(/, "and its titled node block");
+	assert.match(board, /import \{ bindDragHeight, createDetailSheet, detailBlock, detailSection, setTermHeight \}/, "the board takes both from there");
+	assert.match(board, /const actSheet = createDetailSheet\(\{ root: actPanel/, "and the activity detail is one instance of it");
+	assert.match(board, /const panelSection = detailSection;/, "the old block names alias the shared ones");
+	assert.match(board, /const panelBlock = detailBlock;/, "and so do the node blocks");
+	assert.match(kontainerSource, /import \{ bindDragHeight, createDetailSheet, createSlidingDrawer, detailSection \}/, "the kontainer drawer takes the same furniture");
+	assert.match(kontainerSource, /<div class="k-detail" id="kTaskDetail"/, "its task sheet carries its own scoped class, so the board's Escape order never meets it");
+	assert.match(kontainerSource, /const taskDetail = createDetailSheet\(/, "and is the second instance");
+	assert.match(kontainerSource, /card\.addEventListener\("click", \(\) => openTaskDetail\(task\)\);/, "a click on the card opens it");
+	assert.match(kontainerSource, /function openTaskDetail\(task\) \{/, "the opener names what was asked and what the engine said");
+	assert.match(kontainerSource, /detailSection\("input"/, "the input section first");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-task \{ cursor:pointer; \}/, "the card reads as a button");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-detail \{ position:fixed; inset:0; z-index:2200/, "the sheet covers the board like the activity one");
+	assert.match(kontainerSource, /if \(taskDetail\.isOpen\(\)\) \{ taskDetail\.hide\(\); return true; \}/, "Escape gives the sheet up before the tools do");
 });
 
 test("a right press on a card opens the node menu its kind answers to", () => {
