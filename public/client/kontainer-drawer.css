@@ -82,9 +82,7 @@ body.kontainer-open #kontainerScrim { opacity: 1; visibility: visible; transitio
 #kontainerDrawer .k-stratum { display:flex; flex-direction:column; gap:10px; min-width:0; }
 #kontainerDrawer .k-stratum-head { display:flex; align-items:center; justify-content:space-between; padding:0 2px 4px; border-bottom:1px solid rgba(48,54,61,.65); }
 #kontainerDrawer .k-stratum-head.k-stratum-sources { border-bottom-color:rgba(86,212,221,.35); }
-#kontainerDrawer .k-stratum-sources .k-stratum-label .k-idx { color:var(--k-cyan); }
-#kontainerDrawer .k-stratum-label { font:600 11px var(--k-mono); text-transform:uppercase; letter-spacing:.08em; color:var(--k-muted); display:inline-flex; align-items:center; gap:6px; }
-#kontainerDrawer .k-stratum-label .k-idx { color:var(--k-accent); opacity:.8; }
+#kontainerDrawer .k-stratum-label { font:600 11px var(--k-mono); text-transform:uppercase; letter-spacing:.08em; color:var(--k-muted); }
 #kontainerDrawer .k-stratum-meta { font:11px var(--k-mono); color:var(--k-muted); }
 #kontainerDrawer .k-col-list { display:flex; flex-direction:column; gap:9px; }
 #kontainerDrawer .k-empty { font:12px var(--k-mono); color:var(--k-muted); padding:8px 2px; }
@@ -112,7 +110,7 @@ body.kontainer-open #kontainerScrim { opacity: 1; visibility: visible; transitio
 #kontainerDrawer .k-card.k-unused-img { opacity:.62; border-style:dashed; }
 #kontainerDrawer .k-card.k-unused-img:hover { opacity:.95; }
 
-/* 00 Sources · Definitions */
+/* Sources */
 #kontainerDrawer .k-src-card { border-left-width:3px; padding:9px 11px 8px; }
 #kontainerDrawer .k-src-card.k-src-compose { border-left-color:var(--k-cyan); }
 #kontainerDrawer .k-src-card.k-src-dockerfile { border-left-color:var(--k-accent); }

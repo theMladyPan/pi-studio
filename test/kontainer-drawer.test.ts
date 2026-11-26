@@ -296,8 +296,12 @@ test("a keyboard press opens the menu on the card it was pressed on", () => {
 	assert.match(kontainerSource, /ctxOpen\(cardKind === "wire" \? \{ port: "port", net: "network", vol: "volume" \}\[node\.kind\] : cardKind, node, event, card\);/, "and the one card decorator hands its card in");
 });
 
-test("00 Sources stratum sits first, with its own accent and meta", () => {
-	assert.match(kontainerSource, /<span class="k-stratum-label"><span class="k-idx">00<\/span> Sources · Definitions<\/span><span class="k-stratum-meta" id="kMetaSources">/, "the skeleton carries the sources stratum first");
+test("Sources stratum sits first, with its own accent and meta", () => {
+	assert.match(kontainerSource, /<span class="k-stratum-label">Sources<\/span><span class="k-stratum-meta" id="kMetaSources">/, "the skeleton carries the sources stratum first, label only");
+	assert.match(kontainerSource, /<span class="k-stratum-label">Images<\/span><span class="k-stratum-meta" id="kMetaImages">/, "the images stratum is label only");
+	assert.match(kontainerSource, /<span class="k-stratum-label">Containers<\/span><span class="k-stratum-meta" id="kMetaRuntime">/, "the containers stratum is label only");
+	assert.match(kontainerSource, /<span class="k-stratum-label">Wiring<\/span><span class="k-stratum-meta" id="kMetaWiring">/, "the wiring stratum is label only");
+	assert.doesNotMatch(kontainerSource, /k-idx/, "no stratum carries a numbering badge");
 	assert.match(kontainerSource, /<div class="k-col-list" id="kSources"><\/div>/, "and its column list");
 	assert.match(kontainerSource, /const composeCount = sources\(\)\.filter\(\(s\) => s\.kind === "compose"\)\.length;/, "the meta counts compose files");
 	assert.match(kontainerSource, /`\$\{composeCount\} compose · \$\{buildFileCount\} file\$\{buildFileCount === 1 \? "" : "s"\}`/, "and build files");

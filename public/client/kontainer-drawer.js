@@ -50,13 +50,13 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
         <div class="k-stage" id="kStage">
           <svg class="k-wires" id="kWireLayer" aria-hidden="true"></svg>
           <div class="k-grid">
-            <div class="k-stratum"><div class="k-stratum-head k-stratum-sources"><span class="k-stratum-label"><span class="k-idx">00</span> Sources · Definitions</span><span class="k-stratum-meta" id="kMetaSources"></span></div>
+            <div class="k-stratum"><div class="k-stratum-head k-stratum-sources"><span class="k-stratum-label">Sources</span><span class="k-stratum-meta" id="kMetaSources"></span></div>
               <div class="k-col-list" id="kSources"></div></div>
-            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label"><span class="k-idx">01</span> Images · Lineage</span><span class="k-stratum-meta" id="kMetaImages"></span></div>
+            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label">Images</span><span class="k-stratum-meta" id="kMetaImages"></span></div>
               <div class="k-col-list" id="kImages"></div><div class="k-unused-tray" id="kUnusedTray" hidden></div></div>
-            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label"><span class="k-idx">02</span> Runtime · Containers</span><span class="k-stratum-meta" id="kMetaRuntime"></span></div>
+            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label">Containers</span><span class="k-stratum-meta" id="kMetaRuntime"></span></div>
               <div class="k-col-list" id="kRuntime"></div></div>
-            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label"><span class="k-idx">03</span> Wiring</span><span class="k-stratum-meta" id="kMetaWiring"></span></div>
+            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label">Wiring</span><span class="k-stratum-meta" id="kMetaWiring"></span></div>
               <div class="k-col-list" id="kWiring"></div></div>
           </div>
         </div>
@@ -102,7 +102,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   const summary = () => topo().summary || {};
   const findImage = (id) => images().find((i) => i.id === id);
   const findCtr = (id) => containers().find((c) => c.id === id);
-  // Recognized workspace sources (00 Sources · Definitions). Older payloads carry only the file lists,
+  // Recognized workspace sources (Sources stratum). Older payloads carry only the file lists,
   // so basic entries are synthesized from them rather than leaving the stratum empty.
   const synthSource = (full, kind) => {
     const folder = String(state.data?.workspaceFolder || "").replace(/\\/g, "/").replace(/\/+$/, "");
