@@ -36,6 +36,7 @@ const syntaxFiles = [
 	"public/client/board.js",
 	"public/client/drawer-common.js",
 	"public/client/git-drawer.js",
+	"public/client/kontainer-drawer.js",
 	"public/client/terminal-drawer.js",
 	"public/client/text-preview.js",
 	"public/client/diff-table.js",
