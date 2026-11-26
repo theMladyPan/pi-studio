@@ -213,8 +213,8 @@ test("f, a and c each open their own drawer, and pressing one again rolls it up"
 	assert.equal(drawers.open, "activity", "opening another rolls the first one up");
 	core.drawerToggle(drawers, "activity");
 	assert.equal(drawers.open, "", "the same key rolls it back up");
-	core.drawerToggle(drawers, "cards");
-	assert.equal(drawers.open, "cards");
+	core.drawerToggle(drawers, "source");
+	assert.equal(drawers.open, "source");
 	core.drawerClose(drawers);
 	assert.equal(drawers.open, "");
 });
@@ -225,11 +225,11 @@ test("a plain f is the files drawer, and shift+f is the fit it took from plain f
 	assert.equal(core.boardLetter("F", { shift: true }), "fit", "a shifted key arrives upper case");
 	assert.equal(core.boardLetter("F"), "fit", "the capital is the shifted key, whatever the event says");
 	assert.equal(core.boardLetter("a"), "activity");
-	assert.equal(core.boardLetter("c"), "cards");
+	assert.equal(core.boardLetter("c"), "", "c no longer opens a drawer");
 	assert.equal(core.boardLetter("d"), "source");
 	assert.equal(core.boardLetter("D"), "", "a shifted d is not the drawer's key");
 	// Nothing else is taken by this list, so the board's other letters reach their own handlers.
-	for (const key of ["0", "m", "n", "o", "t", "g", "q", "p", "r"]) assert.equal(core.boardLetter(key), "", key);
+	for (const key of ["0", "m", "n", "o", "t", "g", "q", "p", "r", "c"]) assert.equal(core.boardLetter(key), "", key);
 });
 
 test("a letter waits while a field is typed in, a panel is open or the drawer's own surface is up", () => {
@@ -237,7 +237,6 @@ test("a letter waits while a field is typed in, a panel is open or the drawer's 
 		assert.equal(core.boardLetter("f", { [lock]: true }), "", `f waits for ${lock}`);
 		assert.equal(core.boardLetter("f", { [lock]: true, shift: true }), "", `shift+f waits for ${lock}`);
 		assert.equal(core.boardLetter("a", { [lock]: true }), "", `a waits for ${lock}`);
-		assert.equal(core.boardLetter("c", { [lock]: true }), "", `c waits for ${lock}`);
 		assert.equal(core.boardLetter("d", { [lock]: true }), "", `d waits for ${lock}`);
 	}
 	// And a shifted letter the list does not own does nothing rather than falling through.
@@ -784,9 +783,9 @@ test("a path opens as the kind its last extension names, and everything else is 
 
 // ---------------------------------------------------------------- the page
 
-test("the three drawers and the tree exist in the page, and the old picker is gone", () => {
+test("the three drawers and the tree exist in the page, and the old picker and cards drawer are gone", () => {
 	const html = readFileSync(HTML, "utf8");
-	for (const id of ["drawerFiles", "drawerActivity", "drawerCards", "drawerSearch", "srTitle", "srQuery", "srReplace", "srList", "exTree", "exFilter", "exMenu", "exConfirm", "pickCount"]) {
+	for (const id of ["drawerFiles", "drawerActivity", "drawerSource", "drawerSearch", "srTitle", "srQuery", "srReplace", "srList", "railBody", "actMenu", "exTree", "exFilter", "exMenu", "exConfirm", "pickCount"]) {
 		assert.ok(html.includes(`id="${id}"`), `#${id} is in the page`);
 	}
 	// The editor a file opens in: its frame, the path it names, the surface it draws into, its status
@@ -800,12 +799,12 @@ test("the three drawers and the tree exist in the page, and the old picker is go
 	for (const id of ["exViewBody", "exViewToggle", "exViewSource", "exViewPreview", "exViewOpen"]) {
 		assert.ok(html.includes(`id="${id}"`), `#${id} is in the page`);
 	}
-	for (const gone of ['id="picker"', 'id="pickList"', 'id="pickFilter"', 'id="pickHidden"', 'id="railOpen"']) {
-		assert.ok(!html.includes(gone), `${gone} is gone with the picker`);
+	for (const gone of ['id="picker"', 'id="pickList"', 'id="pickFilter"', 'id="pickHidden"', 'id="railOpen"', 'id="drawerCards"', 'id="cardsBtn"', 'id="railNow"', 'id="railRunning"', 'id="railCardCount"', 'id="railClosedCount"']) {
+		assert.ok(!html.includes(gone), `${gone} is gone`);
 	}
 	const board = readFileSync(BOARD, "utf8");
-	for (const dangling of ["picker.hidden", "closePicker", "drawList(", "getElementById(\"picker\")", "railShown(", "railOpenCount"]) {
-		assert.ok(!board.includes(dangling), `no dangling picker or rail guard: ${dangling}`);
+	for (const dangling of ["picker.hidden", "closePicker", "drawList(", "getElementById(\"picker\")", "railShown(", "railOpenCount", "drawerCards", "cardsBtn", "railNow", "railRunning", "railCardCount", "railClosedCount"]) {
+		assert.ok(!board.includes(dangling), `no dangling reference: ${dangling}`);
 	}
 });
 
@@ -817,7 +816,7 @@ test("the keys panel says what the keys do, including f as the drawer and shift+
 	assert.ok(board.includes("function srPaintTitle()"), "the search head carries the workspace path, as the files head does");
 	assert.ok(board.includes("void exPrime().then(() => srPaintTitle())"), "opening the search drawer reads the root, so its head names the folder before any search runs");
 	assert.ok(board.includes('{ keys: "a", does: "open the activity drawer, and press it again to roll it up" }'));
-	assert.ok(board.includes('{ keys: "c", does: "open the cards drawer, and press it again to roll it up" }'));
+	assert.ok(!board.includes('{ keys: "c", does: "open the cards drawer, and press it again to roll it up" }'), "c no longer claims a cards drawer");
 	assert.ok(board.includes('{ keys: "shift+f", does: "fit every card on the screen" }'));
 	assert.ok(!board.includes('{ keys: "f", does: "fit every card on the screen" }'), "f no longer claims the fit");
 	// The map row still names its own key, which the project's own rule asks for. It is a leaf of the
@@ -831,10 +830,10 @@ test("the keys panel says what the keys do, including f as the drawer and shift+
 test("the header chips and the settings hold the map and the hotkeys", () => {
 	const html = readFileSync(HTML, "utf8");
 	const header = html.slice(html.indexOf("<header>"), html.indexOf("</header>"));
-	for (const id of ["viewBtn", "housekeepingBtn", "toolboxBtn", "reset", "newPill", "threadOrder", "statCtx", "activityBtn", "cardsBtn", "searchBtn", "configBtn"]) {
+	for (const id of ["viewBtn", "housekeepingBtn", "toolboxBtn", "reset", "newPill", "threadOrder", "statCtx", "activityBtn", "searchBtn", "configBtn"]) {
 		assert.ok(header.includes(`id="${id}"`), `#${id} stays in the header`);
 	}
-	for (const gone of ["mapBtn", "keysBtn", "stack", "tidy", "fit", "cleanBtn", "leftBtn", "newBtn", "filesBtn", "sourceBtn", "gitBtn", "termBtn"]) {
+	for (const gone of ["mapBtn", "keysBtn", "cardsBtn", "stack", "tidy", "fit", "cleanBtn", "leftBtn", "newBtn", "filesBtn", "sourceBtn", "gitBtn", "termBtn"]) {
 		assert.ok(!header.includes(`id="${gone}"`), `#${gone} is out of the header`);
 	}
 	for (const [menu, ids] of [

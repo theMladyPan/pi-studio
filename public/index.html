@@ -721,59 +721,55 @@
   .ggViewerLine_hunk { color: #79c0ff; }
   .ggViewerLine_meta { color: #8b949e; }
   .ggViewerEmpty { padding: 1.2em; color: var(--muted); }
-  /* The source control menu: one column, the board's own colours. */
-  #scMenu { position: fixed; z-index: 2400; min-width: 200px; padding: 4px;
+  /* The right-click menus for source control and the activity drawer: one column, the board's own colours. */
+  #scMenu, #actMenu { position: fixed; z-index: 2400; min-width: 180px; padding: 4px;
     background: #0d1420; border: 1px solid var(--border-bright); border-radius: 6px;
     box-shadow: 0 8px 28px rgba(0, 0, 0, .55); display: flex; flex-direction: column; }
-  #scMenu[hidden] { display: none; }
-  #scMenu button { font: 12px var(--mono); color: var(--text); background: none; border: none;
+  #scMenu { min-width: 200px; }
+  #scMenu[hidden], #actMenu[hidden] { display: none; }
+  #scMenu button, #actMenu button { font: 12px var(--mono); color: var(--text); background: none; border: none;
     border-radius: 4px; padding: 6px 10px; text-align: left; cursor: pointer; }
-  #scMenu button:hover, #scMenu button:focus-visible { background: #1a2230; }
-  #scMenu button.danger { color: #f85149; }
-  #railNow { padding: 0 8px 6px; display: flex; flex-direction: column; gap: 4px; }
-  /* A running row lives in its thread's card, so this strip holds only the runs whose card is closed. */
-  #railNow:empty { display: none; }
-  #railLog { flex: 1; overflow-y: auto; padding: 4px 8px 10px; display: flex; flex-direction: column; gap: 4px; }
-  /* Cards first: the rail is the map of a board too big to read on the canvas. The cap keeps
-     the activity feed below it visible however many cards there are. */
-  #railCards { flex: 0 1 auto; min-height: 0; max-height: 45%; overflow-y: auto;
-    padding: 0 8px 6px; display: flex; flex-direction: column; gap: 2px; }
-  #railCards:empty { display: none; }
-  /* Closed cards keep a row of their own: a card put away while it still holds a conversation is one
-     click from coming back, and the row is where that click lives. */
-  #railClosed { flex: 0 1 auto; min-height: 0; max-height: 30%; overflow-y: auto;
-    padding: 0 8px 6px; display: flex; flex-direction: column; gap: 2px; }
-  #railClosed:empty { display: none; }
-  #railCards .rail-card, #railClosed .rail-card { display: flex; align-items: center; gap: 6px; width: 100%; flex: none;
-    padding: 3px 6px; border: 1px solid transparent; border-radius: 6px; background: none;
-    color: inherit; font: inherit; text-align: left; cursor: pointer; }
-  #railCards .rail-card:hover, #railClosed .rail-card:hover { background: #0f141b; border-color: #1c2128; }
-  #railCards .rail-card:focus-visible, #railClosed .rail-card:focus-visible { outline: none; border-color: var(--accent-dim); }
-  #railCards .rail-card .dot, #railClosed .rail-card .dot { width: 6px; height: 6px; }
-  /* A card sits under the card it follows from: indented one step per level, with a rule down its left
-     edge so a fan of children reads as one thing and a child of a child is still legible as such. */
-  #railCards .rail-card.child { padding-left: calc(6px + var(--rail-depth, 1) * 9px);
-    border-left: 1px solid #1c2128; border-radius: 0 6px 6px 0; }
-  #railClosed .rail-card .dot { opacity: .55; }
-  #railCards .rail-title, #railClosed .rail-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; color: var(--text); }
-  #railClosed .rail-title { color: var(--muted); }
-  #railCards .rail-state, #railClosed .rail-state { flex: none; color: var(--muted); font-size: 11px; }
-  #railCards .rail-card.wants .rail-state { color: var(--pink); }
-  #railCards .rail-card.updated .rail-state { color: var(--accent); }
-  #railClosed .rail-card .rail-state { color: var(--accent); }
-  #railClosed .rail-card:hover .rail-title { color: var(--text); }
-  /* A closed row holds two presses: the row itself puts the card back, and the trash beside it throws the
-     thread away. The row is a wrapper rather than a button, because a button cannot hold a button, so the
-     reopen press fills what the row used to be and the look of the row does not move. */
-  #railClosed .rail-card { padding: 0; gap: 0; }
-  #railClosed .rail-open { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
+  #scMenu button:hover, #scMenu button:focus-visible,
+  #actMenu button:hover, #actMenu button:focus-visible { background: #1a2230; }
+  #scMenu button.danger, #actMenu button.danger { color: #f85149; }
+  /* One scroll container for the activity drawer: open cards, then the closed heading and closed cards. */
+  #railBody { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 8px 10px;
+    display: flex; flex-direction: column; gap: 2px; }
+  #railCards, #railClosed { display: flex; flex-direction: column; gap: 2px; flex: none; }
+  #railCards:empty, #railClosed:empty { display: none; }
+  #railClosedHead { padding: 10px 4px 4px; }
+  /* One unified row wrapper per card (open or closed), with an inline collapsible log for threads. */
+  #railBody .rail-thread { display: flex; flex-direction: column; gap: 2px; flex: none; }
+  #railBody .rail-thread.child { padding-left: calc(var(--rail-depth, 1) * 9px); }
+  #railBody .rail-card { display: flex; align-items: center; gap: 0; width: 100%; flex: none;
+    border: 1px solid transparent; border-radius: 6px; background: none; color: inherit; font: inherit; }
+  #railBody .rail-card:hover { background: #0f141b; border-color: #1c2128; }
+  #railBody .rail-card:focus-within { border-color: var(--accent-dim); }
+  #railBody .rail-thread.child > .rail-card { border-left: 1px solid #1c2128; border-radius: 0 6px 6px 0; }
+  #railBody .rail-thread-head { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
     padding: 3px 6px; border: 0; background: none; color: inherit; font: inherit; text-align: left;
     cursor: pointer; }
-  #railClosed .rail-open:focus-visible { outline: none; }
-  #railClosed .rail-card:focus-within { border-color: var(--accent-dim); }
-  /* The trash is the one press in this list that destroys work, so it stays muted until the pointer or the
-     keyboard reaches it, and the four-second question it asks is red for the same reason. */
+  #railBody .rail-thread-head:focus-visible { outline: none; }
+  #railBody .rail-thread.no-log .rail-thread-head { cursor: default; }
+  #railBody .rail-thread-head .chev { flex: none; width: 8px; text-align: center; color: var(--muted); }
+  #railBody .rail-thread-head .chev::before { content: "▾"; }
+  #railBody .rail-thread.folded .rail-thread-head .chev::before { content: "▸"; }
+  #railBody .rail-thread.no-log .rail-thread-head .chev::before { content: ""; }
+  #railBody .rail-card .dot { width: 6px; height: 6px; flex: none; }
+  #railClosed .rail-card .dot { opacity: .55; }
+  #railBody .rail-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--text); }
+  #railClosed .rail-title { color: var(--muted); }
+  #railClosed .rail-card:hover .rail-title { color: var(--text); }
+  #railBody .rail-thread-role { flex: none; font: 10px var(--mono); color: var(--accent);
+    background: rgba(88,166,255,.1); border: 1px solid rgba(88,166,255,.22); border-radius: 999px;
+    padding: 0 5px; }
+  #railBody .rail-thread-role[hidden] { display: none; }
+  #railBody .rail-state { flex: none; color: var(--muted); font-size: 11px; }
+  #railBody .rail-thread.wants > .rail-card .rail-state { color: var(--pink); }
+  #railBody .rail-thread.updated > .rail-card .rail-state { color: var(--accent); }
+  /* The trash is the one press in the closed list that destroys work, so it stays muted until the
+     pointer or the keyboard reaches it, and the four-second question it asks is red for the same reason. */
   #railClosed .rail-trash { flex: none; display: flex; align-items: center; align-self: stretch;
     padding: 0 6px; border: 0; border-radius: 0 6px 6px 0; background: transparent; color: var(--muted);
     font: 10px var(--mono); cursor: pointer; }
@@ -782,38 +778,17 @@
   #railClosed .rail-trash:disabled { cursor: default; opacity: .55; }
   #railClosed .rail-trash svg { width: 11px; height: 11px; display: block; fill: none; stroke: currentColor;
     stroke-width: 1.2; stroke-linejoin: round; }
-  /* The closed list's own clean sits beside its count and wears the footer's clean button: it is the same
-     press over a shorter list, so it looks the same at the size the rail's head is set in. */
+  /* The closed list's own clean sits beside its label and wears the footer's clean button: it is the
+     same press over a shorter list, so it looks the same at the size the rail's head is set in. */
   #railClosedClean { margin-left: auto; font: 10.5px var(--mono); color: var(--muted);
     background: #161b22; border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px;
     cursor: pointer; }
   #railClosedClean:hover { color: var(--text); border-color: var(--border-bright); }
   #railClosedClean:disabled { cursor: default; opacity: .55; }
-  /* One foldable section per thread: the rail is a stack of conversations, not one long log. */
-  #railLog .rail-thread { display: flex; flex-direction: column; gap: 4px; flex: none; }
-  #railLog .rail-thread-head { display: flex; align-items: center; gap: 6px; width: 100%; flex: none;
-    padding: 2px 6px; background: transparent; border: 1px solid transparent; border-radius: 6px;
-    color: var(--muted); font: inherit; font-size: 11px; text-align: left; cursor: pointer; }
-  #railLog .rail-thread-head:hover { background: #0f141b; border-color: #1c2128; }
-  #railLog .rail-thread-head:focus-visible { outline: none; border-color: var(--accent-dim); }
-  #railLog .rail-thread-head .chev { flex: none; width: 8px; text-align: center; }
-  #railLog .rail-thread-head .chev::before { content: "▾"; }
-  #railLog .rail-thread.folded .rail-thread-head .chev::before { content: "▸"; }
-  #railLog .rail-thread-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; color: var(--text); }
-  #railLog .rail-thread-count { flex: none; }
-  #railLog .rail-thread-stats { flex: none; color: var(--muted); font: 10px var(--mono); }
-  #railLog .rail-thread-stats:empty { display: none; }
-  #railLog .rail-thread-role { flex: none; font: 10px var(--mono); color: var(--accent);
-    background: rgba(88,166,255,.1); border: 1px solid rgba(88,166,255,.22); border-radius: 999px;
-    padding: 0 5px; }
-  #railLog .rail-thread-role[hidden] { display: none; }
-  /* A child sits under the thread that spawned it: indented, and with a rule down its left edge so
-     the fan of children reads as one thing. */
-  #railLog .rail-thread.child { margin-left: 9px; }
-  #railLog .rail-thread.child > .rail-thread-head { border-left: 1px solid #1c2128; border-radius: 0 6px 6px 0; }
-  #railLog .rail-thread-body { display: flex; flex-direction: column; gap: 4px; }
-  #railLog .rail-thread.folded .rail-thread-body { display: none; }
+  #railBody .rail-thread-body { display: flex; flex-direction: column; gap: 4px; padding: 2px 0 4px 14px; }
+  #railBody .rail-thread.folded .rail-thread-body,
+  #railBody .rail-thread.no-log .rail-thread-body,
+  #railBody .rail-thread-body:empty { display: none; }
   .act { border-radius: 6px; padding: 5px 7px; background: #0f141b; border: 1px solid #1c2128;
     flex: none; }
   .act .top { display: flex; align-items: center; gap: 6px; }
@@ -1656,12 +1631,11 @@
   <button id="reset">100%</button>
   <button id="housekeepingBtn" type="button" aria-haspopup="menu" aria-expanded="false" title="workspace housekeeping">housekeeping</button>
   <button id="toolboxBtn" type="button" aria-haspopup="menu" aria-expanded="false" title="files, source control, git graph, and terminal">toolbox</button>
-  <!-- The two drawers that stay in the header. One drawer is open at a time, and each door names the key that opens it. -->
+  <!-- The thread drawer that stays in the header. One drawer is open at a time, and the door names the key that opens it. -->
   <button id="activityBtn" type="button" aria-controls="drawerActivity" aria-expanded="false" title="show the activity drawer (a)">activity</button>
-  <button id="cardsBtn" type="button" aria-controls="drawerCards" aria-expanded="false" title="show the cards drawer (c)">cards</button>
   <button id="searchBtn" type="button" aria-controls="drawerSearch" aria-expanded="false" title="show the search drawer (ctrl+f)">search</button>
   <!-- One door per plugin whose panel lives in the left drawers, filled in by board.js. The header's
-       own buttons are the style, so a door stands here exactly like activity and cards do. -->
+       own buttons are the style, so a door stands here exactly like activity does. -->
   <span id="pluginDrawerDoors" hidden></span>
   <button id="configBtn" title="board specific settings: default model, thinking, dimming, and which tools a new thread gets" aria-haspopup="dialog" aria-expanded="false">settings</button>
 </header>
@@ -1729,9 +1703,8 @@
 </div>
 
 <!-- The left drawers. One column, one width, one open at a time: `f` for the workspace's files, `a` for
-     what the agents are doing, `c` for the board's cards, `d` for source control. The rail's remembered
-     width and its hidden choice carry over, because this is the rail with doors on it rather than a
-     second place. -->
+     activity and cards, `d` for source control. The rail's remembered width and its open choice carry
+     over, because this is the rail with doors on it rather than a second place. -->
 <div id="drawers" class="drawer-shell drawer-slide">
   <section class="drawer" id="drawerFiles" aria-label="files" tabindex="-1">
     <div id="filesPane">
@@ -1756,15 +1729,12 @@
     </div>
   </section>
   <section class="drawer" id="drawerActivity" aria-label="activity" tabindex="-1">
-    <div class="rail-head">activity <b id="railRunning"></b><button type="button" class="rail-close" title="hide the drawer (esc)">«</button></div>
-    <div id="railNow"></div>
-    <div id="railLog"></div>
-  </section>
-  <section class="drawer" id="drawerCards" aria-label="cards" tabindex="-1">
-    <div class="rail-head">cards <b id="railCardCount"></b><button type="button" class="rail-close" title="hide the drawer (esc)">«</button></div>
-    <div id="railCards"></div>
-    <div class="rail-head" id="railClosedHead" hidden>closed <b id="railClosedCount"></b><button type="button" id="railClosedClean" title="delete the closed threads whose work is saved somewhere else, with their folders, branches and conversations">clean</button></div>
-    <div id="railClosed"></div>
+    <div class="rail-head">activity<button type="button" class="rail-close" title="hide the drawer (esc)">«</button></div>
+    <div id="railBody">
+      <div id="railCards"></div>
+      <div class="rail-head" id="railClosedHead" hidden>closed<button type="button" id="railClosedClean" title="delete the closed threads whose work is saved somewhere else, with their folders, branches and conversations">clean</button></div>
+      <div id="railClosed"></div>
+    </div>
   </section>
   <section class="drawer" id="drawerSource" aria-label="source control">
     <div class="rail-head">source control <b id="scCount"></b><button type="button" class="rail-close" title="hide the drawer (esc)">«</button></div>
@@ -1957,6 +1927,8 @@
 
 <!-- The source control drawer's right-click menu: what is worth offering for one file. -->
 <div id="scMenu" hidden role="menu" aria-label="file actions"></div>
+<!-- The activity drawer's right-click menu: reopen for a closed card, debug for a thread card. -->
+<div id="actMenu" hidden role="menu" aria-label="card actions"></div>
 
 <div id="viewport">
   <div id="world"></div>
