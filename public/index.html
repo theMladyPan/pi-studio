@@ -361,10 +361,12 @@
   .note-body blockquote p, .sticky-reply blockquote p { margin: 0 0 4px; }
   .note-body blockquote p:last-child, .sticky-reply blockquote p:last-child { margin-bottom: 0; }
   .note-body .tick { color: var(--green); cursor: pointer; }
-  .card .edit, .card .copy-id, .card .open-editor, .card .download-note { border: 0; background: transparent; color: var(--muted);
+  .card .edit, .card .open-editor, .card .download-note { border: 0; background: transparent; color: var(--muted);
     font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
-  .card .edit:hover, .card .copy-id:hover, .card .open-editor:hover, .card .download-note:hover { background: #21262d; color: var(--text); }
-  .card .short-id { flex: none; font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
+  .card .edit:hover, .card .open-editor:hover, .card .download-note:hover { background: #21262d; color: var(--text); }
+  .card .short-id { flex: none; font: 12px var(--mono); color: var(--muted); white-space: nowrap;
+    cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+  .card .short-id:hover { background: #21262d; color: var(--text); }
   .card .open-editor, .card .download-note { display: flex; align-items: center; }
   /* The press that makes a pdf runs a browser per picture, so it says it is working and takes no second press. */
   .card .download-note.busy { opacity: .55; cursor: progress; }

@@ -3576,8 +3576,7 @@ function makeCard(data, quiet = false) {
     <span class="spacer"></span>
     <button type="button" class="ask-pill" aria-label="centre this question">answer needed</button>
     <span class="chip"></span>
-    ${kind === "sticky" ? `<span class="short-id" title="this thread's id · ${data.id}">${String(data.id).slice(0, 8)}</span>` : ""}
-    <button type="button" class="copy-id" title="copy this card's id">⧉</button>
+    ${kind === "sticky" ? `<span class="short-id" title="${data.id}">${String(data.id).slice(0, 8)}</span>` : ""}
     <button type="button" class="open-editor" title="open this file in the text editor" aria-label="open this file in the text editor">${OPEN_GLYPH}</button>
     <button type="button" class="download-note" title="download this note as .md and .pdf" aria-label="download this note as .md and .pdf">${DOWNLOAD_GLYPH}</button>
     <button class="pin" title="pin this card" aria-label="pin this card">${PIN_GLYPH}</button>
@@ -3656,18 +3655,20 @@ function makeCard(data, quiet = false) {
     event.stopPropagation();
     centreQuestion(entry);
   });
-  // The id is how a card is named in a message and in a bug report. A thread wears the first eight
-  // of its id beside the press, so the board names it at a glance; one press puts the whole id on
-  // the clipboard, and the footer repeats it in case the clipboard is refused.
-  const copyId = head.querySelector(".copy-id");
-  copyId.title = `copy this card's id · ${data.id}`;
-  copyId.setAttribute("aria-label", `copy the id of ${data.title || "this card"}`);
-  copyId.addEventListener("click", (event) => {
-    event.stopPropagation();
-    copyText(entry.id)
-      .then(() => footNote(`card id copied · ${entry.id}`))
-      .catch(() => footNote(`the clipboard refused, so the card id is here · ${entry.id}`));
-  });
+  // The id is how a thread is named in a message and in a bug report, so its card head wears the
+  // first eight of it in the head's right-hand row, and one click on those eight letters puts the
+  // whole id on the clipboard; the tooltip is the whole id too, and the footer repeats it if the clipboard is refused.
+  const shortId = head.querySelector(".short-id");
+  if (shortId) {
+    shortId.title = String(data.id);
+    shortId.setAttribute("aria-label", `copy the thread id of ${data.title || "this card"}`);
+    shortId.addEventListener("click", (event) => {
+      event.stopPropagation();
+      copyText(entry.id)
+        .then(() => footNote(`thread id copied · ${entry.id}`))
+        .catch(() => footNote(`the clipboard refused, so the thread id is here · ${entry.id}`));
+    });
+  }
   // A source card holds a file, so its head offers the press that hands it to the editor the settings
   // page names. The daemon holds both the setting and the launch, so a refusal is its sentence to say.
   head.querySelector(".open-editor").addEventListener("click", (event) => {
@@ -3978,7 +3979,7 @@ function selectCard(card) {
  * checkbox, the resize corner. Everything else is surface, which drags the card.
  */
 const INTERACTIVE =
-  ".close, .edit, .reply, .min, .ask-pill, .resize, input, textarea, button, a, [contenteditable], .xref, .tick, .q-options, .composer";
+  ".close, .edit, .reply, .min, .ask-pill, .short-id, .resize, input, textarea, button, a, [contenteditable], .xref, .tick, .q-options, .composer";
 
 /**
  * Which cards the selection holds, drawn as a ring on each. An id whose card has left the board goes
