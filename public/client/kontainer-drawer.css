@@ -222,3 +222,9 @@ body.kontainer-open #kontainerScrim { opacity: 1; visibility: visible; transitio
   #kontainerDrawer .k-stage { min-width:640px; }
   #kontainerDrawer .k-search { width:140px; }
 }
+
+/* A human who asked for less motion gets the drawer without its roll or its wire flow. */
+@media (prefers-reduced-motion: reduce) {
+  #kontainerDrawer, #kontainerScrim, body.kontainer-open #kontainerDrawer { transition: none; }
+  #kontainerDrawer * { animation: none !important; }
+}

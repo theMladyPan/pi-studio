@@ -102,7 +102,26 @@ export async function onKontainerEvents(req: IncomingMessage, res: ServerRespons
 
 	let buffer = "";
 	let closed = false;
-	const upstream = openSocketStream(runtime, `/events?filters=${EVENT_FILTERS}`, (chunk) => {
+	let ping: ReturnType<typeof setInterval> | null = null;
+	let upstream: { close: () => void } | null = null;
+	const teardown = () => {
+		if (closed) return;
+		closed = true;
+		if (ping) clearInterval(ping);
+		upstream?.close();
+	};
+	/** An engine that fails mid-stream ends the feed with an `error` event instead of a silent stall. */
+	const failStream = (error: Error) => {
+		if (closed) return;
+		if (ping) clearInterval(ping);
+		closed = true;
+		upstream?.close();
+		try {
+			if (!res.writableEnded) res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
+		} catch {}
+		res.end();
+	};
+	upstream = openSocketStream(runtime, `/events?filters=${EVENT_FILTERS}`, (chunk) => {
 		if (closed) return;
 		buffer += chunk.toString("utf8");
 		let newline = buffer.indexOf("\n");
@@ -114,16 +133,10 @@ export async function onKontainerEvents(req: IncomingMessage, res: ServerRespons
 			}
 			newline = buffer.indexOf("\n");
 		}
-	});
-	const ping = setInterval(() => {
+	}, failStream);
+	ping = setInterval(() => {
 		if (!closed) res.write(": ping\n\n");
 	}, 25_000);
-	const teardown = () => {
-		if (closed) return;
-		closed = true;
-		clearInterval(ping);
-		upstream.close();
-	};
 	req.on("close", teardown);
 	res.on("close", teardown);
 }

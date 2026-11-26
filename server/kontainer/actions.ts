@@ -188,7 +188,11 @@ export async function handleAction(board: KontainerBoardLike, rawBody: unknown, 
 		if (!workingDir || !service) {
 			return { ok: false, error: "this container was not started by compose, so it cannot be recreated" };
 		}
-		return cliResult(await run(cli, ["compose", "up", "-d", "--no-deps", "--force-recreate", service], { cwd: workingDir, timeoutMs: 120_000 }));
+		if (!folder) return { ok: false, error: "this workspace has no folder" };
+		// Recreating runs compose in the stack's own directory, so that directory has to be one this board owns.
+		const inside = resolveInsideFolder(folder, workingDir);
+		if (!inside) return { ok: false, error: "container compose working_dir is outside current workspace" };
+		return cliResult(await run(cli, ["compose", "up", "-d", "--no-deps", "--force-recreate", service], { cwd: inside, timeoutMs: 120_000 }));
 	}
 
 	if (action === "compose.up" || action === "compose.restart" || action === "compose.down") {
@@ -198,6 +202,11 @@ export async function handleAction(board: KontainerBoardLike, rawBody: unknown, 
 			const inside = resolveInsideFolder(folder, composeFile);
 			if (!inside) return { ok: false, error: "compose file must be inside the workspace folder" };
 			args.push("-f", inside);
+		}
+		const project = typeof body.project === "string" ? body.project : "";
+		if (project) {
+			if (!isValidId(project)) return { ok: false, error: "a valid compose project name is required" };
+			args.push("-p", project);
 		}
 		const verb = action === "compose.up" ? "up" : action === "compose.restart" ? "restart" : "down";
 		args.push(verb);

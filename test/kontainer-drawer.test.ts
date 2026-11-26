@@ -16,6 +16,7 @@ const page = readFileSync(new URL("../public/index.html", import.meta.url), "utf
 const board = readFileSync(new URL("../public/client/board.js", import.meta.url), "utf8");
 const terminalSource = readFileSync(new URL("../public/client/terminal-drawer.js", import.meta.url), "utf8");
 const kontainerSource = readFileSync(new URL("../public/client/kontainer-drawer.js", import.meta.url), "utf8");
+const kontainerCss = readFileSync(new URL("../public/client/kontainer-drawer.css", import.meta.url), "utf8");
 
 test("the page carries the drawer, its scrim, its stylesheet and the door in the toolbox", () => {
 	assert.match(page, /<link rel="stylesheet" href="\/client\/kontainer-drawer\.css" \/>/, "the board links the drawer's own stylesheet");
@@ -58,6 +59,28 @@ test("the drawer module keeps the members the board drives, and its three refres
 		assert.match(kontainerSource, new RegExp(`<option value="${mode}">`), `the bar offers ${mode}`);
 	}
 	assert.match(kontainerSource, /\["eco", "balanced", "live"\]\.includes\(/, "and a remembered mode outside them falls back to balanced");
+});
+
+test("the drawer reads a 200 that says ok:false as the failure it is", () => {
+	// The action route answers 200 either way, so the body's `ok` is the only verdict there is.
+	assert.match(kontainerSource, /if \(data\?\.ok === false\) throw new Error\(data\?\.error \|\| "action failed"\);/, "a rejected action is thrown, so its caller toasts it");
+	assert.doesNotMatch(kontainerSource, /data\?\.cmd/, "there is no second place a command could come from");
+	assert.match(kontainerSource, /const cmd = data\?\.command;/, "the terminal runs the command the server built");
+	assert.doesNotMatch(kontainerSource, /docker logs -f \$\{payload\.id\}|docker exec -it \$\{payload\.id\}/, "a failed handoff never becomes a client-built `docker ...` string");
+	// The unavailability reason reaches the bar, next to the way to try again.
+	assert.match(kontainerSource, /state\.data\.reason \|\| "Docker\/Podman socket unavailable"/, "the engine's complaint is shown, not an empty board");
+	// The runtime switcher reads the label the backend carries; the engine never sends a `name`.
+	assert.match(kontainerSource, /const rlabel = \(r\) => \(typeof r === "string" \? r : r\.label \|\| r\.id\);/, "a runtime is named by its label");
+	assert.doesNotMatch(kontainerSource, /r\.name/, "and never by a field the backend does not have");
+	// The unused escaper is gone: every string is written as text.
+	assert.doesNotMatch(kontainerSource, /const esc = /, "no dead helper is left behind");
+	// A re-render draws the detail it already has instead of wiping the box back to "loading…".
+	assert.match(kontainerSource, /const cached = state\.details\.get\(detailKey\(kind, id, tab\)\);/, "the fetched detail is remembered per node and tab");
+	assert.match(kontainerSource, /if \(cached === undefined \|\| refresh\) fetchDetail\(kind, id, tab, box\);/, "a detail with nothing cached is fetched without being asked twice");
+	assert.match(kontainerSource, /if \(tab === "logs"\) return fillLogs\(box, data\.lines\);/, "and the same filler draws it again");
+	// The drawer's own roll and wire flow answer a human who asked for less motion.
+	assert.match(kontainerCss, /@media \(prefers-reduced-motion: reduce\) \{\n\s*#kontainerDrawer, #kontainerScrim, body\.kontainer-open #kontainerDrawer \{ transition: none; \}/, "the stylesheet stops its own transitions");
+	assert.match(kontainerCss, /#kontainerDrawer \* \{ animation: none !important; \}/, "and every animation inside it");
 });
 
 /** The terminal drawer's `runCommand`, on the page it reads and the socket it writes to. */
