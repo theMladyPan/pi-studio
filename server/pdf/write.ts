@@ -1,15 +1,20 @@
 /**
  * A PDF written by hand: the handful of objects the format asks for, and a stream of drawing operators,
- * with the fonts every reader already carries. Nothing is installed, nothing is called out to, and the
- * text stays text — selectable, searchable and sharp at any zoom — because it is never turned into a
- * picture of itself.
+ * with the fonts every reader already carries, plus one subset font carried inside the file. Nothing is
+ * installed, nothing is called out to, and the text stays text — selectable, searchable and sharp at any
+ * zoom — because it is never turned into a picture of itself.
  *
- * The standard fonts hold Latin text only. A card writes arrows, ticks and a tree now and then, so the
- * characters the font has no glyph for are translated on the way out (`encode`), and a card reads as the
- * nearest thing the page can say rather than as a row of empty boxes.
+ * The standard fonts hold Latin text only. Polish and Czech letters beyond the Latin set (ą, ł, č, ř …)
+ * come from the one embedded subset face in `extended-font.ts` (DejaVu Sans, U+0100-U+024F): runs of
+ * those letters are drawn with it as a composite font, with a ToUnicode map so the words stay copyable.
+ * A card also writes arrows, ticks and a tree now and then; the characters neither font has a glyph for
+ * are translated on the way out (`encode`), and a card reads as the nearest thing the page can say
+ * rather than as a row of empty boxes.
  */
 
 import { deflateSync } from "node:zlib";
+
+import { EXTENDED_FONT_B64 } from "./extended-font.ts";
 
 /** A4 portrait, the page a note is read on. */
 export const PAGE_WIDTH = 595.28;
@@ -166,9 +171,10 @@ const STAND_IN: Record<string, string> = {
 };
 
 /**
- * Letters the standard fonts have no byte for, said as the letter they are built on. A title in Polish or
- * Czech is made of these, and dropping them turns `Przegląd` into `Przegld`: a word with a letter missing
- * reads as a typo, where the same word with the accent folded away reads as itself.
+ * Letters the standard fonts have no byte for, said as the letter they are built on when the embedded
+ * face has no glyph either. A title in Polish or Czech is made of these, and dropping them turns
+ * `Przegląd` into `Przegld`: a word with a letter missing reads as a typo, where the same word with the
+ * accent folded away reads as itself.
  */
 const BASE_LETTER: Record<string, string> = {
 	"\u0111": "d", // đ
@@ -188,8 +194,9 @@ const BASE_LETTER: Record<string, string> = {
 
 /**
  * A character the font cannot draw, said as the nearest thing it can. A letter that sits inside the Latin
- * set keeps its own byte; a letter built on another — `ą`, `č`, `ř`, `ü` outside Latin-1 — is folded to the
- * letter its accent is drawn on; anything else with no letter of its own is dropped rather than guessed.
+ * set keeps its own byte; a letter built on another — but outside the embedded face's range, so `pack`
+ * never handed it there — is folded to the letter its accent is drawn on; anything else with no letter
+ * of its own is dropped rather than guessed.
  */
 function fallback(char: string): string {
 	const code = char.codePointAt(0) ?? 0;
@@ -238,7 +245,15 @@ export function encode(value: string): string {
 
 /** How far a string reaches on the page, in points, at a size. */
 export function measure(face: Face, size: number, value: string): number {
-	const text = encode(value);
+	let width = 0;
+	for (const atom of atomsOf(value)) {
+		width += atom.kind === "ext" ? extWidth(atom.gid, size) : stdWidth(face, atom.text, size);
+	}
+	return width;
+}
+
+/** How far a run of standard bytes reaches, in points, at a size. */
+function stdWidth(face: Face, text: string, size: number): number {
 	if (face === "mono") return text.length * size * 0.6;
 	const table = face === "regular" || face === "italic" ? HELVETICA : HELVETICA_BOLD;
 	let width = 0;
@@ -248,6 +263,258 @@ export function measure(face: Face, size: number, value: string): number {
 		else width += HIGH_WIDTH[code] ?? 556;
 	}
 	return (width / 1000) * size;
+}
+
+/** How far one extended glyph reaches, in points, at a size. */
+function extWidth(gid: number, size: number): number {
+	return (extFont().widths1000[gid] ?? 1000) * (size / 1000);
+}
+
+/** One character as the page draws it: standard bytes, or a glyph of the embedded face. */
+type Atom = { kind: "std"; text: string } | { kind: "ext"; gid: number };
+
+/**
+ * One string as runs the compositor can draw in order: standard bytes as the writer has always drawn them,
+ * and letters the standard fonts have no byte for (Polish and Czech Latin Extended) as glyphs of the
+ * embedded face. Characters neither face holds are said the old way, by `encode`'s own fallback.
+ */
+function atomsOf(value: string): Atom[] {
+	const atoms: Atom[] = [];
+	for (const char of String(value ?? "")) {
+		if (char === "\n" || char === "\t" || char === "\r") {
+			atoms.push({ kind: "std", text: " " });
+			continue;
+		}
+		const code = char.codePointAt(0) ?? 0;
+		if (code < 0x20) continue;
+		if (code < 0x7f) {
+			atoms.push({ kind: "std", text: char });
+			continue;
+		}
+		const mapped = WIN_ANSI[char];
+		if (mapped !== undefined) {
+			atoms.push({ kind: "std", text: String.fromCharCode(mapped) });
+			continue;
+		}
+		const stand = STAND_IN[char];
+		if (stand !== undefined) {
+			const said = encode(stand);
+			if (said) atoms.push({ kind: "std", text: said });
+			continue;
+		}
+		const gid = extFont().glyphOf(code);
+		if (gid !== undefined) {
+			atoms.push({ kind: "ext", gid });
+			continue;
+		}
+		const said = fallback(char);
+		if (said) atoms.push({ kind: "std", text: said });
+	}
+	return atoms;
+}
+
+/** One string as runs of one font each, ready to draw: the compositor never mixes faces inside a run. */
+function textRuns(value: string): Array<{ ext: boolean; std: string; gids: number[] }> {
+	const runs: Array<{ ext: boolean; std: string; gids: number[] }> = [];
+	for (const atom of atomsOf(value)) {
+		const last = runs[runs.length - 1];
+		if (last && last.ext === (atom.kind === "ext")) {
+			if (atom.kind === "ext") last.gids.push(atom.gid);
+			else last.std += atom.text;
+			continue;
+		}
+		runs.push(atom.kind === "ext" ? { ext: true, std: "", gids: [atom.gid] } : { ext: false, std: atom.text, gids: [] });
+	}
+	return runs;
+}
+
+// ---------------------------------------------------------------- embedded face
+
+/** The subset face decoded, read and measured once: what the compositor needs, then what the page needs. */
+type ExtFace = {
+	buffer: Buffer;
+	unitsPerEm: number;
+	ascent: number;
+	descent: number;
+	bbox: [number, number, number, number];
+	capHeight: number;
+	widths1000: number[];
+	cmap: Map<number, number>;
+	glyphOf(code: number): number | undefined;
+};
+
+let extOnce: ExtFace | null = null;
+
+/** The embedded face, read once. A broken file throws here, and the route answers 500 with its reason. */
+function extFont(): ExtFace {
+	if (extOnce) return extOnce;
+	const buffer = Buffer.from(EXTENDED_FONT_B64, "base64");
+	const u16 = (off: number) => buffer.readUInt16BE(off);
+	const i16 = (off: number) => buffer.readInt16BE(off);
+	const u32 = (off: number) => buffer.readUInt32BE(off);
+	const numTables = u16(4);
+	const tables = new Map<string, { offset: number; length: number }>();
+	for (let index = 0; index < numTables; index += 1) {
+		const at = 12 + index * 16;
+		tables.set(buffer.toString("latin1", at, at + 4), { offset: u32(at + 8), length: u32(at + 12) });
+	}
+	const table = (tag: string) => {
+		const found = tables.get(tag);
+		if (!found) throw new Error(`extended font: no ${tag} table`);
+		return found;
+	};
+	const head = table("head");
+	const maxp = table("maxp");
+	const hhea = table("hhea");
+	const hmtx = table("hmtx");
+	const unitsPerEm = u16(head.offset + 18);
+	const numGlyphs = u16(maxp.offset + 4);
+	const numHorMetrics = u16(hhea.offset + 34);
+	const widths1000: number[] = [];
+	for (let gid = 0; gid < numGlyphs; gid += 1) {
+		const index = Math.min(gid, numHorMetrics - 1);
+		widths1000.push(Math.round((u16(hmtx.offset + index * 4) * 1000) / unitsPerEm));
+	}
+	// The cmap, read as the fonttools wrote it: many subtables, one answer to "which glyph is U+X".
+	// Format 12 is one group per range; format 4 is segments with deltas and range offsets.
+	const cmap = table("cmap");
+	const cmapMap = new Map<number, number>();
+	const numSubtables = u16(cmap.offset + 2);
+	const subtables: { format: number; at: number }[] = [];
+	for (let index = 0; index < numSubtables; index += 1) {
+		const at = cmap.offset + 4 + index * 8;
+		const sub = cmap.offset + u32(at + 4);
+		subtangles(subtables, sub);
+	}
+	function subtangles(into: { format: number; at: number }[], at: number) {
+		into.push({ format: u16(at), at });
+	}
+	const twelve = subtables.find((sub) => sub.format === 12);
+	if (twelve) {
+		const { at } = twelve;
+		const groups = u32(at + 12);
+		for (let index = 0; index < groups; index += 1) {
+			const group = at + 16 + index * 12;
+			const start = u32(group);
+			const end = u32(group + 4);
+			const first = u32(group + 8);
+			for (let code = start; code <= end; code += 1) cmapMap.set(code, first + (code - start));
+		}
+	} else {
+		const four = subtables.find((sub) => sub.format === 4);
+		if (!four) throw new Error("extended font: cmap has no format 12 or 4 subtable");
+		const { at } = four;
+		const segCount = u16(at + 6) / 2;
+		const endOff = at + 14;
+		const startOff = endOff + segCount * 2 + 2;
+		const deltaOff = startOff + segCount * 2;
+		const rangeOff = deltaOff + segCount * 2;
+		for (let segment = 0; segment < segCount; segment += 1) {
+			const start = u16(startOff + segment * 2);
+			const end = u16(endOff + segment * 2);
+			const delta = i16(deltaOff + segment * 2);
+			const range = u16(rangeOff + segment * 2);
+			for (let code = start; code <= end; code += 1) {
+				let gid: number;
+				if (range === 0) gid = (code + delta) & 0xffff;
+				else {
+					const where = rangeOff + segment * 2 + range + 2 * (code - start);
+					gid = u16(where);
+					if (gid) gid = (gid + delta) & 0xffff;
+				}
+				if (gid) cmapMap.set(code, gid);
+			}
+		}
+	}
+	const scale = (value: number) => Math.round((value * 1000) / unitsPerEm);
+	let capHeight = 700;
+	const os2 = tables.get("OS/2");
+	if (os2 && os2.length >= 102) {
+		const value = Math.abs(i16(os2.offset + 100));
+		if (value) capHeight = scale(value);
+	}
+	extOnce = {
+		buffer,
+		unitsPerEm,
+		ascent: scale(i16(hhea.offset + 4)),
+		descent: scale(i16(hhea.offset + 6)),
+		bbox: [scale(i16(head.offset + 36)), scale(i16(head.offset + 38)), scale(i16(head.offset + 40)), scale(i16(head.offset + 42))],
+		capHeight,
+		widths1000,
+		cmap: cmapMap,
+		glyphOf(code: number) {
+			return this.cmap.get(code);
+		},
+	};
+	return extOnce;
+}
+
+/**
+ * The embedded face as five objects a page can point at: the composite font, the descendant font, the
+ * descriptor, the font program and the map from its glyphs back to the words. The glyph ids are the
+ * font's own, so the map is a single identity line; the widths are what the compositor measured with.
+ */
+function extendedObjects(type0: number, cid: number, desc: number, file: number, toUnicode: number): Buffer[] {
+	const ext = extFont();
+	const fileData = deflateSync(ext.buffer);
+	const fileStream = Buffer.concat([
+		Buffer.from(
+			`<< /Length ${fileData.length} /Length1 ${ext.buffer.length} /Length2 0 /Length3 0 /Filter /FlateDecode >>\nstream\n`,
+			"latin1",
+		),
+		fileData,
+		Buffer.from("\nendstream", "latin1"),
+	]);
+	const cmapStream = toUnicodeCmap(ext);
+	const wEntries: string[] = [];
+	for (const gid of [...new Set(ext.cmap.values())].sort((a, b) => a - b)) wEntries.push(`${gid} [${ext.widths1000[gid] ?? 1000}]`);
+	return [
+		Buffer.from(`<< /Type /Font /Subtype /Type0 /BaseFont /DejaVuSans /Encoding /Identity-H /DescendantFonts [${cid} 0 R] /ToUnicode ${toUnicode} 0 R >>`, "latin1"),
+		Buffer.from(
+			`<< /Type /Font /Subtype /CIDFontType2 /BaseFont /DejaVuSans /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> ` +
+				`/FontDescriptor ${desc} 0 R /CIDToGIDMap /Identity /DW 1000 /W [${wEntries.join(" ")}] >>`,
+			"latin1",
+		),
+		Buffer.from(
+			`<< /Type /FontDescriptor /FontName /DejaVuSans /Flags 4 /FontBBox [${ext.bbox.map((one) => num(one)).join(" ")}] ` +
+				`/ItalicAngle 0 /Ascent ${num(ext.ascent)} /Descent ${num(ext.descent)} /CapHeight ${num(ext.capHeight)} /StemV 80 /FontFile2 ${file} 0 R >>`,
+			"latin1",
+		),
+		fileStream,
+		Buffer.from(`<< /Length ${Buffer.byteLength(cmapStream, "latin1")} >>\nstream\n${cmapStream}endstream`, "latin1"),
+	];
+}
+
+/** The map from the embedded glyphs back to the words: how a reader copies, searches and selects. */
+function toUnicodeCmap(ext: ExtFace): string {
+	const pairs = [...ext.cmap.entries()].map(([code, gid]) => ({ gid, code })).sort((a, b) => a.gid - b.gid);
+	const blocks: string[] = [];
+	for (let start = 0; start < pairs.length; start += 100) {
+		const chunk = pairs.slice(start, start + 100);
+		blocks.push(`${chunk.length} beginbfchar
+${chunk.map((one) => `<${one.gid.toString(16).toUpperCase().padStart(4, "0")}> <${one.code.toString(16).toUpperCase().padStart(4, "0")}>`).join("\n")}
+endbfchar`);
+	}
+	return `/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo
+<< /Registry (Adobe)
+/Ordering (UCS)
+/Supplement 0
+>> def
+/CMapName /Adobe-Identity-UCS def
+/CMapVersion 1.0 def
+/CMapType 2 def
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+${blocks.join("\n")}
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end
+`;
 }
 
 /** The three characters a PDF string has to escape, so a note's own brackets survive. */
@@ -296,9 +563,18 @@ export function sheet(): Sheet {
 			ops.push(`${num(grey)} g`, `${num(grey)} G`);
 		},
 		text(face, size, x, y, value) {
-			const drawn = encode(value);
-			if (!drawn) return;
-			ops.push(`BT`, `/${FACE_ID[face]} ${num(size)} Tf`, `1 0 0 1 ${num(x)} ${num(y)} Tm`, `(${literal(drawn)}) Tj`, `ET`);
+			let at = x;
+			for (const run of textRuns(value)) {
+				if (run.ext) {
+					const hex = run.gids.map((gid) => gid.toString(16).toUpperCase().padStart(4, "0")).join("");
+					ops.push(`BT`, `/${EXT_ID} ${num(size)} Tf`, `1 0 0 1 ${num(at)} ${num(y)} Tm`, `<${hex}> Tj`, `ET`);
+					at += run.gids.reduce((total, gid) => total + extWidth(gid, size), 0);
+			} else {
+				if (!run.std) continue;
+				ops.push(`BT`, `/${FACE_ID[face]} ${num(size)} Tf`, `1 0 0 1 ${num(at)} ${num(y)} Tm`, `(${literal(run.std)}) Tj`, `ET`);
+				at += stdWidth(face, run.std, size);
+			}
+			}
 		},
 		box(x, y, width, height) {
 			if (width <= 0 || height <= 0) return;
@@ -337,19 +613,31 @@ const FACE_ID: Record<Face, string> = {
 	mono: "F5",
 };
 
+/** What the embedded face is called inside a page, beside the standard ones. */
+const EXT_ID = "F6";
+
 /**
- * The pages as one file: a catalog, a tree of pages, the five fonts, then each page and its stream, then
- * every picture and link the pages drew, and the table a reader looks everything up in.
+ * The pages as one file: a catalog, a tree of pages, the five standard fonts and the one embedded
+ * face, then each page and its stream, then every picture and link the pages drew, and the table a
+ * reader looks everything up in.
  *
  * The text streams are written as they are rather than compressed, because a card is a few pages of text
  * and a file a person can open in an editor is worth more than the few kilobytes a deflate would save. A
- * picture is the exception: pixels are already the largest thing in the file, so they are deflated.
+ * picture and the embedded font are the exceptions: pixels and glyphs are already the largest things in
+ * the file, so they are deflated.
  */
 export function documentOf(sheets: Sheet[]): Buffer {
-	// 1 is the catalog, 2 the page tree, one object per face, two per page, then one per picture and one
-	// per link. A picture used on two pages is one object, so its bytes are paid for once.
+	// 1 is the catalog, 2 the page tree, one object per standard face (3-7), five objects for the
+	// embedded face (8-12), two per page, then one per picture and one per link. A picture used on two
+	// pages is one object, so its bytes are paid for once.
 	const firstFace = 3;
-	const firstPage = firstFace + FACES.length;
+	const firstExt = firstFace + FACES.length;
+	const extType0 = firstExt;
+	const extCid = firstExt + 1;
+	const extDesc = firstExt + 2;
+	const extFile = firstExt + 3;
+	const extToUnicode = firstExt + 4;
+	const firstPage = firstExt + 5;
 	const firstPicture = firstPage + sheets.length * 2;
 	const pageId = (index: number) => firstPage + index * 2;
 	const kids = sheets.map((_sheet, index) => `${pageId(index)} 0 R`).join(" ");
@@ -369,6 +657,7 @@ export function documentOf(sheets: Sheet[]): Buffer {
 	for (const face of FACES) {
 		objects.push(Buffer.from(`<< /Type /Font /Subtype /Type1 /BaseFont /${FACE_NAME[face]} /Encoding /WinAnsiEncoding >>`, "latin1"));
 	}
+	objects.push(...extendedObjects(extType0, extCid, extDesc, extFile, extToUnicode));
 	for (const [index, one] of sheets.entries()) {
 		const stream = one.operators();
 		const fonts = FACES.map((face) => `/${FACE_ID[face]} ${firstFace + FACES.indexOf(face)} 0 R`).join(" ");
@@ -377,7 +666,7 @@ export function documentOf(sheets: Sheet[]): Buffer {
 		objects.push(
 			Buffer.from(
 				`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(PAGE_WIDTH)} ${num(PAGE_HEIGHT)}] ` +
-					`/Resources << /Font << ${fonts} >>${xobjects ? ` /XObject << ${xobjects} >>` : ""} >> ` +
+					`/Resources << /Font << ${fonts} /${EXT_ID} ${extType0} 0 R >>${xobjects ? ` /XObject << ${xobjects} >>` : ""} >> ` +
 					`/Contents ${pageId(index) + 1} 0 R${annots ? ` /Annots [${annots}]` : ""} >>`,
 				"latin1",
 			),

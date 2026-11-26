@@ -150,15 +150,20 @@ test("a marker with no definition stays as it was typed rather than becoming a n
 	assert.ok(!text.includes("(1) Tj"), "and nothing is numbered");
 });
 
-test("a letter the standard font has no byte for is folded to the letter it is built on", () => {
-	// The words a page in Polish or Czech is made of. Dropping the diacritic instead of folding it would turn
-	// `Przegląd` into `Przegld`, which reads as a typo rather than as the word.
+test("a letter the standard font has no byte for is drawn with its own glyph from the embedded face", () => {
+	// The words a page in Polish or Czech is made of. Folding them to the letter they are built on would
+	// turn `Przegląd` into `Przeglad` and the letter itself would vanish from the words: the page now
+	// draws them from the embedded subset face, so a reader sees the letters as written, and plain text
+	// taken from the page keeps them too, through the map from glyphs back to words.
 	const text = textOf(card("Przegląd čísel a řádků, Łódź"));
-	assert.ok(text.includes("(Przeglad) Tj"), "a letter with a tail is folded to the letter it is built on");
-	assert.ok(text.includes("(císel) Tj"), "and the word around it is whole");
-	assert.ok(text.includes("(rádku,) Tj") && text.includes("(Lódz) Tj"), "a stroked letter becomes the letter it is");
-	// A letter the Latin set already holds keeps its own byte, so the word is drawn with its accent whole.
-	assert.ok(text.includes("císel"), "a letter the font does hold is kept as it is");
+	assert.ok(text.includes("/Subtype /Type0"), "the embedded face is a composite font on the page");
+	assert.ok(!text.includes("(Przeglad) Tj"), "nothing is folded to its base letter any more");
+	// The ToUnicode map hands the glyphs back as the words they were: ą U+0105, č U+010D, ř U+0159, ů U+016F, Ł U+0141.
+	for (const unicode of ["0105", "010D", "0141", "0159", "016F"]) {
+		assert.ok(text.includes(`<${unicode}>`), `${unicode} has a glyph mapped back to its word`);
+	}
+	// The plain letters around them stay plain text, and the words survive whole.
+	assert.ok(text.includes("(Przegl"), "the plain letters stay plain text");
 });
 
 test("characters the standard font has no glyph for are said in characters it does", () => {
