@@ -1,0 +1,11 @@
+export function cacheEnabled(env?: NodeJS.ProcessEnv): boolean;
+export function cacheDir(repo?: string, env?: NodeJS.ProcessEnv): string;
+export function hashFiles(repo: string, files: string[]): string;
+export function wholeInputFiles(repo: string): string[];
+export function wholeKey(repo: string): string;
+export function listTestFiles(repo: string): string[];
+export function importClosure(repo: string, start: string): string[] | null;
+export function perFileKey(repo: string, testFile: string): string | null;
+export function readCache(dir: string, key: string): { exitCode: number } | null;
+export function writeCache(dir: string, key: string, exitCode: number): void;
+export function clearCache(dir: string): void;
