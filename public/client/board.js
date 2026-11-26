@@ -8168,6 +8168,7 @@ function makeComposer(entry) {
     send: root.querySelector(".send"),
     stopBtn: root.querySelector(".stop"),
     hintEl: root.querySelector(".hintline"),
+    usage: root.querySelector(".usage"),
     refRow: root.querySelector(".refs"),
     paths: root.querySelector(".paths"),
     shots: root.querySelector(".shots"),
@@ -8610,6 +8611,37 @@ function paintCtx(inst) {
   inst.ctxBtn.setAttribute("aria-label", known ? `context ${percent}% used, compact it` : `compact the context, ${compact(held.context)} tokens`);
 }
 
+/**
+ * The consumption figure in the field's own row: what the thread behind this field has spent, in
+ * input and output tokens, requests and money — the per-thread figure the activity drawer used to
+ * carry before the two drawers merged. pi reports no request counter of its own, so the count is
+ * the thread's messages, the same number the footer names. The bottom bar has no thread of its
+ * own and sums every thread instead. A thread that has not run yet still shows its zeros, so the
+ * row keeps its width and the figure never pops in mid-typing.
+ */
+function paintUsage(inst) {
+  const held = cardOf(inst);
+  let stats;
+  if (held) {
+    stats = held.data.stats ?? held.data.answersWith?.stats ?? {};
+  } else {
+    stats = { input: 0, output: 0, messages: 0, cost: 0 };
+    for (const thread of threadFacts.values()) {
+      const own = thread.stats ?? {};
+      stats.input += own.input ?? 0;
+      stats.output += own.output ?? 0;
+      stats.messages += own.messages ?? 0;
+      stats.cost += own.cost ?? 0;
+    }
+  }
+  const input = Number(stats.input) || 0;
+  const output = Number(stats.output) || 0;
+  const requests = Number(stats.messages) || 0;
+  const cost = Number(stats.cost) || 0;
+  inst.usage.textContent = `${compact(input)}/${compact(output)} tok. (${compact(requests)} req.) ~ $${cost > 0 && cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`;
+  inst.usage.title = `Input ${input} tok · Output ${output} tok · ${requests} requests · $${cost.toFixed(2)}`;
+}
+
 async function compactField(inst) {
   const held = answeringCtx(inst);
   // One thread at a time, and only the button that is waiting says so: a compaction in another card
@@ -9045,6 +9077,7 @@ function paintRuntime(inst) {
   inst.modelBtn.title = `${where} ${runtime.provider ?? ""}/${runtime.model ?? ""}`;
   inst.thinkBtn.title = `${held ? "this card" : "a new thread"} thinks at ${runtime.thinking || "off"}`;
   paintCtx(inst);
+  paintUsage(inst);
   paintMode(inst);
   paintHint(inst);
 }
@@ -9082,6 +9115,10 @@ function paintBoardFacts() {
   paintSections();
   homeLiveRows();
   paintFooter();
+  // The bottom bar reads its figure from the threads just gathered, so it is repainted once they
+  // are known rather than from the pass that ran before them: the card fields read their own
+  // card's stats and are already right by then.
+  for (const inst of composers.values()) paintUsage(inst);
 }
 
 function closePick() {
