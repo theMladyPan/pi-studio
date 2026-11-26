@@ -87,6 +87,9 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
       scrim.hidden = false;
     },
     afterOpen() {
+      // The label is shared with the search drawer, which writes its own name into it while it is
+      // up: each drawer says its own name on the way up rather than trusting the last writer.
+      nameLabel.textContent = "git graph";
       nameLabel.hidden = false;
       // The page takes the keyboard once it is alive. Before its first `ready` the board keeps it, so a
       // quick `g` or Escape still reaches the handlers that roll the drawer back up.

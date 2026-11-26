@@ -1399,6 +1399,7 @@ describe("searching file contents and replacing in them", () => {
 			const board = await openWorkspace(daemon, folder);
 			const all = await search(daemon, board, "&q=quiet");
 			assert.equal(all.status, 200, JSON.stringify(all.body));
+			assert.equal(typeof all.body.home, "string", "the search names the home folder, so its head can shorten the path");
 			assert.equal(all.body.repo, false);
 			assert.equal(all.body.totalFiles, 2);
 			assert.equal(all.body.totalMatches, 4);

@@ -786,7 +786,7 @@ test("a path opens as the kind its last extension names, and everything else is 
 
 test("the three drawers and the tree exist in the page, and the old picker is gone", () => {
 	const html = readFileSync(HTML, "utf8");
-	for (const id of ["drawerFiles", "drawerActivity", "drawerCards", "drawerSearch", "srQuery", "srReplace", "srList", "exTree", "exFilter", "exMenu", "exConfirm", "pickCount"]) {
+	for (const id of ["drawerFiles", "drawerActivity", "drawerCards", "drawerSearch", "srTitle", "srQuery", "srReplace", "srList", "exTree", "exFilter", "exMenu", "exConfirm", "pickCount"]) {
 		assert.ok(html.includes(`id="${id}"`), `#${id} is in the page`);
 	}
 	// The editor a file opens in: its frame, the path it names, the surface it draws into, its status
@@ -813,6 +813,8 @@ test("the keys panel says what the keys do, including f as the drawer and shift+
 	const board = readFileSync(BOARD, "utf8");
 	assert.ok(board.includes('{ keys: "f", does: "open the files drawer, and press it again to roll it up" }'));
 	assert.ok(board.includes('{ keys: "ctrl+f", does: "open the search drawer and focus its search field" }'));
+	assert.ok(board.includes('"Search and replace"'), "the header names the open search drawer, as the git graph names itself");
+	assert.ok(board.includes("function srPaintTitle()"), "the search head carries the workspace path, as the files head does");
 	assert.ok(board.includes('{ keys: "a", does: "open the activity drawer, and press it again to roll it up" }'));
 	assert.ok(board.includes('{ keys: "c", does: "open the cards drawer, and press it again to roll it up" }'));
 	assert.ok(board.includes('{ keys: "shift+f", does: "fit every card on the screen" }'));
