@@ -32,8 +32,8 @@ export const MAX_DROPPED_FILES = 40;
 export const MAX_DROPPED_TOTAL = 200_000_000;
 
 
-/** A source card carries a whole file, so the ceiling is higher and still finite. */
-export const MAX_SOURCE_CHARS = 200_000;
+/** An html card carries a whole page, inline or read from a file, so the ceiling is higher and still finite. */
+export const MAX_HTML_CHARS = 200_000;
 
 
 /** A card's name is read at a glance, so it is one short line and not a paragraph. */

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- feat: Add interactive HTML cards and retire source cards — `board_html` puts a page on the board in a sandboxed frame (inline HTML or a workspace file, scripts run, no origin of its own), and the page may ask the board to ping, reveal a file, or write a note through a nonce-checked message bridge that offers nothing else; `board_source` now reveals a file in the files drawer and leaves a small link card instead of copying the file onto the board, and saved source cards are dropped on load. [t-30e68bae]
+
 ## [0.11.2] - 2026-11-26
 
 - fix: Stop the kontainer drawer listing Podman's build layers as images and charging them many times over — intermediate layer records (untagged images that are the parent of another image) are hidden like Docker hides them, a tagged base that happens to be a parent stays listed, and the unused and disk totals now sum each image's unique bytes from `system df` instead of its cumulative size, so a 825 MB image with a dozen layers no longer reads as 9 GB unused; a childless orphan layer is still listed as dangling and prunable, and a layer a container actually runs from stays listed too.

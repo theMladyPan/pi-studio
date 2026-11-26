@@ -164,7 +164,11 @@ test("a plain card keeps its type, and one without a body is dropped", () => {
 	const note = restoredPlainCard({ id: "c1", type: "note", markdown: "# hi", at: now }) as any;
 	assert.deepEqual(note, { id: "c1", type: "note", title: "note", at: now, markdown: "# hi" });
 	assert.equal(restoredPlainCard({ id: "c2", type: "note" }), null);
-	assert.equal(restoredPlainCard({ id: "c3", type: "source", path: "a.ts" }), null);
+	// Source cards are retired, so a saved one is dropped on load rather than read as anything else.
+	assert.equal(restoredPlainCard({ id: "c3", type: "source", path: "a.ts", content: "x" }), null);
+	const html = restoredPlainCard({ id: "c3h", type: "html", html: "<p>hi</p>", at: now }) as any;
+	assert.deepEqual(html, { id: "c3h", type: "html", title: "html", at: now, html: "<p>hi</p>" });
+	assert.equal(restoredPlainCard({ id: "c3i", type: "html" }), null);
 	assert.equal(restoredPlainCard({ id: "c4" }), null);
 });
 

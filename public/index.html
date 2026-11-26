@@ -290,12 +290,11 @@
      and pushes the column into scrolling when the text is long. A card grown to .auto-height has
      no fixed height to fill, so editing one falls back to its minimum while the editor is open. */
   .body { flex: 1 0 auto; position: relative; }
-  /* The code view is absolutely positioned, so the body has no height of its own: the floor keeps
-     a source card with follow-ups from handing the whole column to the thread. */
-  .body.source-body { min-height: 140px; display: flex; flex-direction: column; }
-  /* A source card whose file is a page draws the page in a frame: the frame fills the body the way the
-     code view filled it, and the page scrolls inside its own frame rather than the card's column. */
-  .body.source-body > iframe { flex: 1 1 auto; width: 100%; min-height: 0; border: 0; background: #fff; }
+  /* An html card's frame fills the body, and the page scrolls inside its own frame rather than the
+     card's column. The floor keeps a card with follow-ups from handing the whole column to the thread. */
+  .body.html-body { min-height: 140px; display: flex; flex-direction: column; }
+  .body.html-body > iframe { flex: 1 1 auto; width: 100%; min-height: 0; border: 0; background: #fff; }
+  .note-body a.file-link { color: #58a6ff; text-decoration: underline; cursor: pointer; }
   .note-body { padding: 10px 12px; color: #c9d1d9; word-wrap: break-word; }
   /* A heading owns the text under it, so it keeps more air above than below. */
   .note-body h1, .note-body h2, .note-body h3 { margin: 14px 0 5px; color: #fff; }

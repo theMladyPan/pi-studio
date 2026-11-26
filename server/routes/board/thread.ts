@@ -394,17 +394,8 @@ export function placedRect(body) {
 export function cardPreamble(card, whole = false) {
 	const title = String(card.title ?? card.path ?? card.type).replace(/\s+/g, " ").trim().slice(0, 60);
 	let about;
-	if (card.type === "source") {
-		const lines = String(card.content ?? "").split("\n");
-		const focus = Math.max(1, Math.min(card.line ?? 1, lines.length));
-		const from = Math.max(1, focus - 8);
-		const to = Math.min(lines.length, focus + 12);
-		const numbered = lines
-			.slice(from - 1, to)
-			.map((line, index) => `${from + index}| ${line}`)
-			.join("\n")
-			.slice(0, 1500);
-		about = `The card shows ${card.path}, lines ${from}-${to}:\n${numbered || "(empty)"}`;
+	if (card.type === "html") {
+		about = `The card renders this page:\n${String(card.html ?? "").trim().slice(0, 1500) || "(empty)"}`;
 	} else {
 		// A note is quoted as the human wrote it: flattening a table or a tree into one line is what
 		// makes the reply about "the card says" and not about the thing on it. A question is two strings.

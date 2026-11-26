@@ -18,6 +18,7 @@
  *   workspace.list     {}                → { workspaces: [ { id, name, folder, missing, scratch } ] }
  *   workspace.read     { workspace }     → { workspace, open, cards: [ …the board as a tab draws it… ] }
  *   cards.note         { workspace, markdown, title?, key?, size?, after? }
+ *   cards.html         { workspace, html?, path?, title?, key?, size?, after? }
  *                                        → { cardId, card, updated?, report? }
  *   cards.remove       { workspace, key } → { removed }
  *                                        The card its key names, taken off the board: the paired
@@ -62,7 +63,7 @@ import { onThreadSettled, onThreadStream } from "../bus.ts";
 import { cardsFor } from "../cards.ts";
 import { notifyPlugin } from "./manager.ts";
 import { INVALID_PARAMS, INTERNAL_ERROR, METHOD_NOT_FOUND } from "./protocol.ts";
-import { noteOnBoard } from "../routes/board/content.ts";
+import { htmlOnBoard, noteOnBoard } from "../routes/board/content.ts";
 import { stopOnBoard } from "../routes/board/lifecycle.ts";
 import { messageOnBoard } from "../routes/board/message.ts";
 import { cardByKey, threadOnBoard } from "../routes/board/thread.ts";
@@ -76,6 +77,7 @@ export const PLUGIN_METHODS = [
 	"workspace.list",
 	"workspace.read",
 	"cards.note",
+	"cards.html",
 	"cards.remove",
 	"events.subscribe",
 	"threads.list",
@@ -201,6 +203,7 @@ export function createPluginService(): PluginService {
 			if (call.method === "workspace.list") return { workspaces: workspaceList().map(describe) };
 			if (call.method === "workspace.read") return read(workspaceOf(params));
 			if (call.method === "cards.note") return note(workspaceOf(params), params);
+			if (call.method === "cards.html") return html(workspaceOf(params), params);
 			if (call.method === "cards.remove") return removeCard(workspaceOf(params), params);
 			if (call.method === "threads.list") return listThreads(workspaceOf(params));
 			if (call.method === "threads.create") return createThread(workspaceOf(params), params);
@@ -278,6 +281,11 @@ function savedView(workspace: any) {
  */
 function note(workspace: any, params: Record<string, unknown>): unknown {
 	return through(() => noteOnBoard(openBoard(workspace), params));
+}
+
+/** An html card on a workspace's board, written the way the human's own html route writes one. */
+function html(workspace: any, params: Record<string, unknown>): unknown {
+	return through(() => htmlOnBoard(openBoard(workspace), params));
 }
 
 /**

@@ -15,14 +15,15 @@ and avoid copying the whole artifact into the reply.
 
 Choose the form after deciding that the content merits a card:
 
-- a file to keep open on the board: board_source on that file
+- an interactive page to keep on the board: board_html with the page, inline or by file path
+- a file to point the human at: board_source on that file, which reveals it in the files drawer and leaves a link card
 - quantities or comparisons: a chart block, or a table when the exact numbers matter more than the shape
 - a process, state, sequence, or relationship: a fenced mermaid block
 - a change worth keeping for review: the diff, quoted
 - a failure worth tracking: the relevant trace, quoted
 
 A question asking where something is can be answered in the thread with a path and line number.
-It does not by itself need a source card or a card of paths.
+It does not by itself need a reveal or a card of paths.
 
 One card holds one kind of thing: a chart with its caption, a decision with its reasons, a checklist,
 a tree, a snippet. A chart and the todo for it are two cards only when each is useful to keep.
@@ -66,9 +67,9 @@ Nothing moves on a card. No animation, no fade, no count-up: a card is a still p
 Leave size alone unless the form asks for it: `wide` for a chart or table with more than ten columns
 or points, `compact` for a three-line note, `tall` for a long checklist or trace.
 
-Keep a mermaid graph about six nodes across and label it. board_source opens a real file, scrolled to
-a line, when the human asks to see it on the board or it is useful to keep open during the work. Its
-key is the path, so an existing card of paths can link each file as [[path/to/file]].
+Keep a mermaid graph about six nodes across and label it. board_source reveals a real file in the files
+drawer, selected, when the human asks to see it on the board or it is useful to keep it one click away.
+It leaves a small link card, so an existing card of paths can link each file as [[path/to/file]].
 
 Evidence is a reference at the foot of the card: a URL, or a path with a line. The marker in the
 sentence is `[^label]`, and the reference under the body is `[^label]: where it comes from`, on a line

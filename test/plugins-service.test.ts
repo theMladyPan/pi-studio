@@ -205,7 +205,7 @@ test("a method this daemon does not answer is refused as one", async () => {
 	const service = createPluginService();
 	const refusal = await refused(service, "thread.spawn", { workspace: scratch().id, text: "do the thing" });
 	assert.equal(refusal.code, -32601);
-	assert.match(refusal.message, /it answers workspace\.list, workspace\.read, cards\.note, cards\.remove, events\.subscribe/);
+	assert.match(refusal.message, /it answers workspace\.list, workspace\.read, cards\.note, cards\.html, cards\.remove, events\.subscribe/);
 });
 
 test("params that are not one object are refused", async () => {

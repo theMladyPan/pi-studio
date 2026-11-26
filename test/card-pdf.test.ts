@@ -214,9 +214,9 @@ test("a note with a title outside ascii is saved under a name a header can carry
 });
 
 test("a card that is not a note is refused, and so is an id nobody holds", async () => {
-	const source = { id: "aaaaaa111111", type: "source", title: "a file", path: "src/a.ts" };
-	const wrong = wire({ cardId: source.id });
-	await onCardPdf(wrong.req, wrong.res, board([source]));
+	const html = { id: "aaaaaa111111", type: "html", title: "a page", html: "<p>hi</p>" };
+	const wrong = wire({ cardId: html.id });
+	await onCardPdf(wrong.req, wrong.res, board([html]));
 	await wrong.done;
 	assert.equal(wrong.status, 409);
 
