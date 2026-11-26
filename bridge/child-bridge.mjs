@@ -384,6 +384,41 @@ const collectTool = defineTool({
 });
 
 
+const waitTool = defineTool({
+	name: "board_wait",
+	label: "Wait for a thread",
+	description:
+		"Wait for another thread on the same board to finish, then carry on — for chaining, like merging work after the thread that made it is done. Blocks this turn until that thread settles or `timeoutSeconds` lapses (default 600). Give the full thread id or its first few characters; a prefix that names one thread resolves to it. The answer says `done`, `failed`, `stopped` or `timeout`: on a timeout the thread is still running and you decide — wait again, alert the human, or take the safe route. A thread that already finished answers at once; idle and unanswered reads `failed`, never `done`.",
+	parameters: Type.Object({
+		threadId: Type.String({
+			description: "The thread to wait for: its full id, or a unique first part of it — the first 8 characters are enough.",
+		}),
+		timeoutSeconds: Type.Optional(
+			Type.Number({ description: "How long to wait before giving up, in seconds. Default 600, at most 3600." }),
+		),
+	}),
+	async execute(_id, params) {
+		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
+		try {
+			const result = await call("/thread/wait", {
+				threadId: params.threadId,
+				...(Number.isFinite(params.timeoutSeconds) ? { timeoutSeconds: params.timeoutSeconds } : {}),
+			});
+			const waited = Math.round((result.waitedMs ?? 0) / 1000);
+			const head = `Thread ${result.threadId} ${result.status} — waited ${waited}s`;
+			const still = result.timedOut ? " It is still running; wait again, alert the human, or take the safe route." : "";
+			const said = String(result.output ?? "").trim();
+			return {
+				content: [{ type: "text", text: `${head}.${still}${said ? `\n\n${said}` : ""}` }],
+				details: result,
+			};
+		} catch (error) {
+			return failure(error);
+		}
+	},
+});
+
+
 export default function boardBridge(pi) {
 	if (!attached()) return;
 	pi.registerTool(noteTool);
@@ -393,4 +428,5 @@ export default function boardBridge(pi) {
 	pi.registerTool(skillTool);
 	pi.registerTool(closeTool);
 	pi.registerTool(collectTool);
+	pi.registerTool(waitTool);
 }

@@ -2196,6 +2196,70 @@ describe("routes", { concurrency: 8 }, () => {
 		}
 	});
 
+	test("a master thread waits for another thread to finish, and a timeout is an answer not an error", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-wait-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-wait-work-"));
+		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+		const flags = dirname(stub.envFile);
+		const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+		try {
+			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+			const waiter = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "the waiter" })).body).threadId;
+			const target = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "the worker" })).body).threadId;
+			// A message is what starts a thread and mints its token, and the waiter starts first so the
+			// token read back from the child is its own.
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: waiter, text: "wait for me" })).status, 200);
+			const caller = await childEnvOf(daemon, stub.envFile);
+			assert.equal(caller.thread, waiter, "the token belongs to the starting thread");
+
+			// Unknown ids and waiting on yourself are refused before anything is held.
+			const nowhere = await postAs(daemon, caller.token, board.id, "/thread/wait", { threadId: "no-such-thread" });
+			assert.equal(nowhere.status, 409);
+			assert.equal(nowhere.body, "no such thread");
+			const self = await postAs(daemon, caller.token, board.id, "/thread/wait", { threadId: waiter });
+			assert.equal(self.status, 409);
+			assert.equal(self.body, "a thread cannot wait for itself");
+
+			// A thread with no run answers at once: idle and unanswered reads failed, never done, and an
+			// eight-character prefix is enough to name it.
+			const idle = await postAs(daemon, caller.token, board.id, "/thread/wait", { threadId: target.slice(0, 8) });
+			assert.equal(idle.status, 200);
+			const idleSay = JSON.parse(idle.body);
+			assert.equal(idleSay.threadId, target);
+			assert.equal(idleSay.status, "failed");
+			assert.equal(idleSay.timedOut, false);
+			assert.equal(idleSay.exitCode, null);
+
+			// A slow run is the window to wait in: a short timeout lapses first, then a long one lands.
+			writeFileSync(join(flags, "slow"), "1");
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: target, text: "slow words" })).status, 200);
+			const lapsed = await postAs(daemon, caller.token, board.id, "/thread/wait", { threadId: target, timeoutSeconds: 0.2 });
+			assert.equal(lapsed.status, 200);
+			const lapsedSay = JSON.parse(lapsed.body);
+			assert.equal(lapsedSay.timedOut, true);
+			assert.equal(lapsedSay.status, "timeout");
+			assert.equal(lapsedSay.threadStatus, "running");
+			const done = await postAs(daemon, caller.token, board.id, "/thread/wait", { threadId: target, timeoutSeconds: 30 });
+			assert.equal(done.status, 200);
+			const doneSay = JSON.parse(done.body);
+			assert.equal(doneSay.status, "done");
+			assert.equal(doneSay.timedOut, false);
+			assert.equal(doneSay.output, "the stub answered");
+			assert.equal(doneSay.exitCode, null);
+
+			// A cut run settles stopped rather than done: the answer never arrived.
+			writeFileSync(join(flags, "cut"), "1");
+			const cutId = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: cutId, text: "say nothing" })).status, 200);
+			const cut = await postAs(daemon, caller.token, board.id, "/thread/wait", { threadId: cutId, timeoutSeconds: 30 });
+			assert.equal(cut.status, 200);
+			assert.equal(JSON.parse(cut.body).status, "stopped");
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
+		}
+	});
+
 	test("a compaction reaches the thread's child, and the context comes back smaller", async () => {
 		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-compact-"));
 		const folder = mkdtempSync(join(tmpdir(), "pi-studio-compact-work-"));

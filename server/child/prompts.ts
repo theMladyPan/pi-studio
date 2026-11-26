@@ -107,6 +107,7 @@ export function boardPrompt(board, thread) {
 		workspacePromptText(board, STUDIO_FILE),
 		"A [[key]] only works if the card carries that exact key, so pass a short key to board_note every time and name the card by it.",
 		"Once the children you spawned are merged or otherwise brought in, board_collect frees their worktrees and branches.",
+		"To act after another thread finishes, board_wait waits for it; on a timeout it answers timeout rather than failing.",
 		"How many cards this thread writes, and what may be inside one, is set at the end of this prompt.",
 		worktreePrompt(board, thread),
 		// How a branch a child cut comes back onto this board's own branch: one strategy and the git command
