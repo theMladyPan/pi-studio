@@ -348,6 +348,15 @@ test("sourceCtx runs against the snapshot, and only preview opens the inspector"
 	assert.match(table, /noCache: true/, "and the no-cache build carries it");
 });
 
+test("the image menu runs a disposable shell in the terminal drawer", () => {
+	const table = kontainerSource.match(/function imageCtx\(img\) \{[\s\S]*?\n  \}/)?.[0];
+	assert.ok(table, "the image table is found whole");
+	assert.doesNotMatch(table, /state\.selected/, "the image menu reads no selection");
+	assert.match(table, /const runTarget = tagged \? ref : img\.id;/, "a tagged image runs by its tag, a dangling one by its id");
+	assert.match(table, /\{ id: "run", label: "run shell ↗", disabled: !runTarget, hint: "this image has no id to run", run: \(\) => execToTerminal\(\{ mode: "run", image: runTarget \}\) \}/, "run shell goes to the terminal drawer with the server-built command");
+	assert.doesNotMatch(table, /docker run/, "the menu never builds the docker command itself");
+});
+
 test("the board hands a source path to the editor, and the drawer closes first", () => {
 	assert.match(board, /openWorkspaceFile: \(relPath\) => \{ kontainerDrawer\.close\(\); exEditOpen\(relPath, "edit"\); \}/, "the drawer rolls up and the file opens");
 	assert.match(kontainerSource, /export function createKontainerDrawer\(\{ workspace, typingSomewhere, openTerminalCommand, openWorkspaceFile \}\)/, "the drawer takes the door");
