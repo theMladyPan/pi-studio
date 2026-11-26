@@ -3947,16 +3947,30 @@ describe("routes", { concurrency: 8 }, () => {
 					req.on("error", reject);
 					req.end();
 				});
+			// The daemon prints the plain-http line before the listener finishes binding, so the first
+			// connect can be refused while the socket is still opening. Retry briefly on a refusal
+			// instead of believing the first one.
+			const plainRetry = async (hostname: string, path: string, host: string) => {
+				const deadline = Date.now() + 5_000;
+				for (;;) {
+					try {
+						return await plain(hostname, path, host);
+					} catch (error) {
+						if (Date.now() >= deadline || (error as NodeJS.ErrnoException).code !== "ECONNREFUSED") throw error;
+						await new Promise((resolve) => setTimeout(resolve, 50));
+					}
+				}
+			};
 			// A request that arrives from beyond this machine lands on the HTTPS port with path and
 			// query kept; one that arrives from loopback is served, whatever Host it claims.
 			const lan = Object.values(networkInterfaces()).flat().find((one) => one?.family === "IPv4" && !one.internal)?.address;
 			assert.ok(lan, "no lan address to test the redirect from");
-			const redirected = await plain(lan, "/w/abc123?x=1", `fedora:${plainPort}`);
+			const redirected = await plainRetry(lan, "/w/abc123?x=1", `fedora:${plainPort}`);
 			assert.equal(redirected.status, 308);
 			assert.equal(redirected.location, `https://fedora:${httpsPort}/w/abc123?x=1`);
 			// That loopback answer is exactly what a child gets from `childBaseUrl`: plain http on the
 			// neighbour, so its card tools keep working while the main port is HTTPS-only.
-			const local = await plain("127.0.0.1", "/", `127.0.0.1:${plainPort}`);
+			const local = await plainRetry("127.0.0.1", "/", `127.0.0.1:${plainPort}`);
 			assert.equal(local.status, 200);
 			// A loopback caller claiming a foreign Host still gets the board: the peer address decides.
 			const spoofed = await plain("127.0.0.1", "/", `fedora:${plainPort}`);
