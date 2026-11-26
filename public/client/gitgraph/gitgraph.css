@@ -33,13 +33,13 @@ input[type="search"] { min-width: 0; }
 .error, .danger { color: var(--red); }
 
 #topBar { position: sticky; top: 0; left: 0; z-index: 3; background: var(--bg); }
-.statusStrip { padding: 3px 12px; border-bottom: 1px solid var(--border); font: 11px/17px var(--mono); color: var(--muted); }
+.statusStrip { position: sticky; bottom: 0; z-index: 3; padding: 3px 12px; border-top: 1px solid var(--border); background: var(--bg); font: 11px/17px var(--mono); color: var(--muted); }
 .statusSummary { display: inline-flex; align-items: center; gap: 7px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .statusIndicator { display: inline-block; width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--green); }
 .statusStrip[data-state="loading"] .statusIndicator, .statusStrip[data-state="action"] .statusIndicator { background: var(--accent); }
 .statusStrip[data-state="error"] .statusIndicator { background: var(--red); }
 .statusStrip[data-state="error"] { color: var(--red); }
-#topBar.scrolled .statusStrip[data-state="ready"], #topBar.scrolled #stashListSlot { display: none; }
+#topBar.scrolled #stashListSlot { display: none; }
 #controls {
   display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px;
   padding: 5px 12px; background: var(--card); border-bottom: 1px solid var(--border);
@@ -48,6 +48,8 @@ input[type="search"] { min-width: 0; }
 .toolbarGroup { min-width: 0; }
 .toolbarLabel, .toolbarCheckbox { color: var(--muted); font-size: 12px; }
 .toolbarActions { margin-left: auto; }
+.drawerActions { display: flex; align-items: center; gap: 6px; margin-left: 6px; padding-left: 10px; border-left: 1px solid var(--border); }
+.drawerActions button { font-size: 12px; }
 .toolbarIconButton { display: grid; place-items: center; width: 28px; height: 27px; padding: 0; }
 .toolbarFind { flex: 1 1 100%; order: 1; justify-content: flex-end; }
 .toolbarFindInput { width: min(340px, 100%); }

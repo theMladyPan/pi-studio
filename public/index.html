@@ -522,6 +522,11 @@
   header .hint { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   header .sess { font: 13px var(--mono); color: var(--text); }
   header .sess b { color: var(--accent); font-weight: 600; }
+  /* The open drawer's name, between the workspace and the live state. It is hidden while no drawer
+     is open, so the header carries nothing for a panel that is not up. */
+  header .open-panel { font: 12px var(--mono); color: var(--text); white-space: nowrap;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  header .open-panel[hidden] { display: none; }
   /* A daemon booted on another state folder is a second instance, and says so beside the workspace. */
   header .sess .instance { margin-left: 6px; color: var(--amber); font-size: 11px; }
   header .stat { font: 12px var(--mono); color: var(--muted); background: #161b22;
@@ -1315,13 +1320,13 @@
      its size and its state and loading it again never happens. z-index 1500 sits above the header
      (10), the rail (8), the footer (40) and the transcript drawer (60), and below the
      pickers and header panels (2000), the prompt editor (2100) and the sheets (2200). */
+  /* The board's own footer (24px) stays visible under the drawer, so the drawer ends where it begins. */
   #gitDrawer {
-    top: 44px; left: 0; right: 0; height: calc(100vh - 44px); z-index: 1500;
+    top: 44px; left: 0; right: 0; height: calc(100vh - 44px - 24px); z-index: 1500;
     background: var(--bg);
     border-bottom: 1px solid var(--border-bright); box-shadow: 0 18px 48px rgba(0,0,0,.6);
     transform: translateY(-100%);
   }
-  #gitDrawer button:disabled { cursor: default; opacity: .5; }
   #gdFrame, #pvFrame { width: 100%; height: 100%; border: 0; display: block; background: var(--bg); }
   /* `display` on the id outranks the browser's own `[hidden]` rule, so a board with no folder hides the
      frame here rather than leaving an empty page over the drawer's notice. */
@@ -1333,7 +1338,7 @@
      area it dims. Only the git one fades with the same 170ms slide; the toolbox one is already heavy
      enough standing still. */
   #gitScrim, #pluginScrim { position: fixed; inset: 44px 0 0 0; z-index: 1499; background: rgba(1,4,9,.45); }
-  #gitScrim { opacity: 0; visibility: hidden;
+  #gitScrim { bottom: 24px; opacity: 0; visibility: hidden;
     transition: opacity 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms; }
   body.git-open #gitScrim { opacity: 1; visibility: visible; transition: opacity 170ms cubic-bezier(.2,.9,.25,1); }
   /* `hidden` is only the state before the drawer was ever rolled down, so a board that never opens one
@@ -1583,10 +1588,12 @@
 <header>
   <span class="brand" title="every keyboard shortcut is listed under settings"><img src="/favicon.svg" alt="pi-studio" width="24" height="24" /></span>
   <button class="sess" id="sess" type="button" title="switch workspace"></button>
+  <!-- The open drawer's name. Nothing is shown while no drawer is open. -->
+  <span class="open-panel" id="openPanelName" hidden>git graph</span>
+  <span class="grow"></span>
   <!-- Polite, so the state is spoken when it changes; the elapsed clock is decoration that ticks
        every second and is hidden, so it is never read out. -->
   <span class="live" id="live" role="status" aria-live="polite"><b aria-hidden="true"></b> <span id="liveText">connecting</span><span id="liveClock" aria-hidden="true"></span></span>
-  <span class="grow"></span>
   <!-- The context chip is also the compact button: the action sits on the number it changes,
        and the word appears on hover or focus so the row keeps its width at rest. -->
   <button class="stat" id="statCtx" title="compact the context, the same as /compact" hidden><span id="statCtxValue"></span><span class="act" aria-hidden="true">compact</span></button>
@@ -1942,13 +1949,6 @@
      /client/git-drawer.js, which also knows whether this board has a folder to draw at all. -->
 <div id="gitScrim" hidden></div>
 <section id="gitDrawer" class="drawer-shell drawer-slide" aria-label="git graph" inert>
-  <div class="gd-bar drawer-bar">
-    <span class="gd-title drawer-title">git graph</span>
-    <span class="gd-workspace drawer-workspace" id="gdWorkspace"></span>
-    <span class="grow"></span>
-    <button id="gdTab" type="button" title="open the git graph in a tab of its own">open in tab &#8599;</button>
-    <button id="gdClose" type="button" title="roll the git graph up (g)">roll up (g)</button>
-  </div>
   <div class="gd-body drawer-body"><iframe id="gdFrame" title="git graph"></iframe></div>
 </section>
 
