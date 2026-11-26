@@ -124,6 +124,9 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
       // reconnects, so its scrollback survives untouched.
       if (term) term.reset();
       sendSize();
+      // The commands handed over while the socket was still opening are typed now, in the order they
+      // came, so the shell reads them the way it would read a human typing at the prompt.
+      while (pendingCommands.length) send({ type: "input", data: pendingCommands.shift() });
     });
     socket.addEventListener("message", (event) => {
       let message;
@@ -187,6 +190,23 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
   const close = sliding.close;
 
   /**
+   * A command from elsewhere on the board — the kontainer drawer's `exec ↗` and `logs ↗` — typed into
+   * this shell as if the human had. It is kept until the socket answers if there is none yet, so the
+   * drawer that hands it over can roll back down in the same breath and the command still arrives;
+   * `\r` is the enter the human would have pressed after it.
+   */
+  const pendingCommands = [];
+  function runCommand(command) {
+    if (!command) return;
+    sliding.open();
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      send({ type: "input", data: `${command}\r` });
+      return;
+    }
+    pendingCommands.push(`${command}\r`);
+  }
+
+  /**
    * `x` reaches this window only while the drawer is up and the focus is outside the terminal.
    * Inside the terminal the letter belongs to the shell (`typingSomewhere` says so), and it
    * listens on the way down so the board's own `x`, which opens the drawer, never sees the press
@@ -218,5 +238,5 @@ export function createTerminalDrawer({ workspace, typingSomewhere }) {
 
   closeBtn.addEventListener("click", () => close());
 
-  return { isOpen: sliding.isOpen, toggle: sliding.toggle, open: sliding.open, close: sliding.close, setName };
+  return { isOpen: sliding.isOpen, toggle: sliding.toggle, open: sliding.open, close: sliding.close, setName, runCommand };
 }
