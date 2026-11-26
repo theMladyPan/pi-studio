@@ -136,7 +136,10 @@ export async function modelCatalog() {
 	// picker would spawn pi again. A failed — or distrusted — read is kept for a shorter while, so the
 	// next open asks pi again rather than showing the same hole for the whole memory window.
 	if (trouble && catalog) {
-		catalog = { ...catalog, trouble };
+		// Refusal does not update what was seen, but the six-hour window still runs underneath: rows that
+		// have gone unnamed since before the refusal age out here too, so a list that really did shrink
+		// lands a little at a time until a read clears four fifths of what is left.
+		catalog = { ...catalog, models: remembered(Date.now()), trouble };
 		catalogAt = Date.now();
 		return catalog;
 	}
@@ -145,10 +148,18 @@ export async function modelCatalog() {
 	// the whole window leaves the answer.
 	const now = Date.now();
 	for (const one of models) catalogSeen.set(`${one.provider}\u0000${one.model}`, { row: one, seenAt: now });
-	for (const [key, entry] of catalogSeen) if (now - entry.seenAt > CATALOG_MEMORY_MS) catalogSeen.delete(key);
-	catalog = { models: [...catalogSeen.values()].map((entry) => entry.row), levels: THINKING_LEVELS, trouble };
+	catalog = { models: remembered(now), levels: THINKING_LEVELS, trouble };
 	catalogAt = now;
 	return catalog;
+}
+
+
+/** The rows pi has named within the memory window: every pair whose last naming is inside six hours. */
+function remembered(now) {
+	for (const [key, entry] of catalogSeen) {
+		if (now - entry.seenAt > CATALOG_MEMORY_MS) catalogSeen.delete(key);
+	}
+	return [...catalogSeen.values()].map((entry) => entry.row);
 }
 
 

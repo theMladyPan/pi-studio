@@ -10,10 +10,11 @@ import { removeTree } from "../test-support/temp.ts";
  * What the picker is told this machine can run.
  *
  * The catalogue is one `pi --list-models` and a human table, so the read is the fragile part: pi can
- * exit badly with half a table on stdout, and half a table is not a smaller machine. A stub `pi` at the
- * path the daemon looks for one lets a read fail between two good ones, which is the case this file is
- * about — a failed read used to answer the picker with a shorter list, and every scope pattern pi holds
- * then read as "matched no model here".
+ * exit badly with half a table on stdout, and it can also exit cleanly with a table a fifth smaller,
+ * and neither is a smaller machine. A stub `pi` at the path the daemon looks for one lets a read fail
+ * or arrive short between two good ones, which is the case this file is about — a read that came back
+ * short used to answer the picker with a shorter list, and every scope pattern pi holds then read as
+ * "matched no model here".
  */
 
 /** A `pi` that lists whatever `say.json` beside it holds: the rows, and how the process ends. */
@@ -127,6 +128,31 @@ test("a failed read of pi's table keeps the models already known, and says why",
 		assert.equal(faded.models.length, 9, "a model unnamed for six hours stayed in the answer");
 		assert.ok(!named(faded.models).includes("openrouter/a7"), "the faded model is still named");
 		assert.ok(!faded.trouble, "a good read after a quiet one still reported trouble");
+
+		// A read smaller by just over a fifth keeps being refused, and every refusal is retried after
+		// thirty seconds — but the window still runs underneath a refusal, so a list that really did
+		// shrink empties entry by entry until the same read clears four fifths of what is left.
+		say(stub.sayFile, bigger.slice(0, 7));
+		t.mock.timers.tick(11 * 60_000);
+		const refused = (await modelCatalog()) as unknown as Catalog;
+		assert.equal(refused.models.length, 9, "a refused read spent the answer on the rows it had");
+		assert.match(refused.trouble, /short table/, "the picker was not told a short table came back");
+		t.mock.timers.tick(6 * 60 * 60_000 + 60_000);
+		const fadedOut = (await modelCatalog()) as unknown as Catalog;
+		assert.equal(fadedOut.models.length, 0, "rows unnamed for six hours stayed through refusal");
+		assert.match(fadedOut.trouble, /short table/, "the emptied answer lost its reason");
+		t.mock.timers.tick(31_000);
+		const landed = (await modelCatalog()) as unknown as Catalog;
+		assert.deepEqual(named(landed.models), [
+			"deepseek/deepseek-flash",
+			"github-copilot/gemini-4-argon",
+			"openrouter/a0",
+			"openrouter/a1",
+			"openrouter/a2",
+			"openrouter/a3",
+			"openrouter/a4",
+		]);
+		assert.ok(!landed.trouble, "a read the shrunk list cleared still reported trouble");
 	} finally {
 		delete process.env.PI_MANAGED_INSTALL_ROOT;
 		await removeTree(stub.root);
