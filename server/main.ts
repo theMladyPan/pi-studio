@@ -43,6 +43,8 @@ import { onKontainerAction, onKontainerDetail, onKontainerDf, onKontainerEvents,
 import { onCommand } from "./routes/board/command.ts";
 import { onSourceControlCommit, onSourceControlConflict, onSourceControlContinue, onSourceControlDiff, onSourceControlDiscard, onSourceControlFileAtHead, onSourceControlIgnore, onSourceControlMessage, onSourceControlResolve, onSourceControlStage, onSourceControlStatus, onSourceControlUnstage } from "./routes/board/source-control.ts";
 import { attachTerminal, stopAllTerminals, terminalSize } from "./terminal.ts";
+import { logPluginLine, tapDaemon } from "./logs.ts";
+import { onLog, onLogs, onLogsStream } from "./routes/logs.ts";
 import { startPlugins, stopPlugins } from "./plugins/manager.ts";
 import { createPluginService } from "./plugins/service.ts";
 import { commandList, forMenu } from "./commands.ts";
@@ -62,7 +64,7 @@ export { token };
 
 
 /** The routes a child may reach. Everything else on this daemon belongs to the human. */
-export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/wait", "/thread/status", "/thread/board-status", "/thread/collect", "/skill", "/close"]);
+export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/wait", "/thread/status", "/thread/board-status", "/thread/collect", "/skill", "/close", "/log"]);
 
 
 
@@ -583,6 +585,14 @@ function requestHandler(req, res) {
 			return;
 		}
 
+		// The daemon's own log, as a stream: a late joiner gets the ring as its first event and every line
+		// after it, which is what the drawer on the right edge paints itself from. Its snapshot is
+		// `/logs` below, for a tab that only wants to read once.
+		if (req.method === "GET" && url.pathname === "/logs/stream") {
+			onLogsStream(req, res);
+			return;
+		}
+
 		// ----- crossroads -----
 		if (req.method === "GET" && url.pathname === "/workspaces") {
 			answer(res, 200, { workspaces: workspaceList().map(describeWorkspace), instance: INSTANCE });
@@ -834,6 +844,12 @@ function requestHandler(req, res) {
 			});
 			return;
 		}
+		// Every line the daemon's ring still holds, oldest first. Read like `/state`: behind the caller
+		// check, because what the daemon says about the commands it ran is the human's to see.
+		if (req.method === "GET" && url.pathname === "/logs") {
+			onLogs(res);
+			return;
+		}
 		// The three globals the Git Graph page reads before it draws, and whether it may draw at all. It is
 		// behind the caller check and the workspace check like `/state`, because what it hands out is a path
 		// on this machine and the repositories the page is then allowed to read.
@@ -980,6 +996,10 @@ function requestHandler(req, res) {
 				// out of the studio.
 				"/card/pdf": onCardPdf,
 				"/skill": onSkill,
+				// A child's own line in the daemon's log, redacted and capped where every other line is. It is in
+				// THREAD_ROUTES because saying what a thread is doing is the thread's own business; the drawer
+				// is the human's to read.
+				"/log": onLog,
 				"/card/ask": onAsk,
 				"/edit": onEdit,
 				"/rename": onRename,
@@ -1324,6 +1344,10 @@ export function onListening() {
  * The entry calls this and nothing else, so importing this file never binds a socket.
  */
 export function start() {
+	// Everything this daemon prints from here on is also a line in the log the drawer reads, and it
+	// still goes to the terminal or the journal it always went to. Tapped at boot and not at import,
+	// so a test that imports the daemon's modules captures nothing.
+	tapDaemon();
 	// The one-time legacy import runs here, at startup, rather than at import,
 	// so importing daemon code writes nothing. What the import copied is re-read into memory below.
 	try {
@@ -1387,7 +1411,7 @@ export function start() {
 	// on stderr and the rest of the roster runs. Nothing is started before this call, and nothing here
 	// writes into a workspace. The caller catches, so `pluginsUp` is a promise that always settles.
 	const service = createPluginService();
-	pluginsUp = startPlugins({ onRequest: (call) => service.handle(call), closeTimeoutMs: 400 }).catch((error) =>
+	pluginsUp = startPlugins({ onRequest: (call) => service.handle(call), closeTimeoutMs: 400, log: logPluginLine }).catch((error) =>
 		console.error(`pi-studio: the plugins could not be started: ${error.message}`),
 	);
 }

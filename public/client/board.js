@@ -10,6 +10,9 @@ import { createTerminalDrawer } from "./terminal-drawer.js";
 // The kontainer drawer is the third of its kind: the Docker/Podman topology, the stats cadence the
 // human picked and the sheets that act on a container are one subject, behind the same one rule.
 import { createKontainerDrawer } from "./kontainer-drawer.js";
+// The logs drawer is the fourth of its kind: the daemon's own log, in a strip on the right edge, from a
+// stream the daemon publishes. It owns no keyboard of its own — `l` and Escape are answered here.
+import { createLogsDrawer } from "./logs-drawer.js";
 // The tokenizer and the text surface are shared with the git graph's reader, so both pages colour a
 // file the same way: one implementation, imported by each.
 import { createTextPreview, escapeHtml, highlight } from "./text-preview.js";
@@ -43,6 +46,7 @@ const gitDrawer = createGitDrawer({ workspace, typingSomewhere });
 document.getElementById("gitBtn").addEventListener("click", () => {
   closeHeaderMenus();
   kontainerDrawer.close();
+  logsDrawer.close();
   gitDrawer.toggle();
 });
 // One terminal drawer for the life of the page, beside the git one: the shell and the screen
@@ -51,6 +55,7 @@ const terminalDrawer = createTerminalDrawer({ workspace, typingSomewhere });
 document.getElementById("termBtn").addEventListener("click", () => {
   closeHeaderMenus();
   kontainerDrawer.close();
+  logsDrawer.close();
   closeDocks("bottom");
   terminalDrawer.toggle();
 });
@@ -74,7 +79,20 @@ document.getElementById("kontainerBtn").addEventListener("click", () => {
   closeDrawers();
   gitDrawer.close();
   terminalDrawer.close();
+  logsDrawer.close();
   kontainerDrawer.toggle();
+});
+// The logs drawer keeps nothing of its own between rolls but the lines it has drawn: the daemon's ring
+// is the buffer, and the stream is opened on the first roll in and kept. It stands on the right edge, so
+// the left column, the header and the card being read are all still reachable while it is up, and a
+// door for another surface rolls it back out rather than stacking two panels over the board.
+const logsDrawer = createLogsDrawer();
+document.getElementById("logsBtn").addEventListener("click", () => {
+  closeHeaderMenus();
+  gitDrawer.close();
+  terminalDrawer.close();
+  kontainerDrawer.close();
+  logsDrawer.toggle();
 });
 // The plugin panel: one sandboxed frame for the life of the page, the doors the toolbox lists for the
 // plugins that declared a panel, and the one call a panel is allowed to make.
@@ -1258,7 +1276,7 @@ function exDrawerToggle(state, name) {
  * opens in stands over everything, a name being edited or a menu standing open goes before the drawer,
  * and the drawer goes before the card the board is reading.
  */
-const EX_ESCAPE_ORDER = ["editor", "confirm", "menu", "rename", "create", "sheet", "plugin", "git", "kontainer", "terminal", "drawer", "card"];
+const EX_ESCAPE_ORDER = ["editor", "confirm", "menu", "rename", "create", "sheet", "plugin", "git", "kontainer", "terminal", "logs", "drawer", "card"];
 
 function exEscapeTarget(open) {
   for (const one of EX_ESCAPE_ORDER) if (open?.[one]) return one;
@@ -9845,13 +9863,14 @@ const SHORTCUTS = [
       { keys: "g", does: "roll the git graph down, and press it again to roll it up" },
       { keys: "x", does: "roll the terminal drawer up from the bottom, and press it again to roll it down" },
       { keys: "k", does: "roll the kontainer topology down, and press it again to roll it up" },
+      { keys: "l", does: "roll the logs drawer in from the right, and press it again to roll it out" },
       { keys: "one letter per plugin", does: "open that plugin's panel — assigned in the crossroads settings under plugins" },
       { keys: "t", does: "start a new thread, on a board of threads with no card selected" },
       { keys: "r", does: "name the card you are reading in the message you were writing" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
       { keys: "q", does: "close the card you are reading" },
       { keys: "delete", does: "delete the thread card you are reading — it first says what would go" },
-      { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the plugin panel, then the git graph, then the kontainer topology, then the terminal, then the files drawer, or with nothing open, let go of the selected card" },
+      { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the plugin panel, then the git graph, then the kontainer topology, then the terminal, then the logs drawer, then the files drawer, or with nothing open, let go of the selected card" },
       { keys: "ctrl+z", does: "undo a close and put the card back" },
       { keys: "ctrl+m", does: "cycle the mode of the card you are reading: agent, plan, boss, discuss, then back on" },
     ],
@@ -9971,7 +9990,7 @@ function paintShortcuts() {
  * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too, and so does
  * a plugin's panel, whose page is the only thing the keyboard can reach while it is down.
  */
-const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen() || kontainerDrawer.isOpen();
+const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || logsDrawer.isOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen() || kontainerDrawer.isOpen();
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
@@ -14691,6 +14710,7 @@ function exOpenSurfaces() {
     kontainer: kontainerDrawer.isOpen(),
     plugin: pluginPanel.isOpen(),
     terminal: terminalDrawer.isOpen(),
+    logs: logsDrawer.isOpen(),
     drawer: Boolean(drawerState.open) || dockOpen(),
     card: Boolean(document.querySelector(".card.active")) || selectedIds.size > 0,
   };
@@ -14737,6 +14757,7 @@ document.addEventListener("keydown", (event) => {
   if (target === "git") return gitDrawer.close();
   if (target === "kontainer") return kontainerDrawer.handleEscape();
   if (target === "terminal") return terminalDrawer.close();
+  if (target === "logs") return logsDrawer.close();
   // The files drawer is an overlay of the left column, so Escape rolls it up before it lets go of the
   // card the board is reading.
   if (target === "drawer") return closeDrawers();
@@ -15021,6 +15042,25 @@ document.addEventListener("keydown", (event) => {
   gitDrawer.close();
   terminalDrawer.close();
   kontainerDrawer.open();
+});
+
+// `l` rolls the logs drawer in from the right edge, and it is the second drawer letter that also rolls
+// its own drawer out: the strip stands over the board and takes the focus while it is up, and `panelUp`
+// counts it, so this handler is the only place the letter still lands. Every other way round keeps the
+// guards the letters above keep — a field, a panel, a sheet or a drawer's own surface keeps its keys.
+// It rolls nothing else: the left column, the git graph and the terminal are not its business, and the
+// drawers that would cover it out of its own door roll it out themselves.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "l" || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (typingSomewhere()) return;
+  if (logsDrawer.isOpen()) {
+    event.preventDefault();
+    logsDrawer.close();
+    return;
+  }
+  if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
+  event.preventDefault();
+  logsDrawer.open();
 });
 
 // ---------- transport ----------------------------------------------------
