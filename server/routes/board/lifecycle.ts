@@ -6,19 +6,21 @@
 import { liveTurn, stopStream } from "../../child/run.ts";
 import { broadcast, card, closedCards, nudgeWelcome, resync, threadSettled, update, updateCard } from "../../bus.ts";
 import { CHILD_CLOSE_DELAY_MS, MAX_PUT_AWAY_CHILDREN } from "../../limits.ts";
-import { MAX_PLAIN_CARDS, putAwayByBoard, scheduleSave } from "../../store.ts";
+import { MAX_PLAIN_CARDS, MAX_THREADS, putAwayByBoard, scheduleSave } from "../../store.ts";
 import { ownedCards, refreshOwned } from "./message.ts";
 import { answer, fail, readJson } from "../../http.ts";
 import { field, refusal } from "./thread.ts";
 import { randomUUID } from "node:crypto";
-import { cleanBoard, clearBoard, plainCardFor, stopQueue, sweepTrees } from "../../cards.ts";
-import { existsSync, unlinkSync } from "node:fs";
+import { cleanBoard, clearBoard, cardFor, plainCardFor, stopQueue, sweepTrees } from "../../cards.ts";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { finished } from "../../waiters.ts";
 import { liveThoughts, settleRows } from "../../thought.ts";
 import { settleTreeBranch } from "../../worktrees/name.ts";
 import { discardBranch, discardTree, retireWorktree, treeBranch, treeRepo } from "../../worktrees/retire.ts";
 import { fragmentsOf, removeFragment, removePreview, stepsNote, treeOf } from "../../worktrees/fragments.ts";
-import { sessionFile } from "../../session.ts";
+import { sessionDir, sessionFile } from "../../session.ts";
+import { runtimeDefaults } from "../../workspaces.ts";
+import { basename, join } from "node:path";
 import { repoOf } from "../../git/repo.ts";
 
 
@@ -460,6 +462,151 @@ export async function onUndo(req, res, board) {
 		return void answer(res, 200, { restored: thread.id });
 	}
 	fail(res, 409, "nothing to undo");
+}
+
+
+/**
+ * Copy a thread's pi session for its duplicate, under a fresh session id, and return that id.
+ *
+ * A duplicate that shared the session would be two threads appending to one file, so the copy is a
+ * fork: the same entries, a new header id, and a file name that `sessionFile` finds by that id. The
+ * header is the first line, and only it carries the id, so the rest of the file is copied as written.
+ * Throwing rather than starting the copy fresh is the honest answer when the file is gone: a card
+ * showing a conversation the child never had would be a lie the next message has to live with.
+ */
+function forkSession(board, thread, sessionId) {
+	const before = thread.sessionId;
+	if (!before) return null;
+	const source = sessionFile({ id: board.id, folder: board.folder }, before);
+	if (!source) throw refusal(409, "could not copy the session file");
+	let raw;
+	try {
+		raw = readFileSync(source, "utf8");
+	} catch {
+		throw refusal(409, "could not copy the session file");
+	}
+	const cut = raw.indexOf("\n");
+	let header;
+	try {
+		header = JSON.parse(cut === -1 ? raw : raw.slice(0, cut));
+	} catch {
+		throw refusal(409, "could not copy the session file");
+	}
+	header.id = sessionId;
+	const name = basename(source);
+	const suffix = `_${before}.jsonl`;
+	const forked = name.endsWith(suffix) ? `${name.slice(0, -suffix.length)}_${sessionId}.jsonl` : `${name.replace(/\.jsonl$/, "")}_${sessionId}.jsonl`;
+	try {
+		writeFileSync(join(sessionDir(board), forked), `${JSON.stringify(header)}${cut === -1 ? "" : raw.slice(cut)}`);
+	} catch {
+		throw refusal(409, "could not copy the session file");
+	}
+	return sessionId;
+}
+
+
+/**
+ * A thread duplicated: the same title, runtime and conversation, a new thread id and its own card.
+ *
+ * The new thread carries a copy of the turns, not the list itself, so the two cards never edit one
+ * another; and it carries no worktree, no queue and no child, so its first message cuts its own tree
+ * and starts its own process. What it keeps is the session, copied under a fresh id (see `forkSession`),
+ * so the conversation continues where the original left it. Cards the original owns stay bound to it:
+ * nothing here touches `board.cards`, so a note the original wrote keeps answering to the original.
+ */
+function duplicateThread(board, thread) {
+	if (thread.status === "dead") throw refusal(409, "thread ended");
+	if (thread.status === "running") throw refusal(409, "this thread has a run in progress");
+	const drawn = [...board.threads.values()].filter((held) => !held.hidden).length;
+	if (drawn >= MAX_THREADS) throw refusal(409, `this board holds ${MAX_THREADS} threads`);
+	const sessionId = forkSession(board, thread, randomUUID());
+	const fork = {
+		id: randomUUID(),
+		title: thread.title,
+		sessionId,
+		status: "idle",
+		...runtimeDefaults(board),
+		...(thread.provider ? { provider: thread.provider } : {}),
+		...(thread.model ? { model: thread.model } : {}),
+		...(thread.thinking ? { thinking: thread.thinking } : {}),
+		...(thread.type ? { type: thread.type } : {}),
+		...(thread.parentThread ? { parentThread: thread.parentThread, depth: thread.depth ?? 0 } : {}),
+		...(thread.threadRoot ? { threadRoot: thread.threadRoot } : {}),
+		...(thread.after?.length ? { after: [...thread.after] } : {}),
+		...(thread.role ? { role: thread.role } : {}),
+		...(thread.mode ? { mode: thread.mode } : {}),
+		...(thread.path ? { path: thread.path } : {}),
+		...(thread.pathChosenBy ? { pathChosenBy: thread.pathChosenBy } : {}),
+		...(thread.namedBy ? { namedBy: thread.namedBy } : {}),
+		at: Date.now(),
+		turns: structuredClone(thread.turns ?? []),
+		queued: [],
+		folder: board.folder,
+	};
+	board.threads.set(fork.id, fork);
+	card(board, fork);
+	return { cardId: fork.id, card: cardFor(fork, board) };
+}
+
+
+/**
+ * A plain card duplicated: the same words under a new id, drawn where the board places it.
+ *
+ * The copy is a clone, so the two never edit one another; it carries no key, because a key makes a
+ * later write revise the card it names, and one key on two cards would make every revision a coin
+ * toss; and it carries no rect, for the same reason a new card carries none. Ownership and the turns
+ * on the card come along, so a copy is answered by the thread that answered the original. An open
+ * question is refused: the child waiting on it waits on the original's id, and a copy nobody holds
+ * open would sit waiting for an answer nobody will send.
+ */
+function duplicatePlainCard(board, held) {
+	if (held.type === "question" && held.status === "open") throw refusal(409, "that question is still open");
+	makeRoom(board);
+	const copy = structuredClone(held);
+	copy.id = randomUUID();
+	copy.at = Date.now();
+	copy.updatedAt = Date.now();
+	delete copy.key;
+	delete copy.rect;
+	delete copy.pinned;
+	board.cards.set(copy.id, copy);
+	broadcast(board, { type: "card", card: plainCardFor(copy, board) });
+	scheduleSave(board);
+	return { cardId: copy.id, card: plainCardFor(copy, board) };
+}
+
+
+/**
+ * Duplicate the card the head's duplicate press names, thread or plain alike.
+ *
+ * It is the service behind `POST /duplicate`, and a refusal throws with the status the route would
+ * have answered. A card id names a thread the way it names a plain card — the card a thread draws
+ * carries its id — so both are taken, and the plain card wins when both exist.
+ */
+export function duplicateOnBoard(board, body) {
+	const asked = String(body?.cardId ?? "");
+	const held = asked ? board.cards.get(asked) : undefined;
+	if (held) return duplicatePlainCard(board, held);
+	const thread = asked ? board.threads.get(asked) : undefined;
+	if (!thread) throw refusal(404, "no such card");
+	return duplicateThread(board, thread);
+}
+
+
+/**
+ * `/duplicate`, which is the human's: making threads and cards is not something a child asks for on
+ * its own, so it is not in `THREAD_ROUTES`.
+ */
+export async function onDuplicate(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	let made;
+	try {
+		made = duplicateOnBoard(board, body);
+	} catch (error) {
+		return void fail(res, error.status ?? 500, error.message);
+	}
+	answer(res, 200, made);
 }
 
 
