@@ -137,7 +137,10 @@ test("docker actions pop as blue running tasks, then green or red", () => {
 	assert.match(kontainerSource, /function startTask\(label\) \{/, "one starter makes one card");
 	assert.match(kontainerSource, /host\.append\(card\);/, "and appends it, so parallel actions stack rather than replace");
 	assert.match(kontainerSource, /function finishTask\(task, ok, detail\) \{/, "and one finisher closes it");
-	assert.match(kontainerSource, /setTimeout\(\(\) => task\.card\.remove\(\), 2000\);/, "two seconds after it finishes, on its own timer");
+	assert.match(kontainerSource, /setTimeout\(\(\) => task\.card\.remove\(\), 5000\);/, "five seconds after it finishes, on its own timer");
+	assert.match(kontainerSource, /card\.addEventListener\("mouseenter", \(\) => \{ task\.hovered = true; clearTimeout\(task\.timer\); \}\);/, "hovering pauses the countdown");
+	assert.match(kontainerSource, /card\.addEventListener\("mouseleave", \(\) => \{ task\.hovered = false; if \(task\.done\) scheduleTaskRemoval\(task\); \}\);/, "and leaving restarts it");
+	assert.match(kontainerSource, /if \(!task\.hovered\) scheduleTaskRemoval\(task\);/, "a task that finishes under the cursor waits for the cursor to leave");
 	assert.doesNotMatch(kontainerSource, /if \(okMsg\) toast\(okMsg\);/, "the old success toast is not left beside the queue");
 	assert.match(kontainerSource, /"k-task k-running"/, "running reads in its own blue");
 	assert.match(kontainerCss, /#kontainerDrawer \.k-tasks \{ position:fixed; bottom:14px; right:14px/, "the queue pins to the toast's own corner");

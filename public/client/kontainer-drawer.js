@@ -272,6 +272,10 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
 
   /* ---------- toasts & task queue ---------- */
   let lastTaskFailure = null;
+  function scheduleTaskRemoval(task) {
+    clearTimeout(task.timer);
+    task.timer = setTimeout(() => task.card.remove(), 5000);
+  }
   function startTask(label) {
     const host = $("kTasks");
     if (!host) return null;
@@ -280,7 +284,10 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const labelEl = el("span", "k-task-label", `${label}…`);
     card.append(dot, labelEl);
     host.append(card);
-    return { card, dot, labelEl, label, started: Date.now() };
+    const task = { card, dot, labelEl, label, started: Date.now(), done: false, hovered: false, timer: null };
+    card.addEventListener("mouseenter", () => { task.hovered = true; clearTimeout(task.timer); });
+    card.addEventListener("mouseleave", () => { task.hovered = false; if (task.done) scheduleTaskRemoval(task); });
+    return task;
   }
   function finishTask(task, ok, detail) {
     if (!task) return;
@@ -293,7 +300,8 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       lastTaskFailure = { msg: String(detail || ""), at: Date.now() };
       if (detail) task.card.append(el("div", "k-task-detail", String(detail)));
     }
-    setTimeout(() => task.card.remove(), 2000);
+    task.done = true;
+    if (!task.hovered) scheduleTaskRemoval(task);
   }
   function toast(msg) {
     // A failed task already carries its error in red, so the caller's copy would be a second bubble.
