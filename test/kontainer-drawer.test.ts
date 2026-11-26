@@ -52,13 +52,49 @@ test("the drawer module keeps the members the board drives, and its three refres
 		createKontainerDrawer?: unknown;
 	};
 	assert.equal(typeof module.createKontainerDrawer, "function", "the drawer is made, not run at load");
-	// What the board calls on it is the shared sliding drawer's list plus the topology's own two.
-	assert.match(kontainerSource, /return \{ isOpen: sliding\.isOpen, toggle: sliding\.toggle, open: sliding\.open, close: sliding\.close, setName, handleEscape \};/);
+	// What the board calls on it is the shared sliding drawer's list plus the topology's own one.
+	assert.match(kontainerSource, /return \{ isOpen: sliding\.isOpen, toggle: sliding\.toggle, open: sliding\.open, close: sliding\.close, handleEscape \};/);
 	// The stats cadence is the human's pick, and the stored one has to be one of the three.
 	for (const mode of ["eco", "balanced", "live"]) {
 		assert.match(kontainerSource, new RegExp(`<option value="${mode}">`), `the bar offers ${mode}`);
 	}
 	assert.match(kontainerSource, /\["eco", "balanced", "live"\]\.includes\(/, "and a remembered mode outside them falls back to balanced");
+});
+
+test("the board's header names the drawer, and nothing in its own bar does", () => {
+	// The name stands in the slot the git graph uses, and the drawer's bar carries no title and no
+	// workspace label of its own.
+	assert.doesNotMatch(kontainerSource, /k-title/, "the bar has no title of its own");
+	assert.doesNotMatch(kontainerSource, /k-ws|"kWs"/, "and no second copy of the workspace name");
+	assert.doesNotMatch(kontainerCss, /\.k-title|\.k-ws\b/, "neither rule is left in the sheet");
+	// `setName` named that label and nothing else, so it leaves with it — and the board stops calling it.
+	assert.doesNotMatch(kontainerSource, /setName/, "the drawer no longer names a workspace");
+	assert.doesNotMatch(board, /kontainerDrawer\.setName/, "and the board does not ask it to");
+	// The slot belongs to the board, another drawer names it next, so what it said comes back at close.
+	assert.match(kontainerSource, /const panelName = document\.getElementById\("openPanelName"\);/, "the drawer reads the board's own name slot");
+	assert.match(kontainerSource, /panelName\.textContent = "kontainer";/, "and puts its own name in it as it opens");
+	assert.match(kontainerSource, /panelNameBefore = \{ text: panelName\.textContent, hidden: panelName\.hidden \};/, "after remembering what the slot said");
+	assert.match(kontainerSource, /panelName\.textContent = panelNameBefore\.text;/, "which comes back as it closes");
+	assert.match(kontainerSource, /panelName\.hidden = panelNameBefore\.hidden;/, "hidden or shown as it was left");
+});
+
+test("the inspector is dragged wide from its left edge, and its width survives a reload", () => {
+	// The handle is a strip on the inspector's own left edge, and it says what it does on hover.
+	assert.match(kontainerSource, /<div class="k-insp-grip" id="kInspGrip" role="separator" aria-orientation="vertical" tabindex="0" title="drag to resize inspector"><\/div>/, "the strip is inside the panel it sizes");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-insp-grip \{[^}]*cursor:col-resize/, "it reads as a width edge under the cursor");
+	// The width is the human's furniture, the way the rail's is: clamped, remembered, set as one property.
+	assert.match(kontainerSource, /const INSP_MIN = 260, INSP_MAX = 560;/, "the panel stays readable and leaves the topology its room");
+	assert.match(kontainerSource, /drawer\.style\.setProperty\("--k-insp-w", `\$\{inspWidth\}px`\);/, "one custom property carries it, and the sheet reads it");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-inspector \{[^}]*width:var\(--k-insp-w, 340px\)/, "the inspector's width comes from it");
+	assert.match(kontainerSource, /store\.set\("kontainer\.inspectorWidth", String\(inspWidth\)\);/, "the width is remembered");
+	assert.match(kontainerSource, /setInspectorWidth\(Number\(store\.get\("kontainer\.inspectorWidth", ""\)\) \|\| inspWidth\);/, "and read back at load");
+	// The drag is the shared grip furniture; the wires are drawn against the stage, so they follow it.
+	assert.match(kontainerSource, /bindDragHeight\(grip, \{ bodyClass: "kontainer-inspecting", resolvePx: \(event\) => setInspectorWidth\(inspector\.getBoundingClientRect\(\)\.right - event\.clientX\) \}\);/, "the press, the capture and the release are the shared ones");
+	assert.match(kontainerSource, /function setInspectorWidth\(px\) \{[\s\S]{0,400}?scheduleWires\(\);/, "a resize redraws the wires rather than leaving them detached");
+	assert.match(kontainerCss, /body\.kontainer-inspecting \{ cursor:col-resize; user-select:none; \}/, "the drag takes the pointer and the text selection out of it");
+	// Arrow keys move the edge too, so the width is not a mouse-only setting.
+	assert.match(kontainerSource, /event\.key === "ArrowLeft" \? 24 : event\.key === "ArrowRight" \? -24 : 0/, "the handle answers the two arrows that move it");
+	assert.match(kontainerSource, /grip\.setAttribute\("aria-valuenow", String\(inspWidth\)\);/, "and says where the edge stands");
 });
 
 test("the drawer reads a 200 that says ok:false as the failure it is", () => {

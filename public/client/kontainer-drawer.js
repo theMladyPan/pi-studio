@@ -4,12 +4,15 @@
  * It keeps no state of its own beyond the session: every fact comes from `/kontainer/*` on the
  * daemon, refreshed over SSE plus the stats cadence the human picked (Eco/Balanced/Live).
  */
-import { createSlidingDrawer } from "./drawer-common.js";
+import { bindDragHeight, createSlidingDrawer } from "./drawer-common.js";
 
 export function createKontainerDrawer({ workspace, typingSomewhere, openTerminalCommand }) {
   const drawer = document.getElementById("kontainerDrawer");
   const scrim = document.getElementById("kontainerScrim");
   const btn = document.getElementById("kontainerBtn");
+  // The board's header names the open drawer beside the workspace, the way it names the git graph,
+  // so this drawer's name belongs there and not in a bar of its own.
+  const panelName = document.getElementById("openPanelName");
 
   const $ = (id) => drawer.querySelector(`#${id}`);
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
@@ -28,7 +31,6 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   /* ---------- DOM skeleton (own markup only; untrusted strings go through textContent) ---------- */
   drawer.innerHTML = `
     <div class="k-bar">
-      <span class="k-title">kontainer</span><span class="k-ws" id="kWs"></span>
       <span class="k-pill" id="kPill"><span class="k-dot" id="kDot"></span><span><em id="kRun">0</em> up</span><span>·</span><span class="k-warn" id="kIssues">0 alerts</span><span>·</span><span id="kDisk">—</span></span>
       <span id="kRuntimeHost"></span>
       <span class="k-sep"></span>
@@ -57,7 +59,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
           </div>
         </div>
       </div>
-      <aside class="k-inspector k-collapsed" id="kInspector" aria-label="selected node inspector"></aside>
+      <aside class="k-inspector k-collapsed" id="kInspector" aria-label="selected node inspector"><div class="k-insp-grip" id="kInspGrip" role="separator" aria-orientation="vertical" tabindex="0" title="drag to resize inspector"></div></aside>
       <div class="k-tools-menu" id="kToolsMenu" hidden role="menu"></div>
     </div>
     <div class="k-sheet-backdrop" id="kSheet" hidden><div class="k-sheet-panel" role="dialog" aria-modal="true">
@@ -66,7 +68,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     </div></div>
     <div class="k-toast" id="kToast" role="status"></div>`;
 
-  const viewport = $("kViewport"), stage = $("kStage"), wires = $("kWireLayer"), inspector = $("kInspector");
+  const viewport = $("kViewport"), stage = $("kStage"), wires = $("kWireLayer"), inspector = $("kInspector"), grip = $("kInspGrip");
   const searchInput = $("kSearch"), toolsBtn = $("kToolsBtn"), toolsMenu = $("kToolsMenu"), sheet = $("kSheet");
 
   /* ---------- state ---------- */
@@ -464,6 +466,33 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   viewport.addEventListener("click", () => { if (state.selected) { state.selected = null; state.armedKill = null; render(); } });
 
   /* ---------- inspector ---------- */
+  /* The inspector's width is the human's furniture, the way the rail's is: pressed on its left edge,
+     clamped, remembered, and set as the one custom property the sheet reads. */
+  const INSP_MIN = 260, INSP_MAX = 560;
+  let inspWidth = 340;
+  function setInspectorWidth(px) {
+    inspWidth = Math.max(INSP_MIN, Math.min(INSP_MAX, Math.round(px)));
+    drawer.style.setProperty("--k-insp-w", `${inspWidth}px`);
+    store.set("kontainer.inspectorWidth", String(inspWidth));
+    grip.setAttribute("aria-valuenow", String(inspWidth));
+    // The topology is drawn against the stage, so a width that moves is a redraw of the wires.
+    scheduleWires();
+  }
+  grip.setAttribute("aria-valuemin", String(INSP_MIN));
+  grip.setAttribute("aria-valuemax", String(INSP_MAX));
+  // The width the human left the panel at, set before anything is drawn so a reload keeps its furniture.
+  setInspectorWidth(Number(store.get("kontainer.inspectorWidth", "")) || inspWidth);
+  // The press, the pointer capture and the release are the shared grip furniture, the rail's turned
+  // on its side: the width is the space between the cursor and the panel's right edge, which stays put.
+  bindDragHeight(grip, { bodyClass: "kontainer-inspecting", resolvePx: (event) => setInspectorWidth(inspector.getBoundingClientRect().right - event.clientX) });
+  // The same edge from the keyboard, so the width is not a mouse-only setting.
+  grip.addEventListener("keydown", (event) => {
+    const step = event.key === "ArrowLeft" ? 24 : event.key === "ArrowRight" ? -24 : 0;
+    if (!step) return;
+    event.preventDefault();
+    setInspectorWidth(inspWidth + step);
+  });
+
   function kvRow(k, v) { const r = el("div", "k-kv-row"); r.append(el("span", "k-kv-k", k), el("span", "k-kv-v", v)); return r; }
   function actBtn(label, cls, fn) { const b = el("button", `k-act ${cls || ""}`, label); b.type = "button"; b.onclick = fn; return b; }
   function inspHead(kind, name, actions) {
@@ -482,7 +511,8 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     return t;
   }
   function renderInspector(refresh = false) {
-    inspector.replaceChildren();
+    // The grip is the panel's own edge and every render paints over the panel, so it is laid first.
+    inspector.replaceChildren(grip);
     if (!state.selected) { inspector.classList.add("k-collapsed"); scheduleWires(); return; }
     inspector.classList.remove("k-collapsed");
     const { kind, id } = state.selected;
@@ -769,16 +799,29 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   document.addEventListener("visibilitychange", () => { if (document.hidden) stopLive(); else if (sliding.isOpen()) { loadState(); startLive(); } });
 
   /* ---------- drawer shell ---------- */
-  function setName(name) { $("kWs").textContent = workspace ? `· ${name || workspace}` : ""; }
-  setName("");
+  /** What the board's name slot said before this drawer named it. Nothing while the drawer is shut. */
+  let panelNameBefore = null;
   const sliding = createSlidingDrawer({
     drawer, btn, bodyClass: "kontainer-open",
     openTitle: "roll kontainer up (k)", shutTitle: "roll kontainer down (k)",
     beforeOpen() { scrim.hidden = false; },
     // The state arrives before the cadence starts, so the first stats read finds the containers and the
     // telemetry is there as the drawer lands instead of three seconds later.
-    async afterOpen() { await loadState(); if (!sliding.isOpen()) return; startLive(); scheduleWires(); },
-    afterClose() { scrim.hidden = true; stopLive(); },
+    async afterOpen() {
+      // The name slot is the board's and another drawer names it next, so what it said is kept and
+      // put back as this one rolls up.
+      panelNameBefore = { text: panelName.textContent, hidden: panelName.hidden };
+      panelName.textContent = "kontainer";
+      panelName.hidden = false;
+      await loadState(); if (!sliding.isOpen()) return; startLive(); scheduleWires();
+    },
+    afterClose() {
+      scrim.hidden = true; stopLive();
+      if (!panelNameBefore) return;
+      panelName.textContent = panelNameBefore.text;
+      panelName.hidden = panelNameBefore.hidden;
+      panelNameBefore = null;
+    },
   });
   scrim.addEventListener("click", () => sliding.close());
   $("kRollUp").onclick = () => sliding.close();
@@ -799,5 +842,5 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
 
   function render() { renderBar(); renderTopology(); renderInspector(false); }
 
-  return { isOpen: sliding.isOpen, toggle: sliding.toggle, open: sliding.open, close: sliding.close, setName, handleEscape };
+  return { isOpen: sliding.isOpen, toggle: sliding.toggle, open: sliding.open, close: sliding.close, handleEscape };
 }
