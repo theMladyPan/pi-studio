@@ -931,11 +931,13 @@ export async function libreRepoInfo(repo: string, showStashes: boolean): Promise
 		}
 	}
 	const stashes = showStashes ? await libreStashes(repo) : [];
-	// user config local/global
-	const local = await gitText(repo, ["config", "--local", "--get", "user.name"]);
-	const localE = await gitText(repo, ["config", "--local", "--get", "user.email"]);
-	const global = await gitText(repo, ["config", "--global", "--get", "user.name"]);
-	const globalE = await gitText(repo, ["config", "--global", "--get", "user.email"]);
+	// The identity at each scope, read from the two lists rather than four `--get` calls: a scope that
+	// holds no such key is absent from its list, so it answers `null` without a failed spawn logging an
+	// error row on every refresh. The list parser above is the one `getRepoConfig` already uses.
+	const localPairs = await gitText(repo, ["config", "-z", "--local", "--list"]);
+	const local = localPairs.ok ? configPairs(localPairs.text) : new Map<string, string>();
+	const globalPairs = await gitText(repo, ["config", "-z", "--global", "--list"]);
+	const global = globalPairs.ok ? configPairs(globalPairs.text) : new Map<string, string>();
 	const headCommit = head ? (refs.ok ? refs.value.heads.find((h) => h.name === head)?.hash ?? null : null) : null;
 	return {
 		isRepo: true,
@@ -947,8 +949,8 @@ export async function libreRepoInfo(repo: string, showStashes: boolean): Promise
 		stashes,
 		stashCount: stashes.length,
 		config: {
-			userName: { local: local.ok ? local.text.trim() || null : null, global: global.ok ? global.text.trim() || null : null },
-			userEmail: { local: localE.ok ? localE.text.trim() || null : null, global: globalE.ok ? globalE.text.trim() || null : null },
+			userName: { local: local.get("user.name") || null, global: global.get("user.name") || null },
+			userEmail: { local: local.get("user.email") || null, global: global.get("user.email") || null },
 		},
 	};
 }
