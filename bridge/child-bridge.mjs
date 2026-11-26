@@ -419,6 +419,57 @@ const waitTool = defineTool({
 });
 
 
+const reportStatusTool = defineTool({
+	name: "report_status",
+	label: "Report status",
+	description:
+		"Report the phase of the work in front of you, so other threads can cooperate without colliding — a fuzzy semaphore, not a lock. Use `reading` while scouting or reviewing, `writing` while producing code or docs in your own worktree, `merging` before a merge, rebase or other git operation that touches every worktree, and `system` before a network, docker or filesystem operation with global effect. Report when the phase changes, not on every step. Clearing comes automatically when this thread finishes: done clears silently, a failure leaves its error as the note. Pass `idle` to clear it yourself.",
+	parameters: Type.Object({
+		status: Type.Union(["reading", "writing", "merging", "system", "idle"].map((status) => Type.Literal(status)), {
+			description:
+				"The phase of the work: reading is scouting or reviewing, writing is producing in your own worktree, merging is a merge, rebase or other git operation touching every worktree, system is a global network, docker or filesystem operation, idle clears the report.",
+		}),
+		note: Type.Optional(Type.String({ description: "One line saying why the thread is there, for the threads it warns." })),
+	}),
+	async execute(_id, params) {
+		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
+		try {
+			const result = await call("/thread/status", {
+				status: params.status,
+				...(params.note ? { note: params.note } : {}),
+			});
+			const said = `${result.status}${result.note ? ` — ${result.note}` : ""}`;
+			return { content: [{ type: "text", text: `Reported ${said}.` }], details: result };
+		} catch (error) {
+			return failure(error);
+		}
+	},
+});
+
+
+const boardStatusTool = defineTool({
+	name: "get_board_status",
+	label: "Board status",
+	description:
+		"Read what every thread on this board is doing right now: the phase each running thread reported and a note where it left one. Pull it before a merge, rebase or other operation that touches every worktree — the first-message board status is stale by then. Running children carry no tools, so they read by their role and are marked default. A settled thread appears only with the error or the stop that ended it.",
+	parameters: Type.Object({}),
+	async execute(_id, _params) {
+		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
+		try {
+			const result = await call("/thread/board-status", {});
+			const threads = Array.isArray(result.threads) ? result.threads : [];
+			if (!threads.length) return { content: [{ type: "text", text: "Nobody is mid-phase on this board." }], details: result };
+			const lines = threads.map(
+				(one) => `- ${one.threadId.slice(0, 8)} — ${one.title || "this thread"} (${one.status})${one.reported ? "" : " (default)"}${one.note ? ` — ${one.note}` : ""}`,
+			);
+			return { content: [{ type: "text", text: `The board's phases:\n${lines.join("\n")}` }], details: result };
+		} catch (error) {
+			return failure(error);
+		}
+	},
+});
+
+
 export default function boardBridge(pi) {
 	if (!attached()) return;
 	pi.registerTool(noteTool);
@@ -429,4 +480,6 @@ export default function boardBridge(pi) {
 	pi.registerTool(closeTool);
 	pi.registerTool(collectTool);
 	pi.registerTool(waitTool);
+	pi.registerTool(reportStatusTool);
+	pi.registerTool(boardStatusTool);
 }

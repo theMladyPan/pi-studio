@@ -4,6 +4,7 @@
  */
 import { answer, fail, readJson } from "../../http.ts";
 import { cardIndex } from "./index.ts";
+import { boardStatusBlock } from "./status.ts";
 import { cardPreamble, field, refusal, threadPreamble } from "./thread.ts";
 import { randomUUID } from "node:crypto";
 import { runtimeDefaults } from "../../workspaces.ts";
@@ -24,8 +25,8 @@ import { chipSections, MAX_CHIPS } from "./chips.ts";
  * The human's section is always named, even when nothing precedes it: the same shape on every turn is
  * what makes the name mean something, and a turn that changed shape would be the one read as an order.
  */
-function boardSections(board, preamble, naming, text, commands = "") {
-	const sections = [cardIndex(board), preamble, naming]
+function boardSections(board, preamble, naming, text, commands = "", threads = "") {
+	const sections = [cardIndex(board), threads, preamble, naming]
 		.map((one) => String(one ?? "").replace(/\s+$/, ""))
 		.filter(Boolean);
 	// The chips sit closest above the words: the message is the pair, and a skill's instructions were written
@@ -183,7 +184,10 @@ export async function messageOnBoard(board, body) {
 	// because a human section holding a bare `/name` reads as a command to run a second time.
 	const words = text || "(the human sent no words; the commands above are the request)";
 	const said = text || picked.map((one) => `/${one}`).join(" ");
-	const message = boardSections(board, preamble, naming, words, chipped.sections);
+	// The board's phases are orientation for a thread's first words only: stale by the time the thread
+	// answers, so freshness has to come from pulling get_board_status before a cooperative act.
+	const opening = !thread.parentThread && thread.turns.length === 0 ? boardStatusBlock(board, thread.id) : "";
+	const message = boardSections(board, preamble, naming, words, chipped.sections, opening);
 	const holding = askedCard && thread.hidden ? askedCard : null;
 	let target = null;
 	let index;

@@ -46,8 +46,32 @@ export function isCompacting(thread) {
 
 
 
+/**
+ * A report that outlives its run is a lie, so a settled thread keeps no phase: done clears it, and an end
+ * that was not an answer leaves the reason as its note, so a failed thread still says why (a 429, a cut)
+ * where the board status can be read. A stopped thread needs a report to leave one: a kill on a thread
+ * that never claimed anything would otherwise fill the board with stops. Kept here, beside finished, so
+ * every settle — end of run, kill — clears through one place.
+ */
+function settleActivity(thread) {
+	const said = thread.activity;
+	const turns = Array.isArray(thread.turns) ? thread.turns : [];
+	const last = turns[turns.length - 1];
+	const failed = thread.status === "dead" || (last?.status === "stopped" && last.error);
+	if (thread.status === "dead" || failed) {
+		const reason = last?.error ? String(last.error) : "";
+		thread.activity = { status: "idle", at: Date.now(), ...(reason ? { note: reason } : {}) };
+	} else if (last?.status === "stopped" && said) {
+		thread.activity = { status: "idle", note: "stopped", at: Date.now() };
+	} else {
+		delete thread.activity;
+	}
+}
+
+
 /** Wake whoever waits on this thread. Called where a run ends, never where one starts. */
 export function finished(thread) {
+	settleActivity(thread);
 	const waiting = settleWaiters.get(thread.id);
 	if (!waiting) return;
 	settleWaiters.delete(thread.id);

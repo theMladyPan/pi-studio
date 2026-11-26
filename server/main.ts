@@ -26,6 +26,7 @@ import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
 import { LOOPBACK, bindHosts, bindSource, boardLinks, childBaseUrl as childBaseUrlOf, isLoopback, publishConfig, tlsApplies, tlsConfig, tlsOff } from "./listen.ts";
 import { onMode, onPath, onThread, onThreadSpawn, onThreadWait } from "./routes/board/thread.ts";
+import { onBoardStatus, onStatus } from "./routes/board/status.ts";
 import { onAnswer, onAsk, onPause } from "./routes/board/answer.ts";
 import { onMessage, onMessageDrop, onMessageEdit } from "./routes/board/message.ts";
 import { onDrop } from "./routes/board/drop.ts";
@@ -61,7 +62,7 @@ export { token };
 
 
 /** The routes a child may reach. Everything else on this daemon belongs to the human. */
-export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/wait", "/thread/collect", "/skill", "/close"]);
+export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/wait", "/thread/status", "/thread/board-status", "/thread/collect", "/skill", "/close"]);
 
 
 
@@ -964,6 +965,9 @@ function requestHandler(req, res) {
 				"/thread": onThread,
 				"/thread/spawn": onThreadSpawn,
 				"/thread/wait": onThreadWait,
+				// A thread reports the phase of the work in front of it and reads the others', so masters cooperate without colliding. Same master-only rule as every other board tool.
+				"/thread/status": onStatus,
+				"/thread/board-status": onBoardStatus,
 				"/thread/path": onPath,
 				"/mode": onMode,
 				"/card/note": onNote,

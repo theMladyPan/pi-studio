@@ -2230,16 +2230,26 @@ describe("routes", { concurrency: 8 }, () => {
 			assert.equal(idleSay.timedOut, false);
 			assert.equal(idleSay.exitCode, null);
 
-			// A slow run is the window to wait in: a short timeout lapses first, then a long one lands.
-			writeFileSync(join(flags, "slow"), "1");
-			assert.equal((await postTo(daemon, board.id, "/message", { cardId: target, text: "slow words" })).status, 200);
+			// A held run never answers, so a short timeout lapses on it however slow the machine is.
+			writeFileSync(join(flags, "hold"), "1");
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: target, text: "held words" })).status, 200);
+			for (let tries = 0; tries < 100; tries++) {
+				if ((await threadState(daemon, board.id, target))?.status === "running") break;
+				await new Promise((done) => setTimeout(done, 50));
+			}
 			const lapsed = await postAs(daemon, caller.token, board.id, "/thread/wait", { threadId: target, timeoutSeconds: 0.2 });
 			assert.equal(lapsed.status, 200);
 			const lapsedSay = JSON.parse(lapsed.body);
 			assert.equal(lapsedSay.timedOut, true);
 			assert.equal(lapsedSay.status, "timeout");
 			assert.equal(lapsedSay.threadStatus, "running");
-			const done = await postAs(daemon, caller.token, board.id, "/thread/wait", { threadId: target, timeoutSeconds: 30 });
+
+			// A slow run then settles: arriving after it settles still answers done.
+			rmSync(join(flags, "hold"));
+			writeFileSync(join(flags, "slow"), "1");
+			const worker = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: worker, text: "slow words" })).status, 200);
+			const done = await postAs(daemon, caller.token, board.id, "/thread/wait", { threadId: worker, timeoutSeconds: 30 });
 			assert.equal(done.status, 200);
 			const doneSay = JSON.parse(done.body);
 			assert.equal(doneSay.status, "done");
@@ -2254,6 +2264,103 @@ describe("routes", { concurrency: 8 }, () => {
 			const cut = await postAs(daemon, caller.token, board.id, "/thread/wait", { threadId: cutId, timeoutSeconds: 30 });
 			assert.equal(cut.status, 200);
 			assert.equal(JSON.parse(cut.body).status, "stopped");
+		} finally {
+			daemon.child.kill();
+			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
+		}
+	});
+
+	test("a thread reports its phase, another thread is told it once, and a failure leaves its note", async () => {
+		const stateHome = mkdtempSync(join(tmpdir(), "pi-studio-thread-status-"));
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-thread-status-work-"));
+		const stub = stubPi(mkdtempSync(join(tmpdir(), "pi-studio-stub-pi-")));
+		const flags = dirname(stub.envFile);
+		const daemon = await boot(stateHome, { PI_MANAGED_INSTALL_ROOT: stub.root, PI_STUDIO_NAME_MODEL: "" });
+		try {
+			const board = JSON.parse((await post(daemon, "/workspace", { folder })).body).board;
+			const reporter = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "the reporter" })).body).threadId;
+			const listener = JSON.parse((await postTo(daemon, board.id, "/thread", { title: "the listener" })).body).threadId;
+			// A held run stays open however slow the machine is: the stub answers nothing while `hold` stands.
+			writeFileSync(join(flags, "hold"), "1");
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: reporter, text: "first words" })).status, 200);
+			const caller = await childEnvOf(daemon, stub.envFile);
+			assert.equal(caller.thread, reporter, "the token belongs to the reporting thread");
+
+			// An unknown phase is refused before anything is stored.
+			const refused = await postAs(daemon, caller.token, board.id, "/thread/status", { status: "dancing" });
+			assert.equal(refused.status, 409);
+			assert.match(refused.body, /unknown status/);
+
+			const said = await postAs(daemon, caller.token, board.id, "/thread/status", { status: "reading", note: "scanning the router" });
+			assert.equal(said.status, 200);
+			assert.equal(JSON.parse(said.body).status, "reading");
+
+			const pulled = await postAs(daemon, caller.token, board.id, "/thread/board-status", {});
+			assert.equal(pulled.status, 200);
+			const listed = JSON.parse(pulled.body).threads;
+			const mine = listed.find((one: any) => one.threadId === reporter);
+			assert.equal(mine?.status, "reading");
+			assert.equal(mine?.note, "scanning the router");
+			assert.equal(mine?.reported, true);
+
+			// The listener's first message is told about the report; its second queues behind the held run.
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: listener, text: "listener words" })).status, 200);
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: listener, text: "second words" })).status, 200);
+			const promptOf = (words: string) =>
+				framesOf(stub)
+					.filter((frame) => frame.type === "prompt")
+					.map((frame) => String(frame.message))
+					.find((message) => message.includes(words));
+			for (let tries = 0; tries < 100 && !promptOf("listener words"); tries++) {
+				await new Promise((done) => setTimeout(done, 50));
+			}
+			const opened = promptOf("listener words");
+			assert.ok(opened, "the listener's first prompt never reached its child");
+			assert.ok(opened.includes("[board threads]"), "the opening block was not injected");
+			assert.ok(opened.includes("scanning the router"), "the reported note was not injected");
+
+			// The queued message was composed after the opening, so it carries no board block.
+			const waiting = await threadState(daemon, board.id, listener);
+			assert.equal(waiting.queued.length, 1);
+			assert.ok(!String(waiting.queued[0].message).includes("[board threads]"), "the opening block was told twice");
+
+			// Killing the reporter settles it stopped, and the report ends as a stop note.
+			assert.equal((await postTo(daemon, board.id, "/kill", { cardId: reporter })).status, 200);
+			for (let tries = 0; tries < 100; tries++) {
+				if ((await threadState(daemon, board.id, reporter))?.status === "idle") break;
+				await new Promise((done) => setTimeout(done, 50));
+			}
+			const stopped = await postAs(daemon, caller.token, board.id, "/thread/board-status", {});
+			const stoppedEntry = JSON.parse(stopped.body).threads.find((one: any) => one.threadId === reporter);
+			assert.equal(stoppedEntry?.status, "idle");
+			assert.equal(stoppedEntry?.note, "stopped");
+
+			// A failed run leaves the reason where the board status can be read.
+			writeFileSync(join(flags, "refuses"), "1");
+			const broken = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: broken, text: "please" })).status, 200);
+			for (let tries = 0; tries < 100; tries++) {
+				if ((await threadState(daemon, board.id, broken))?.status === "idle") break;
+				await new Promise((done) => setTimeout(done, 50));
+			}
+			const failed = await postAs(daemon, caller.token, board.id, "/thread/board-status", {});
+			const entry = JSON.parse(failed.body).threads.find((one: any) => one.threadId === broken);
+			assert.equal(entry?.status, "idle");
+			assert.ok(String(entry?.note).includes("401"), `the failure note was ${JSON.stringify(entry)}`);
+
+			// A done run clears its report silently: nothing is left to read.
+			rmSync(join(flags, "refuses"));
+			rmSync(join(flags, "hold"));
+			writeFileSync(join(flags, "slow"), "1");
+			const calm = JSON.parse((await postTo(daemon, board.id, "/thread", {})).body).threadId;
+			assert.equal((await postTo(daemon, board.id, "/message", { cardId: calm, text: "calm words" })).status, 200);
+			for (let tries = 0; tries < 100; tries++) {
+				if ((await threadState(daemon, board.id, calm))?.status === "idle") break;
+				await new Promise((done) => setTimeout(done, 50));
+			}
+			const settled = await postAs(daemon, caller.token, board.id, "/thread/board-status", {});
+			const calmListed = JSON.parse(settled.body).threads.some((one: any) => one.threadId === calm);
+			assert.ok(!calmListed, "a done thread still reported a phase");
 		} finally {
 			daemon.child.kill();
 			for (const gone of [stateHome, folder, stub.root]) await removeTree(gone);
