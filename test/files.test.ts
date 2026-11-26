@@ -126,7 +126,7 @@ describe("the explorer's routes belong to the human", () => {
 	const child = { human: false, board: { id: "board-a" }, thread: { id: "t1" } };
 
 	test("none of them is a route a thread may reach, and the human is refused nothing", () => {
-		const reads = ["/files", "/files/read"];
+		const reads = ["/files", "/files/find", "/files/read"];
 		const changes = ["/files/new", "/files/rename", "/files/move", "/files/copy", "/files/delete", "/files/write"];
 		const routes = [...reads, ...changes];
 		for (const path of routes) assert.equal(THREAD_ROUTES.has(path), false, `${path} is in THREAD_ROUTES`);
@@ -1278,6 +1278,95 @@ describe("saving one file", () => {
 			const foreign = await saveFile(daemon, board, { path: "plain.txt", content: "x", mtime: 1, size: 1 }, "thread-secret-token");
 			assert.equal(foreign.status, 403, foreign.body);
 			assert.match(foreign.body, /forbidden/);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("finding names in every folder", () => {
+	const find = (daemon: Daemon, board: string, query: string) =>
+		get(daemon, `/files/find?token=${daemon.token}&workspace=${board}${query}`).then((res) => {
+			let body: any = null;
+			try {
+				body = res.body ? JSON.parse(res.body) : null;
+			} catch {
+				body = res.body;
+			}
+			return { status: res.status, body };
+		});
+
+	test("a query finds names in subfolders, in pages, and never under .git", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-find-"));
+		const folder = join(state, "proj");
+		mkdirSync(join(folder, "docs"), { recursive: true });
+		mkdirSync(join(folder, "docs", "deep"), { recursive: true });
+		mkdirSync(join(folder, ".git"), { recursive: true });
+		writeFileSync(join(folder, "README.md"), "root\n");
+		writeFileSync(join(folder, "docs", "README.md"), "docs\n");
+		writeFileSync(join(folder, "docs", "deep", "readme-notes.txt"), "deep\n");
+		writeFileSync(join(folder, ".git", "README.md"), "git\n");
+		writeFileSync(join(folder, "docs", "other.md"), "other\n");
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			const all = await find(daemon, board, "&q=readme");
+			assert.equal(all.status, 200, JSON.stringify(all.body));
+			assert.equal(all.body.q, "readme");
+			assert.equal(all.body.total, 3);
+			assert.deepEqual(all.body.entries.map((one: any) => one.path).sort(), ["README.md", "docs/README.md", "docs/deep/readme-notes.txt"]);
+			assert.equal(all.body.entries.every((one: any) => typeof one.dir === "boolean" && typeof one.link === "boolean"), true);
+			assert.equal(all.body.truncated, false);
+			assert.equal(all.body.next, null);
+			assert.equal(all.body.scanTruncated, false);
+
+			const first = await find(daemon, board, "&q=readme&limit=2");
+			assert.equal(first.status, 200);
+			assert.equal(first.body.entries.length, 2);
+			assert.equal(first.body.truncated, true);
+			assert.equal(first.body.next, "2");
+			const second = await find(daemon, board, `&q=readme&limit=2&from=${first.body.next}`);
+			assert.equal(second.status, 200);
+			assert.equal(second.body.entries.length, 1);
+			assert.equal(second.body.truncated, false);
+			assert.deepEqual(
+				[...first.body.entries, ...second.body.entries].map((one: any) => one.path).sort(),
+				["README.md", "docs/README.md", "docs/deep/readme-notes.txt"],
+			);
+
+			const missing = await find(daemon, board, "");
+			assert.equal(missing.status, 400);
+			assert.match(String(missing.body), /a name to search for/);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	test("dot names are in the walk only when hidden files were asked for, and excludes still hold", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-find-hidden-"));
+		const folder = join(state, "proj");
+		mkdirSync(join(folder, ".hidden", "sub"), { recursive: true });
+		mkdirSync(join(folder, "node_modules", "pkg"), { recursive: true });
+		mkdirSync(join(folder, ".vscode"), { recursive: true });
+		writeFileSync(join(folder, ".hidden", "sub", "README.md"), "hidden\n");
+		writeFileSync(join(folder, ".env"), "A=1\n");
+		writeFileSync(join(folder, "README.md"), "root\n");
+		writeFileSync(join(folder, "node_modules", "pkg", "README.md"), "deps\n");
+		writeFileSync(join(folder, ".vscode", "settings.json"), JSON.stringify({ "files.exclude": { "**/node_modules": true } }));
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			const shown = await find(daemon, board, "&q=readme&hidden=1");
+			assert.equal(shown.status, 200, JSON.stringify(shown.body));
+			assert.deepEqual(shown.body.entries.map((one: any) => one.path).sort(), [".hidden/sub/README.md", "README.md"]);
+			const hidden = await find(daemon, board, "&q=readme&hidden=0");
+			assert.deepEqual(hidden.body.entries.map((one: any) => one.path), ["README.md"]);
+			const envOff = await find(daemon, board, "&q=env&hidden=0");
+			assert.equal(envOff.body.total, 0);
+			const envOn = await find(daemon, board, "&q=env&hidden=1");
+			assert.deepEqual(envOn.body.entries.map((one: any) => one.path), [".env"]);
 		} finally {
 			daemon.child.kill();
 			rmSync(state, { recursive: true, force: true });
