@@ -292,7 +292,10 @@
   .body { flex: 1 0 auto; position: relative; }
   /* The code view is absolutely positioned, so the body has no height of its own: the floor keeps
      a source card with follow-ups from handing the whole column to the thread. */
-  .body.source-body { min-height: 140px; }
+  .body.source-body { min-height: 140px; display: flex; flex-direction: column; }
+  /* A source card whose file is a page draws the page in a frame: the frame fills the body the way the
+     code view filled it, and the page scrolls inside its own frame rather than the card's column. */
+  .body.source-body > iframe { flex: 1 1 auto; width: 100%; min-height: 0; border: 0; background: #fff; }
   .note-body { padding: 10px 12px; color: #c9d1d9; word-wrap: break-word; }
   /* A heading owns the text under it, so it keeps more air above than below. */
   .note-body h1, .note-body h2, .note-body h3 { margin: 14px 0 5px; color: #fff; }

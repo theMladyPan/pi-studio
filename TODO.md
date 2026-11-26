@@ -4,7 +4,7 @@ The one list of what is open. `STATE.md` says what works; this says what does no
 says what it is, what it would touch, and what has to be settled before it can start. Line numbers are
 `dev` at `c723fc3`.
 
-Nine entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
+Eight entries, in three groups: **fix** is something that reads wrong on screen today, **feat** is
 something the board cannot do yet, **chore** is work on the code itself.
 
 Two decisions have to be answered by you before some of these can start, and each is named in the
@@ -20,13 +20,6 @@ to disk (`diskRow`, `server/bus.ts:136`), so a row from before a restart says th
 fetches its picture on demand or carries it.
 
 ## feat
-
-**A card that renders a whole HTML page.** The files drawer's editor draws an opened HTML file ready:
-source or preview, in its own frame with scripts allowed and no origin of its own, so it cannot reach
-the page, the session or the daemon as the page; a page referring to a file beside it is read as source
-instead. What still shows source text only is a card: a source card holding an `.html` file, and any card
-body that might carry a page. Touches the client's card bodies. To settle: whether a card needs a drawn
-page at all, and if so which sandbox, size cap and beside-it rule the editor already lives with.
 
 **Usage totals beside a rail row's detail sheet.** The sheet shows status, exit code, tokens and time
 (`public/client/board.js:5524`) and nothing about what the call cost. The numbers exist per thread

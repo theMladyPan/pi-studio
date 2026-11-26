@@ -2355,6 +2355,34 @@ function renderMarkdown(markdown) {
 }
 
 // ---------- bodies -------------------------------------------------------
+/**
+ * The frame a whole HTML page is drawn in — the editor's preview and a source card's body share it.
+ *
+ * One shape is the point: `allow-scripts` and nothing else, so the page has no origin of its own and
+ * cannot read this page, carry its session or ask the daemon as it. What the page writes for itself —
+ * forms, popups, storage — it gets none of, by the same token.
+ */
+function htmlFrame(content, title) {
+  const frame = el("iframe");
+  frame.title = title;
+  frame.setAttribute("sandbox", "allow-scripts");
+  frame.srcdoc = content;
+  return frame;
+}
+
+/**
+ * The frame a source card draws when its file is a page: the file's own content, never the code view.
+ * The frame is kept on the card and handed back while the content stands, so a repaint of anything else
+ * on the card does not load the page again and lose its place.
+ */
+function htmlBody(data, entry) {
+  if (entry.htmlFrame && entry.htmlContent === data.content) return entry.htmlFrame;
+  const frame = htmlFrame(data.content, data.path || data.title || "");
+  entry.htmlFrame = frame;
+  entry.htmlContent = data.content;
+  return frame;
+}
+
 /** Virtualized code view: only visible lines exist in the DOM. */
 function sourceBody(data) {
   const lines = data.content.split("\n");
@@ -3408,7 +3436,12 @@ function detailsBlock(details, entry) {
 }
 
 function bodyFor(data, entry) {
-  if (data.type === "source") return { node: sourceBody(data), cls: "source-body" };
+  if (data.type === "source") {
+    // A source card whose file is a page draws the page, not its source: opening the file again is what
+    // brings the code view back, in the editor the card's head hands it to.
+    if (exPreviewKind(data.path) === "html") return { node: htmlBody(data, entry), cls: "source-body" };
+    return { node: sourceBody(data), cls: "source-body" };
+  }
   if (data.type === "sticky") return { node: stickyBody(data), cls: "" };
   if (data.type === "question") return { node: questionBody(data, entry), cls: "" };
   const note = renderMarkdown(data.markdown || "");
@@ -4390,7 +4423,9 @@ function paintCard(entry, data) {
 
   const { node, cls } = bodyFor(data, entry);
   entry.body.className = cls ? `body ${cls}` : "body";
-  entry.body.replaceChildren(node);
+  // A body already holding this very node stays: lifting a frame out and setting it down loads its page
+  // again, and a repaint is not a reason to start it over.
+  if (entry.body.firstElementChild !== node) entry.body.replaceChildren(node);
   paintThread(entry, data);
   fitContent(entry, data);
   syncRailCard(entry);
@@ -12434,11 +12469,7 @@ function exRenderMarkdownPreview() {
  * for anything as this page. A page that needs the workspace beside it is read as source instead.
  */
 function exRenderHtmlPreview() {
-  const frame = el("iframe");
-  frame.title = exEditorDoc.path;
-  frame.setAttribute("sandbox", "allow-scripts");
-  frame.srcdoc = exEditorPreview.getText();
-  exViewBody.replaceChildren(frame);
+  exViewBody.replaceChildren(htmlFrame(exEditorPreview.getText(), exEditorDoc.path));
 }
 
 /** Source or preview, for the two kinds that carry both. The text holds still either way. */
