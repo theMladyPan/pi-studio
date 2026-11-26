@@ -63,13 +63,15 @@ test("the injected block names the others and never the thread it opens for", ()
 	assert.ok(text.startsWith("[board threads]"));
 	assert.ok(text.includes("master-blu"));
 	assert.ok(text.includes("(merging)"));
+	// Newest claim first: blue reported before broken, so merging stands ahead of the failure note.
+	assert.ok(text.indexOf("(merging)") < text.indexOf("401"), "the block is not newest-first");
 	assert.ok(text.includes("401: invalid api key"));
 	assert.doesNotMatch(text, /master-red/, "the opening thread was told its own phase");
 	assert.equal(boardStatusBlock({ threads: new Map() }, "master-red"), "", "an empty board still says nothing");
 });
 
 test("a settled run clears silently, a cut leaves a stop note, and a failure leaves its reason", () => {
-const reported = (turns: unknown[]) => ({ id: "t", turns, activity: { status: "writing", at: Date.now() } }) as any;
+	const reported = (turns: unknown[]) => ({ id: "t", turns, activity: { status: "writing", at: Date.now() } }) as any;
 	const done = reported([{ status: "answered" }]);
 	finished(done);
 	assert.equal(done.activity, undefined, "an answer kept its phase");

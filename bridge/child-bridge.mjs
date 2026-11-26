@@ -70,6 +70,12 @@ function failure(error) {
 	return { content: [{ type: "text", text: `The board refused that: ${error.message}` }] };
 }
 
+/** A timestamp as the reader walks it: seconds under a minute, then minutes. */
+function ageOf(at) {
+	const seconds = Math.max(0, Math.round((Date.now() - Number(at ?? Date.now())) / 1000));
+	return seconds < 60 ? `${seconds}s` : `${Math.round(seconds / 60)}m`;
+}
+
 const noteTool = defineTool({
 	name: "board_note",
 	label: "Board note",
@@ -460,7 +466,7 @@ const boardStatusTool = defineTool({
 			const threads = Array.isArray(result.threads) ? result.threads : [];
 			if (!threads.length) return { content: [{ type: "text", text: "Nobody is mid-phase on this board." }], details: result };
 			const lines = threads.map(
-				(one) => `- ${one.threadId.slice(0, 8)} — ${one.title || "this thread"} (${one.status})${one.reported ? "" : " (default)"}${one.note ? ` — ${String(one.note).replace(/\s+/g, " ").slice(0, 140)}` : ""}`,
+				(one) => `- ${one.threadId.slice(0, 8)} — ${one.title || "this thread"} (${one.status})${one.reported ? ` · ${ageOf(one.at)}` : " (default)"}${one.note ? ` — ${String(one.note).replace(/\s+/g, " ").slice(0, 140)}` : ""}`,
 			);
 			return { content: [{ type: "text", text: `The board's phases:\n${lines.join("\n")}` }], details: result };
 		} catch (error) {

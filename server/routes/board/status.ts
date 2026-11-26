@@ -127,7 +127,12 @@ export async function onStatus(req, res, board, caller = { human: true }) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	if (!caller.thread) return void fail(res, 409, "a thread reports its own status");
-	if (caller.thread.status === "dead") return void fail(res, 409, "thread ended");
+	// The router already refuses spawned children for every thread route; the handler repeats the child
+	// half so the rule does not depend on one place alone.
+	if (caller.thread.parentThread) return void fail(res, 409, "a spawned child has no board tools");
+	// A report exists only while the thread is working: a dead token still resolves, and a late report
+	// must not overwrite the settled note of a run that already ended.
+	if (caller.thread.status !== "running") return void fail(res, 409, "thread is not running");
 	const status = field(body.status, 20);
 	if (!STATUS_NAMES.includes(status)) return void fail(res, 409, `unknown status: ${status}`);
 	const note = field(body.note, STATUS_NOTE_CHARS);

@@ -517,6 +517,9 @@ export function handleChildLine(board, thread, line) {
 		// The cards this thread answers through carried `answersWith.running` while it ran, and a card
 		// still offering a stop for a run that has finished is a button that cannot work.
 		refreshOwned(board, thread);
+		// A run that settles with a message waiting behind it is not the end of the thread: the next
+		// message starts at once, so the thread keeps running and keeps its phase and its waiters until
+		// it is truly idle — finished() would settle a report a follower is still working under.
 		if (drainQueue(board, thread)) return;
 		// A run that died of the provider's own weather is sent again before the card is left reading
 		// stopped, and the same words go out up to three times before the human is told it failed.
