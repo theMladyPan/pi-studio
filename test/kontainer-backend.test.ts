@@ -309,6 +309,12 @@ test("buildExecCommand makes safe terminal commands", () => {
 	assert.deepEqual(buildExecCommand({ mode: "exec", id: "111111aaaaaabbbb" }), { ok: true, command: "docker exec -it 111111aaaaaa sh" });
 	assert.deepEqual(buildExecCommand({ mode: "logs", id: "111111aaaaaabbbb" }), { ok: true, command: "docker logs -f --tail 100 111111aaaaaa" });
 	assert.deepEqual(buildExecCommand({ mode: "compose-logs" }), { ok: true, command: "docker compose logs -f" });
+	assert.deepEqual(buildExecCommand({ mode: "run", image: "ghcr.io/astral-sh/uv:0.12.24" }), { ok: true, command: "docker run --rm -it 'ghcr.io/astral-sh/uv:0.12.24' sh" });
+	assert.deepEqual(buildExecCommand({ mode: "run", image: "sha256:111111aaaaaabbbb" }), { ok: true, command: "docker run --rm -it 'sha256:111111aaaaaabbbb' sh" });
+	assert.equal(buildExecCommand({ mode: "run", image: "<none>:<none>" }).ok, false);
+	assert.equal(buildExecCommand({ mode: "run", image: "--rm evil; rm -rf /" }).ok, false);
+	assert.equal(buildExecCommand({ mode: "run", image: "-evil" }).ok, false);
+	assert.equal(buildExecCommand({ mode: "run" }).ok, false);
 	assert.equal(buildExecCommand({ mode: "exec", id: "bad/../../id" }).ok, false);
 	assert.equal(buildExecCommand({ mode: "compose-logs", composeFile: "../compose.yaml" }, { folder: "/ws/myproj" }).ok, false);
 	assert.equal(buildExecCommand({ mode: "nope" }).ok, false);
@@ -317,6 +323,10 @@ test("buildExecCommand makes safe terminal commands", () => {
 test("handleAction exec.cmd needs no engine and returns the command", async () => {
 	const result = await handleAction({ folder: "/ws/myproj" }, { action: "exec.cmd", mode: "exec", id: "111111aaaaaabbbb" }, { runtimes: [] });
 	assert.deepEqual(result, { ok: true, command: "docker exec -it 111111aaaaaa sh" });
+	const runResult = await handleAction({ folder: "/ws/myproj" }, { action: "exec.cmd", mode: "run", image: "docker.io/library/debian:trixie-slim" }, { runtimes: [] });
+	assert.deepEqual(runResult, { ok: true, command: "docker run --rm -it 'docker.io/library/debian:trixie-slim' sh" });
+	const badRun = await handleAction({ folder: "/ws/myproj" }, { action: "exec.cmd", mode: "run", image: "x; rm -rf /" }, { runtimes: [] });
+	assert.equal(badRun.ok, false);
 });
 
 // ---------- recreate and compose safety ----------

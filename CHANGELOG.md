@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - fix: Read the Git Graph's identity quietly — the repository info now lists the local and global config once each and picks `user.name` and `user.email` out of the lists, so a repository with no local identity answers `null` for it instead of logging an error row on every refresh. [t-f731fc5b]
+- feat: Run a disposable shell from an image's right-click menu — `run shell ↗` opens a `--rm -it` container from the image's tag (or its id when dangling) in the terminal drawer, so the shell lives in the board's own pty and exits with the container removed. [t-ae0b80e5]
 
 - fix: Say a command had no output in the logs drawer instead of repeating the command — a quiet command such as an empty stash list now opens on a dim `[no output]` line under its meta grid, and a plain log line without a command behind it still opens on its full message. [t-f731fc5b]
 

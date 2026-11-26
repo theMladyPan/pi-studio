@@ -72,6 +72,11 @@ export function buildExecCommand(body: Record<string, unknown>, opts: ExecComman
 		const command = mode === "exec" ? `${cli} exec -it ${short} sh` : `${cli} logs -f --tail 100 ${short}`;
 		return { ok: true, command };
 	}
+	if (mode === "run") {
+		const image = body.image;
+		if (typeof image !== "string" || image.startsWith("-") || (!isValidImageRef(image) && !isValidImageId(image))) return { ok: false, error: "a valid image reference is required" };
+		return { ok: true, command: `${cli} run --rm -it ${shellQuote(image as string)} sh` };
+	}
 	if (mode === "compose-logs") {
 		const composeFile = typeof body.composeFile === "string" ? body.composeFile : "";
 		if (composeFile) {

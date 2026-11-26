@@ -446,10 +446,13 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const ref = `${img.repo || "<none>"}:${img.tag || "<none>"}`;
     // An untagged build has no repository to push to or pull from.
     const tagged = !img.dangling && img.repo !== "<none>";
+    // A run names the tag when there is one and the id otherwise, so a dangling build still runs.
+    const runTarget = tagged ? ref : img.id;
     const run = (payload, okMsg) => () => postAction(payload, okMsg).catch((e) => toast(e.message));
     return [
       { id: "inspect", label: "inspect", run: () => showTab("image", img.id, "inspect") },
       { id: "layers", label: "layers", run: () => showTab("image", img.id, "layers") },
+      { id: "run", label: "run shell ↗", disabled: !runTarget, hint: "this image has no id to run", run: () => execToTerminal({ mode: "run", image: runTarget }) },
       { sep: true },
       { id: "pull", label: "pull", disabled: !tagged, hint: "an untagged build has no reference to pull", run: run({ action: "image.pull", image: ref }, `pulling ${ref}`) },
       { id: "push", label: "push", disabled: !tagged, hint: "an untagged build has no reference to push", run: run({ action: "image.push", image: ref }, `pushing ${ref}`) },
