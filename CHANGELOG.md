@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Keep a long error readable in the kontainer drawer's toast — the bubble has rounded corners and wraps its text, so a message that names the container it would not remove stays inside the bubble instead of running off its edge. [t-ec9cf957]
+
 ## [0.10.0] - 2026-11-26
 
 - fix: Keep localhost working after TLS — `npm run start`, `npm run dev` and `npm run dev:alt` now name loopback and switch TLS off, so a stored publish choice or a generated certificate cannot turn a local start into a self-signed HTTPS page a browser warns on; a generated certificate only serves HTTPS beyond loopback, `--no-tls` (or `PI_STUDIO_TLS=0`) switches TLS off anywhere, and with TLS on the printed local link is plain http on the port below the HTTPS one instead of the HTTPS link, with plain probes of the HTTPS port logged at most once a minute.
