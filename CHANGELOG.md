@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Read the Git Graph's identity quietly — the repository info now lists the local and global config once each and picks `user.name` and `user.email` out of the lists, so a repository with no local identity answers `null` for it instead of logging an error row on every refresh. [t-f731fc5b]
+
 - fix: Say a command had no output in the logs drawer instead of repeating the command — a quiet command such as an empty stash list now opens on a dim `[no output]` line under its meta grid, and a plain log line without a command behind it still opens on its full message. [t-f731fc5b]
 
 - fix: Measure container CPU percent between the drawer's own polls by wall time instead of trusting the engine's previous sample — Podman's one-shot stats carry a zero previous sample, so the old formula read as a lifetime average that a burst of load barely moved, and its system counter counts busy time only, so the Docker formula overread it; the drawer now keeps each container's last CPU counter and divides the change by the seconds elapsed, so 8 busy cores read 800% on any runtime. [t-07290c41]

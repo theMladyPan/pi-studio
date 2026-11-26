@@ -18,6 +18,7 @@ import {
 	libreTagDetails,
 } from "../server/git/gitgraph/read.ts";
 import { UNCOMMITTED } from "../server/git/gitgraph/protocol.ts";
+import { snapshot } from "../server/logs.ts";
 import { git, scratchRepo } from "../test-support/git.ts";
 
 /**
@@ -411,5 +412,25 @@ test(
 		assert.equal(config.value.pushDefault, null);
 		assert.equal(config.value.branches.dev?.remote, "origin");
 		assert.deepEqual(config.value.remotes, [{ name: "origin", url: "https://example.invalid/repo.git", pushUrl: null }]);
+	}),
+);
+
+test(
+	"a repository with no local identity answers null for it, without an error log row",
+	withHistory(async (repo) => {
+		// Most repositories carry no local identity: the global one is what git uses. Reading it with
+		// `--get` exits 1 and the daemon logged that as an error on every graph refresh.
+		git(repo, "config", "--unset", "user.name");
+		git(repo, "config", "--unset", "user.email");
+		const configErrors = () => snapshot().filter((entry) => entry.level === "error" && String(entry.meta?.cmd ?? entry.message).includes("config")).length;
+		const before = configErrors();
+		const info = await libreRepoInfo(repo, false);
+		assert.equal(info.config.userName.local, null);
+		assert.equal(info.config.userEmail.local, null);
+		assert.equal(configErrors(), before, "reading a missing identity logs no error");
+		// The local identity that is set still reads back, from the same list.
+		git(repo, "config", "user.email", "local@example.invalid");
+		const set = await libreRepoInfo(repo, false);
+		assert.equal(set.config.userEmail.local, "local@example.invalid");
 	}),
 );
