@@ -815,6 +815,7 @@ test("the keys panel says what the keys do, including f as the drawer and shift+
 	assert.ok(board.includes('{ keys: "ctrl+f", does: "open the search drawer and focus its search field" }'));
 	assert.ok(board.includes('"Search and replace"'), "the header names the open search drawer, as the git graph names itself");
 	assert.ok(board.includes("function srPaintTitle()"), "the search head carries the workspace path, as the files head does");
+	assert.ok(board.includes("void exPrime().then(() => srPaintTitle())"), "opening the search drawer reads the root, so its head names the folder before any search runs");
 	assert.ok(board.includes('{ keys: "a", does: "open the activity drawer, and press it again to roll it up" }'));
 	assert.ok(board.includes('{ keys: "c", does: "open the cards drawer, and press it again to roll it up" }'));
 	assert.ok(board.includes('{ keys: "shift+f", does: "fit every card on the screen" }'));

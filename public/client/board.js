@@ -6057,7 +6057,13 @@ function showDrawer(name) {
   closeDocks();
   if (name === "files") exPrime();
   if (name === "source") scPrime();
-  if (name === "search") requestAnimationFrame(() => { srQueryEl?.focus(); srQueryEl?.select(); });
+  if (name === "search") {
+    // The head names the folder being searched, so opening the drawer reads the root listing the
+    // files drawer reads, and the head is painted again once the root is known.
+    srPaintTitle();
+    void exPrime().then(() => srPaintTitle());
+    requestAnimationFrame(() => { srQueryEl?.focus(); srQueryEl?.select(); });
+  }
   explorerCore.drawerOpen(drawerState, name);
   paintDrawers();
 }
@@ -6069,7 +6075,11 @@ function toggleDrawer(name) {
   explorerCore.drawerToggle(drawerState, name);
   if (!open && name === "files") exPrime();
   if (!open && name === "source") scPrime();
-  if (!open && name === "search") requestAnimationFrame(() => { srQueryEl?.focus(); srQueryEl?.select(); });
+  if (!open && name === "search") {
+    srPaintTitle();
+    void exPrime().then(() => srPaintTitle());
+    requestAnimationFrame(() => { srQueryEl?.focus(); srQueryEl?.select(); });
+  }
   paintDrawers();
 }
 
@@ -11257,6 +11267,8 @@ async function exLoad(dir, { quiet = false } = {}) {
           exTitleEl.textContent = label;
         }
         exTitleEl.title = exState.root || label;
+        // The search head names the same folder, so it follows the root once it is known.
+        srPaintTitle();
       }
       exPaint();
       after = page.next ?? "";
