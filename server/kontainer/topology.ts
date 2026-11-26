@@ -20,6 +20,8 @@ export interface KontainerImage {
 	tag: string;
 	name: string;
 	sizeBytes: number;
+	/** Bytes this image alone holds on disk (Size minus the layers it shares). Summing this, not sizeBytes, gives a reclaimable total. */
+	uniqueSizeBytes: number;
 	created: number;
 	dangling: boolean;
 	inUse: boolean;
@@ -177,6 +179,11 @@ export function shortId(id: string): string {
 	return (id.startsWith("sha256:") ? id.slice(7) : id).slice(0, 12);
 }
 
+/** Image ids compare bare: engine listings carry `sha256:` on Id but not on ParentId or df ids. */
+function bareId(id: string): string {
+	return id.startsWith("sha256:") ? id.slice(7) : id;
+}
+
 /** Lowercased, separator-normalized form for workspace membership tests. */
 export function normalizePath(path: string): string {
 	return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -233,6 +240,8 @@ export interface BuildTopologyInput {
 	containersRaw: unknown[];
 	networksRaw?: unknown[];
 	volumesRaw?: unknown;
+	/** Per-image unique bytes from `/system/df` (Size minus SharedSize), keyed by bare or prefixed id. */
+	uniqueSizeById?: ReadonlyMap<string, number>;
 	folder: string;
 	scope: Scope;
 }
@@ -241,8 +250,19 @@ export function buildTopology(input: BuildTopologyInput): Topology {
 	const folder = input.folder;
 	const projectName = folder ? normalizeProjectName(basename(folder)) : "";
 
-	// One image per local image record; `<none>:<none>` is dangling.
+	// One image per local image record. Buildah keeps an untagged record per
+	// Dockerfile instruction: each is the ParentId of the next, so its Size is
+	// the cumulative virtual size and its layers are shared. Those are
+	// intermediates, not images to list or sum (see the filter below).
+	const parentIds = new Set<string>();
+	for (const raw of input.imagesRaw) {
+		const parent = asString(asRecord(raw).ParentId);
+		if (parent) parentIds.add(bareId(parent));
+	}
+	const uniqueByBareId = new Map<string, number>();
+	for (const [key, value] of input.uniqueSizeById ?? []) uniqueByBareId.set(bareId(key), value);
 	const images: KontainerImage[] = [];
+	const intermediateIds = new Set<string>();
 	const imageByName = new Map<string, KontainerImage>();
 	const imageById = new Map<string, KontainerImage>();
 	for (const raw of input.imagesRaw) {
@@ -251,14 +271,22 @@ export function buildTopology(input: BuildTopologyInput): Topology {
 		const repoTags = asArray(image.RepoTags).filter((t): t is string => typeof t === "string" && t.length > 0);
 		const first = repoTags[0] ?? "<none>:<none>";
 		const { repo, tag } = parseRepoTag(first);
-		const dangling = repo === "<none>" || repoTags.length === 0;
+		const hasChild = parentIds.has(bareId(id));
+		// Dangling in the engine's sense: untagged and childless. An untagged
+		// parent is a build layer the tagged image above it still needs.
+		const dangling = (repo === "<none>" || repoTags.length === 0) && !hasChild;
+		if (repoTags.length === 0 && hasChild) intermediateIds.add(id);
+		const sizeBytes = asNumber(image.Size);
+		const shared = asNumber(image.SharedSize);
+		const dfUnique = uniqueByBareId.get(bareId(id));
 		const entry: KontainerImage = {
 			id,
 			shortId: shortId(id),
 			repo,
 			tag,
-			name: dangling ? "<none>:<none>" : first,
-			sizeBytes: asNumber(image.Size),
+			name: repoTags.length === 0 ? "<none>:<none>" : first,
+			sizeBytes,
+			uniqueSizeBytes: dfUnique ?? (shared > 0 && shared <= sizeBytes ? sizeBytes - shared : sizeBytes),
 			created: toMs(image.Created),
 			dangling,
 			inUse: false,
@@ -368,6 +396,12 @@ export function buildTopology(input: BuildTopologyInput): Topology {
 		}
 	}
 
+	// Intermediates stay in the maps above so a container built from one still
+	// links, but the drawer never lists them: they are layers of a top image,
+	// and their cumulative sizes would be counted once per layer. A container
+	// actually running one keeps it listed.
+	const topImages = images.filter((image) => !intermediateIds.has(image.id) || usedImageIds.has(image.id));
+
 	// Scope filtering.
 	const visible = input.scope === "all" ? allContainers : allContainers.filter((c) => c.inWorkspace);
 	const visibleIds = new Set(visible.map((c) => c.id));
@@ -378,7 +412,7 @@ export function buildTopology(input: BuildTopologyInput): Topology {
 		if (byName) visibleImageIds.add(byName.id);
 	}
 	const visibleImages =
-		input.scope === "all" ? images : images.filter((image) => visibleImageIds.has(image.id) || image.dangling);
+		input.scope === "all" ? topImages : topImages.filter((image) => visibleImageIds.has(image.id) || image.dangling);
 
 	// Wiring, deduplicated, filtered to visible containers.
 	const portWiring = new Map<string, PortWiring>();
@@ -454,17 +488,19 @@ export function buildTopology(input: BuildTopologyInput): Topology {
 		}
 	}
 
-	const unused = images.filter((image) => !usedImageIds.has(image.id));
+	const unused = topImages.filter((image) => !usedImageIds.has(image.id));
 	const summary: TopologySummary = {
 		running: visible.filter((c) => c.state === "running").length,
 		issues: visible.filter((c) => c.health === "unhealthy" || c.staleImage || c.oomKilled || (c.state === "exited" && c.exitCode !== null && c.exitCode !== 0) || c.state === "dead").length,
 		totalContainers: visible.length,
 		workspaceContainers: allContainers.filter((c) => c.inWorkspace).length,
 		allContainers: allContainers.length,
-		totalImages: images.length,
+		totalImages: topImages.length,
 		unusedImages: unused.length,
-		unusedBytes: unused.reduce((sum, image) => sum + image.sizeBytes, 0),
-		totalImageBytes: images.reduce((sum, image) => sum + image.sizeBytes, 0),
+		// Unique bytes only: sizeBytes is cumulative per image, so summing it
+		// charges every shared layer once per image that contains it.
+		unusedBytes: unused.reduce((sum, image) => sum + image.uniqueSizeBytes, 0),
+		totalImageBytes: topImages.reduce((sum, image) => sum + image.uniqueSizeBytes, 0),
 	};
 
 	return {
@@ -1117,20 +1153,32 @@ export async function fetchStats(runtime: Runtime, ids: string[], samples: Map<s
 }
 
 export async function fetchTopology(runtime: Runtime, folder: string, scope: Scope): Promise<{ engineVersion: string | null; topology: Topology }> {
-	const [versionRaw, imagesRaw, containersRaw, networksRaw, volumesRaw] = await Promise.all([
+	const [versionRaw, imagesRaw, containersRaw, networksRaw, volumesRaw, dfRaw] = await Promise.all([
 		requestJson(runtime, "/version").catch(() => null),
 		requestJson(runtime, "/images/json?all=1"),
 		requestJson(runtime, "/containers/json?all=1"),
 		requestJson(runtime, "/networks").catch(() => []),
 		requestJson(runtime, "/volumes").catch(() => null),
+		// Unique sizes live only here: `/images/json` reports SharedSize as -1.
+		// A df refusal degrades to cumulative sizes, never to a failed state.
+		requestJson(runtime, "/system/df").catch(() => null),
 	]);
 	const version = asRecord(versionRaw);
 	const engineVersion = asString(version.Version) || null;
+	const uniqueSizeById = new Map<string, number>();
+	for (const raw of asArray(asRecord(dfRaw).Images)) {
+		const entry = asRecord(raw);
+		const id = asString(entry.Id);
+		const size = asNumber(entry.Size);
+		const shared = asNumber(entry.SharedSize);
+		if (id && shared >= 0 && shared <= size) uniqueSizeById.set(id, size - shared);
+	}
 	const topology = buildTopology({
 		imagesRaw: asArray(imagesRaw),
 		containersRaw: asArray(containersRaw),
 		networksRaw: asArray(networksRaw),
 		volumesRaw: volumesRaw ?? undefined,
+		uniqueSizeById,
 		folder,
 		scope,
 	});
