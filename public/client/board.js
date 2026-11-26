@@ -1248,7 +1248,6 @@ function exBoardLetter(key, { shift = false, typing = false, panel = false, surf
   if (shifted) return "";
   if (lower === "d") return "source";
   if (lower === "a") return "activity";
-  if (lower === "c") return "cards";
   return "";
 }
 
@@ -3875,21 +3874,11 @@ function paintFooter() {
   footRun.textContent = [threads ? `${threads} thread${threads > 1 ? "s" : ""}` : "", running ? `${running} running` : "", msgs ? `${msgs} msgs` : "", tools ? `${tools} tools` : ""].filter(Boolean).join(" · ");
 }
 
-/** A section says what its thread costs and which role it plays. */
+/** Update every card row's role chip and order after runtime facts/meta settle. */
 function paintSections() {
-  for (const entry of railSections.values()) {
-    const held = threadFacts.get(entry.id);
-    const stats = held?.stats;
-    const bits = [];
-    if (stats?.context) bits.push(`${compact(stats.context)}${stats.contextMax ? `/${compact(stats.contextMax)}` : ""} ctx`);
-    if (stats?.cost) bits.push(`$${stats.cost < 1 ? stats.cost.toFixed(2) : compact(stats.cost)}`);
-    entry.head.children[3].textContent = bits.join(" · ");
-    // The role arrives with the thread's card, which can land after its first activity row.
-    const { role = "" } = threadMeta.get(entry.id) ?? {};
-    entry.roleEl.textContent = role;
-    entry.roleEl.hidden = !role;
-    orderRail();
-  }
+  for (const row of railRows.values()) paintRailRole(row);
+  for (const row of railClosedRows.values()) paintRailRole(row);
+  orderRailCards();
 }
 
 /**
@@ -5948,22 +5937,19 @@ document.getElementById("newPill").addEventListener("click", jumpToFresh);
 resetBtn.addEventListener("click", resetZoom);
 
 // ---------- activity rail ------------------------------------------------
-const railNow = document.getElementById("railNow");
-const railLog = document.getElementById("railLog");
-const railRunning = document.getElementById("railRunning");
+const railBody = document.getElementById("railBody");
 const actEls = new Map();
 /** A thought with no patch for this long is stalled, and its row says so with the clock. */
 const THOUGHT_STALL_MS = 3000;
 
 // ---------- the left drawers ---------------------------------------------
-// Three drawers share the rail's column: the workspace's files, what the agents are doing, and the
-// board's cards. One is open at a time, and the width and the hidden choice a human left on the old
-// rail are the ones these open with, because this is that rail with doors on it.
-const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards", source: "drawerSource", search: "drawerSearch" };
+// Four drawers share the rail's column: the workspace's files, activity (threads and cards),
+// source control, and search. One is open at a time, and the width and remembered open choice carry over.
+const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", source: "drawerSource", search: "drawerSearch" };
 const drawerState = explorerCore.drawers();
 // The plugin drawers off the other three edges: one strip per edge, one pane open per strip. The
 // strips are separate from the left column because the left column is the rail's (files, activity,
-// cards, source control), and a column or a strip is not part of it.
+// source control), and a column or a strip is not part of it.
 const DOCK_NAMES = { bottom: "pluginDockBottom", top: "pluginDockTop", right: "drawersRight" };
 const dockState = { bottom: "", top: "", right: "" };
 
@@ -6001,12 +5987,12 @@ function dockOpen() {
 }
 /** The doors in the header for plugins whose panel lives in this column, by drawer name. */
 const pluginDrawerDoors = {};
-// The three doors in the header, read before anything paints them.
+// The header doors, read before anything paints them.
 const filesBtn = document.getElementById("filesBtn");
 const activityBtn = document.getElementById("activityBtn");
-const cardsBtn = document.getElementById("cardsBtn");
 const sourceBtn = document.getElementById("sourceBtn");
 const searchBtn = document.getElementById("searchBtn");
+const openPanelName = document.getElementById("openPanelName");
 
 // The rail is the user's furniture: its width survives a reload, and so does whether a drawer is up.
 const RAIL_MIN = 160;
@@ -6022,28 +6008,33 @@ function railWidth(px) {
   return width;
 }
 
-/** Paint which drawer is up, and say so on the three doors in the header. */
+/** Paint which drawer is up, and say so on the doors in the header. */
 function paintDrawers() {
   document.body.classList.toggle("rail-off", !drawerState.open);
   for (const [name, id] of Object.entries(DRAWER_NAMES)) {
     const pane = document.getElementById(id);
     pane.classList.toggle("on", drawerState.open === name);
   }
-  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn, search: searchBtn, ...pluginDrawerDoors };
+  const doors = { files: filesBtn, activity: activityBtn, source: sourceBtn, search: searchBtn, ...pluginDrawerDoors };
   for (const [name, door] of Object.entries(doors)) {
     door.setAttribute("aria-expanded", drawerState.open === name ? "true" : "false");
   }
   // Files and source live in the toolbox menu, so the chip says when one of them is open.
   toolboxBtn.classList.toggle("has-open", drawerState.open === "files" || drawerState.open === "source");
   // The header names the open drawer beside the workspace, the way the git graph names itself:
-  // the search drawer says "Search and replace" while it is up, and nothing while no drawer is.
-  // The git graph owns the same label while it is up, so it is only hidden here when it is not.
-  const openPanelName = document.getElementById("openPanelName");
-  if (drawerState.open === "search") {
-    openPanelName.textContent = "Search and replace";
-    openPanelName.hidden = false;
-  } else if (!gitDrawer.isOpen()) {
-    openPanelName.hidden = true;
+  // the search drawer says "Search and replace" and the activity drawer says "activity" while up,
+  // and nothing while no drawer is. The git graph owns the same label while it is up, so it is only
+  // written here when it is not.
+  if (openPanelName && !gitDrawer.isOpen()) {
+    if (drawerState.open === "search") {
+      openPanelName.textContent = "Search and replace";
+      openPanelName.hidden = false;
+    } else if (drawerState.open === "activity") {
+      openPanelName.textContent = "activity";
+      openPanelName.hidden = false;
+    } else {
+      openPanelName.hidden = true;
+    }
   }
   try {
     localStorage.setItem("board.railOff", drawerState.open ? "0" : "1");
@@ -6095,17 +6086,16 @@ function closeDrawers() {
   }
 }
 
-// A board that never hid its rail opens on activity, which is the strip a human was reading before;
-// one whose rail was shut stays shut until a door is pressed.
+// Fresh boards start with the activity drawer closed; an explicit remembered open state still restores.
 function restoreDrawers() {
   let saved = 0;
-  let off = "0";
+  let off = null;
   try {
     saved = Number(localStorage.getItem("board.railWidth")) || 0;
-    off = localStorage.getItem("board.railOff") || "0";
+    off = localStorage.getItem("board.railOff");
   } catch {}
   if (saved) railWidth(saved);
-  if (off !== "1") drawerState.open = "activity";
+  if (off === "0") drawerState.open = "activity";
   paintDrawers();
 }
 restoreDrawers();
@@ -6117,13 +6107,13 @@ restoreDrawers();
 bindDragHeight(document.getElementById("dockGripBottom"), { bodyClass: "dock-resizing", resolvePx: (event) => setTermHeight(window.innerHeight - event.clientY) });
 bindDragHeight(document.getElementById("dockGripTop"), { bodyClass: "dock-resizing", resolvePx: (event) => setTermHeight(event.clientY - 44) });
 
-for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn, search: searchBtn })) {
+for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, source: sourceBtn, search: searchBtn })) {
   door.addEventListener("click", () => {
     closeHeaderMenus();
     toggleDrawer(name);
   });
 }
-// The header doors for plugins whose panel lives in this column: the same doors as activity and cards,
+// The header doors for plugins whose panel lives in this column: the same doors as activity,
 // added as the daemon lists them, and painted with the same aria-expanded the drawers keep.
 const pluginDrawer = createPluginPanelHost({ workspace, mode: "drawer" });
 for (const shut of document.querySelectorAll("#drawers .rail-close")) {
@@ -6775,14 +6765,86 @@ trFollowBtn.addEventListener("click", () => {
   trFollowBtn.classList.toggle("on", trFollow);
   if (trFollow) void trLoad();
 });
-// Right click a thread in the rail to read it. The section is the thread, so the press lands on a row
-// or on the head and names the same conversation either way.
-railLog.addEventListener("contextmenu", (event) => {
-  const section = event.target.closest(".rail-thread");
-  const threadId = section?.dataset.thread;
-  if (!threadId) return;
+// ---------- the activity row menu ----------------------------------------
+// Right-click a card row in the activity drawer: reopen for a closed card, debug (transcript) for
+// a thread card. Same look and keyboard walk as the source control menu.
+const actMenuEl = document.getElementById("actMenu");
+let actMenuPrior = null;
+
+function actCloseMenu() {
+  if (actMenuEl.hidden) return;
+  actMenuEl.hidden = true;
+  actMenuEl.replaceChildren();
+  const prior = actMenuPrior;
+  actMenuPrior = null;
+  if (prior instanceof HTMLElement && document.contains(prior)) prior.focus();
+}
+
+function actMenuItem(label, run) {
+  const button = el("button");
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", () => {
+    actCloseMenu();
+    void run();
+  });
+  return button;
+}
+
+function actOpenMenu(event, rowEl) {
+  const id = rowEl.dataset.id;
+  if (!id) return;
+  const closedInfo = railClosedData.get(id);
+  const entry = byId.get(id);
+  const isThread = Boolean(closedInfo) || entry?.data?.type === "sticky";
+  const items = [];
+  if (closedInfo) {
+    items.push(actMenuItem("reopen", () => reopenCard(closedInfo.row, closedInfo.name)));
+  }
+  if (isThread) {
+    items.push(actMenuItem("debug", () => trOpen(id)));
+  }
+  if (!items.length) return;
   event.preventDefault();
-  trOpen(threadId);
+  actMenuEl.replaceChildren(...items);
+  actMenuEl.hidden = false;
+  const width = actMenuEl.offsetWidth || 180;
+  const height = actMenuEl.offsetHeight || items.length * 32 + 12;
+  const x = Math.min(event.clientX, innerWidth - width - 8);
+  const y = Math.min(event.clientY, innerHeight - height - 8);
+  actMenuEl.style.left = `${Math.max(4, x)}px`;
+  actMenuEl.style.top = `${Math.max(4, y)}px`;
+  actMenuPrior = rowEl.querySelector(".rail-thread-head") || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  items[0].focus();
+}
+
+actMenuEl.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const buttons = [...actMenuEl.querySelectorAll("button")];
+  const at = buttons.indexOf(document.activeElement);
+  const step = event.key === "ArrowDown" ? 1 : -1;
+  buttons[(at + step + buttons.length) % buttons.length].focus();
+});
+
+document.addEventListener("click", (event) => {
+  if (!actMenuEl.hidden && !event.target.closest("#actMenu")) actCloseMenu();
+});
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (actMenuEl.hidden || event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    actCloseMenu();
+  },
+  true,
+);
+
+railBody.addEventListener("contextmenu", (event) => {
+  const rowEl = event.target.closest(".rail-thread");
+  if (!rowEl) return;
+  actOpenMenu(event, rowEl);
 });
 
 (() => {
@@ -6808,11 +6870,12 @@ railLog.addEventListener("contextmenu", (event) => {
   grip.addEventListener("pointercancel", stop);
 })();
 
-// The rail is the overview of the board: every card, newest first, with the one state worth
-// knowing. A row is the way back to its card.
+// The activity drawer lists every card, open then closed, one row wrapper per card id. A thread card
+// expands inline to show its settled activity log, collapsed by default.
 const railCards = document.getElementById("railCards");
-const railCardCount = document.getElementById("railCardCount");
 const railRows = new Map();
+/** Card ids whose settled log is currently expanded; collapsed by default. */
+const expandedCards = new Set();
 /** Arrival order of the rows, so a list that nests can still put the newest thread on top. */
 let cardSeq = 0;
 
@@ -6840,8 +6903,52 @@ function railState(entry) {
 }
 
 function paintRailCount() {
-  railCardCount.textContent = railRows.size ? String(railRows.size) : "";
   syncTicker();
+}
+
+function applyRowFold(row) {
+  const id = row.dataset.id;
+  const expandable = !row.classList.contains("no-log");
+  const open = expandable && expandedCards.has(id);
+  row.classList.toggle("folded", !open);
+  const head = row.querySelector(".rail-thread-head");
+  if (head) {
+    if (expandable) head.setAttribute("aria-expanded", open ? "true" : "false");
+    else head.removeAttribute("aria-expanded");
+  }
+}
+
+function paintRailRole(row) {
+  const id = row.dataset.id;
+  const roleEl = row.querySelector(".rail-thread-role");
+  if (!roleEl) return;
+  const { role = "" } = threadMeta.get(id) ?? {};
+  roleEl.textContent = role;
+  roleEl.hidden = !role;
+}
+
+/** Build the unified row wrapper shared by open and closed cards. */
+function makeRailRow(id, expandable) {
+  const wrap = el("section", "rail-thread");
+  wrap.dataset.id = id;
+  if (!expandable) wrap.classList.add("no-log");
+  const card = el("div", "rail-card");
+  const head = el("button", "rail-thread-head");
+  head.type = "button";
+  const roleEl = el("span", "rail-thread-role");
+  roleEl.hidden = true;
+  head.append(el("span", "chev"), el("span", "dot"), el("span", "rail-title"), roleEl, el("span", "rail-state"));
+  head.addEventListener("click", () => {
+    if (wrap.classList.contains("no-log")) return;
+    if (expandedCards.has(id)) expandedCards.delete(id);
+    else expandedCards.add(id);
+    applyRowFold(wrap);
+  });
+  card.append(head);
+  const body = el("div", "rail-thread-body");
+  wrap.append(card, body);
+  applyRowFold(wrap);
+  return wrap;
 }
 
 /** Just the state word and its tone, so the clock and a repaint share one writer. */
@@ -6849,23 +6956,26 @@ function paintRailState(entry) {
   const row = railRows.get(entry.id);
   if (!row) return;
   const { text, wants, updated } = railState(entry);
+  const head = row.querySelector(".rail-thread-head");
+  const titleEl = head.children[2];
+  const stateEl = head.children[4];
   // The clock calls this every second, so a word that has not changed must not touch the DOM.
-  if (row.children[2].textContent !== text) {
-    row.children[2].textContent = text;
+  if (stateEl.textContent !== text) {
+    stateEl.textContent = text;
     row.classList.toggle("wants", wants);
     row.classList.toggle("updated", updated);
-    row.title = `${row.children[1].textContent} · ${text}`;
+    head.title = `${titleEl.textContent} · ${text}`;
   }
 }
 
 /**
- * Where a card follows from: the thread that spawned it, or the card its own note was written for.
- * Both are kept, in that order, because a spawned thread whose card the board does not draw leaves
- * only the card it was written on to hang from.
+ * Where a card follows from: the thread that spawned it, the card its own note was written for,
+ * or the parent remembered in threadMeta.
  */
 const railParentsOf = (entry) => {
   const data = entry.data || {};
-  return [data.parentThread || "", data.threadRoot || ""].filter((id) => id && id !== entry.id);
+  const metaParent = threadMeta.get(entry.id)?.parent || "";
+  return [...new Set([data.parentThread || "", data.threadRoot || "", metaParent].filter((id) => id && id !== entry.id))];
 };
 
 /**
@@ -6877,22 +6987,21 @@ function syncRailCard(entry) {
   if (!entry) return;
   let row = railRows.get(entry.id);
   const parents = railParentsOf(entry).join(" ");
+  const isThread = entry.data?.type === "sticky";
   if (!row) {
-    row = el("button", "rail-card");
-    row.type = "button";
-    row.dataset.id = entry.id;
+    row = makeRailRow(entry.id, isThread);
     row.dataset.seq = String(++cardSeq);
-    row.append(el("span", "dot"), el("span", "rail-title"), el("span", "rail-state"));
-    row.addEventListener("click", () => {
-      const record = byId.get(row.dataset.id);
-      if (record) centerOn(record);
-    });
     railRows.set(entry.id, row);
     railCards.prepend(row);
+    flushPendingRows(entry.id, row);
   }
-  row.children[0].className = `dot ${dotKind(entry.data.type)}`;
-  row.children[1].textContent = entry.titleEl.textContent;
+  const head = row.querySelector(".rail-thread-head");
+  row.classList.toggle("no-log", !isThread);
+  head.children[1].className = `dot ${dotKind(entry.data.type)}`;
+  head.children[2].textContent = entry.titleEl.textContent;
+  paintRailRole(row);
   paintRailState(entry);
+  applyRowFold(row);
   paintRailCount();
   // A newborn row may be the child of one that is already here, and a card can be told where it
   // follows from after it landed, so the order is recomputed for both. It costs nothing while the
@@ -6903,6 +7012,13 @@ function syncRailCard(entry) {
 function dropRailCard(id) {
   const row = railRows.get(id);
   if (!row) return;
+  // Preserve any settled activity nodes buffered for this card in case it reappears as closed.
+  const body = row.querySelector(".rail-thread-body");
+  if (body?.childElementCount) {
+    const held = pendingRows.get(id) ?? [];
+    for (const node of [...body.children]) held.push(node);
+    pendingRows.set(id, held);
+  }
   row.remove();
   railRows.delete(id);
   paintRailCount();
@@ -6921,7 +7037,8 @@ function orderRailCards() {
   // what it found there.
   for (const [id, row] of railRows) {
     const entry = byId.get(id);
-    row.dataset.parent = entry ? railParentsOf(entry).join(" ") : "";
+    const parents = entry ? railParentsOf(entry) : [threadMeta.get(id)?.parent || ""].filter((p) => p && p !== id);
+    row.dataset.parent = parents.join(" ");
   }
   // The first of a row's parents that the rail still holds, so closing a parent hands its children
   // back to the next one it names, or makes them top rows of their own.
@@ -6958,36 +7075,38 @@ function clearRailCards() {
 }
 
 // A card the human closed while it still held a conversation is not gone: the board keeps it, and
-// the rail offers it back. The list is the board's, not this tab's, so a second tab sees the same
-// closed cards and the one that puts a card back takes the row from both.
+// the drawer offers it back via right-click (reopen) while left-click expands its settled log.
 const railClosed = document.getElementById("railClosed");
 const railClosedHead = document.getElementById("railClosedHead");
-const railClosedCount = document.getElementById("railClosedCount");
 const railClosedClean = document.getElementById("railClosedClean");
+const railClosedRows = new Map();
+const railClosedData = new Map();
 
 /** Redrawn whole: the list is short, and the server only says it when it changes. */
 function applyClosed(rows) {
+  // Park any settled rows sitting inside closed rows before replacing them.
+  for (const [id, oldRow] of railClosedRows) {
+    const body = oldRow.querySelector(".rail-thread-body");
+    if (body?.childElementCount) {
+      const held = pendingRows.get(id) ?? [];
+      for (const node of [...body.children]) held.push(node);
+      pendingRows.set(id, held);
+    }
+  }
   railClosed.replaceChildren();
+  railClosedRows.clear();
+  railClosedData.clear();
   for (const row of Array.isArray(rows) ? rows : []) {
-    // The row is a wrapper rather than a button, because it now carries two presses and a button cannot
-    // hold one. The reopen press fills the wrapper, so the row reads and clicks as it always did.
-    const wrap = el("div", "rail-card");
-    wrap.dataset.id = row.id;
-    const button = el("button", "rail-open");
-    button.type = "button";
+    const wrap = makeRailRow(row.id, true);
+    const card = wrap.querySelector(".rail-card");
+    const head = wrap.querySelector(".rail-thread-head");
     const name = row.title || "thread";
     const turns = Number(row.turns) || 0;
-    const dot = el("span", "dot");
-    dot.className = `dot ${dotKind("sticky")}`;
-    const title = el("span", "rail-title");
-    title.textContent = name;
-    const state = el("span", "rail-state");
-    // The row's one action is the reason it is here, so the action is what the row says.
-    state.textContent = "reopen";
-    button.append(dot, title, state);
-    button.title = `${name} · closed ${agoText(Date.now() - (Number(row.closedAt) || Date.now()))} ago · ${turns} turn${turns === 1 ? "" : "s"} · click to put it back`;
-    button.setAttribute("aria-label", `reopen the card ${name}`);
-    button.addEventListener("click", () => reopenCard(row, name));
+    head.children[1].className = `dot ${dotKind("sticky")}`;
+    head.children[2].textContent = name;
+    head.children[4].textContent = "closed";
+    head.title = `${name} · closed ${agoText(Date.now() - (Number(row.closedAt) || Date.now()))} ago · ${turns} turn${turns === 1 ? "" : "s"}`;
+    paintRailRole(wrap);
     // The trash is the only press in this list that destroys work: the thread, its conversation, the folder
     // it worked in and its branch all go. So it asks first, in the same four seconds as every such press,
     // and it names what it takes for a reader who never sees the tooltip.
@@ -7009,11 +7128,13 @@ function applyClosed(rows) {
       if (!receipt) trash.disabled = false;
       else footNote(removeReceipt(receipt, name));
     });
-    wrap.append(button, trash);
+    card.appendChild(trash);
+    railClosedRows.set(row.id, wrap);
+    railClosedData.set(row.id, { row, name });
     railClosed.appendChild(wrap);
+    flushPendingRows(row.id, wrap);
   }
   railClosedHead.hidden = railClosed.childElementCount === 0;
-  railClosedCount.textContent = railClosed.childElementCount ? String(railClosed.childElementCount) : "";
 }
 
 /**
@@ -7638,130 +7759,78 @@ function thoughtTail(text, keep = 180) {
   return tail.length < flat.length ? `…${tail}` : tail;
 }
 
-// Settled rows are filed under the thread that wrote them, one foldable section per thread, newest
-// thread on top. A row that is still running is read in its own thread's card, where its answer will
-// appear; the strip above the log holds it only when that card is not on this board, so a run is
-// never invisible and the log below is only ever about what has already happened.
-const railSections = new Map();
-/** A section the reader folded shut. Session only: a reload shows everything again. */
-const foldedSections = new Set();
+// Settled rows are filed under the thread card that wrote them (card id == thread id), collapsed
+// by default. A row that arrives before its card lands is buffered in `pendingRows` until the card
+// appears (open or closed). A running row stays only in its thread's canvas card live strip.
+const pendingRows = new Map();
 let heldRows = 0;
-
-function applyFold(entry) {
-  entry.section.classList.toggle("folded", foldedSections.has(entry.id));
-  entry.head.setAttribute("aria-expanded", foldedSections.has(entry.id) ? "false" : "true");
-}
 
 /** The rail's rows in the order they arrived, so the oldest is findable by its number. */
 let railSeq = 0;
 
-function railSection(row) {
-  const id = row.thread?.id || "";
-  let entry = railSections.get(id);
-  if (!entry) {
-    const section = el("section", "rail-thread");
-    const head = el("button", "rail-thread-head");
-    head.type = "button";
-    head.append(
-      el("span", "chev"),
-      el("span", "rail-thread-title"),
-      el("span", "rail-thread-count"),
-      el("span", "rail-thread-stats"),
-      el("span", "rail-thread-role"),
-    );
-    const body = el("div", "rail-thread-body");
-    section.append(head, body);
-    head.addEventListener("click", () => {
-      if (foldedSections.has(id)) foldedSections.delete(id);
-      else foldedSections.add(id);
-      applyFold(entry);
-    });
-    // The section says which thread it is, so a right click can read that thread's conversation.
-    section.dataset.thread = id;
-    entry = { section, head, body, id, title: "", roleEl: head.children[4], at: 0 };
-    entry.roleEl.hidden = true;
-    railSections.set(id, entry);
-    applyFold(entry);
-  }
-  const title = row.thread?.title || "earlier";
-  if (title !== entry.title) {
-    entry.title = title;
-    entry.head.children[1].textContent = title;
-    entry.head.title = title;
-  }
-  return entry;
+/** Find the open or closed card row that owns this thread's settled log. */
+function cardRowFor(threadId) {
+  if (!threadId) return null;
+  return railRows.get(threadId) || railClosedRows.get(threadId) || null;
 }
 
-/**
- * Where the sections sit. The thread that spoke last is on top, so a busy board reads as a stack of
- * conversations, and a child always sits directly under the master that spawned it. The log itself
- * stays a flat list, because trimming, folding and the replay all assume that, so the order is
- * recomputed and only the sections that are out of place are moved.
- */
-function orderRail() {
-  const parentOf = (entry) => threadMeta.get(entry.id)?.parent || "";
-  const ranked = [...railSections.values()].sort((a, b) => b.at - a.at);
-  const wanted = [];
-  for (const master of ranked) {
-    // A child is only nested while the section it hangs under is still there; a master whose own
-    // rows were trimmed away has no head left to sit under, so the child reads as a thread of its own.
-    const nested = Boolean(parentOf(master)) && railSections.has(parentOf(master));
-    master.section.classList.toggle("child", nested);
-    if (nested) continue;
-    wanted.push(master);
-    for (const kid of ranked) {
-      if (kid === master || parentOf(kid) !== master.id) continue;
-      kid.section.classList.add("child");
-      wanted.push(kid);
-    }
-  }
-  let cursor = railLog.firstElementChild;
-  for (const entry of wanted) {
-    if (entry.section === cursor) {
-      cursor = cursor.nextElementSibling;
-      continue;
-    }
-    railLog.insertBefore(entry.section, cursor);
-  }
+/** Move any buffered settled rows for `id` into the newly built card row, newest first. */
+function flushPendingRows(id, rowEl) {
+  const buffered = pendingRows.get(id);
+  if (!buffered?.length) return;
+  pendingRows.delete(id);
+  const body = rowEl.querySelector(".rail-thread-body");
+  if (!body) return;
+  buffered.sort((a, b) => Number(b.dataset.seq || 0) - Number(a.dataset.seq || 0));
+  for (const node of buffered) body.appendChild(node);
 }
 
-/** The oldest row in the log, whichever section it sits in. */
+/** The oldest settled row across all card logs and buffered rows. */
 function oldestRailRow() {
   let oldest = null;
   let at = Infinity;
-  for (const entry of railSections.values()) {
-    const row = entry.body.lastElementChild;
-    const seen = Number(row?.dataset.seq ?? NaN);
-    if (row && seen < at) {
-      oldest = row;
+  const check = (node) => {
+    const seen = Number(node?.dataset.seq ?? NaN);
+    if (node && seen < at) {
+      oldest = node;
       at = seen;
     }
+  };
+  for (const row of railRows.values()) check(row.querySelector(".rail-thread-body")?.lastElementChild);
+  for (const row of railClosedRows.values()) check(row.querySelector(".rail-thread-body")?.lastElementChild);
+  for (const list of pendingRows.values()) {
+    for (const node of list) check(node);
   }
   return oldest;
 }
 
-/** The log is a tail, not a history: the oldest row goes first, whatever section it belongs to. */
+/** The log is a tail, not a history: the oldest settled row goes first, capped at 200. */
 function trimRail() {
   while (heldRows > 200) {
     const row = oldestRailRow();
     if (!row) return;
     for (const [id, elem] of actEls) if (elem === row) actEls.delete(id);
-    const section = row.closest(".rail-thread");
-    row.remove();
-    heldRows--;
-    // A section with no rows left says nothing, so it goes: its children then sort as threads of
-    // their own instead of nesting under a head that is no longer there.
-    if (section && !section.querySelector(".rail-thread-body")?.childElementCount) {
-      section.remove();
-      for (const [id, entry] of railSections) if (entry.section === section) railSections.delete(id);
+    if (row.parentElement) {
+      row.remove();
+    } else {
+      for (const [tid, list] of pendingRows) {
+        const idx = list.indexOf(row);
+        if (idx >= 0) {
+          list.splice(idx, 1);
+          if (!list.length) pendingRows.delete(tid);
+          break;
+        }
+      }
     }
+    heldRows--;
   }
 }
 
 function clearRailLog() {
-  railLog.replaceChildren();
-  railSections.clear();
-  foldedSections.clear();
+  for (const row of railRows.values()) row.querySelector(".rail-thread-body")?.replaceChildren();
+  for (const row of railClosedRows.values()) row.querySelector(".rail-thread-body")?.replaceChildren();
+  pendingRows.clear();
+  expandedCards.clear();
   actEls.clear();
   heldRows = 0;
   // A live row can sit in a card, so a replay empties those boxes as well as the log.
@@ -7867,12 +7936,16 @@ function runningCount() {
 }
 
 /**
- * Where a running row is read: its thread's card while that card is here, and the rail strip when it is
- * not, so a run always has somewhere to be seen. Moving a node that is already home is not moving it.
+ * Where a running row is read: its thread's canvas card live strip while that card is open, and
+ * off-DOM in `actEls` when its card is closed.
  */
 function homeRunning(node) {
   const card = cardOfThread(node.dataset.thread);
-  const box = card ? card.live : railNow;
+  if (!card) {
+    if (node.parentElement) node.remove();
+    return;
+  }
+  const box = card.live;
   if (node.parentElement !== box) box.prepend(node);
 }
 
@@ -7903,27 +7976,44 @@ function applyActivity(row) {
   }
   const card = row.status === "running" ? cardOfThread(row.thread?.id) : null;
   const node = actRow(row, card !== null);
-  // The row carries when it arrived, so trimming can find the oldest one without trusting the order
-  // of the sections, which the rail reorders to keep a child under its master.
+  // The row carries when it arrived, so trimming can find the oldest one.
   node.dataset.seq = String(++railSeq);
-  if (previous) previous.remove();
+  if (previous) {
+    const wasSettled = previous.dataset.status !== "running";
+    if (previous.parentElement) {
+      previous.remove();
+    } else if (wasSettled) {
+      for (const [tid, list] of pendingRows) {
+        const idx = list.indexOf(previous);
+        if (idx >= 0) {
+          list.splice(idx, 1);
+          if (!list.length) pendingRows.delete(tid);
+          break;
+        }
+      }
+    }
+    if (wasSettled) heldRows = Math.max(0, heldRows - 1);
+  }
   actEls.set(row.id, node);
   if (row.status === "running") {
     homeRunning(node);
   } else {
-    const section = railSection(row);
-    section.body.prepend(node);
-    section.at = railSeq;
-    section.head.children[2].textContent = String(section.body.childElementCount);
-    // The thread that just spoke goes on top, so a board with many threads reads like a stack of
-    // conversations rather than one long line of tool calls. A child goes under its master instead.
-    orderRail();
-    heldRows++;
-    trimRail();
+    const threadId = row.thread?.id || "";
+    const ownerRow = cardRowFor(threadId);
+    const body = ownerRow && !ownerRow.classList.contains("no-log") ? ownerRow.querySelector(".rail-thread-body") : null;
+    if (body) {
+      body.prepend(node);
+    } else if (threadId) {
+      const held = pendingRows.get(threadId) ?? [];
+      held.push(node);
+      pendingRows.set(threadId, held);
+    }
+    if (body || threadId) {
+      heldRows++;
+      trimRail();
+    }
   }
   paintLive();
-  const running = runningCount();
-  railRunning.textContent = running ? String(running) : "";
   syncTicker();
 }
 
@@ -9677,7 +9767,6 @@ const SHORTCUTS = [
       { keys: "f", does: "open the files drawer, and press it again to roll it up" },
       { keys: "ctrl+f", does: "open the search drawer and focus its search field" },
       { keys: "a", does: "open the activity drawer, and press it again to roll it up" },
-      { keys: "c", does: "open the cards drawer, and press it again to roll it up" },
       { keys: "d", does: "open the source control drawer, and press it again to roll it up" },
       { keys: "shift+f", does: "fit every card on the screen" },
       { keys: "0", does: "back to real size, 100%" },
@@ -14509,6 +14598,7 @@ const openSheet = () => document.querySelector(".sheet:not([hidden])");
  * open. A menu and a name being typed are.
  */
 const drawerSurface = () =>
+  !actMenuEl.hidden ||
   !scMenuEl.hidden ||
   !scDiffEl.hidden ||
   !exEditorEl.hidden ||
@@ -14765,7 +14855,7 @@ document.addEventListener("keydown", (event) => {
   // A surface of the files drawer and the `@` list are their own: a board letter would move what is
   // out of reach.
   if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
-  // `f`, `a` and `c` are the drawers, and `shift+f` is the fit they took `f` from. One list decides,
+  // `f`, `a` and `d` are the drawers, and `shift+f` is the fit they took `f` from. One list decides,
   // so a letter the drawer owns never also moves the board.
   const letter = explorerCore.boardLetter(event.key, { shift: event.shiftKey });
   if (letter) {
