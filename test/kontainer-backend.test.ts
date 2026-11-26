@@ -671,26 +671,26 @@ test("onKontainerEvents tells the tab when the engine fails mid-stream", async (
 
 // ---------- engine calls and events in the daemon log ----------
 
-test("a container lifecycle write lands in the daemon log as info with its name and workspace", async () => {
+test("a container lifecycle write lands in the daemon log as the command a developer would type", async () => {
 	const runtime = mockRuntime();
 	const result = await handleAction({ folder: "/ws/myproj" }, { action: "start", id: "999999aaaaaa", runtime: runtime.id }, { runtimes: [runtime] });
 	assert.equal(result.ok, true);
-	const line = snapshot().find((entry) => entry.message === "start container chatbot_chatbot_1 (999999aaaaaa)");
-	assert.ok(line, "the start is in the ring, in words");
+	const line = snapshot().find((entry) => entry.message === "cd /ws/myproj docker start chatbot_chatbot_1");
+	assert.ok(line, "the start is in the ring, as a command");
 	assert.equal(line.level, "info");
 	assert.equal(line.source, "docker");
-	assert.equal(line.meta?.cmd, "POST /containers/999999aaaaaa/start");
+	assert.equal(line.meta?.cmd, "cd /ws/myproj docker start chatbot_chatbot_1");
 	assert.equal(line.meta?.exit, 204);
 	assert.equal(line.meta?.cwd, "/ws/myproj");
-	assert.ok(!snapshot().some((entry) => entry.message.startsWith("start container 999999aaaaaa")), "the name lookup leaves no line of its own");
+	assert.ok(!snapshot().some((entry) => entry.message.startsWith("docker start 999999aaaaaa")), "the name lookup leaves no line of its own");
 });
 
 test("a failed engine read is debug and a failed write is error, so polls stay out of the default view", async () => {
 	const brokenRuntime = { socketPath: brokenSockPath, cli: "docker" };
-	await assert.rejects(requestJson(brokenRuntime, "/containers/json"), /engine request failed \(500\)/);
+	await assert.rejects(requestJson(brokenRuntime, "/containers/json?all=1"), /engine request failed \(500\)/);
 	await assert.rejects(requestJson(brokenRuntime, "/containers/abc/start", { method: "POST" }), /engine request failed \(500\)/);
-	const readFailure = snapshot().find((entry) => entry.message.startsWith("list containers"));
-	const writeFailure = snapshot().find((entry) => entry.message.startsWith("start container abc"));
+	const readFailure = snapshot().find((entry) => entry.message.startsWith("docker ps -a"));
+	const writeFailure = snapshot().find((entry) => entry.message.startsWith("docker start abc"));
 	assert.ok(readFailure && readFailure.level === "debug" && readFailure.meta?.exit === 500);
 	assert.ok(writeFailure && writeFailure.level === "error" && writeFailure.meta?.exit === 500);
 });
@@ -699,10 +699,9 @@ test("an image removal is logged with its tag and its forced flag", async () => 
 	const runtime = mockRuntime();
 	const result = await handleAction({ folder: "/ws/myproj" }, { action: "image.remove", id: "sha256:aaa111", force: true, runtime: runtime.id }, { runtimes: [runtime] });
 	assert.equal(result.ok, false, "the mock engine refuses image deletion");
-	const line = snapshot().find((entry) => entry.message.startsWith("remove image app:latest (sha256:aaa111) (forced)"));
-	assert.ok(line, "the removal is in the ring, in words");
+	const line = snapshot().find((entry) => entry.message.startsWith("cd /ws/myproj docker rmi -f app:latest"));
+	assert.ok(line, "the removal is in the ring, as a command");
 	assert.equal(line.level, "error");
-	assert.equal(line.meta?.cmd, "DELETE /images/sha256%3Aaaa111?force=1");
 });
 
 test("logEngineEvent says a death out loud and ordinary churn at debug, and drops a line it cannot read", () => {

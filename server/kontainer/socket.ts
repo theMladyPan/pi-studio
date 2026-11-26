@@ -184,6 +184,58 @@ function engineDescription(method: string, path: string, label?: string): string
 	return `${method} ${segments.map(shortenId).join("/")}`;
 }
 
+/** A folder that needs it, quoted the way a shell would: a space in a workspace path must survive the copy-paste. */
+function shellQuoted(value: string): string {
+	return /[\s'"]/.test(value) ? `'${value.replace(/'/g, `'\\''`)}'` : value;
+}
+
+/**
+ * The command a developer would have typed for this engine call — `podman restart chatbot` — so the line is
+ * copy-pasteable and reads like the git lines beside it. The daemon itself never spawns it; it speaks HTTP to
+ * the engine, and this is that call translated. Null when there is no honest translation (a `create` whose body
+ * carries the arguments), and the caller falls back to a description in words.
+ */
+function engineCommand(method: string, path: string, label: string | undefined, cli: string | undefined, cwd: string | undefined): string | null {
+	if (!cli) return null;
+	const [pathname, query = ""] = path.split("?");
+	const pairs = Object.fromEntries(query.split("&").filter(Boolean).map((pair) => {
+		const [key, value] = pair.split("=");
+		return [key, value ?? ""];
+	}));
+	const segments = pathname.split("/").filter(Boolean).map((segment) => {
+		try {
+			return decodeURIComponent(segment);
+		} catch {
+			return segment;
+		}
+	});
+	const [head, name, tail] = segments;
+	const target = (id: string) => label ?? shortenId(id);
+	const forced = pairs.force === "1" || pairs.force === "true";
+	let command: string | null = null;
+	if (head === "containers" && name) {
+		if (name === "json" && method === "GET") command = `${cli} ps${pairs.all === "1" ? " -a" : ""}`;
+		else if (method === "GET" && tail === "logs") command = `${cli} logs ${target(name)}`;
+		else if (method === "GET" && (tail === "json" || !tail)) command = `${cli} inspect ${target(name)}`;
+		else if (method === "POST" && ["start", "stop", "restart", "kill", "pause", "unpause"].includes(tail ?? "")) command = `${cli} ${tail} ${target(name)}`;
+		else if (method === "DELETE" && !tail) command = `${cli} rm${forced ? " -f" : ""} ${target(name)}`;
+	} else if (head === "images" && name) {
+		if (name === "json" && method === "GET") command = `${cli} images`;
+		else if (name === "search" && method === "GET") command = `${cli} search ${pairs.term ?? ""}`.trim();
+		else if (method === "GET" && tail === "history") command = `${cli} image history ${target(name)}`;
+		else if (method === "DELETE" && !tail) command = `${cli} rmi${forced ? " -f" : ""} ${target(name)}`;
+		else if (method === "GET" && (tail === "json" || !tail)) command = `${cli} inspect ${target(name)}`;
+	} else if (name === "prune" || tail === "prune") {
+		command = `${cli} ${{ images: "image", containers: "container", networks: "network", volumes: "volume", system: "system" }[head] ?? head} prune`;
+	} else if (head === "version" && method === "GET") command = `${cli} version`;
+	else if (head === "system" && name === "df" && method === "GET") command = `${cli} system df`;
+	else if (head === "volumes" && method === "GET") command = name ? `${cli} volume inspect ${target(name)}` : `${cli} volume ls`;
+	else if (head === "networks" && method === "GET") command = name ? `${cli} network inspect ${target(name)}` : `${cli} network ls`;
+	else if (head === "events" && method === "GET") command = `${cli} events`;
+	if (!command) return null;
+	return `${cwd ? `cd ${shellQuoted(cwd)} ` : ""}${command}`;
+}
+
 /**
  * One JSON request over the Engine socket. Throws on a non-2xx status. The call lands in the daemon's
  * log where a human can find it without the drawer open: a write is news (`info`, a failure is `error`),
@@ -191,12 +243,11 @@ function engineDescription(method: string, path: string, label?: string): string
  */
 export function requestJson(runtime: EngineRuntime, path: string, opts: SocketRequestOptions = {}): Promise<unknown> {
 	const method = opts.method ?? "GET";
-	const command = `${method} ${path}`;
-	const what = engineDescription(method, path, opts.label);
+	const what = engineCommand(method, path, opts.label, runtime.cli, opts.cwd) ?? engineDescription(method, path, opts.label);
 	const source = engineSource(runtime);
 	const startedAt = Date.now();
 	const isRead = method === "GET";
-	const meta = (exit: number | string, dur: number) => ({ cmd: command, exit, dur, ...(opts.cwd ? { cwd: opts.cwd } : {}) });
+	const meta = (exit: number | string, dur: number) => ({ cmd: what, exit, dur, ...(opts.cwd ? { cwd: opts.cwd } : {}) });
 	return new Promise((resolve, reject) => {
 		const req = request(
 			{
@@ -247,11 +298,10 @@ export function requestJson(runtime: EngineRuntime, path: string, opts: SocketRe
  */
 export function requestBuffer(runtime: EngineRuntime, path: string, opts: SocketRequestOptions = {}): Promise<Buffer> {
 	const method = opts.method ?? "GET";
-	const command = `${method} ${path}`;
-	const what = engineDescription(method, path, opts.label);
+	const what = engineCommand(method, path, opts.label, runtime.cli, opts.cwd) ?? engineDescription(method, path, opts.label);
 	const source = engineSource(runtime);
 	const startedAt = Date.now();
-	const meta = (exit: number | string, dur: number) => ({ cmd: command, exit, dur, ...(opts.cwd ? { cwd: opts.cwd } : {}) });
+	const meta = (exit: number | string, dur: number) => ({ cmd: what, exit, dur, ...(opts.cwd ? { cwd: opts.cwd } : {}) });
 	return new Promise((resolve, reject) => {
 		const req = request(
 			{
