@@ -33,7 +33,10 @@
  * The name search (`/files/find`) walks the whole workspace for names holding the query, in chunks, under
  * the same exclusions the listing shows, and keeps its answer for two seconds so the pages that follow
  * it are slices of one walk rather than walks of their own. Dot names are in it only when the drawer
- * asks for hidden files; `.git` is never in it.
+ * asks for hidden files; `.git` is never in it. The content search (`/files/search`) walks the same way
+ * and reads each file it may, line by line, under the same exclusions; the batch replace
+ * (`/files/replace`) writes only the files a search named, each checked against the stamp that search
+ * read, one file atomic at a time.
  *
  * What the listing shows is the workspace's own decision. The standard VS Code exclusions, this machine's
  * user settings and the board's own `.vscode/settings.json` are merged, and what they hide is gone before
@@ -119,6 +122,24 @@ const FIND_CACHE_MS = 2000;
 
 /** Entries between yields in a find walk, so a bulk walk never holds the daemon's event loop. */
 const FIND_YIELD_EVERY = 512;
+
+/** How many matched files one content search keeps. Past it the search stops keeping and says so. */
+const MAX_SEARCH_FILES = 500;
+
+/** How many matches one content search keeps in total. */
+const MAX_SEARCH_MATCHES = 2000;
+
+/** How many snippet lines one file keeps; its count still names every match. */
+const MAX_MATCHES_PER_FILE = 100;
+
+/** How many files one content search reads before it stops and says so. Reading is dearer than listing. */
+const MAX_SEARCH_SCAN = 20_000;
+
+/** How long one content search reads files for, in milliseconds. Past it the hits so far stand. */
+const SEARCH_TIMEOUT_MS = 5000;
+
+/** How long a query or a replacement may be, in bytes. A longer one is refused rather than searched. */
+const MAX_SEARCH_QUERY_BYTES = 512;
 
 /**
  * The file kinds the browser itself can draw, by extension and nothing else: pictures, the one vector
@@ -1076,6 +1097,322 @@ export async function onFilesFind(url: URL, res: ServerResponse, board: BoardFol
 	});
 }
 
+// ---------- searching file contents ----------
+
+/** The flags a content search runs under. */
+type SearchFlags = { caseSensitive: boolean; wholeWord: boolean; regex: boolean };
+
+/** One match inside one line, as the drawer draws it. Offsets are into `text`, the clipped line. */
+type SearchHit = { line: number; col: number; length: number; text: string; matchStart: number; matchEnd: number };
+
+/** One file a content search kept, with the stamp a batch replace checks before it writes. */
+type SearchFile = { path: string; mtime: number; size: number; editable: boolean; count: number; matches: SearchHit[] };
+
+/**
+ * The matcher a content search and a batch replace share, so the preview a human saw and the write
+ * that lands are the same words. Literal text is escaped; whole word wraps it in boundaries; a
+ * regular expression is the human's own, refused when it cannot compile. Matching is line by line.
+ */
+function compileSearchMatcher(query: string, flags: SearchFlags): { matcher: RegExp } | { error: string } {
+	if (!query) return { error: "a text to search for is required" };
+	if (Buffer.byteLength(query) > MAX_SEARCH_QUERY_BYTES) return { error: `a text holds at most ${MAX_SEARCH_QUERY_BYTES} bytes` };
+	const body = flags.regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const source = flags.wholeWord ? `\\b(?:${body})\\b` : body;
+	try {
+		return { matcher: new RegExp(source, flags.caseSensitive ? "gu" : "giu") };
+	} catch (error) {
+		return { error: `invalid regular expression: ${(error as Error).message}` };
+	}
+}
+
+/** Every match of `matcher` in one line, with the line clipped about each one. */
+function hitsInLine(line: string, matcher: RegExp, lineNumber: number, kept: SearchHit[]): number {
+	let count = 0;
+	matcher.lastIndex = 0;
+	for (let match = matcher.exec(line); match; match = matcher.exec(line)) {
+		count++;
+		if (match[0].length === 0) matcher.lastIndex++;
+		if (kept.length >= MAX_MATCHES_PER_FILE) continue;
+		const start = match.index;
+		const end = start + match[0].length;
+		const from = Math.max(0, start - 80);
+		const to = Math.min(line.length, end + 80);
+		const text = `${from > 0 ? "…" : ""}${line.slice(from, to)}${to < line.length ? "…" : ""}`;
+		kept.push({
+			line: lineNumber,
+			col: start,
+			length: match[0].length,
+			text,
+			matchStart: start - from + (from > 0 ? 1 : 0),
+			matchEnd: end - from + (from > 0 ? 1 : 0),
+		});
+	}
+	return count;
+}
+
+/**
+ * Every file in the workspace whose text holds the matcher, walked like the name search and read
+ * line by line. A file past the editor's ceiling, a binary file and a link out of the workspace are
+ * counted and skipped rather than read; a file the walk cannot reach by its own path is skipped too.
+ * The walk yields between files, keeps at most five hundred matched files and two thousand matches,
+ * and stops reading after five seconds, saying so either way.
+ */
+async function walkSearch(root: string, matcher: RegExp, showHidden: boolean): Promise<{ files: SearchFile[]; totalMatches: number; scanned: number; truncated: boolean; scanTruncated: boolean; skippedBinary: number; skippedLarge: number; warnings: string[]; repo: boolean }> {
+	const { settings, warnings } = explorerSettings(root);
+	const files: SearchFile[] = [];
+	const visited = new Set<string>([root]);
+	const stack: { rel: string; abs: string }[] = [{ rel: "", abs: root }];
+	let scanned = 0;
+	let totalMatches = 0;
+	let truncated = false;
+	let scanTruncated = false;
+	let skippedBinary = 0;
+	let skippedLarge = 0;
+	const started = Date.now();
+	while (stack.length && !scanTruncated) {
+		const { rel, abs } = stack.pop() as { rel: string; abs: string };
+		let dirents: Dirent[];
+		try {
+			dirents = await readdir(abs, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		const siblings = dirents.map((dirent) => dirent.name);
+		for (const dirent of dirents) {
+			const name = dirent.name;
+			if (name === ".git" || CONTROL_CHARS.test(name)) continue;
+			if (!showHidden && name.startsWith(".")) continue;
+			const path = rel ? `${rel}/${name}` : name;
+			if (excluded(path, name, siblings, settings.exclude)) continue;
+			let entry: Entry;
+			try {
+				entry = entryOf(path, name, join(abs, name));
+			} catch {
+				continue;
+			}
+			if (entry.dir) {
+				let real: string;
+				try {
+					real = realpathSync(join(abs, name));
+				} catch {
+					continue;
+				}
+				if (!inside(root, real) || visited.has(real)) continue;
+				visited.add(real);
+				stack.push({ rel: path, abs: real });
+				continue;
+			}
+			if (Date.now() - started > SEARCH_TIMEOUT_MS) {
+				scanTruncated = true;
+				break;
+			}
+			scanned++;
+			if (scanned > MAX_SEARCH_SCAN) {
+				scanTruncated = true;
+				break;
+			}
+			await new Promise((resolve) => setImmediate(resolve));
+			let real: string;
+			try {
+				real = realpathSync(join(abs, name));
+			} catch {
+				continue;
+			}
+			if (!inside(root, real)) continue;
+			let stat: Stats;
+			try {
+				stat = statSync(real);
+			} catch {
+				continue;
+			}
+			if (!stat.isFile()) continue;
+			if (stat.size > MAX_FILE_BYTES) {
+				skippedLarge++;
+				continue;
+			}
+			const bytes = readCapped(real, MAX_FILE_BYTES);
+			if (!bytes) {
+				skippedLarge++;
+				continue;
+			}
+			if (binaryBytes(bytes)) {
+				skippedBinary++;
+				continue;
+			}
+			const { bom } = shapeOf(bytes);
+			const text = (bom ? bytes.subarray(UTF8_BOM.length) : bytes).toString("utf8").replace(/\r\n/g, "\n");
+			const hits: SearchHit[] = [];
+			let count = 0;
+			const lines = text.split("\n");
+			for (let at = 0; at < lines.length; at++) count += hitsInLine(lines[at], matcher, at + 1, hits);
+			if (!count) continue;
+			if (files.length >= MAX_SEARCH_FILES || totalMatches + count > MAX_SEARCH_MATCHES) {
+				truncated = true;
+				continue;
+			}
+			totalMatches += count;
+			files.push({ path, mtime: Math.floor(stat.mtimeMs), size: stat.size, editable: !entry.link, count, matches: hits });
+		}
+	}
+	const kept = warnings.slice();
+	const toplevel = await gitToplevel(root);
+	let found = files;
+	if (settings.excludeGitIgnore) {
+		if (toplevel) {
+			const checks = await gitIgnored(root, toplevel, files.map((one) => one.path));
+			if (checks.warning) kept.push(checks.warning);
+			found = files.filter((one) => !ignoredPath(one.path, checks.ignored));
+		} else {
+			kept.push("explorer.excludeGitIgnore is on, but this folder is not a git checkout");
+		}
+	}
+	return { files: found, totalMatches: found.reduce((sum, one) => sum + one.count, 0), scanned, truncated, scanTruncated, skippedBinary, skippedLarge, warnings: kept, repo: toplevel !== "" };
+}
+
+/**
+ * File contents holding `q`, under case, whole-word and regular-expression flags. `hidden=1` asks for
+ * dot names too, as the name search does. The answer names whether the folder is a repository, so the
+ * drawer can say what a batch replace may be undone by before it asks.
+ */
+export async function onFilesSearch(url: URL, res: ServerResponse, board: BoardFolder): Promise<void> {
+	const root = realRoot(board);
+	if (!root) return void fail(res, 409, `no such folder: ${board.folder}`);
+	const wanted = compileSearchMatcher(url.searchParams.get("q") ?? "", {
+		caseSensitive: url.searchParams.get("case") === "1",
+		wholeWord: url.searchParams.get("word") === "1",
+		regex: url.searchParams.get("regex") === "1",
+	});
+	if ("error" in wanted) return void fail(res, 400, wanted.error);
+	const showHidden = url.searchParams.get("hidden") !== "0";
+	const found = await walkSearch(root, wanted.matcher, showHidden);
+	answer(res, 200, {
+		root,
+		repo: found.repo,
+		q: url.searchParams.get("q") ?? "",
+		files: found.files,
+		totalFiles: found.files.length,
+		totalMatches: found.totalMatches,
+		scanned: found.scanned,
+		truncated: found.truncated,
+		scanTruncated: found.scanTruncated,
+		skippedBinary: found.skippedBinary,
+		skippedLarge: found.skippedLarge,
+		...(found.warnings.length ? { settingsWarnings: found.warnings } : {}),
+	});
+}
+
+/** One file a batch replace named, with the stamp the search read it with. */
+type ReplaceTarget = { path: string; mtime: number; size: number };
+
+/**
+ * `q` replaced by `replacement` in the files a search named. Each file is checked against the stamp
+ * that search read, written through a sibling temp file, and yielded between files, so a file that
+ * moved under the search is reported rather than overwritten. Literal text replaces literally;
+ * a regular expression keeps its `$` expansions. A partial batch answers 207 with what failed.
+ */
+export async function onFilesReplace(req: IncomingMessage, res: ServerResponse, board: BoardFolder): Promise<void> {
+	const body = await readJson(req, res);
+	if (!body || typeof body !== "object" || Array.isArray(body)) return;
+	const bag = body as Record<string, unknown>;
+	const root = realRoot(board);
+	if (!root) return void fail(res, 409, `no such folder: ${board.folder}`);
+	if (typeof bag.q !== "string" || typeof bag.replacement !== "string") return void fail(res, 400, "q and replacement are strings");
+	const wanted = compileSearchMatcher(bag.q, { caseSensitive: bag.case === true, wholeWord: bag.word === true, regex: bag.regex === true });
+	if ("error" in wanted) return void fail(res, 400, wanted.error);
+	if (!Array.isArray(bag.files) || !bag.files.length || bag.files.length > MAX_BATCH) return void fail(res, 400, `files holds at most ${MAX_BATCH} paths`);
+	const targets: ReplaceTarget[] = [];
+	for (const one of bag.files as unknown[]) {
+		if (!one || typeof one !== "object") return void fail(res, 400, "each file names a path, mtime and size");
+		const held = one as Record<string, unknown>;
+		if (typeof held.path !== "string" || !Number.isFinite(held.mtime) || !Number.isFinite(held.size)) return void fail(res, 400, "each file names a path, mtime and size");
+		targets.push({ path: held.path, mtime: Number(held.mtime), size: Number(held.size) });
+	}
+	const replacement = bag.replacement;
+	const matcher = wanted.matcher;
+	const outcome = await serialised(root, async (): Promise<{ files: unknown[]; failed: { path: string; error: string }[] }> => {
+		const files: unknown[] = [];
+		const failed: { path: string; error: string }[] = [];
+		for (const target of targets) {
+			await new Promise((resolve) => setImmediate(resolve));
+			const done = (path: string, error: string) => void failed.push({ path, error });
+			const wantedRel = normalizeRel(target.path);
+			if ("error" in wantedRel || !wantedRel.rel) {
+				done(target.path, "error" in wantedRel ? wantedRel.error : "the workspace root is not a file");
+				continue;
+			}
+			const leaf = leafOf(root, wantedRel.rel);
+			if ("error" in leaf) {
+				done(target.path, leaf.error);
+				continue;
+			}
+			let stat: Stats;
+			try {
+				stat = lstatSync(leaf.abs);
+			} catch {
+				done(target.path, `no such file: ${wantedRel.rel}`);
+				continue;
+			}
+			if (stat.isSymbolicLink()) {
+				done(target.path, `${wantedRel.rel} is a link, and a link is not edited`);
+				continue;
+			}
+			if (!stat.isFile()) {
+				done(target.path, `${wantedRel.rel} is not a file`);
+				continue;
+			}
+			if (stat.size > MAX_FILE_BYTES) {
+				done(target.path, `${wantedRel.rel} is larger than ${MAX_FILE_BYTES} bytes`);
+				continue;
+			}
+			if (stat.size !== target.size || Math.floor(stat.mtimeMs) !== target.mtime) {
+				done(target.path, "the file changed on disk since the search");
+				continue;
+			}
+			const current = readCapped(leaf.abs, MAX_FILE_BYTES);
+			if (!current) {
+				done(target.path, `${wantedRel.rel} is larger than ${MAX_FILE_BYTES} bytes`);
+				continue;
+			}
+			if (binaryBytes(current)) {
+				done(target.path, `${wantedRel.rel} is not text`);
+				continue;
+			}
+			const { bom, eol } = shapeOf(current);
+			const folded = (bom ? current.subarray(UTF8_BOM.length) : current).toString("utf8").replace(/\r\n/g, "\n");
+			let count = 0;
+			const lines = folded.split("\n").map((line) => {
+				matcher.lastIndex = 0;
+				for (let match = matcher.exec(line); match; match = matcher.exec(line)) {
+					count++;
+					if (match[0].length === 0) matcher.lastIndex++;
+				}
+				matcher.lastIndex = 0;
+				return bag.regex === true ? line.replace(matcher, replacement) : line.replace(matcher, () => replacement);
+			});
+			if (!count) {
+				done(target.path, "no match left in the file");
+				continue;
+			}
+			const bytes = Buffer.concat([bom ? UTF8_BOM : Buffer.alloc(0), Buffer.from(eol === "crlf" ? lines.join("\n").replace(/\n/g, "\r\n") : lines.join("\n"), "utf8")]);
+			if (bytes.length > MAX_FILE_BYTES) {
+				done(target.path, `${wantedRel.rel} would be larger than ${MAX_FILE_BYTES} bytes with its own line endings`);
+				continue;
+			}
+			const failedWrite = putBytes(leaf.abs, leaf.name, bytes, stat.mode & 0o7777);
+			if (failedWrite) {
+				done(target.path, failedWrite);
+				continue;
+			}
+			const after = statSync(leaf.abs);
+			files.push({ path: wantedRel.rel, count, mtime: Math.floor(after.mtimeMs), size: after.size });
+		}
+		return { files, failed };
+	});
+	const replacedMatches = (outcome.files as { count: number }[]).reduce((sum, one) => sum + one.count, 0);
+	const status = outcome.failed.length === 0 ? 200 : outcome.files.length ? 207 : 409;
+	answer(res, status, { replacedFiles: outcome.files.length, replacedMatches, files: outcome.files, failed: outcome.failed });
+}
+
 // ---------- one file, read and written ----------
 
 /**
@@ -1277,6 +1614,36 @@ async function readSave(req: IncomingMessage, res: ServerResponse): Promise<Reco
  * A save never creates: a path with nothing at it is a 404, because an editor that opened a file is saving
  * a file and not making one.
  */
+/**
+ * Bytes at `abs` through a sibling temp file, keeping the mode the file already had. The temp file
+ * carries a name of its own rather than the file's name again: the filesystem stops at 255 bytes, and
+ * a long name repeated here would make a write fail with ENAMETOOLONG. The name never holds half a
+ * write. Returns the sentence saying why not, or null when it landed.
+ */
+function putBytes(abs: string, name: string, bytes: Buffer, mode: number): string | null {
+	const dir = abs.slice(0, abs.length - name.length);
+	const temp = join(dir, `.pi-studio-${randomUUID()}.tmp`);
+	try {
+		const fd = openSync(temp, "wx", mode);
+		try {
+			// The umask has no say in a mode the file already had.
+			fchmodSync(fd, mode);
+			let at = 0;
+			while (at < bytes.length) at += writeSync(fd, bytes, at, bytes.length - at, at);
+			fsyncSync(fd);
+		} finally {
+			closeSync(fd);
+		}
+		renameSync(temp, abs);
+	} catch (error) {
+		try {
+			unlinkSync(temp);
+		} catch {}
+		return say(error);
+	}
+	return null;
+}
+
 export async function onFileWrite(req: IncomingMessage, res: ServerResponse, board: BoardFolder): Promise<void> {
 	const body = await readSave(req, res);
 	if (!body) return;
@@ -1322,29 +1689,8 @@ export async function onFileWrite(req: IncomingMessage, res: ServerResponse, boa
 		// The ceiling is on the text, and a file whose own endings double its newlines is still one the
 		// editor has to be able to open again.
 		if (bytes.length > MAX_FILE_BYTES) return { status: 413, error: `${wanted.rel} would be larger than ${MAX_FILE_BYTES} bytes with its own line endings` };
-		const dir = leaf.abs.slice(0, leaf.abs.length - leaf.name.length);
-		// The temp file is a sibling with a name of its own rather than the file's name again: the filesystem
-		// stops at 255 bytes, and a long name repeated here would make a save fail with ENAMETOOLONG.
-		const temp = join(dir, `.pi-studio-${randomUUID()}.tmp`);
-		const mode = stat.mode & 0o7777;
-		try {
-			const fd = openSync(temp, "wx", mode);
-			try {
-				// The umask has no say in a mode the file already had.
-				fchmodSync(fd, mode);
-				let at = 0;
-				while (at < bytes.length) at += writeSync(fd, bytes, at, bytes.length - at, at);
-				fsyncSync(fd);
-			} finally {
-				closeSync(fd);
-			}
-			renameSync(temp, leaf.abs);
-		} catch (error) {
-			try {
-				unlinkSync(temp);
-			} catch {}
-			return { status: 409, error: say(error) };
-		}
+		const failed = putBytes(leaf.abs, leaf.name, bytes, stat.mode & 0o7777);
+		if (failed) return { status: 409, error: failed };
 		const after = statSync(leaf.abs);
 		return { status: 200, payload: { path: wanted.rel, size: after.size, mtime: Math.floor(after.mtimeMs) } };
 	});

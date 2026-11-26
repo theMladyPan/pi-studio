@@ -126,8 +126,8 @@ describe("the explorer's routes belong to the human", () => {
 	const child = { human: false, board: { id: "board-a" }, thread: { id: "t1" } };
 
 	test("none of them is a route a thread may reach, and the human is refused nothing", () => {
-		const reads = ["/files", "/files/find", "/files/read"];
-		const changes = ["/files/new", "/files/rename", "/files/move", "/files/copy", "/files/delete", "/files/write"];
+		const reads = ["/files", "/files/find", "/files/search", "/files/read"];
+		const changes = ["/files/new", "/files/rename", "/files/move", "/files/copy", "/files/delete", "/files/write", "/files/replace"];
 		const routes = [...reads, ...changes];
 		for (const path of routes) assert.equal(THREAD_ROUTES.has(path), false, `${path} is in THREAD_ROUTES`);
 		// The list is compared whole too: a route added to THREAD_ROUTES widens what a child may reach.
@@ -1367,6 +1367,118 @@ describe("finding names in every folder", () => {
 			assert.equal(envOff.body.total, 0);
 			const envOn = await find(daemon, board, "&q=env&hidden=1");
 			assert.deepEqual(envOn.body.entries.map((one: any) => one.path), [".env"]);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("searching file contents and replacing in them", () => {
+	const search = (daemon: Daemon, board: string, query: string) =>
+		get(daemon, `/files/search?token=${daemon.token}&workspace=${board}${query}`).then((res) => {
+			let body: any = null;
+			try {
+				body = res.body ? JSON.parse(res.body) : null;
+			} catch {
+				body = res.body;
+			}
+			return { status: res.status, body };
+		});
+	const replace = (daemon: Daemon, board: string, body: unknown) => postJson(daemon, board, "/files/replace", body);
+
+	test("literal search names lines and counts, case and whole word change the answer", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-search-"));
+		const folder = join(state, "proj");
+		mkdirSync(join(folder, "docs"), { recursive: true });
+		writeFileSync(join(folder, "a.md"), "quietly moving, quiet at rest\nQUIET caps\n");
+		writeFileSync(join(folder, "docs", "b.md"), "stay quiet.\n");
+		writeFileSync(join(folder, "bin.dat"), Buffer.from([0x61, 0x00, 0x71, 0x75, 0x69, 0x65, 0x74]));
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			const all = await search(daemon, board, "&q=quiet");
+			assert.equal(all.status, 200, JSON.stringify(all.body));
+			assert.equal(all.body.repo, false);
+			assert.equal(all.body.totalFiles, 2);
+			assert.equal(all.body.totalMatches, 4);
+			assert.equal(all.body.skippedBinary, 1);
+			const a = all.body.files.find((one: any) => one.path === "a.md");
+			assert.equal(a.count, 3);
+			assert.equal(a.editable, true);
+			assert.equal(typeof a.mtime, "number");
+			assert.equal(a.matches[0].line, 1);
+			assert.equal(a.matches[0].text.slice(a.matches[0].matchStart, a.matches[0].matchEnd), "quiet");
+			const cased = await search(daemon, board, "&q=quiet&case=1");
+			assert.equal(cased.body.totalMatches, 3);
+			const word = await search(daemon, board, "&q=quiet&word=1");
+			assert.equal(word.body.totalMatches, 3);
+			const regex = await search(daemon, board, "&q=qui%5Cw%2B&regex=1");
+			assert.equal(regex.body.totalMatches, 4);
+			const bad = await search(daemon, board, "&q=(unterminated&regex=1");
+			assert.equal(bad.status, 400);
+			const empty = await search(daemon, board, "");
+			assert.equal(empty.status, 400);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	test("a batch replace writes literally, keeps endings, and refuses a stale file", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-replace-"));
+		const folder = join(state, "proj");
+		mkdirSync(folder, { recursive: true });
+		writeFileSync(join(folder, "a.txt"), "quiet and quiet\r\nquiet\r\n");
+		writeFileSync(join(folder, "b.txt"), "quiet\n");
+		symlinkSync(join(folder, "a.txt"), join(folder, "link.txt"));
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			const found = await search(daemon, board, "&q=quiet");
+			assert.equal(found.status, 200);
+			const targets = found.body.files.filter((one: any) => one.editable).map((one: any) => ({ path: one.path, mtime: one.mtime, size: one.size }));
+			assert.deepEqual(targets.map((one: any) => one.path).sort(), ["a.txt", "b.txt"]);
+			const stale = { ...targets[0], mtime: targets[0].mtime + 1 };
+			const done = await replace(daemon, board, { q: "quiet", replacement: "silent $1", files: [stale, targets[1]] });
+			assert.equal(done.status, 207, done.body);
+			const body = JSON.parse(done.body);
+			assert.equal(body.replacedFiles, 1);
+			assert.equal(body.failed.length, 1);
+			assert.match(body.failed[0].error, /changed on disk/);
+			assert.equal(readFileSync(join(folder, "b.txt"), "utf8"), "silent $1\n");
+			// The stale file is untouched, endings and all.
+			assert.equal(readFileSync(join(folder, "a.txt"), "utf8"), "quiet and quiet\r\nquiet\r\n");
+			const again = await search(daemon, board, "&q=quiet");
+			const a = again.body.files.find((one: any) => one.path === "a.txt");
+			const clean = await replace(daemon, board, { q: "quiet", replacement: "silent", files: [{ path: a.path, mtime: a.mtime, size: a.size }] });
+			assert.equal(clean.status, 200, clean.body);
+			assert.equal(readFileSync(join(folder, "a.txt"), "utf8"), "silent and silent\r\nsilent\r\n");
+			const link = await replace(daemon, board, { q: "quiet", replacement: "x", files: [{ path: "link.txt", mtime: 1, size: 1 }] });
+			assert.equal(link.status, 409);
+			assert.match(link.body, /is a link/);
+		} finally {
+			daemon.child.kill();
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	test("a regular expression replace keeps its dollar expansions", async () => {
+		const state = mkdtempSync(join(tmpdir(), "pi-studio-files-replace-re-"));
+		const folder = join(state, "proj");
+		mkdirSync(folder, { recursive: true });
+		writeFileSync(join(folder, "a.txt"), "hello World, hello there\n");
+		const daemon = await boot(state);
+		try {
+			const board = await openWorkspace(daemon, folder);
+			const found = await search(daemon, board, "&q=hello%5Cs(%5Cw%2B)&regex=1");
+			assert.equal(found.body.totalMatches, 2);
+			const file = found.body.files[0];
+			const done = await replace(daemon, board, { q: "hello\\s(\\w+)", replacement: "hi $1", regex: true, files: [{ path: file.path, mtime: file.mtime, size: file.size }] });
+			assert.equal(done.status, 200, done.body);
+			assert.equal(readFileSync(join(folder, "a.txt"), "utf8"), "hi World, hi there\n");
+			const badRegex = await replace(daemon, board, { q: "(", replacement: "x", regex: true, files: [{ path: "a.txt", mtime: 1, size: 1 }] });
+			assert.equal(badRegex.status, 400);
 		} finally {
 			daemon.child.kill();
 			rmSync(state, { recursive: true, force: true });

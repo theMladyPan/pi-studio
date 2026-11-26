@@ -5959,7 +5959,7 @@ const THOUGHT_STALL_MS = 3000;
 // Three drawers share the rail's column: the workspace's files, what the agents are doing, and the
 // board's cards. One is open at a time, and the width and the hidden choice a human left on the old
 // rail are the ones these open with, because this is that rail with doors on it.
-const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards", source: "drawerSource" };
+const DRAWER_NAMES = { files: "drawerFiles", activity: "drawerActivity", cards: "drawerCards", source: "drawerSource", search: "drawerSearch" };
 const drawerState = explorerCore.drawers();
 // The plugin drawers off the other three edges: one strip per edge, one pane open per strip. The
 // strips are separate from the left column because the left column is the rail's (files, activity,
@@ -6006,6 +6006,7 @@ const filesBtn = document.getElementById("filesBtn");
 const activityBtn = document.getElementById("activityBtn");
 const cardsBtn = document.getElementById("cardsBtn");
 const sourceBtn = document.getElementById("sourceBtn");
+const searchBtn = document.getElementById("searchBtn");
 
 // The rail is the user's furniture: its width survives a reload, and so does whether a drawer is up.
 const RAIL_MIN = 160;
@@ -6028,7 +6029,7 @@ function paintDrawers() {
     const pane = document.getElementById(id);
     pane.classList.toggle("on", drawerState.open === name);
   }
-  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn, ...pluginDrawerDoors };
+  const doors = { files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn, search: searchBtn, ...pluginDrawerDoors };
   for (const [name, door] of Object.entries(doors)) {
     door.setAttribute("aria-expanded", drawerState.open === name ? "true" : "false");
   }
@@ -6046,6 +6047,7 @@ function showDrawer(name) {
   closeDocks();
   if (name === "files") exPrime();
   if (name === "source") scPrime();
+  if (name === "search") requestAnimationFrame(() => { srQueryEl?.focus(); srQueryEl?.select(); });
   explorerCore.drawerOpen(drawerState, name);
   paintDrawers();
 }
@@ -6057,6 +6059,7 @@ function toggleDrawer(name) {
   explorerCore.drawerToggle(drawerState, name);
   if (!open && name === "files") exPrime();
   if (!open && name === "source") scPrime();
+  if (!open && name === "search") requestAnimationFrame(() => { srQueryEl?.focus(); srQueryEl?.select(); });
   paintDrawers();
 }
 
@@ -6094,7 +6097,7 @@ restoreDrawers();
 bindDragHeight(document.getElementById("dockGripBottom"), { bodyClass: "dock-resizing", resolvePx: (event) => setTermHeight(window.innerHeight - event.clientY) });
 bindDragHeight(document.getElementById("dockGripTop"), { bodyClass: "dock-resizing", resolvePx: (event) => setTermHeight(event.clientY - 44) });
 
-for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn })) {
+for (const [name, door] of Object.entries({ files: filesBtn, activity: activityBtn, cards: cardsBtn, source: sourceBtn, search: searchBtn })) {
   door.addEventListener("click", () => {
     closeHeaderMenus();
     toggleDrawer(name);
@@ -9652,6 +9655,7 @@ const SHORTCUTS = [
     rows: [
       { keys: "ctrl", does: "is ⌘ on a Mac, wherever this list says ctrl" },
       { keys: "f", does: "open the files drawer, and press it again to roll it up" },
+      { keys: "ctrl+f", does: "open the search drawer and focus its search field" },
       { keys: "a", does: "open the activity drawer, and press it again to roll it up" },
       { keys: "c", does: "open the cards drawer, and press it again to roll it up" },
       { keys: "d", does: "open the source control drawer, and press it again to roll it up" },
@@ -12863,6 +12867,415 @@ exPaintHiddenToggle();
 exTreeEl.addEventListener("scroll", () => {
   if (!exState.filter.trim() || !exState.find.next || exState.find.loading) return;
   if (exTreeEl.scrollTop + exTreeEl.clientHeight >= exTreeEl.scrollHeight - 40) exFindMore();
+});
+
+// ---------- the search drawer ----------------------------------------------
+// Full-text search over file contents, and a batch replace over the files it named. The drawer is
+// built in, so a hit opens in the files editor and a replace writes through the same routes a save
+// does; an external plugin panel could do neither. A replace never lands without the confirm sheet,
+// and it names what undo exists before it asks: a repository, or nothing.
+const srQueryEl = document.getElementById("srQuery");
+const srReplaceEl = document.getElementById("srReplace");
+const srReplaceRow = document.getElementById("srReplaceRow");
+const srReplaceToggleEl = document.getElementById("srReplaceToggle");
+const srReplaceBtn = document.getElementById("srReplaceBtn");
+const srScopeEl = document.getElementById("srScope");
+const srHiddenToggleEl = document.getElementById("srHiddenToggle");
+const srStatusEl = document.getElementById("srStatus");
+const srCountEl = document.getElementById("srCount");
+const srListEl = document.getElementById("srList");
+const srCaseEl = document.getElementById("srCase");
+const srWordEl = document.getElementById("srWord");
+const srRegexEl = document.getElementById("srRegex");
+
+const srState = {
+  seq: 0,
+  case: false,
+  word: false,
+  regex: false,
+  files: [],
+  totalFiles: 0,
+  totalMatches: 0,
+  repo: false,
+  loading: false,
+  error: "",
+  warnings: [],
+  truncated: false,
+  scanTruncated: false,
+  skippedBinary: 0,
+  skippedLarge: 0,
+  collapsed: new Set(),
+  unchecked: new Set(),
+  scopeChecked: false,
+  replaceOpen: false,
+  replacing: false,
+  replacedNote: "",
+  failedNote: "",
+};
+let srTimer = null;
+
+/** The files a replace would write: every editable file shown, or only the ticked ones. */
+function srTargets() {
+  return srState.files.filter((file) => file.editable !== false && (!srState.scopeChecked || !srState.unchecked.has(file.path)));
+}
+
+/** What one match becomes, for the preview: the replacement with a regular expression's `$` kept. */
+function srPreviewText(hit) {
+  const query = srQueryEl.value;
+  const replacement = srReplaceEl.value;
+  if (!srState.regex) return replacement;
+  const body = srState.word ? `\\b(?:${query})\\b` : query;
+  const flags = srState.case ? "y" : "iy";
+  try {
+    const sticky = new RegExp(body, flags);
+    sticky.lastIndex = hit.matchStart;
+    const match = sticky.exec(hit.text);
+    if (!match || match.index !== hit.matchStart) return replacement;
+    return match[0].replace(new RegExp(body, srState.case ? "" : "i"), replacement);
+  } catch {
+    return replacement;
+  }
+}
+
+/** One grouped file: the name and its count, then its snippet lines with the match picked out. */
+function srPaint() {
+  srCaseEl.classList.toggle("on", srState.case);
+  srCaseEl.setAttribute("aria-pressed", srState.case ? "true" : "false");
+  srWordEl.classList.toggle("on", srState.word);
+  srWordEl.setAttribute("aria-pressed", srState.word ? "true" : "false");
+  srRegexEl.classList.toggle("on", srState.regex);
+  srRegexEl.setAttribute("aria-pressed", srState.regex ? "true" : "false");
+  srHiddenToggleEl.classList.toggle("on", exState.findHidden);
+  srHiddenToggleEl.setAttribute("aria-pressed", exState.findHidden ? "true" : "false");
+  srReplaceRow.hidden = !srState.replaceOpen;
+  srReplaceToggleEl.classList.toggle("on", srState.replaceOpen);
+  srReplaceToggleEl.setAttribute("aria-pressed", srState.replaceOpen ? "true" : "false");
+  srScopeEl.setAttribute("aria-checked", srState.scopeChecked ? "true" : "false");
+  const targets = srTargets();
+  const targetMatches = targets.reduce((sum, file) => sum + file.count, 0);
+  srReplaceBtn.disabled = srState.replacing || srState.loading || !targets.length;
+  srReplaceBtn.textContent = srState.replacing ? "replacing…" : targets.length ? `replace ${targetMatches} in ${targets.length} file${targets.length === 1 ? "" : "s"}` : "replace";
+  const status = srStatusEl;
+  status.classList.toggle("bad", Boolean(srState.error));
+  if (srState.error) status.textContent = srState.error;
+  else if (srState.replacedNote) status.textContent = srState.replacedNote;
+  else if (srState.loading) status.textContent = "searching…";
+  else if (!srState.files.length) status.textContent = srQueryEl.value.trim() ? `no text holds “${srQueryEl.value.trim()}”` : "";
+  else {
+    const capped = srState.truncated || srState.scanTruncated ? " (capped)" : "";
+    status.textContent = `${srState.totalMatches} result${srState.totalMatches === 1 ? "" : "s"} in ${srState.totalFiles} file${srState.totalFiles === 1 ? "" : "s"}${capped}`;
+  }
+  srCountEl.textContent = srState.failedNote || (srState.files.length ? `${srState.totalMatches} matches · ${srState.totalFiles} files${srState.skippedBinary ? ` · ${srState.skippedBinary} binary skipped` : ""}${srState.skippedLarge ? ` · ${srState.skippedLarge} large skipped` : ""}` : "nothing searched");
+  const rows = [];
+  if (srState.failedNote) {
+    const note = el("div", "ex-note bad");
+    note.textContent = srState.failedNote;
+    rows.push(note);
+  }
+  for (const warning of srState.warnings) {
+    const note = el("div", "ex-note bad");
+    note.textContent = warning;
+    rows.push(note);
+  }
+  for (const file of srState.files) {
+    const collapsed = srState.collapsed.has(file.path);
+    const dim = srState.scopeChecked && srState.unchecked.has(file.path);
+    const head = el("div", `ex-row sr-file${dim ? " dim" : ""}`);
+    head.dataset.path = file.path;
+    head.setAttribute("role", "treeitem");
+    head.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    head.title = file.path;
+    head.tabIndex = -1;
+    const twist = el("span", `ex-twist codicon ${collapsed ? "codicon-chevron-right" : "codicon-chevron-down"}`);
+    head.append(twist);
+    const icon = el("span", "ex-icon");
+    const seti = explorerCore.icon(exState.theme, { name: file.path.slice(file.path.lastIndexOf("/") + 1), dir: false });
+    if (seti) {
+      icon.className = "ex-icon seti";
+      icon.textContent = seti.glyph;
+      if (seti.color) icon.style.color = seti.color;
+    } else icon.className = "ex-icon codicon codicon-file";
+    head.append(icon);
+    if (srState.scopeChecked) {
+      const box = el("input", "sr-chk");
+      box.type = "checkbox";
+      box.checked = !srState.unchecked.has(file.path);
+      box.title = `replace in ${file.path}`;
+      box.addEventListener("click", (event) => event.stopPropagation());
+      box.addEventListener("change", () => {
+        if (box.checked) srState.unchecked.delete(file.path);
+        else srState.unchecked.add(file.path);
+        srPaint();
+      });
+      head.append(box);
+    }
+    const label = el("span", "ex-label");
+    label.textContent = file.path;
+    head.append(label);
+    const badge = el("span", "sr-badge");
+    badge.textContent = String(file.count);
+    head.append(badge);
+    head.addEventListener("click", () => {
+      if (srState.collapsed.has(file.path)) srState.collapsed.delete(file.path);
+      else srState.collapsed.add(file.path);
+      srPaint();
+    });
+    head.addEventListener("dblclick", () => void srOpenFile(file, file.matches[0]?.line ?? 1));
+    rows.push(head);
+    if (collapsed) continue;
+    for (const hit of file.matches) {
+      const row = el("div", "sr-snip");
+      row.tabIndex = -1;
+      row.title = `${file.path}:${hit.line}`;
+      row.append(el("span", "sr-line"));
+      row.firstChild.textContent = String(hit.line);
+      const text = el("span", "sr-text");
+      const before = String(hit.text).slice(0, hit.matchStart);
+      const matched = String(hit.text).slice(hit.matchStart, hit.matchEnd);
+      const after = String(hit.text).slice(hit.matchEnd);
+      text.append(document.createTextNode(before));
+      if (srState.replaceOpen && srReplaceEl.value !== "") {
+        const del = el("span", "sr-del");
+        del.textContent = matched;
+        const ins = el("span", "sr-ins");
+        ins.textContent = srPreviewText(hit);
+        text.append(del, ins);
+      } else {
+        const mark = el("mark");
+        mark.textContent = matched;
+        text.append(mark);
+      }
+      text.append(document.createTextNode(after));
+      row.append(text);
+      row.addEventListener("click", () => void srOpenFile(file, hit.line));
+      rows.push(row);
+    }
+  }
+  srListEl.replaceChildren(...rows);
+}
+
+/** One search over file contents. A reply from a query already left behind is dropped. */
+async function srRun() {
+  const query = srQueryEl.value;
+  if (!query.trim()) {
+    srState.files = [];
+    srState.totalFiles = 0;
+    srState.totalMatches = 0;
+    srState.error = "";
+    srPaint();
+    return;
+  }
+  const seq = ++srState.seq;
+  srState.loading = true;
+  srState.error = "";
+  srState.replacedNote = "";
+  srState.failedNote = "";
+  srPaint();
+  try {
+    const params = new URLSearchParams({
+      workspace,
+      q: query,
+      case: srState.case ? "1" : "0",
+      word: srState.word ? "1" : "0",
+      regex: srState.regex ? "1" : "0",
+      hidden: exState.findHidden ? "1" : "0",
+    });
+    const response = await fetch(`/files/search?${params.toString()}`);
+    if (seq !== srState.seq) return;
+    const text = (await response.text()).trim();
+    if (!response.ok) throw new Error(text.slice(0, 160) || response.statusText);
+    const data = JSON.parse(text);
+    srState.files = Array.isArray(data.files) ? data.files : [];
+    srState.totalFiles = Number(data.totalFiles) || srState.files.length;
+    srState.totalMatches = Number(data.totalMatches) || 0;
+    srState.repo = Boolean(data.repo);
+    srState.truncated = Boolean(data.truncated);
+    srState.scanTruncated = Boolean(data.scanTruncated);
+    srState.skippedBinary = Number(data.skippedBinary) || 0;
+    srState.skippedLarge = Number(data.skippedLarge) || 0;
+    srState.warnings = Array.isArray(data.settingsWarnings) ? data.settingsWarnings : [];
+    srState.collapsed = new Set();
+    srState.unchecked = new Set();
+  } catch (error) {
+    if (seq !== srState.seq) return;
+    srState.error = error.message || String(error);
+  }
+  srState.loading = false;
+  srPaint();
+}
+
+/** A hit in the editor, at the line the match sits on. */
+async function srOpenFile(file, line) {
+  const target = explorerCore.editTarget({ dir: false, link: file.editable === false });
+  await exEditOpen(file.path, target);
+  if (!exEditorEl.hidden && exEditorDoc.path === file.path) exEditorPreview.setLine(line);
+}
+
+/** The question a batch replace asks, on the confirm sheet the permanent delete uses. */
+function srAskReplace(targets, matches) {
+  return new Promise((resolve) => {
+    const prior = document.activeElement;
+    const yesLabel = exConfirmYes.textContent;
+    const noLabel = exConfirmNo.textContent;
+    exConfirmTitle.textContent = `replace in ${targets.length} file${targets.length === 1 ? "" : "s"}`;
+    const note = el("p", "act-note");
+    const capped = srState.truncated || srState.scanTruncated ? " Only the files shown will be changed: the search was capped." : "";
+    note.textContent = `Replace ${matches} match${matches === 1 ? "" : "es"} of “${srQueryEl.value}” with “${srReplaceEl.value || "(nothing — the matches are deleted)"}” across ${targets.length} file${targets.length === 1 ? "" : "s"}.${capped}`;
+    const undo = el("p", "act-note");
+    undo.textContent = srState.repo
+      ? "There is no undo in the drawer. This workspace is a git repository, so tracked files can be reverted in Source Control or with git checkout."
+      : "There is no undo. This folder is not a git repository, so replaced files cannot be reverted automatically.";
+    const list = el("div", "cut");
+    const shown = targets.slice(0, 50).map((file) => `${file.path} (${file.count})`);
+    list.textContent = shown.join("\n") + (targets.length > 50 ? `\n…and ${targets.length - 50} more` : "");
+    exConfirmBody.replaceChildren(note, undo, list);
+    exConfirmYes.textContent = `replace ${matches} match${matches === 1 ? "" : "es"}`;
+    exConfirmNo.textContent = "cancel";
+    exConfirmEl.hidden = false;
+    exConfirmYes.focus();
+    const trap = (event) => {
+      if (event.key !== "Tab") return;
+      const stops = [...exConfirmEl.querySelectorAll("button:not([disabled])")];
+      if (!stops.length) return;
+      event.preventDefault();
+      const at = stops.indexOf(document.activeElement);
+      const step = event.shiftKey ? -1 : 1;
+      stops[(at + step + stops.length) % stops.length].focus();
+    };
+    exConfirmEl.addEventListener("keydown", trap);
+    const done = (answer) => {
+      exConfirmEl.removeEventListener("keydown", trap);
+      exConfirmEl.hidden = true;
+      exConfirmYes.onclick = null;
+      exConfirmNo.onclick = null;
+      exConfirmYes.textContent = yesLabel;
+      exConfirmNo.textContent = noLabel;
+      if (prior instanceof HTMLElement && document.contains(prior)) prior.focus();
+      else srQueryEl.focus();
+      resolve(answer);
+    };
+    exConfirmYes.onclick = () => done(true);
+    exConfirmNo.onclick = () => done(false);
+  });
+}
+
+/** The replace, confirmed: write the targets, say what landed and what did not, search again. */
+async function srDoReplace() {
+  const targets = srTargets();
+  if (!targets.length || srState.replacing) return;
+  const matches = targets.reduce((sum, file) => sum + file.count, 0);
+  if (!(await srAskReplace(targets, matches))) return;
+  srState.replacing = true;
+  srPaint();
+  try {
+    const outcome = await exPost("/files/replace", {
+      q: srQueryEl.value,
+      replacement: srReplaceEl.value,
+      case: srState.case,
+      word: srState.word,
+      regex: srState.regex,
+      files: targets.map((file) => ({ path: file.path, mtime: file.mtime, size: file.size })),
+    });
+    if (outcome.data && typeof outcome.data === "object" && Array.isArray(outcome.data.files)) {
+      const note = `replaced ${outcome.data.replacedMatches} match${outcome.data.replacedMatches === 1 ? "" : "es"} in ${outcome.data.replacedFiles} file${outcome.data.replacedFiles === 1 ? "" : "s"}`;
+      const failed = Array.isArray(outcome.data.failed) ? outcome.data.failed : [];
+      const failedNote = failed.length ? `${note}, ${failed.length} failed: ${failed.slice(0, 3).map((one) => `${one.path} — ${one.error}`).join("; ")}${failed.length > 3 ? `; and ${failed.length - 3} more` : ""}` : "";
+      await srRun();
+      srState.replacedNote = note;
+      srState.failedNote = failedNote;
+      srPaint();
+      footNote(failed.length ? failedNote : note, Boolean(failed.length));
+    } else {
+      srState.error = outcome.text || `the daemon answered ${outcome.status}`;
+      srPaint();
+    }
+  } catch (error) {
+    srState.error = error.message || String(error);
+    srPaint();
+  }
+  srState.replacing = false;
+  srPaint();
+}
+
+function srQueueRun() {
+  clearTimeout(srTimer);
+  srTimer = setTimeout(() => void srRun(), 250);
+}
+
+srQueryEl.addEventListener("input", srQueueRun);
+srQueryEl.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    clearTimeout(srTimer);
+    void srRun();
+  }
+});
+srReplaceEl.addEventListener("input", () => srPaint());
+srReplaceEl.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !srReplaceBtn.disabled) {
+    event.preventDefault();
+    void srDoReplace();
+  }
+});
+for (const [button, key] of [[srCaseEl, "case"], [srWordEl, "word"], [srRegexEl, "regex"]]) {
+  button.addEventListener("click", () => {
+    srState[key] = !srState[key];
+    srPaint();
+    if (srQueryEl.value.trim()) void srRun();
+  });
+}
+srReplaceToggleEl.addEventListener("click", () => {
+  srState.replaceOpen = !srState.replaceOpen;
+  srPaint();
+  if (srState.replaceOpen) srReplaceEl.focus();
+});
+srScopeEl.addEventListener("click", () => {
+  srState.scopeChecked = !srState.scopeChecked;
+  srPaint();
+});
+srReplaceBtn.addEventListener("click", () => void srDoReplace());
+srHiddenToggleEl.addEventListener("click", () => {
+  exState.findHidden = !exState.findHidden;
+  try {
+    localStorage.setItem("board.exShowHidden", exState.findHidden ? "1" : "0");
+  } catch {}
+  exPaintHiddenToggle();
+  srPaint();
+  if (srQueryEl.value.trim()) void srRun();
+});
+document.getElementById("srRefresh")?.addEventListener("click", () => void srRun());
+document.getElementById("srCollapse")?.addEventListener("click", () => {
+  for (const file of srState.files) srState.collapsed.add(file.path);
+  srPaint();
+});
+srListEl.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  const rows = [...srListEl.querySelectorAll(".sr-file, .sr-snip")];
+  if (!rows.length) return;
+  event.preventDefault();
+  const at = rows.indexOf(document.activeElement);
+  const next = rows[Math.max(0, Math.min(rows.length - 1, at + (event.key === "ArrowDown" ? 1 : -1)))];
+  next?.focus();
+});
+srPaint();
+
+// `ctrl+f` opens the search drawer and puts the caret in its field. It never takes the key from a
+// field being typed in, from the editor a file is open in, or from a panel or sheet already up.
+document.addEventListener("keydown", (event) => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+  if (event.key.toLowerCase() !== "f") return;
+  const inSearch = document.activeElement instanceof Element && document.activeElement.closest("#drawerSearch");
+  if (!inSearch) {
+    if (typingSomewhere()) return;
+    if (!exEditorEl.hidden) return;
+    if (panelUp() || openSheet() || !atPick.hidden || !exConfirmEl.hidden || !scDiffEl.hidden) return;
+    if (gitDrawer.isOpen() || terminalDrawer.isOpen() || pluginPanel.isOpen()) return;
+    if (exState.menu || exState.renaming || exState.draft) return;
+  }
+  event.preventDefault();
+  showDrawer("search");
+  srQueryEl.focus();
+  srQueryEl.select();
 });
 
 document.getElementById("exRefresh").addEventListener("click", () => void exRefreshTree());
