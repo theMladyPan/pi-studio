@@ -27,8 +27,6 @@ body.kontainer-open #kontainerScrim { opacity: 1; visibility: visible; transitio
 
 /* bar */
 #kontainerDrawer .k-bar { display:flex; align-items:center; gap:8px; padding:6px 12px; background:var(--k-bg); border-bottom:1px solid var(--k-border); flex:none; flex-wrap:wrap; }
-#kontainerDrawer .k-title { font:600 12px var(--k-mono); color:var(--k-text); display:inline-flex; align-items:center; gap:6px; }
-#kontainerDrawer .k-ws { font:11px var(--k-mono); color:var(--k-muted); }
 #kontainerDrawer .k-pill { display:inline-flex; align-items:center; gap:6px; font:11px var(--k-mono); color:var(--k-muted); background:var(--k-card); border:1px solid var(--k-border); border-radius:999px; padding:2px 9px; white-space:nowrap; }
 #kontainerDrawer .k-pill .k-dot { width:6px; height:6px; border-radius:50%; background:var(--k-green); flex:none; }
 #kontainerDrawer .k-pill .k-dot.bad { background:var(--k-amber); }
@@ -148,8 +146,13 @@ body.kontainer-open #kontainerScrim { opacity: 1; visibility: visible; transitio
 #kontainerDrawer .k-wire-meta { font:11px var(--k-mono); color:var(--k-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
 /* inspector */
-#kontainerDrawer .k-inspector { width:340px; flex:none; background:var(--k-bg-deep); border-left:1px solid var(--k-border); display:flex; flex-direction:column; min-height:0; z-index:10; }
+#kontainerDrawer .k-inspector { position:relative; width:var(--k-insp-w, 340px); flex:none; background:var(--k-bg-deep); border-left:1px solid var(--k-border); display:flex; flex-direction:column; min-height:0; z-index:10; }
 #kontainerDrawer .k-inspector.k-collapsed { display:none; }
+/* The grip: an invisible strip on the inspector's left edge, the rail's on its side. Its width is the
+   human's, so it reads nothing and sets the one property the module remembers. */
+#kontainerDrawer .k-insp-grip { position:absolute; top:0; bottom:0; left:-4px; width:9px; z-index:11; cursor:col-resize; background:transparent; touch-action:none; }
+#kontainerDrawer .k-insp-grip:hover, #kontainerDrawer .k-insp-grip:focus-visible, body.kontainer-inspecting #kontainerDrawer .k-insp-grip { background:var(--k-accent-dim); }
+body.kontainer-inspecting { cursor:col-resize; user-select:none; }
 #kontainerDrawer .k-insp-head { padding:10px 12px; background:var(--k-head); border-bottom:1px solid var(--k-border); display:flex; flex-direction:column; gap:8px; }
 #kontainerDrawer .k-insp-title-row { display:flex; align-items:center; gap:8px; }
 #kontainerDrawer .k-insp-name { font:600 14px var(--k-sans); color:var(--k-text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -216,9 +219,9 @@ body.kontainer-open #kontainerScrim { opacity: 1; visibility: visible; transitio
 #kontainerDrawer .k-toast { position:fixed; bottom:14px; right:14px; z-index:2500; font:12px var(--k-mono); color:var(--k-text); background:var(--k-head); border:1px solid var(--k-accent-dim); border-radius:999px; padding:6px 14px; box-shadow:0 10px 28px rgba(0,0,0,.6); opacity:0; pointer-events:none; transition:opacity 160ms ease; max-width:min(420px,90vw); }
 #kontainerDrawer .k-toast.k-show { opacity:1; }
 
-@media (max-width:1120px) { #kontainerDrawer .k-inspector { width:300px; } #kontainerDrawer .k-grid { gap:36px; } }
+@media (max-width:1120px) { #kontainerDrawer .k-inspector { width:var(--k-insp-w, 300px); } #kontainerDrawer .k-grid { gap:36px; } }
 @media (max-width:960px) {
-  #kontainerDrawer .k-inspector { position:absolute; top:0; right:0; bottom:0; width:min(340px,92vw); box-shadow:-12px 0 32px rgba(0,0,0,.65); }
+  #kontainerDrawer .k-inspector { position:absolute; top:0; right:0; bottom:0; width:min(var(--k-insp-w, 340px), 92vw); box-shadow:-12px 0 32px rgba(0,0,0,.65); }
   #kontainerDrawer .k-stage { min-width:640px; }
   #kontainerDrawer .k-search { width:140px; }
 }

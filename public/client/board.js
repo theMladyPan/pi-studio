@@ -14229,7 +14229,6 @@ function applyMeta(meta) {
   // where another one can be opened in a tab of its own.
   const folder = meta.workspace?.name || meta.folder || "session";
   terminalDrawer.setName(meta.workspace?.name);
-  kontainerDrawer.setName(meta.workspace?.name);
   const sess = document.getElementById("sess");
   sess.innerHTML = "";
   const name = document.createElement("b");
