@@ -192,7 +192,7 @@ export function createLogsDrawer() {
     const detail = document.createElement("div");
     detail.className = "log-detail";
     const full = document.createElement("pre");
-    full.textContent = String(entry.message ?? "");
+    full.textContent = entry.output !== undefined && entry.output !== null && entry.output !== "" ? String(entry.output) : String(entry.message ?? "");
     const actions = document.createElement("div");
     actions.className = "actions";
     const copy = document.createElement("button");
@@ -213,7 +213,8 @@ export function createLogsDrawer() {
       chevron.textContent = open ? "⌄" : "›";
     });
     copy.addEventListener("click", () => {
-      const text = entry.meta ? `${entry.message}\n\n${JSON.stringify(entry.meta, null, 2)}` : String(entry.message ?? "");
+      const base = entry.meta ? `${entry.message}\n\n${JSON.stringify(entry.meta, null, 2)}` : String(entry.message ?? "");
+      const text = entry.output ? `${base}\n\n${entry.output}` : base;
       navigator.clipboard?.writeText(text).catch(() => {});
     });
     collapse.addEventListener("click", shutRow);

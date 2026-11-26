@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LOG_CAPACITY, LOG_MESSAGE_MAX, levelOf, levelPasses, log, logPluginLine, redact, snapshot, subscribe, tapDaemon } from "../server/logs.ts";
+import { LOG_CAPACITY, LOG_MESSAGE_MAX, LOG_OUTPUT_MAX, levelOf, levelPasses, log, logPluginLine, redact, snapshot, subscribe, tapDaemon, truncateOutput } from "../server/logs.ts";
 import type { LogEntry } from "../server/logs.ts";
 
 /**
@@ -25,6 +25,23 @@ test("the ring keeps the newest lines and never more than it promises", () => {
 test("a message is capped, so one runaway print cannot become the whole buffer", () => {
 	const entry = log("error", "git", "x".repeat(LOG_MESSAGE_MAX * 2));
 	assert.equal(entry.message.length, LOG_MESSAGE_MAX);
+});
+
+test("a command's output rides on its line, head and tail, and a secret in it is masked where it is written", () => {
+	const small = log("info", "git", "git rev-parse --show-toplevel", { cmd: "git rev-parse --show-toplevel" }, "/home/stanke/projekty/pi-studio");
+	assert.equal(small.output, "/home/stanke/projekty/pi-studio");
+	const silent = log("info", "git", "git status");
+	assert.equal(silent.output, undefined, "a command with no answer brings none");
+	const big = "head\n" + "x".repeat(10_000) + "\ntail";
+	const entry = log("info", "git", "git log", undefined, big);
+	assert.ok(entry.output && entry.output.startsWith("head"), "the head is kept");
+	assert.ok(entry.output && entry.output.endsWith("tail"), "the tail is kept");
+	assert.ok(entry.output && entry.output.length <= LOG_OUTPUT_MAX + 64, "what is kept fits the budget");
+	assert.ok(entry.output && entry.output.includes("chars omitted"), "the omission says itself");
+	const masked = log("info", "git", "git log", undefined, "token=should-not-be-seen");
+	assert.ok(!String(masked.output).includes("should-not-be-seen"), "a secret never reaches the buffer");
+	const direct = truncateOutput("  a\n\n");
+	assert.equal(direct, "  a", "trimming touches the edges only");
 });
 
 test("every shape a secret wears is masked on the way in, and the rest of the line is kept", () => {
