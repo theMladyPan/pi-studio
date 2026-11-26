@@ -14,7 +14,7 @@ import { EventEmitter } from "node:events";
 import { after, before, test } from "node:test";
 
 const { demuxDockerLogs, discoverRuntimes, requestJson } = await import("../server/kontainer/socket.ts");
-const { buildSources, buildTopology, fetchStats, getState, scanWorkspaceFiles, statsFromPayload } = await import("../server/kontainer/topology.ts");
+const { buildSources, buildTopology, cleanLogText, fetchStats, getState, scanWorkspaceFiles, statsFromPayload } = await import("../server/kontainer/topology.ts");
 const { buildExecCommand, handleAction } = await import("../server/kontainer/actions.ts");
 const { logEngineEvent, onKontainerAction, onKontainerEvents, onKontainerState } = await import("../server/routes/kontainer.ts");
 const { snapshot } = await import("../server/logs.ts");
@@ -176,6 +176,16 @@ test("demuxDockerLogs parses multiplexed frames", () => {
 test("demuxDockerLogs treats a non-header buffer as raw TTY output", () => {
 	assert.equal(demuxDockerLogs(Buffer.from("plain line\nsecond\n")), "plain line\nsecond\n");
 	assert.equal(demuxDockerLogs(Buffer.from("short")), "short");
+});
+
+test("cleanLogText strips ANSI, collapses carriage returns and backspaces", () => {
+	// The Python REPL from the screenshot: coloured prompt, bracketed paste, cursor hide.
+	assert.equal(cleanLogText("\u001b[?2004h\u001b[?25l\u001b[1;35m>>> \u001b[0m\u001b[36mprint\u001b[0m"), ">>> print");
+	assert.equal(cleanLogText("\u001b]8;;https://example.com\u0007link\u001b]8;;\u0007"), "link");
+	assert.equal(cleanLogText("pytjon\b\b\b\b\bython\n"), "python\n");
+	assert.equal(cleanLogText("10%\r20%\r30%\ndone\r\n"), "30%\ndone\n");
+	assert.equal(cleanLogText("plain\ttext\n"), "plain\ttext\n");
+	assert.equal(cleanLogText("a\u0000b\u007fc\n"), "abc\n");
 });
 
 // ---------- topology ----------
