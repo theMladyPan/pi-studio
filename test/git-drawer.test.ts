@@ -5,8 +5,8 @@ import { test } from "node:test";
  * The header label, without a browser.
  *
  * `public/client/git-drawer.js` reads five elements of the board's page and two listeners on `window`, so
- * a stand-in carrying exactly that much answers it. What this covers is the one thing the label says: the
- * workspace name it is told, and the workspace id it falls back to until it hears one.
+ * a stand-in carrying exactly that much answers it. What this covers is the one thing the header label
+ * does: it is shown only while the drawer is open.
  */
 
 /** One element as far as the drawer touches it: its text, its classes, its attributes and its listeners. */
@@ -92,22 +92,10 @@ async function drawerFor(workspace: string) {
 			toggle: () => void;
 			open: () => void;
 			close: () => void;
-			setName: (name?: string) => void;
 		};
 	};
 	return module.createGitDrawer({ workspace, typingSomewhere: () => false });
 }
-
-test("the header label says the workspace id until it is told the name", async () => {
-	const label = standInPage();
-	const drawer = await drawerFor("b08b6688eaf9");
-	assert.equal(label.textContent, "git graph · b08b6688eaf9");
-	drawer.setName("pi-studio");
-	assert.equal(label.textContent, "git graph · pi-studio");
-	// A board that has heard no name yet keeps the id rather than dropping it for an empty label.
-	drawer.setName();
-	assert.equal(label.textContent, "git graph · b08b6688eaf9");
-});
 
 test("the header label shows only while the drawer is open", async () => {
 	const label = standInPage();
@@ -119,16 +107,14 @@ test("the header label shows only while the drawer is open", async () => {
 	assert.equal(label.hidden, true, "rolling up takes the name with it");
 });
 
-test("being told the name keeps the members the board drives", async () => {
-	const label = standInPage();
+test("the drawer keeps the members the board drives", async () => {
+	standInPage();
 	const drawer = await drawerFor("b08b6688eaf9");
-	drawer.setName("pi-studio");
 	assert.equal(drawer.isOpen(), false);
 	drawer.toggle();
 	assert.equal(drawer.isOpen(), true, "one press rolls the drawer down");
 	drawer.toggle();
 	assert.equal(drawer.isOpen(), false, "and the next rolls it up");
-	assert.equal(label.textContent, "git graph · pi-studio", "rolling the drawer changes nothing the label says");
 });
 
 test("closing does not give the keyboard to a hidden toolbox button", async () => {

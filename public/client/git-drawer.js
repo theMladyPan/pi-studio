@@ -30,16 +30,8 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
   const btn = document.getElementById("gitBtn");
   const nameLabel = document.getElementById("openPanelName");
 
-  /**
-   * The header names the board the way a human knows it. A workspace id is a folder's identity in the
-   * state folder, not something anyone reads, so it is what the label falls back to before the board has
-   * heard the name. The label itself is shown only while the drawer is open.
-   */
-  function setName(name) {
-    const board = name || workspace;
-    nameLabel.textContent = board ? `git graph · ${board}` : "git graph";
-  }
-  setName("");
+  // The header label is shown only while the drawer is open; the workspace itself already stands
+  // in the header's own button, so the label names the drawer alone.
   nameLabel.hidden = true;
 
   /** Has the frame ever been pointed at the page. The page is loaded once and kept after that. */
@@ -145,5 +137,5 @@ export function createGitDrawer({ workspace, typingSomewhere }) {
     true,
   );
 
-  return { isOpen: sliding.isOpen, toggle: sliding.toggle, open: sliding.open, close: sliding.close, setName };
+  return { isOpen: sliding.isOpen, toggle: sliding.toggle, open: sliding.open, close: sliding.close };
 }
