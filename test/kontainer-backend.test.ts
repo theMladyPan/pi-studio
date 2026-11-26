@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -14,7 +14,7 @@ import { EventEmitter } from "node:events";
 import { after, before, test } from "node:test";
 
 const { demuxDockerLogs, discoverRuntimes } = await import("../server/kontainer/socket.ts");
-const { buildTopology, fetchStats, statsFromPayload } = await import("../server/kontainer/topology.ts");
+const { buildSources, buildTopology, fetchStats, getState, scanWorkspaceFiles, statsFromPayload } = await import("../server/kontainer/topology.ts");
 const { buildExecCommand, handleAction } = await import("../server/kontainer/actions.ts");
 const { onKontainerAction, onKontainerEvents, onKontainerState } = await import("../server/routes/kontainer.ts");
 import type { Runtime } from "../server/kontainer/socket.ts";
@@ -332,6 +332,193 @@ test("compose actions name the project when the request carries one", async () =
 	assert.deepEqual(calls[1], ["compose", "down"]);
 });
 
+// ---------- workspace sources ----------
+
+function writeWorkspace(): string {
+	const root = mkdtempSync(join(tmpdir(), "pi-studio-sources-"));
+	const folder = join(root, "myproj");
+	mkdirSync(join(folder, "services", "worker"), { recursive: true });
+	mkdirSync(join(folder, "services", "api"), { recursive: true });
+	writeFileSync(join(folder, "compose.yaml"), [
+		"name: myproj",
+		"services:",
+		"  web:",
+		"    image: app:latest",
+		"    build:",
+		"      context: .",
+		"      dockerfile: Dockerfile",
+		"  worker:",
+		"    build: ./services/worker",
+		"volumes:",
+		"  appdata:",
+		"networks:",
+		"  front:",
+		"",
+	].join("\n"));
+	writeFileSync(join(folder, "Dockerfile"), ["FROM node:20 AS build", "FROM node:20-slim", "EXPOSE 3000", ""].join("\n"));
+	writeFileSync(join(folder, "services", "worker", "Containerfile"), ["FROM python:3.12-slim AS base", "FROM base AS runtime", "EXPOSE 8080 9090", ""].join("\n"));
+	writeFileSync(join(folder, "services", "api", "Dockerfile"), "FROM alpine\n");
+	// Dockerfile is older than its image; the worker Containerfile is newer than its image.
+	utimesSync(join(folder, "Dockerfile"), new Date((NOW - 1000) * 1000), new Date((NOW - 1000) * 1000));
+	utimesSync(join(folder, "services", "worker", "Containerfile"), new Date(NOW * 1000), new Date(NOW * 1000));
+	return folder;
+}
+
+test("scanWorkspaceFiles recognizes compose variants and build files to depth 2", () => {
+	const folder = writeWorkspace();
+	try {
+		writeFileSync(join(folder, "compose.e2e.yml"), "services: {}\n");
+		writeFileSync(join(folder, "Containerfile.cli"), "FROM alpine\n");
+		mkdirSync(join(folder, ".git"));
+		writeFileSync(join(folder, ".git", "compose.yaml"), "services: {}\n");
+		mkdirSync(join(folder, "node_modules", "pkg"), { recursive: true });
+		writeFileSync(join(folder, "node_modules", "pkg", "Dockerfile"), "FROM alpine\n");
+		mkdirSync(join(folder, "a", "b", "c"), { recursive: true });
+		writeFileSync(join(folder, "a", "b", "c", "compose.yaml"), "services: {}\n");
+		mkdirSync(join(folder, "linkfile"));
+		symlinkSync(join(folder, "Dockerfile"), join(folder, "linkfile", "Dockerfile"));
+		symlinkSync(join(folder, "services"), join(folder, "linked-services"));
+		const { composeFiles, dockerfiles } = scanWorkspaceFiles(folder);
+		const rel = (paths: string[]) => paths.map((p) => p.slice(folder.length + 1)).sort();
+		assert.deepEqual(rel(composeFiles), ["compose.e2e.yml", "compose.yaml"]);
+		assert.deepEqual(rel(dockerfiles), ["Containerfile.cli", "Dockerfile", "services/api/Dockerfile", "services/worker/Containerfile"]);
+	} finally {
+		rmSync(folder, { recursive: true, force: true });
+		rmSync(join(folder, ".."), { recursive: true, force: true });
+	}
+});
+
+test("buildSources parses compose and build files and links them to topology", () => {
+	const folder = writeWorkspace();
+	try {
+		const imagesRaw = [
+			{ Id: "sha256:aaa111", RepoTags: ["app:latest"], Size: 1000, Created: NOW - 100 },
+			{ Id: "sha256:ccc333", RepoTags: ["myproj-worker:latest"], Size: 1000, Created: NOW - 100 },
+		];
+		const containersRaw = [
+			{
+				Id: "111111aaaaaa",
+				Names: ["/myproj-web-1"],
+				Image: "app:latest",
+				ImageID: "sha256:aaa111",
+				State: "running",
+				Status: "Up 2 hours",
+				Created: NOW - 7200,
+				Labels: { "com.docker.compose.project": "myproj", "com.docker.compose.service": "web", "com.docker.compose.project.working_dir": folder, "com.docker.compose.project.config_files": join(folder, "compose.yaml") },
+				Ports: [],
+				NetworkSettings: { Networks: {} },
+				Mounts: [],
+			},
+		];
+		const topology = buildTopology({ imagesRaw, containersRaw, folder, scope: "all" });
+		assert.equal(topology.containers[0]?.composeConfigFiles.length, 1);
+		const sources = buildSources({ folder, topology });
+		const compose = sources.find((source) => source.id === "src:compose.yaml");
+		assert.ok(compose);
+		assert.equal(compose.kind, "compose");
+		assert.equal(compose.dir, "./");
+		assert.equal(compose.file, "compose.yaml");
+		assert.equal(compose.meta, "2 services · 1 vol · 1 net");
+		assert.equal(compose.badge, "active");
+		assert.equal(compose.statusText, "stack running (1/2 up)");
+		assert.equal(compose.unbuilt, false);
+		assert.deepEqual(compose.services, [
+			{ name: "web", image: "app:latest", dockerfile: "Dockerfile", state: "up" },
+			{ name: "worker", image: null, dockerfile: "services/worker/Containerfile", state: "down" },
+		]);
+		assert.deepEqual(compose.containerIds, ["111111aaaaaa"]);
+		assert.ok(compose.imageIds.includes("sha256:aaa111"));
+		assert.ok(compose.preview.startsWith("name: myproj"));
+		const dockerfile = sources.find((source) => source.id === "src:Dockerfile");
+		assert.ok(dockerfile);
+		assert.equal(dockerfile.kind, "dockerfile");
+		assert.deepEqual(dockerfile.stages, ["build", "node:20-slim"]);
+		assert.equal(dockerfile.baseImage, "node:20");
+		assert.deepEqual(dockerfile.exposedPorts, ["3000"]);
+		assert.equal(dockerfile.meta, "FROM node:20 · 2 stages · EXPOSE 3000");
+		assert.equal(dockerfile.badge, "multi-stage");
+		assert.equal(dockerfile.statusText, "built → app:latest");
+		assert.equal(dockerfile.edited, false);
+		assert.deepEqual(dockerfile.imageIds, ["sha256:aaa111"]);
+		assert.deepEqual(dockerfile.containerIds, ["111111aaaaaa"]);
+		const containerfile = sources.find((source) => source.id === "src:services/worker/Containerfile");
+		assert.ok(containerfile);
+		assert.equal(containerfile.kind, "containerfile");
+		assert.equal(containerfile.dir, "services/worker/");
+		assert.deepEqual(containerfile.stages, ["base", "runtime"]);
+		assert.equal(containerfile.baseImage, "python:3.12-slim");
+		assert.deepEqual(containerfile.exposedPorts, ["8080", "9090"]);
+		assert.equal(containerfile.meta, "FROM python:3.12-slim · 2 stages · EXPOSE 8080, 9090");
+		assert.equal(containerfile.edited, true);
+		assert.equal(containerfile.badge, "edited");
+		assert.equal(containerfile.statusText, "modified after last build (drift)");
+		assert.deepEqual(containerfile.imageIds, ["sha256:ccc333"]);
+		const unbuilt = sources.find((source) => source.id === "src:services/api/Dockerfile");
+		assert.ok(unbuilt);
+		assert.equal(unbuilt.badge, "unbuilt");
+		assert.equal(unbuilt.statusText, "not built yet");
+		assert.equal(unbuilt.unbuilt, true);
+	} finally {
+		rmSync(join(folder, ".."), { recursive: true, force: true });
+	}
+});
+
+test("buildSources without topology marks compose down and build files unbuilt", () => {
+	const folder = writeWorkspace();
+	try {
+		const sources = buildSources({ folder, topology: null });
+		const compose = sources.find((source) => source.id === "src:compose.yaml");
+		assert.equal(compose?.badge, "stopped");
+		assert.equal(compose?.statusText, "0 containers up");
+		assert.equal(compose?.unbuilt, true);
+		assert.ok(compose?.services.every((service) => service.state === "down"));
+		const dockerfile = sources.find((source) => source.id === "src:Dockerfile");
+		assert.equal(dockerfile?.badge, "unbuilt");
+		assert.equal(dockerfile?.statusText, "not built yet");
+	} finally {
+		rmSync(join(folder, ".."), { recursive: true, force: true });
+	}
+});
+
+test("getState returns sources even when no runtime socket is available", async () => {
+	const folder = writeWorkspace();
+	try {
+		const state = await getState({ folder, scope: "workspace", runtimes: [] });
+		assert.equal(state.available, false);
+		assert.equal(state.topology, null);
+		assert.ok(state.sources.some((source) => source.id === "src:compose.yaml"));
+		assert.ok(state.sources.some((source) => source.id === "src:services/worker/Containerfile"));
+		assert.ok(state.composeFiles.length >= 1);
+		assert.ok(state.dockerfiles.length >= 2);
+	} finally {
+		rmSync(join(folder, ".."), { recursive: true, force: true });
+	}
+});
+
+test("handleAction build honours dockerfile and context inside the workspace", async () => {
+	const runtime = mockRuntime();
+	const folder = writeWorkspace();
+	try {
+		const calls: string[][] = [];
+		const run = async (_cli: string, args: string[]) => {
+			calls.push(args);
+			return { code: 0, output: "" };
+		};
+		const inside = await handleAction({ folder }, { action: "build", tag: "app:1", dockerfile: "services/api/Dockerfile", context: "services/api", runtime: runtime.id }, { runtimes: [runtime], run });
+		assert.equal(inside.ok, true);
+		assert.deepEqual(calls[0], ["build", "-f", join(folder, "services/api/Dockerfile"), "-t", "app:1", join(folder, "services/api")]);
+		const defaulted = await handleAction({ folder }, { action: "build", tag: "app:1", runtime: runtime.id }, { runtimes: [runtime], run });
+		assert.equal(defaulted.ok, true);
+		assert.deepEqual(calls[1], ["build", "-t", "app:1", "."]);
+		const outside = await handleAction({ folder }, { action: "build", tag: "app:1", context: "../outside", runtime: runtime.id }, { runtimes: [runtime], run });
+		assert.equal(outside.ok, false);
+		assert.equal(outside.error, "build context must be inside the workspace folder");
+		assert.equal(calls.length, 2, "a rejected context never reaches the CLI");
+	} finally {
+		rmSync(join(folder, ".."), { recursive: true, force: true });
+	}
+});
+
 // ---------- routes ----------
 
 type FakeResponse = EventEmitter & {
@@ -447,6 +634,24 @@ test("onKontainerEvents streams engine events and closes the upstream socket whe
 	assert.equal(opened.closed, 1, "one close tears the upstream down once");
 	assert.equal(opened.ended, false, "the client's own disconnect is not answered with an end");
 	assert.doesNotMatch(opened.chunks, /event: error/);
+});
+
+test("onKontainerState includes workspace sources", async () => {
+	const folder = writeWorkspace();
+	try {
+		const state = JSON.parse(
+			await withEngine(sockPath, async () => {
+				const res = fakeResponse();
+				await onKontainerState({} as IncomingMessage, res as unknown as ServerResponse, new URL("http://daemon/kontainer/state?scope=all&runtime=docker"), { folder });
+				assert.equal(res.status, 200);
+				return res.body;
+			}),
+		) as { sources: Array<{ id: string }> };
+		assert.ok(state.sources.some((source) => source.id === "src:compose.yaml"));
+		assert.ok(state.sources.some((source) => source.id === "src:Dockerfile"));
+	} finally {
+		rmSync(join(folder, ".."), { recursive: true, force: true });
+	}
 });
 
 test("onKontainerEvents tells the tab when the engine fails mid-stream", async () => {

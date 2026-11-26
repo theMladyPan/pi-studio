@@ -226,7 +226,13 @@ export async function handleAction(board: KontainerBoardLike, rawBody: unknown, 
 			args.push("-f", inside);
 		}
 		if (body.noCache === true) args.push("--no-cache");
-		args.push("-t", tag as string, ".");
+		let buildContext = ".";
+		if (typeof body.context === "string" && body.context) {
+			const insideContext = resolveInsideFolder(folder, body.context);
+			if (!insideContext) return { ok: false, error: "build context must be inside the workspace folder" };
+			buildContext = insideContext;
+		}
+		args.push("-t", tag as string, buildContext);
 		if (!folder) return { ok: false, error: "this workspace has no folder" };
 		return cliResult(await run(cli, args, { cwd: folder, timeoutMs: 120_000 }));
 	}

@@ -130,6 +130,199 @@ test("a long engine error wraps inside a rounded bubble", () => {
 	assert.match(kontainerCss, /#kontainerDrawer \.k-toast \{[^}]*max-width:min\(560px,90vw\)/, "it stops short of the screen edge");
 });
 
+test("a right press on a card opens the node menu its kind answers to", () => {
+	// The menu is a body element of its own, beside the tools popover, and it starts hidden.
+	assert.match(kontainerSource, /<div class="k-ctx-menu" id="kCtxMenu" hidden role="menu" aria-label="node actions"><\/div>/, "the skeleton carries the menu");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-menu \{[^}]*position:fixed/, "the menu is placed on the window, not inside a column");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-menu\[hidden\] \{ display:none; \}/, "a closed menu draws nothing");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-sep \{[^}]*background:var\(--k-border\)/, "the items are parted by a hairline");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-item:disabled \{ color:var\(--k-muted\)/, "an item that cannot act reads muted");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-item\.k-danger-item \{ color:var\(--k-red\); \}/, "and the one that removes reads red in the drawer's own palette");
+	// One listener on the shared card decorator serves all three builders; no builder adds its own.
+	assert.match(kontainerSource, /function focusClasses\(card, id, related\) \{[\s\S]*?card\.addEventListener\("contextmenu"/, "the shared card decorator listens for the right press");
+	assert.equal(kontainerSource.match(/"contextmenu"/g)?.length, 1, "and no builder listens a second time");
+	// The five tables speak the inspector's words, and the kind of a node picks its own.
+	for (const kind of ["image", "container", "port", "network", "volume", "source"]) {
+		assert.match(kontainerSource, new RegExp(`\\b${kind}Ctx\\b`), `a ${kind} node has a menu of its own`);
+	}
+	assert.match(kontainerSource, /const CTX_MENUS = \{ image: imageCtx, container: containerCtx, port: portCtx, network: networkCtx, volume: volumeCtx, source: sourceCtx \};/, "the kind of a node picks its table");
+	// Placed where the press was, pulled back inside the window by the box the menu really drew.
+	assert.match(kontainerSource, /const box = ctxMenu\.getBoundingClientRect\(\);/, "the menu is measured before it is placed");
+	assert.match(kontainerSource, /Math\.max\(4, Math\.min\(at\.x, window\.innerWidth - box\.width - 4\)\)/, "the left edge stays on the window");
+	assert.match(kontainerSource, /Math\.max\(4, Math\.min\(at\.y, window\.innerHeight - box\.height - 4\)\)/, "and so does the top");
+	assert.match(kontainerSource, /ctxMenu\.querySelector\("button:not\(:disabled\)"\)\?\.focus\(\);/, "the first item that can act takes the keyboard");
+});
+
+test("a right press opens the menu without the selection or the inspector following it", () => {
+	// The press belongs to the menu alone: it selects nothing, so a shut inspector stays shut and an
+	// open one stays open, and `inspect`/`layers` are the only items that mean "show me this node".
+	const handler = kontainerSource.match(/card\.addEventListener\("contextmenu", \(event\) => \{[\s\S]*?\n    \}\);/)?.[0];
+	assert.ok(handler, "the card decorator's right-press listener is found whole");
+	assert.doesNotMatch(handler, /state\.selected/, "a right press assigns no selection");
+	assert.doesNotMatch(handler, /render\(|renderInspector\(|showTab\(/, "and repaints no panel");
+	assert.match(handler, /ctxOpen\(/, "it opens the menu on the node it read");
+	// Every item runs against the copy the menu held at the press, never against a selection.
+	assert.match(kontainerSource, /ctxHeld = \{ kind, id: entity\.id, node: \{ \.\.\.entity \} \};/, "the menu keeps its own snapshot of the node");
+	assert.match(kontainerSource, /const item = CTX_MENUS\[held\.kind\]\?\.\(held\.node\)\.find\(\(one\) => one\.id === id\);/, "and every press runs against that snapshot");
+	for (const kind of ["image", "container", "port", "network", "volume", "source"]) {
+		const table = kontainerSource.match(new RegExp(`function ${kind}Ctx\\([^)]*\\) \\{[\\s\\S]*?\\n  \\}`))?.[0];
+		assert.ok(table, `the ${kind} table is found whole`);
+		assert.doesNotMatch(table, /state\.selected/, `the ${kind} menu reads no selection`);
+	}
+	// The two items that name the inspector are the only ones that select, and they say which tab.
+	assert.match(kontainerSource, /function showTab\(kind, id, tab\) \{ state\.selected = \{ kind, id \}; state\.tab = tab; renderInspector\(\); \}/, "one helper opens the inspector on the node the item names");
+	assert.equal(kontainerSource.match(/run: \(\) => showTab\(/g)?.length, 4, "and only the inspect, layers and source preview items call it");
+	assert.match(kontainerSource, /\{ id: "inspect", label: "inspect", run: \(\) => showTab\("image", img\.id, "inspect"\) \}/, "the image inspect item selects and opens the inspector");
+	assert.match(kontainerSource, /\{ id: "layers", label: "layers", run: \(\) => showTab\("image", img\.id, "layers"\) \}/, "so does the image layers item");
+	assert.match(kontainerSource, /\{ id: "inspect", label: "inspect", run: \(\) => showTab\("container", c\.id, "inspect"\) \}/, "and the container inspect item");
+	assert.match(kontainerSource, /\{ id: "preview", label: "inspect", run: \(\) => showTab\("source", src\.id, "preview"\) \}/, "and the source preview item");
+});
+
+test("Escape and a press outside put the node menu away before the tools and the selection", () => {
+	// The drawer's own Escape order: a sheet, then the node menu, then the tools, the filter, the selection.
+	assert.match(kontainerSource, /if \(!sheet\.hidden\) \{ sheet\.hidden = true; return true; \}\n\s*if \(!ctxMenu\.hidden\) \{[^\n]*ctxClose\(\);[^\n]*return true; \}\n\s*if \(!toolsMenu\.hidden\)/, "the sheet goes first, the node menu second, the tools third");
+	assert.match(kontainerSource, /if \(!ctxMenu\.hidden\) \{[^\n]*const id = ctxHeld\?\.id \?\? state\.selected\?\.id;[^\n]*focusNode\(id\);[^\n]*return true; \}/, "and the keyboard comes back to the card the menu was opened on");
+	assert.match(kontainerSource, /document\.addEventListener\("pointerdown", \(event\) => \{\n\s*if \(ctxMenu\.hidden\) return;\n\s*if \(event\.target\.closest\?\.\("#kCtxMenu"\)\) return;\n\s*ctxClose\(\);/, "a press anywhere else closes it, the files menu's own shape");
+	assert.match(kontainerSource, /if \(event\.key === "Tab"\) \{ ctxClose\(\); return; \}/, "Tab puts it away");
+	assert.match(kontainerSource, /const step = event\.key === "ArrowDown" \? 1 : -1;\n\s*buttons\[\(at \+ step \+ buttons\.length\) % buttons\.length\]\?\.focus\(\);/, "the two arrows walk the items that can act");
+});
+
+test("the menu copies through the browser's clipboard, and the volume menu prunes volumes", () => {
+	// A board opened over the network is not a secure context, so a missing or refused clipboard shows the value.
+	assert.match(kontainerSource, /if \(!navigator\.clipboard\?\.writeText\) \{ toast\(value\); return; \}/, "there is one guarded clipboard call");
+	assert.match(kontainerSource, /navigator\.clipboard\.writeText\(value\)\.then\(\(\) => toast\("copied"\), \(\) => toast\(value\)\);/, "and a refusal carries the value it could not copy");
+	// The sheet takes the target it is asked for, and every caller that names none keeps the images it had.
+	assert.match(kontainerSource, /run: \(\) => openSheet\("prune", \{ target: "volumes" \}\)/, "the volume menu asks the sheet for volumes");
+	assert.match(kontainerSource, /const target = preset\?\.target === "volumes" \? "volumes" : "images";/, "and the sheet defaults to images");
+	assert.equal(kontainerSource.match(/openSheet\("prune"\)/g)?.length, 3, "the tray, the tools menu and `> prune` still ask for the image sheet");
+	assert.match(kontainerSource, /disabled: w\.mountKind !== "volume", hint: "a bind mount has no volume to prune"/, "a bind mount offers no prune, and says why");
+});
+
+test("the menu's kill arm repaints the inspector it armed, and only for the node it names", () => {
+	// The menu puts itself away before the item runs, so the press that arms the kill would otherwise leave
+	// the inspector's button reading `kill` while it waits for its second press. The arming is one helper
+	// the inspector's own button and the menu share, and it repaints only the node the panel already shows.
+	const arm = kontainerSource.match(/function armKill\(c\) \{[\s\S]*?\n  \}/)?.[0];
+	assert.ok(arm, "the kill arming is one helper the inspector and the menu share");
+	assert.equal(arm.match(/renderInspector\(false\)/g)?.length, 2, "the press and its three-second reset both repaint the button");
+	assert.match(arm, /state\.selected\?\.kind === "container" && state\.selected\.id === c\.id/, "and only when the panel is on that container");
+	assert.match(kontainerSource, /if \(state\.armedKill !== c\.id\) \{ armKill\(c\); toast\(/, "the menu's kill item arms through it");
+	assert.match(kontainerSource, /if \(!armed\) return armKill\(c\);/, "and so does the inspector's own button");
+});
+
+test("a wire card and its inspector name a mount's own kind, not the column it is drawn in", () => {
+	// `volume` and `bind` ride beside the `vol` column, so a mounted folder never reads as a volume.
+	assert.match(kontainerSource, /const items = list\.map\(\(n\) => \(\{ \.\.\.n, kind, mountKind: n\.kind \}\)\)/, "the mount's kind survives the spread that paints the column's");
+	assert.match(kontainerSource, /`\$\{w\.mountKind \|\| w\.kind \|\| ""\} · \$\{w\.destination/, "the card names the mount's kind");
+	assert.match(kontainerSource, /kvRow\("kind", w\.mountKind \|\| w\.kind \|\| "—"\)/, "and so does the inspector's kind row");
+});
+
+test("open in browser reaches the port through a host a browser can dial", () => {
+	// An any-interface bind and an IPv6 literal are not authorities a browser resolves, so the first reads
+	// as `localhost` and the second gets its brackets back; the tab it opens cannot reach back into the board.
+	const open = kontainerSource.match(/const openHost = \(ip\) => \{[\s\S]*?\n  \};/)?.[0];
+	assert.ok(open, "the host is mapped in one place");
+	assert.match(open, /if \(host === "0\.0\.0\.0" \|\| host === "::"\) return "localhost";/, "a wildcard bind is dialled at localhost");
+	assert.match(open, /host\.includes\(":"\) \? `\[\$\{host\}\]` : host;/, "and an IPv6 literal keeps the brackets a URL needs");
+	assert.match(kontainerSource, /window\.open\(`http:\/\/\$\{openHost\(w\.hostIp\)\}:\$\{w\.hostPort\}`, "_blank", "noopener"\)/, "the port opens through it, and the tab is opened without a handle back");
+});
+
+test("a keyboard press opens the menu on the card it was pressed on", () => {
+	// `Shift+F10` and the menu key fire a `contextmenu` with no point of their own, so the menu opens at the
+	// card's corner instead of pinned to the window's.
+	const open = kontainerSource.match(/function ctxOpen\(kind, entity, event, card\) \{[\s\S]*?\n  \}/)?.[0];
+	assert.ok(open, "the menu takes the card it was opened on");
+	assert.match(open, /const at = !event\.clientX && !event\.clientY \? \{ x: rect\.left \+ 16, y: rect\.top \+ 16 \}/, "a press with no point is placed on the card");
+	assert.match(kontainerSource, /ctxOpen\(cardKind === "wire" \? \{ port: "port", net: "network", vol: "volume" \}\[node\.kind\] : cardKind, node, event, card\);/, "and the one card decorator hands its card in");
+});
+
+test("00 Sources stratum sits first, with its own accent and meta", () => {
+	assert.match(kontainerSource, /<span class="k-stratum-label"><span class="k-idx">00<\/span> Sources · Definitions<\/span><span class="k-stratum-meta" id="kMetaSources">/, "the skeleton carries the sources stratum first");
+	assert.match(kontainerSource, /<div class="k-col-list" id="kSources"><\/div>/, "and its column list");
+	assert.match(kontainerSource, /const composeCount = sources\(\)\.filter\(\(s\) => s\.kind === "compose"\)\.length;/, "the meta counts compose files");
+	assert.match(kontainerSource, /`\$\{composeCount\} compose · \$\{buildFileCount\} file\$\{buildFileCount === 1 \? "" : "s"\}`/, "and build files");
+	assert.match(kontainerCss, /--k-cyan: #56d4dd/, "the drawer carries the cyan accent");
+	assert.match(kontainerCss, /\.k-stratum-head\.k-stratum-sources \{[^}]*rgba\(86,212,221,\.35\)/, "the sources head is cyan-lined");
+	assert.match(kontainerCss, /grid-template-columns:minmax\(220px,\.95fr\) minmax\(205px,\.88fr\) minmax\(290px,1\.38fr\) minmax\(205px,\.86fr\); gap:42px/, "four strata draw the grid");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-stage \{[^}]*min-width:1020px/, "the stage is wide enough for four columns");
+	assert.match(kontainerCss, /\.k-src-card\.k-src-compose \{ border-left-color:var\(--k-cyan\); \}/, "compose cards lean cyan");
+	assert.match(kontainerCss, /\.k-src-card\.k-src-containerfile \{ border-left-color:var\(--k-purple\); \}/, "containerfiles lean purple");
+	assert.match(kontainerCss, /\.k-src-card\.k-src-unbuilt \{ border-style:dashed/, "an unbuilt source reads dashed");
+});
+
+test("source cards name their kind, badge, services and output jack", () => {
+	assert.match(kontainerSource, /function buildSourceCard\(src, related\) \{/, "the builder exists");
+	assert.match(kontainerSource, /card\.dataset\.nodeId = src\.id; card\.dataset\.kind = "source";/, "the card carries a source node id");
+	assert.match(kontainerSource, /src\.kind === "compose" \? "C" : src\.kind === "dockerfile" \? "D" : "CF"/, "C, D and CF badges");
+	assert.match(kontainerSource, /el\("span", `k-mini-dot \$\{s\.state\}`\)/, "service pills carry a state dot");
+	assert.match(kontainerSource, /jack\.dataset\.jack = `\$\{src\.id\}-out`/, "the source card draws the output jack");
+	assert.match(kontainerSource, /jackL\.dataset\.jack = `\$\{img\.id\}-in`;/, "and the image card draws the input jack the source wire lands on");
+	assert.match(kontainerSource, /"compose stacks"/, "sources group compose stacks first");
+	assert.match(kontainerSource, /"dockerfiles & containerfiles"/, "then dockerfiles & containerfiles");
+	assert.match(kontainerSource, /"no compose or containerfiles"/, "an empty workspace says so");
+	assert.match(kontainerSource, /"no sources match"/, "and a filter that matches nothing says that");
+	// The wire from a source to its image is drawn in the kind's colour, dashed, and amber when drifted.
+	assert.match(kontainerSource, /`k-src \$\{drift\}/, "source wires are dashed");
+	assert.match(kontainerSource, /s\.edited \|\| img\?\.drift\) stroke = "#d29922"/, "drift wires read amber");
+	assert.match(kontainerSource, /s\.kind === "compose"\) stroke = "#56d4dd"/, "compose wires read cyan");
+	assert.match(kontainerSource, /const src = findSource\(id\);/, "a source is a focusable node");
+	assert.match(kontainerSource, /sources\(\)\.filter\(\(s\) => \(s\.imageIds \|\| \[\]\)\.includes\(img\.id\)\)/, "an image pulls its sources into focus");
+});
+
+test("sourceCtx runs against the snapshot, and only preview opens the inspector", () => {
+	const table = kontainerSource.match(/function sourceCtx\(src\) \{[\s\S]*?\n  \}/)?.[0];
+	assert.ok(table, "the source table is found whole");
+	assert.doesNotMatch(table, /state\.selected/, "the source menu reads no selection");
+	assert.match(table, /\{ id: "openFile", label: "open file", run: \(\) => openSourceFile\(src\.relPath\) \}/, "open file hands the path to the board");
+	assert.match(table, /\{ id: "copyPath", label: "copy path", run: \(\) => copyText\(src\.relPath\) \}/, "and copies it");
+	assert.match(table, /action: "compose\.up", file: src\.relPath/, "compose up names the file");
+	assert.match(table, /action: "compose\.restart", file: src\.relPath/, "restart does too");
+	assert.match(table, /action: "compose\.down", file: src\.relPath/, "down does too");
+	assert.match(table, /disabled: src\.unbuilt, hint: "no stack containers are up"/, "down says why it is greyed on an unbuilt stack");
+	assert.match(table, /execToTerminal\(\{ mode: "compose-logs", composeFile: src\.relPath \}\)/, "logs go to the terminal");
+	assert.match(table, /openSheet\("build", \{ dockerfile: src\.relPath, context: src\.dir === "\.\/" \? "\." : src\.dir\.replace/, "a build opens the sheet prefilled, context and all");
+	assert.match(table, /noCache: true/, "and the no-cache build carries it");
+});
+
+test("the board hands a source path to the editor, and the drawer closes first", () => {
+	assert.match(board, /openWorkspaceFile: \(relPath\) => \{ kontainerDrawer\.close\(\); exEditOpen\(relPath, "edit"\); \}/, "the drawer rolls up and the file opens");
+	assert.match(kontainerSource, /export function createKontainerDrawer\(\{ workspace, typingSomewhere, openTerminalCommand, openWorkspaceFile \}\)/, "the drawer takes the door");
+	assert.match(kontainerSource, /function openSourceFile\(relPath\) \{\n\s*if \(typeof openWorkspaceFile === "function"\) openWorkspaceFile\(relPath\);\n\s*else toast\(relPath\);/, "and toasts the path when the board gave none");
+	// Card actions never select the card they sit on.
+	assert.match(kontainerSource, /openBtn\.onclick = \(e\) => \{ e\.stopPropagation\(\); openSourceFile\(src\.relPath\); \};/, "open stops propagation");
+	assert.match(kontainerSource, /up\.onclick = \(e\) => \{ e\.stopPropagation\(\); postAction\(\{ action: "compose\.up", file: src\.relPath \}/, "so does up -d");
+});
+
+test("the source inspector previews the file and details its services or build", () => {
+	assert.match(kontainerSource, /if \(kind === "source"\) return renderSourceInspector\(findSource\(id\)\);/, "a source click opens its inspector");
+	assert.match(kontainerSource, /state\.tab = card\.dataset\.kind === "source" \? "preview"/, "and lands on the preview tab");
+	assert.match(kontainerSource, /function renderSourceInspector\(src\) \{/, "the builder exists");
+	assert.match(kontainerSource, /inspHead\(src\.kind, src\.relPath, actions\)/, "the head names the kind and the path");
+	assert.match(kontainerSource, /actBtn\("compose up -d", "k-primary"/, "compose up -d is primary");
+	assert.match(kontainerSource, /actBtn\(src\.unbuilt \? "build image" : "rebuild image", "k-primary"/, "a dockerfile builds or rebuilds");
+	assert.match(kontainerSource, /box\.textContent = src\.preview \|\| "\(empty file\)"/, "the preview is text, never html");
+	assert.match(kontainerSource, /kvRow\("workspace path", src\.relPath\)/, "the preview tab names the path");
+	assert.match(kontainerSource, /kvRow\("base image", src\.baseImage \|\| "—"\)/, "details name the base image");
+	assert.match(kontainerSource, /kvRow\("build stages", \(src\.stages \|\| \[\]\)\.length/, "and the stages");
+	assert.match(kontainerSource, /kvRow\("exposed ports", \(src\.exposedPorts \|\| \[\]\)\.length/, "and the ports");
+});
+
+test("the build sheet takes a preset object with a build context", () => {
+	assert.match(kontainerSource, /const presetObj = preset && typeof preset === "object" \? preset : null;/, "an object preset is read as one");
+	assert.match(kontainerSource, /presetObj \? String\(presetObj\.dockerfile \|\| ""\) : typeof preset === "string" \? preset : ""/, "and a string preset still works");
+	assert.match(kontainerSource, /field\("Build Context", "kBuildContext", presetObj\?\.context \|\| "\."\)/, "the context field pre-fills");
+	assert.match(kontainerSource, /field\("Image tag", "kBuildTag", presetObj\?\.tag \|\|/, "so does the tag");
+	assert.match(kontainerSource, /const noCache = check\("no cache", "kBuildNoCache", !!presetObj\?\.noCache\);/, "and the no-cache box");
+	assert.match(kontainerSource, /action: "build", dockerfile: df\.value\.trim\(\), context: ctx\.value\.trim\(\) \|\| "\."/, "the build carries the context");
+	assert.match(kontainerSource, /Array\.isArray\(state\.data\?\.sources\)/, "older payloads synthesize sources instead of crashing");
+});
+
+test("an empty workspace hint stays accurate when sources are recognized, and unavailable runtimes keep their scanned sources", () => {
+	assert.match(kontainerSource, /\(s\.workspaceContainers \?\? 0\) === 0 && \(s\.allContainers \?\? 0\) > 0 && sources\(\)\.length === 0/, "sources suppress the every-container claim");
+	assert.match(kontainerSource, /if \(data\.available === false\) \{ showUnavailable\(data\.reason \|\| "no container runtime is available", data\); return; \}/, "showUnavailable receives the state payload");
+	assert.match(kontainerSource, /sources: Array\.isArray\(existing\?\.sources\) \? existing\.sources : \[\],/, "and preserves recognized sources when no engine socket is up");
+});
+
 /** The terminal drawer's `runCommand`, on the page it reads and the socket it writes to. */
 class FakeElement {
 	textContent = "";

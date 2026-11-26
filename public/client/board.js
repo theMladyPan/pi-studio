@@ -67,6 +67,7 @@ const kontainerDrawer = createKontainerDrawer({
     closeDocks("bottom");
     terminalDrawer.runCommand(cmd);
   },
+  openWorkspaceFile: (relPath) => { kontainerDrawer.close(); exEditOpen(relPath, "edit"); },
 });
 document.getElementById("kontainerBtn").addEventListener("click", () => {
   closeHeaderMenus();
