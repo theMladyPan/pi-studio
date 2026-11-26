@@ -31,7 +31,20 @@ export const NAME_MODEL = process.env.PI_STUDIO_NAME_MODEL ?? "openrouter/deepse
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 
+/**
+ * How long a good read is kept before pi is asked again. `pi --list-models` answers in well under a
+ * second, so the cadence costs nothing and a healthy read keeps answering for ten minutes.
+ */
 export const CATALOG_TTL_MS = 10 * 60_000;
+
+
+/**
+ * How long a model stays in the answer after pi last named it, even when a read omits it. OpenRouter
+ * retires models rarely, and a model a board has been spawning stays spawnable through reads that
+ * lost it, so one bad read cannot refuse every spawn for six hours. Six hours of being unnamed is
+ * the one way a model leaves the answer.
+ */
+export const CATALOG_MEMORY_MS = 6 * 60 * 60_000;
 
 
 export const run = promisify(execFile);
@@ -51,9 +64,20 @@ export let catalogAt = 0;
 
 
 /**
- * How long a failed read is trusted before pi is asked again. Ten minutes of an empty picker is what a
- * single failed read used to cost, and the human has no way to tell that from a machine that lost its
- * credentials.
+ * What pi has listed within the retention window, keyed `${provider}/${model}` to when it was last
+ * seen. The catalogue is answered from this memory rather than from the latest read alone: a model a
+ * board could spawn this morning stays spawnable for six hours even when a read omits it, so one read
+ * that lost a model cannot refuse every spawn for it. A read that this memory distrusts (a failure, or
+ * a table more than a fifth smaller) leaves `seenAt` alone, and a model that is not seen for six hours
+ * leaves the answer, which is the one way it is ever dropped.
+ */
+export const catalogSeen = new Map();
+
+
+/**
+ * How long a failed read is trusted before pi is asked again. A whole memory window of a table that
+ * came back short is what a single failed read would cost, and the human has no way to tell that from
+ * a machine that lost its credentials.
  */
 export const CATALOG_RETRY_MS = 30_000;
 
@@ -98,13 +122,44 @@ export async function modelCatalog() {
 			images: images === "yes",
 		});
 	}
+	// A table that came back clean but much smaller than the one already known is a short read, not a
+	// smaller machine. Pi trims the list it prints to the shortlist the key may use, and a slow or
+	// partial answer from OpenRouter shrinks the table while the process still exits cleanly — which
+	// used to become the truth for the whole memory window and refuse spawns for models still there.
+	// A read of more than a fifth smaller is distrusted the way a failed read is: the known models stay,
+	// the reason reaches the picker, and pi is asked again after thirty seconds.
+	if (!trouble && catalog && catalog.models.length > 0 && models.length * 5 < catalog.models.length * 4) {
+		trouble = `pi listed ${models.length} models after ${catalog.models.length}, which reads as a short table, so the known list is kept`;
+	}
 	// A machine with no credentials still has a board, so an empty table is answered with the levels and
 	// no models rather than with an error. The empty answer is kept too: otherwise every open of the
-	// picker would spawn pi again. A failed read is kept for a shorter while, so the next open asks pi
-	// again rather than showing the same hole for ten minutes.
-	catalog = trouble && catalog ? { ...catalog, trouble } : { models, levels: THINKING_LEVELS, trouble };
-	catalogAt = Date.now();
+	// picker would spawn pi again. A failed — or distrusted — read is kept for a shorter while, so the
+	// next open asks pi again rather than showing the same hole for the whole memory window.
+	if (trouble && catalog) {
+		// Refusal does not update what was seen, but the six-hour window still runs underneath: rows that
+		// have gone unnamed since before the refusal age out here too, so a list that really did shrink
+		// lands a little at a time until a read clears four fifths of what is left.
+		catalog = { ...catalog, models: remembered(Date.now()), trouble };
+		catalogAt = Date.now();
+		return catalog;
+	}
+	// A read the memory can trust: what it names is seen now, and what it omits stays for the rest of
+	// its six hours. A row spoken of again is spoken of from this read, and one that goes unspoken for
+	// the whole window leaves the answer.
+	const now = Date.now();
+	for (const one of models) catalogSeen.set(`${one.provider}\u0000${one.model}`, { row: one, seenAt: now });
+	catalog = { models: remembered(now), levels: THINKING_LEVELS, trouble };
+	catalogAt = now;
 	return catalog;
+}
+
+
+/** The rows pi has named within the memory window: every pair whose last naming is inside six hours. */
+function remembered(now) {
+	for (const [key, entry] of catalogSeen) {
+		if (now - entry.seenAt > CATALOG_MEMORY_MS) catalogSeen.delete(key);
+	}
+	return [...catalogSeen.values()].map((entry) => entry.row);
 }
 
 
