@@ -151,6 +151,9 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   // The bar's count, this column's filter and the backend's `summary.issues` are one definition.
   const isIssue = (c) => String(c.health || "").toLowerCase() === "unhealthy" || !!c.staleImage || !!c.oomKilled || (String(c.state || "").toLowerCase() === "exited" && c.exitCode !== null && c.exitCode !== 0) || String(c.state || "").toLowerCase() === "dead";
   const isUnusedImg = (i) => i.dangling || !i.inUse;
+  // What removing the image frees on disk: its unique layers, not its cumulative
+  // size, which charges every shared layer once per image containing it.
+  const reclaimBytes = (i) => i.uniqueSizeBytes ?? i.sizeBytes ?? 0;
   const imgNameOf = (c) => { const i = imageOfCtr(c); return i ? `${i.repo}:${i.tag}` : c.imageName || ""; };
   const ctrWires = (c) => {
     const w = [];
@@ -372,7 +375,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const s = summary();
     $("kRun").textContent = String(s.running ?? containers().filter(isRunning).length);
     $("kIssues").textContent = `${s.issues ?? containers().filter(isIssue).length} alerts`;
-    $("kDisk").textContent = fmtBytes(s.totalImageBytes ?? images().reduce((a, i) => a + (i.sizeBytes || 0), 0));
+    $("kDisk").textContent = fmtBytes(s.totalImageBytes ?? images().reduce((a, i) => a + reclaimBytes(i), 0));
     $("kDot").classList.toggle("bad", (s.issues ?? 0) > 0);
     const composeCount = sources().filter((s) => s.kind === "compose").length;
     const buildFileCount = sources().filter((s) => s.kind === "dockerfile" || s.kind === "containerfile").length;
@@ -792,7 +795,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const tray = $("kUnusedTray"); tray.replaceChildren();
     tray.hidden = !unused.length;
     if (unused.length) {
-      const head = el("div", "k-unused-head", `unused · ${fmtBytes(unused.reduce((a, i) => a + (i.sizeBytes || 0), 0))}`);
+      const head = el("div", "k-unused-head", `unused · ${fmtBytes(unused.reduce((a, i) => a + reclaimBytes(i), 0))}`);
       const prune = el("button", "k-link-act", "prune"); prune.type = "button"; prune.onclick = () => openSheet("prune");
       head.append(prune); tray.append(head);
       unused.forEach((i) => tray.append(buildImageCard(i, related)));
@@ -1215,12 +1218,12 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       const note = el("div", null, target === "volumes"
         ? "Docker will remove anonymous and unused volumes not referenced by any container. This cannot be undone."
         : unused.length
-          ? `Reclaim ${fmtBytes(unused.reduce((a, i) => a + (i.sizeBytes || 0), 0))} from ${unused.length} unused image(s). Running containers are never touched.`
+          ? `Reclaim ${fmtBytes(unused.reduce((a, i) => a + reclaimBytes(i), 0))} from ${unused.length} unused image(s). Running containers are never touched.`
           : "Nothing to prune — workspace is clean.");
       note.style.color = "var(--k-muted)"; body.append(note);
       const list = el("div", "k-kv-list");
       if (target === "volumes") unused.forEach((v) => list.append(kvRow(v.destination || "—", v.source || v.id)));
-      else unused.forEach((i) => list.append(kvRow(`${fmtBytes(i.sizeBytes)} · ${fmtDate(i.created)}`, `${i.repo || "<none>"}:${i.tag || "<none>"} (${i.shortId || i.id})`)));
+      else unused.forEach((i) => list.append(kvRow(`${fmtBytes(reclaimBytes(i))} · ${fmtDate(i.created)}`, `${i.repo || "<none>"}:${i.tag || "<none>"} (${i.shortId || i.id})`)));
       body.append(list, out);
       finish(target === "volumes" ? "prune unused volumes" : `prune ${unused.length} image(s)`,
         () => postAction({ action: "prune", target }, target === "volumes" ? "pruned unused volumes" : "pruned unused images"));
@@ -1253,7 +1256,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     item("pull / push / search…", "r", () => openSheet("registry"));
     item("registry login…", "", () => openSheet("registry"));
     sep(); section("Housekeeping");
-    item("prune unused images", fmtBytes(images().filter(isUnusedImg).reduce((a, i) => a + (i.sizeBytes || 0), 0)), () => openSheet("prune"), true);
+    item("prune unused images", fmtBytes(images().filter(isUnusedImg).reduce((a, i) => a + reclaimBytes(i), 0)), () => openSheet("prune"), true);
     item("disk usage (system df)", "", () => openSheet("df"));
   }
   toolsBtn.onclick = (e) => { e.stopPropagation(); buildToolsMenu(); const opening = toolsMenu.hidden; toolsMenu.hidden = !opening; toolsBtn.setAttribute("aria-expanded", String(opening)); };

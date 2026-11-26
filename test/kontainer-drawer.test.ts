@@ -258,6 +258,15 @@ test("the menu copies through the browser's clipboard, and the volume menu prune
 	assert.match(kontainerSource, /disabled: w\.mountKind !== "volume", hint: "a bind mount has no volume to prune"/, "a bind mount offers no prune, and says why");
 });
 
+test("unused and prune totals sum unique bytes, never cumulative image sizes", () => {
+	// An image Size charges every shared layer it contains, so adding Sizes
+	// counts one layer once per image. Every reclaim total goes through the
+	// one helper that reads the backend's unique figure instead.
+	assert.match(kontainerSource, /const reclaimBytes = \(i\) => i\.uniqueSizeBytes \?\? i\.sizeBytes \?\? 0;/, "one helper names the reclaimable figure");
+	assert.doesNotMatch(kontainerSource, /unused\.reduce\(\(a, i\) => a \+ \(i\.sizeBytes \|\| 0\)/, "the tray and the sheet no longer add cumulative sizes");
+	assert.match(kontainerSource, /filter\(isUnusedImg\)\.reduce\(\(a, i\) => a \+ reclaimBytes\(i\), 0\)/, "the tools menu total uses it too");
+});
+
 test("the menu's kill arm repaints the inspector it armed, and only for the node it names", () => {
 	// The menu puts itself away before the item runs, so the press that arms the kill would otherwise leave
 	// the inspector's button reading `kill` while it waits for its second press. The arming is one helper

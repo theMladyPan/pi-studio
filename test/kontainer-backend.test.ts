@@ -243,6 +243,49 @@ test("buildTopology in all scope keeps every image and container", () => {
 	assert.equal(topology.summary.issues, 2);
 });
 
+test("buildTopology hides Buildah intermediates but keeps leaf dangling and container-used layers", () => {
+	// Podman keeps one untagged record per Dockerfile instruction, each the
+	// ParentId of the next (bare hex, Id carries sha256:). Only the tagged
+	// top, the childless orphan leaf and a layer a container runs from list.
+	const imagesRaw = [
+		{ Id: "sha256:111aaa", RepoTags: ["python:3.13"], Size: 1000, Created: NOW - 10, ParentId: "" },
+		{ Id: "sha256:222bbb", RepoTags: [], Size: 5000, Created: NOW - 9, ParentId: "111aaa" },
+		{ Id: "sha256:333ccc", RepoTags: ["app:latest"], Size: 9000, Created: NOW - 8, ParentId: "222bbb" },
+		{ Id: "sha256:444ddd", RepoTags: [], Size: 9000, Created: NOW - 7, ParentId: "222bbb" },
+		{ Id: "sha256:555eee", RepoTags: [], Size: 4000, Created: NOW - 6, ParentId: "111aaa" },
+	];
+	const containersRaw = [
+		{ Id: "c-running", Names: ["/app"], Image: "app:latest", ImageID: "sha256:333ccc", State: "running", Status: "Up 1 hour", Created: NOW - 3600, Labels: {}, Ports: [], NetworkSettings: { Networks: {} }, Mounts: [] },
+		{ Id: "c-layer", Names: ["/layer"], Image: "555eee", ImageID: "sha256:555eee", State: "running", Status: "Up 1 hour", Created: NOW - 3600, Labels: {}, Ports: [], NetworkSettings: { Networks: {} }, Mounts: [] },
+	];
+	const topology = buildTopology({ imagesRaw, containersRaw, folder: "/ws/myproj", scope: "all" });
+	assert.deepEqual(topology.images.map((i) => i.id), ["sha256:111aaa", "sha256:333ccc", "sha256:444ddd", "sha256:555eee"]);
+	assert.equal(topology.images.find((i) => i.id === "sha256:444ddd")?.dangling, true, "the childless orphan is dangling");
+	assert.equal(topology.images.find((i) => i.id === "sha256:111aaa")?.dangling, false, "a tagged parent is not dangling");
+	assert.equal(topology.summary.totalImages, 4);
+	// Unused here is the base (no container runs it directly) plus the orphan leaf.
+	assert.equal(topology.summary.unusedImages, 2);
+});
+
+test("buildTopology sums unique bytes, not cumulative sizes, for unused and total", () => {
+	const imagesRaw = [
+		{ Id: "sha256:aaa111", RepoTags: ["app:latest"], Size: 825000, Created: NOW - 10, ParentId: "" },
+		{ Id: "sha256:bbb222", RepoTags: ["base:1"], Size: 122000, SharedSize: 121980, Created: NOW - 9, ParentId: "" },
+		{ Id: "sha256:ccc333", RepoTags: [], Size: 825000, Created: NOW - 8, ParentId: "" },
+	];
+	const containersRaw = [
+		{ Id: "c1", Names: ["/app"], Image: "app:latest", ImageID: "sha256:aaa111", State: "running", Status: "Up 1 hour", Created: NOW - 3600, Labels: {}, Ports: [], NetworkSettings: { Networks: {} }, Mounts: [] },
+	];
+	// df says the orphan holds 42 bytes of its own; the base holds 20 (Size minus SharedSize).
+	const topology = buildTopology({ imagesRaw, containersRaw, folder: "/ws/myproj", scope: "all", uniqueSizeById: new Map([["ccc333", 42]]) });
+	const byId = new Map(topology.images.map((i) => [i.id, i]));
+	assert.equal(byId.get("sha256:ccc333")?.uniqueSizeBytes, 42);
+	assert.equal(byId.get("sha256:bbb222")?.uniqueSizeBytes, 20);
+	assert.equal(byId.get("sha256:aaa111")?.uniqueSizeBytes, 825000, "no df entry and no SharedSize falls back to Size");
+	assert.equal(topology.summary.unusedBytes, 62, "20 + 42, never 122000 + 825000");
+	assert.equal(topology.summary.totalImageBytes, 825062);
+});
+
 // ---------- stats ----------
 
 test("statsFromPayload computes CPU percentage and memory", () => {

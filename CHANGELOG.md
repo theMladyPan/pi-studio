@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Stop the kontainer drawer listing Podman's build layers as images and charging them many times over — intermediate layer records (untagged images that are the parent of another image) are hidden like Docker hides them, a tagged base that happens to be a parent stays listed, and the unused and disk totals now sum each image's unique bytes from `system df` instead of its cumulative size, so a 825 MB image with a dozen layers no longer reads as 9 GB unused; a childless orphan layer is still listed as dangling and prunable, and a layer a container actually runs from stays listed too [t-6657c7b3].
+
 ## [0.11.1] - 2026-11-26
 
 - fix: Stop the TLS redirect test racing the daemon — the test now retries a refused first connect to the plain neighbour for a few seconds, since the daemon prints the line before the listener finishes binding; the redirect itself is unchanged.
