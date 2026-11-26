@@ -460,7 +460,7 @@ const boardStatusTool = defineTool({
 			const threads = Array.isArray(result.threads) ? result.threads : [];
 			if (!threads.length) return { content: [{ type: "text", text: "Nobody is mid-phase on this board." }], details: result };
 			const lines = threads.map(
-				(one) => `- ${one.threadId.slice(0, 8)} — ${one.title || "this thread"} (${one.status})${one.reported ? "" : " (default)"}${one.note ? ` — ${one.note}` : ""}`,
+				(one) => `- ${one.threadId.slice(0, 8)} — ${one.title || "this thread"} (${one.status})${one.reported ? "" : " (default)"}${one.note ? ` — ${String(one.note).replace(/\s+/g, " ").slice(0, 140)}` : ""}`,
 			);
 			return { content: [{ type: "text", text: `The board's phases:\n${lines.join("\n")}` }], details: result };
 		} catch (error) {

@@ -127,6 +127,7 @@ export async function onStatus(req, res, board, caller = { human: true }) {
 	const body = await readJson(req, res);
 	if (!body) return;
 	if (!caller.thread) return void fail(res, 409, "a thread reports its own status");
+	if (caller.thread.status === "dead") return void fail(res, 409, "thread ended");
 	const status = field(body.status, 20);
 	if (!STATUS_NAMES.includes(status)) return void fail(res, 409, `unknown status: ${status}`);
 	const note = field(body.note, STATUS_NOTE_CHARS);
@@ -138,6 +139,7 @@ export async function onStatus(req, res, board, caller = { human: true }) {
 
 /** The board's phases as they stand right now: the fresh read, pulled before a cooperative act. */
 export async function onBoardStatus(req, res, board) {
-	await readJson(req, res);
+	const body = await readJson(req, res);
+	if (!body) return;
 	answer(res, 200, { threads: boardStatuses(board) });
 }

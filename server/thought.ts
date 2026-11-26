@@ -539,7 +539,7 @@ function endRun(board, thread, reached) {
 		update(board, thread);
 	}
 	// The run is over for anyone waiting on it.
-	finished(thread);
+	finished(thread, reached);
 	// And for whoever subscribed to the board's events: a settled run is the one moment a plugin that
 	// asked for work is told about.
 	threadSettled(board, thread, reached);

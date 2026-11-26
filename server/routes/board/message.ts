@@ -185,8 +185,14 @@ export async function messageOnBoard(board, body) {
 	const words = text || "(the human sent no words; the commands above are the request)";
 	const said = text || picked.map((one) => `/${one}`).join(" ");
 	// The board's phases are orientation for a thread's first words only: stale by the time the thread
-	// answers, so freshness has to come from pulling get_board_status before a cooperative act.
-	const opening = !thread.parentThread && thread.turns.length === 0 ? boardStatusBlock(board, thread.id) : "";
+	// answers, so freshness has to come from pulling get_board_status before a cooperative act. The first
+	// compose takes them and remembers, because a hidden thread never grows its own turns — its turns
+	// sit on the card it answers for — so turn counts cannot say which message is the first.
+	let opening = "";
+	if (!thread.parentThread && thread.opening === undefined) {
+		opening = boardStatusBlock(board, thread.id);
+		thread.opening = opening;
+	}
 	const message = boardSections(board, preamble, naming, words, chipped.sections, opening);
 	const holding = askedCard && thread.hidden ? askedCard : null;
 	let target = null;
@@ -255,7 +261,7 @@ export async function messageOnBoard(board, body) {
 		// The card quote is kept beside the words the human typed, so a message still waiting can be
 		// rewritten without losing what the child needs to know about the card it is about.
 		// The pictures wait with the words: a run that has not read them yet is not told about them twice.
-		thread.queued.push({ message, text: said, preamble, naming, skills: chipped.sections, target, ...(images.length ? { images } : {}) });
+		thread.queued.push({ message, text: said, preamble, naming, threads: opening, skills: chipped.sections, target, ...(images.length ? { images } : {}) });
 	} else {
 		prompt(board, thread, message, target, images, said);
 	}
@@ -321,7 +327,7 @@ export async function onMessageEdit(req, res, board) {
 	// Only the human's own words change: the card and thread quotes the message was queued with stay as
 	// they were. The board section is built again, so the message keeps what it named until the child
 	// reads it.
-	entry.message = boardSections(board, entry.preamble ?? "", entry.naming ?? "", entry.text, entry.skills ?? "");
+	entry.message = boardSections(board, entry.preamble ?? "", entry.naming ?? "", entry.text, entry.skills ?? "", entry.threads ?? "");
 	const turn = queuedTurn(board, thread, target);
 	if (turn) turn.text = entry.text;
 	showQueue(board, thread, target);

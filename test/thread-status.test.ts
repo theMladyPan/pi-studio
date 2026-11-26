@@ -8,6 +8,7 @@ const state = mkdtempSync(join(tmpdir(), "pi-studio-status-state-"));
 process.env.PI_STUDIO_STATE = state;
 
 const { boardStatusBlock, boardStatuses } = await import("../server/routes/board/status.ts");
+const { finished } = await import("../server/waiters.ts");
 
 after(() => rmSync(state, { recursive: true, force: true }));
 
@@ -65,4 +66,28 @@ test("the injected block names the others and never the thread it opens for", ()
 	assert.ok(text.includes("401: invalid api key"));
 	assert.doesNotMatch(text, /master-red/, "the opening thread was told its own phase");
 	assert.equal(boardStatusBlock({ threads: new Map() }, "master-red"), "", "an empty board still says nothing");
+});
+
+test("a settled run clears silently, a cut leaves a stop note, and a failure leaves its reason", () => {
+const reported = (turns: unknown[]) => ({ id: "t", turns, activity: { status: "writing", at: Date.now() } }) as any;
+	const done = reported([{ status: "answered" }]);
+	finished(done);
+	assert.equal(done.activity, undefined, "an answer kept its phase");
+	const cut = reported([{ status: "stopped" }]);
+	finished(cut);
+	assert.equal(cut.activity?.note, "stopped");
+	const failed = reported([{ status: "stopped", error: "429\nRate limited" }]);
+	finished(failed);
+	assert.equal(failed.activity?.note, "429 Rate limited");
+	const quiet = { id: "t", turns: [{ status: "stopped" }] } as any;
+	finished(quiet);
+	assert.equal(quiet.activity, undefined, "a stop without a report left a note");
+});
+
+test("the turn that ended the run decides even when the thread's own list disagrees", () => {
+	// A hidden thread answers on its card, so its own turns can read answered while the card's turn was cut.
+	const thread = { id: "t", turns: [{ status: "answered" }], activity: { status: "reading", at: Date.now() } } as any;
+	finished(thread, { status: "stopped", error: "401: invalid api key" } as any);
+	assert.equal(thread.activity?.status, "idle");
+	assert.equal(thread.activity?.note, "401: invalid api key");
 });
