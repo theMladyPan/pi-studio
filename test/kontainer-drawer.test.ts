@@ -133,11 +133,18 @@ test("a long engine error wraps inside a rounded bubble", () => {
 test("a right press on a card opens the node menu its kind answers to", () => {
 	// The menu is a body element of its own, beside the tools popover, and it starts hidden.
 	assert.match(kontainerSource, /<div class="k-ctx-menu" id="kCtxMenu" hidden role="menu" aria-label="node actions"><\/div>/, "the skeleton carries the menu");
-	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-menu \{[^}]*position:fixed/, "the menu is placed on the window, not inside a column");
-	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-menu\[hidden\] \{ display:none; \}/, "a closed menu draws nothing");
-	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-sep \{[^}]*background:var\(--k-border\)/, "the items are parted by a hairline");
-	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-item:disabled \{ color:var\(--k-muted\)/, "an item that cannot act reads muted");
-	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-item\.k-danger-item \{ color:var\(--k-red\); \}/, "and the one that removes reads red in the drawer's own palette");
+	// It leaves the drawer at init: a drawer in mid-roll is a transformed box, and it would place the
+	// menu 44px off against itself instead of against the window.
+	assert.match(kontainerSource, /document\.body\.append\(ctxMenu\);/, "the menu is moved to the page body when the drawer is made");
+	assert.match(kontainerCss, /#kCtxMenu \{[^}]*position:fixed/, "the menu is placed on the window, and no drawer ancestor can claim it");
+	assert.doesNotMatch(kontainerCss, /#kontainerDrawer \.k-ctx/, "no rule for the menu hangs off the drawer it left");
+	assert.match(kontainerCss, /#kCtxMenu\[hidden\] \{ display:none; \}/, "a closed menu draws nothing");
+	assert.match(kontainerCss, /#kCtxMenu \.k-ctx-sep \{[^}]*background:var\(--k-border\)/, "the items are parted by a hairline");
+	assert.match(kontainerCss, /#kCtxMenu \.k-ctx-item:disabled \{ color:var\(--k-muted\)/, "an item that cannot act reads muted");
+	assert.match(kontainerCss, /#kCtxMenu \.k-ctx-item\.k-danger-item \{ color:var\(--k-red\); \}/, "and the one that removes reads red in the drawer's own palette");
+	// The tokens live on the drawer, so the menu carries them too and keeps its dark styling outside it.
+	assert.match(kontainerCss, /#kontainerDrawer, #kCtxMenu \{\n\s*--k-bg: #0d1117;[^\n]*--k-card: #161b22;/, "the palette is declared on the drawer and the menu alike");
+	assert.match(kontainerCss, /#kCtxMenu, #kCtxMenu \*, #kCtxMenu \*::before, #kCtxMenu \*::after \{ box-sizing: border-box; \}/, "and the menu keeps the drawer's box model");
 	// One listener on the shared card decorator serves all three builders; no builder adds its own.
 	assert.match(kontainerSource, /function focusClasses\(card, id, related\) \{[\s\S]*?card\.addEventListener\("contextmenu"/, "the shared card decorator listens for the right press");
 	assert.equal(kontainerSource.match(/"contextmenu"/g)?.length, 1, "and no builder listens a second time");
@@ -179,6 +186,8 @@ test("a right press opens the menu without the selection or the inspector follow
 });
 
 test("Escape and a press outside put the node menu away before the tools and the selection", () => {
+	// The menu is a page element, so the roll up is the only thing that can take it down with the drawer.
+	assert.match(kontainerSource, /afterClose\(\) \{\n\s*\/\/ The menu is a page element now[^\n]*\n\s*scrim\.hidden = true; stopLive\(\); ctxClose\(\);/, "rolling the drawer up puts the menu away with it");
 	// The drawer's own Escape order: a sheet, then the node menu, then the tools, the filter, the selection.
 	assert.match(kontainerSource, /if \(!sheet\.hidden\) \{ sheet\.hidden = true; return true; \}\n\s*if \(!ctxMenu\.hidden\) \{[^\n]*ctxClose\(\);[^\n]*return true; \}\n\s*if \(!toolsMenu\.hidden\)/, "the sheet goes first, the node menu second, the tools third");
 	assert.match(kontainerSource, /if \(!ctxMenu\.hidden\) \{[^\n]*const id = ctxHeld\?\.id \?\? state\.selected\?\.id;[^\n]*focusNode\(id\);[^\n]*return true; \}/, "and the keyboard comes back to the card the menu was opened on");
@@ -191,6 +200,14 @@ test("the menu copies through the browser's clipboard, and the volume menu prune
 	// A board opened over the network is not a secure context, so a missing or refused clipboard shows the value.
 	assert.match(kontainerSource, /if \(!navigator\.clipboard\?\.writeText\) \{ toast\(value\); return; \}/, "there is one guarded clipboard call");
 	assert.match(kontainerSource, /navigator\.clipboard\.writeText\(value\)\.then\(\(\) => toast\("copied"\), \(\) => toast\(value\)\);/, "and a refusal carries the value it could not copy");
+	// The volume sheet names no count: the topology only carries mounted volumes, so a count of unused
+	// ones read zero however many dangling volumes the engine holds. The image sheet's count is real.
+	const pruneSheet = kontainerSource.match(/} else if \(tool === "prune"\) \{[\s\S]*?\n    } else if \(tool === "df"\)/)?.[0];
+	assert.ok(pruneSheet, "the prune sheet is found whole");
+	assert.doesNotMatch(pruneSheet, /prune \$\{unused\.length\} volume/, "the volume press counts nothing it cannot count");
+	assert.doesNotMatch(pruneSheet, /Prune \$\{unused\.length\} unused volume/, "and neither does its note");
+	assert.match(pruneSheet, /Docker will remove anonymous and unused volumes not referenced by any container\. This cannot be undone\./, "the note says what Docker does instead of naming a number");
+	assert.match(pruneSheet, /finish\(target === "volumes" \? "prune unused volumes" : `prune \$\{unused\.length\} image\(s\)`/, "the volume press names the act, and the image press keeps its real count");
 	// The sheet takes the target it is asked for, and every caller that names none keeps the images it had.
 	assert.match(kontainerSource, /run: \(\) => openSheet\("prune", \{ target: "volumes" \}\)/, "the volume menu asks the sheet for volumes");
 	assert.match(kontainerSource, /const target = preset\?\.target === "volumes" \? "volumes" : "images";/, "and the sheet defaults to images");

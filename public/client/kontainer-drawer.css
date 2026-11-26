@@ -1,11 +1,15 @@
-/* kontainer drawer — Neon v2. Every rule hangs off the drawer, scrim or body class. */
-#kontainerDrawer {
+/* kontainer drawer — Neon v2. Every rule hangs off the drawer, scrim, body class or the node menu,
+   which is a page element of its own so a drawer in mid-roll cannot be the box it is placed against. */
+/* The menu paints in the drawer's palette from outside the drawer, so the tokens stand on both. */
+#kontainerDrawer, #kCtxMenu {
   --k-bg: #0d1117; --k-bg-deep: #090d13; --k-card: #161b22; --k-head: #1c2128;
   --k-border: #30363d; --k-border-bright: #3d444d; --k-text: #e6edf3; --k-muted: #7d8590;
   --k-accent: #58a6ff; --k-accent-dim: #1f6feb; --k-green: #3fb950; --k-green-soft: #7ee08c;
   --k-amber: #d29922; --k-red: #f85149; --k-red-soft: #ff9189; --k-purple: #d2a8ff; --k-cyan: #56d4dd;
   --k-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   --k-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+#kontainerDrawer {
   position: fixed; top: 44px; left: 0; right: 0; height: calc(100vh - 44px); z-index: 1500;
   display: flex; flex-direction: column; background: var(--k-bg); color: var(--k-text);
   border-bottom: 1px solid var(--k-border-bright); box-shadow: 0 18px 48px rgba(0,0,0,.65);
@@ -19,10 +23,11 @@ body.kontainer-open #kontainerDrawer { transform: none; visibility: visible; tra
   opacity: 0; visibility: hidden; transition: opacity 150ms ease, visibility 0s linear 150ms;
 }
 body.kontainer-open #kontainerScrim { opacity: 1; visibility: visible; transition: opacity 170ms ease; }
-#kontainerDrawer *, #kontainerDrawer *::before, #kontainerDrawer *::after { box-sizing: border-box; }
+#kontainerDrawer *, #kontainerDrawer *::before, #kontainerDrawer *::after,
+#kCtxMenu, #kCtxMenu *, #kCtxMenu *::before, #kCtxMenu *::after { box-sizing: border-box; }
 #kontainerDrawer ::-webkit-scrollbar { width: 8px; height: 8px; }
 #kontainerDrawer ::-webkit-scrollbar-thumb { background: #21262d; border-radius: 6px; }
-#kontainerDrawer button:focus-visible, #kontainerDrawer input:focus-visible, #kontainerDrawer select:focus-visible, #kontainerDrawer [tabindex]:focus-visible { outline: 2px solid var(--k-accent); outline-offset: 2px; }
+#kontainerDrawer button:focus-visible, #kontainerDrawer input:focus-visible, #kontainerDrawer select:focus-visible, #kontainerDrawer [tabindex]:focus-visible, #kCtxMenu button:focus-visible { outline: 2px solid var(--k-accent); outline-offset: 2px; }
 #kontainerDrawer .k-grow { flex: 1; }
 
 /* bar */
@@ -235,16 +240,16 @@ body.kontainer-inspecting { cursor:col-resize; user-select:none; }
 #kontainerDrawer .k-tools-menu .k-tm-hint { font-size:10px; color:var(--k-muted); }
 #kontainerDrawer .k-tools-menu button.k-danger-item { color:var(--k-red-soft); }
 
-/* node context menu */
-#kontainerDrawer .k-ctx-menu { position:fixed; z-index:2050; min-width:200px; max-width:320px; padding:5px; background:var(--k-card); border:1px solid var(--k-border-bright); border-radius:8px; box-shadow:0 14px 36px rgba(1,4,9,.72); }
-#kontainerDrawer .k-ctx-menu[hidden] { display:none; }
-#kontainerDrawer .k-ctx-sep { height:1px; background:var(--k-border); margin:4px 2px; }
-#kontainerDrawer .k-ctx-item { width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; font:12px var(--k-mono); color:var(--k-text); background:transparent; border:0; border-radius:5px; padding:6px 8px; cursor:pointer; text-align:left; }
-#kontainerDrawer .k-ctx-item:hover { background:#1a2230; }
-#kontainerDrawer .k-ctx-item:disabled { color:var(--k-muted); cursor:default; }
-#kontainerDrawer .k-ctx-item:disabled:hover { background:transparent; }
-#kontainerDrawer .k-ctx-item.k-danger-item { color:var(--k-red); }
-#kontainerDrawer .k-ctx-keys { font-size:10px; color:var(--k-muted); }
+/* node context menu — on the page body, so it keeps the window as its containing block */
+#kCtxMenu { position:fixed; z-index:2050; min-width:200px; max-width:320px; padding:5px; background:var(--k-card); border:1px solid var(--k-border-bright); border-radius:8px; box-shadow:0 14px 36px rgba(1,4,9,.72); }
+#kCtxMenu[hidden] { display:none; }
+#kCtxMenu .k-ctx-sep { height:1px; background:var(--k-border); margin:4px 2px; }
+#kCtxMenu .k-ctx-item { width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; font:12px var(--k-mono); color:var(--k-text); background:transparent; border:0; border-radius:5px; padding:6px 8px; cursor:pointer; text-align:left; }
+#kCtxMenu .k-ctx-item:hover { background:#1a2230; }
+#kCtxMenu .k-ctx-item:disabled { color:var(--k-muted); cursor:default; }
+#kCtxMenu .k-ctx-item:disabled:hover { background:transparent; }
+#kCtxMenu .k-ctx-item.k-danger-item { color:var(--k-red); }
+#kCtxMenu .k-ctx-keys { font-size:10px; color:var(--k-muted); }
 
 /* sheets + toast */
 #kontainerDrawer .k-sheet-backdrop { position:fixed; inset:0; z-index:2200; background:rgba(1,4,9,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
