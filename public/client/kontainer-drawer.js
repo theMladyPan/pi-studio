@@ -61,6 +61,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       </div>
       <aside class="k-inspector k-collapsed" id="kInspector" aria-label="selected node inspector"><div class="k-insp-grip" id="kInspGrip" role="separator" aria-orientation="vertical" tabindex="0" title="drag to resize inspector"></div></aside>
       <div class="k-tools-menu" id="kToolsMenu" hidden role="menu"></div>
+      <div class="k-ctx-menu" id="kCtxMenu" hidden role="menu" aria-label="node actions"></div>
     </div>
     <div class="k-sheet-backdrop" id="kSheet" hidden><div class="k-sheet-panel" role="dialog" aria-modal="true">
       <div class="k-sheet-head"><span class="k-sheet-title" id="kSheetTitle"></span><span class="k-grow"></span><button class="k-insp-close" id="kSheetClose" type="button" title="close (esc)">×</button></div>
@@ -69,7 +70,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     <div class="k-toast" id="kToast" role="status"></div>`;
 
   const viewport = $("kViewport"), stage = $("kStage"), wires = $("kWireLayer"), inspector = $("kInspector"), grip = $("kInspGrip");
-  const searchInput = $("kSearch"), toolsBtn = $("kToolsBtn"), toolsMenu = $("kToolsMenu"), sheet = $("kSheet");
+  const searchInput = $("kSearch"), toolsBtn = $("kToolsBtn"), toolsMenu = $("kToolsMenu"), sheet = $("kSheet"), ctxMenu = $("kCtxMenu");
 
   /* ---------- state ---------- */
   const state = {
@@ -108,7 +109,9 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   };
   const wireNode = (id) => {
     for (const [kind, list] of [["port", wiring().ports || []], ["net", wiring().networks || []], ["vol", wiring().volumes || []]]) {
-      const n = list.find((x) => x.id === id); if (n) return { ...n, kind };
+      // `kind` is the column the wire is drawn in; a volume's own volume/bind kind rides beside it, so a
+      // bind mount is never pruned as a volume.
+      const n = list.find((x) => x.id === id); if (n) return { ...n, kind, mountKind: n.kind };
     } return null;
   };
   // The label the backend carries, so an unpublished port reads as one instead of `0.0.0.0:null`.
@@ -255,12 +258,199 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   /* ---------- render: topology ---------- */
   const LAYER_COLORS = ["#3d444d", "#1f6feb", "#58a6ff", "#3fb950", "#d29922", "#d2a8ff", "#f85149"];
   function focusClasses(card, id, related) {
+    // A card keeps no place in the tab order, but the context menu's Escape puts the keyboard back on
+    // the card the menu was opened on.
+    card.tabIndex = -1;
     if (state.selected?.id === id) card.classList.add("k-selected");
     if (related) card.classList.toggle("k-related", related.has(id)), card.classList.toggle("k-dimmed", !related.has(id));
+    // One listener here serves every card the three builders make; the wiring kinds are resolved by id.
+    card.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      const cardKind = card.dataset.kind;
+      const node = cardKind === "wire" ? wireNode(id) : cardKind === "image" ? findImage(id) : findCtr(id);
+      if (!node) return;
+      // The inspector follows the press, and an arming on another node does not outlive it.
+      state.selected = { kind: cardKind, id };
+      state.tab = cardKind === "image" ? "layers" : "logs";
+      if (state.armedKill && state.armedKill !== id) state.armedKill = null;
+      render();
+      ctxOpen(cardKind === "wire" ? { port: "port", net: "network", vol: "volume" }[node.kind] : cardKind, node, event);
+    });
     card.addEventListener("click", (e) => { e.stopPropagation(); state.selected = { kind: card.dataset.kind, id }; state.tab = card.dataset.kind === "image" ? "layers" : "logs"; state.armedKill = null; if (state.mode === "eco") fetchStats([id]); render(); });
     card.addEventListener("mouseenter", () => { if (state.hovered?.id !== id) { state.hovered = { kind: card.dataset.kind, id }; paintFocus(); } });
     card.addEventListener("mouseleave", () => { if (state.hovered?.id === id) { state.hovered = null; paintFocus(); } });
   }
+
+  /* ---------- node context menu ---------- */
+  /* A right press on a card offers what that node's kind can do, in the inspector's own words. The
+     press is held as `{kind, id}` plus the node as it read then, so a menu still runs against the row
+     the human pressed after a repaint has replaced every card. */
+  let ctxHeld = null;
+
+  /** Text onto the clipboard. A board reached over the network is not a secure context, where the
+      modern call is missing or refused, so the value itself is shown rather than lost. */
+  function copyText(text) {
+    const value = String(text ?? "");
+    if (!value) { toast("nothing to copy"); return; }
+    if (!navigator.clipboard?.writeText) { toast(value); return; }
+    navigator.clipboard.writeText(value).then(() => toast("copied"), () => toast(value));
+  }
+  /** The inspector, on the node the menu names and the tab the item asked for. */
+  function showTab(kind, id, tab) { state.selected = { kind, id }; state.tab = tab; renderInspector(); }
+  /** The card the menu was opened on, where Escape puts the keyboard back. */
+  function focusNode(id) { stage.querySelector(`[data-node-id="${CSS.escape(String(id ?? ""))}"]`)?.focus(); }
+
+  function imageCtx(img) {
+    const ref = `${img.repo || "<none>"}:${img.tag || "<none>"}`;
+    // An untagged build has no repository to push to or pull from.
+    const tagged = !img.dangling && img.repo !== "<none>";
+    const run = (payload, okMsg) => () => postAction(payload, okMsg).catch((e) => toast(e.message));
+    return [
+      { id: "inspect", label: "inspect", run: () => showTab("image", img.id, "inspect") },
+      { id: "layers", label: "layers", run: () => showTab("image", img.id, "layers") },
+      { sep: true },
+      { id: "pull", label: "pull", disabled: !tagged, hint: "an untagged build has no reference to pull", run: run({ action: "image.pull", image: ref }, `pulling ${ref}`) },
+      { id: "push", label: "push", disabled: !tagged, hint: "an untagged build has no reference to push", run: run({ action: "image.push", image: ref }, `pushing ${ref}`) },
+      { sep: true },
+      { id: "copyTag", label: "copy tag", run: () => copyText(ref) },
+      { id: "copyId", label: "copy id", run: () => copyText(img.id) },
+      { id: "copyShortId", label: "copy short id", run: () => copyText(img.shortId) },
+      { sep: true },
+      { id: "remove", label: "remove", disabled: !!img.inUse, hint: "a container still runs this image", run: run({ action: "image.remove", id: img.id, force: false }, `removed ${ref}`) },
+      // Force is the second press a container still holding the image needs, and the item carries it.
+      { id: "removeForce", label: "remove (force)", keys: "force", disabled: !img.inUse, run: run({ action: "image.remove", id: img.id, force: true }, `force removed ${ref}`) },
+    ];
+  }
+
+  function containerCtx(c) {
+    const running = isRunning(c);
+    const armed = state.armedKill === c.id;
+    const run = (payload, okMsg) => () => postAction(payload, okMsg).catch((e) => toast(e.message));
+    const items = [
+      { id: "inspect", label: "inspect", run: () => showTab("container", c.id, "inspect") },
+      { id: "logs", label: "logs ↗", run: () => execToTerminal({ mode: "logs", id: c.id }) },
+      { id: "exec", label: "exec sh ↗", disabled: !running, hint: "a stopped container has no shell", run: () => execToTerminal({ mode: "exec", id: c.id }) },
+      { sep: true },
+    ];
+    // Start and stop each stand only when they can act, the way the inspector shows one of the two.
+    if (running) items.push({ id: "stop", label: "stop", run: run({ action: "stop", id: c.id }, `stopped ${c.name}`) });
+    else items.push({ id: "start", label: "start", disabled: c.state === "dead", hint: "a dead container cannot be started", run: run({ action: "start", id: c.id }, `started ${c.name}`) });
+    items.push({ id: "restart", label: "restart", run: run({ action: "restart", id: c.id }, `restarted ${c.name}`) });
+    if (running) items.push({ id: "kill", label: armed ? "confirm kill" : "kill", danger: true, run: () => {
+      // The arming is the inspector's, so a press here arms the same one it would.
+      if (state.armedKill !== c.id) {
+        state.armedKill = c.id;
+        toast(`press kill again to kill ${c.name}`);
+        setTimeout(() => { if (state.armedKill === c.id) state.armedKill = null; }, 3000);
+        return;
+      }
+      state.armedKill = null;
+      postAction({ action: "kill", id: c.id }, `killed ${c.name}`).catch((e) => toast(e.message));
+    } });
+    items.push({ sep: true });
+    // Recreating runs the stack the container belongs to, which the board must own the folder of.
+    items.push({ id: "recreate", label: "recreate on latest build", disabled: !(c.staleImage && c.composeProject && c.inWorkspace), hint: "needs a stale compose container inside this workspace", run: run({ action: "recreate", id: c.id }, `recreated ${c.name}`) });
+    items.push({ sep: true },
+      { id: "copyId", label: "copy id", run: () => copyText(c.id) },
+      { id: "copyName", label: "copy name", run: () => copyText(c.name) },
+      { id: "copyImage", label: "copy image ref", run: () => copyText(imgNameOf(c)) },
+      { sep: true },
+      { id: "remove", label: "remove", danger: true, disabled: running, hint: "stop it first", run: run({ action: "remove", id: c.id }, `removed ${c.name}`) });
+    return items;
+  }
+
+  function portCtx(w) {
+    return [
+      { id: "copyEndpoint", label: "copy endpoint", run: () => copyText(wireLabel(w)) },
+      { id: "copyHostPort", label: "copy host port", disabled: !w.listening, run: () => copyText(String(w.hostPort)) },
+      { id: "copyContainerPort", label: "copy container port", run: () => copyText(`${w.containerPort}${w.proto ? `/${w.proto}` : ""}`) },
+      { sep: true },
+      { id: "open", label: "open in browser", disabled: !(w.listening && w.proto === "tcp"), hint: "only a listening tcp port opens", run: () => window.open(`http://${w.hostIp || "localhost"}:${w.hostPort}`) },
+      { sep: true },
+      { id: "copyId", label: "copy id", run: () => copyText(w.id) },
+    ];
+  }
+
+  // A wiring node carries the ids of what it reaches; the names are the containers the drawer holds.
+  const attachedText = (w) => (w.containerIds || []).map((id) => findCtr(id)?.name || id).join("\n");
+
+  function networkCtx(w) {
+    return [
+      { id: "copyName", label: "copy name", run: () => copyText(w.name) },
+      { id: "copySubnet", label: "copy subnet", disabled: w.subnet === null, run: () => copyText(w.subnet) },
+      { id: "copyAttached", label: "copy attached containers", disabled: !(w.containerIds || []).length, run: () => copyText(attachedText(w)) },
+    ];
+  }
+
+  function volumeCtx(w) {
+    const mount = `${w.source}:${w.destination}${w.rw === false ? ":ro" : ""}`;
+    return [
+      { id: "copySource", label: "copy source", run: () => copyText(w.source) },
+      { id: "copyDestination", label: "copy destination", run: () => copyText(w.destination) },
+      { id: "copyMount", label: "copy mount", run: () => copyText(mount) },
+      { id: "copyAttached", label: "copy attached containers", disabled: !(w.containerIds || []).length, run: () => copyText(attachedText(w)) },
+      { sep: true },
+      { id: "prune", label: "prune unused volumes", disabled: w.mountKind !== "volume", hint: "a bind mount has no volume to prune", run: () => openSheet("prune", { target: "volumes" }) },
+    ];
+  }
+
+  const CTX_MENUS = { image: imageCtx, container: containerCtx, port: portCtx, network: networkCtx, volume: volumeCtx };
+
+  function ctxOpen(kind, entity, event) {
+    const table = CTX_MENUS[kind];
+    if (!table || !entity) return;
+    ctxHeld = { kind, id: entity.id, node: { ...entity } };
+    ctxMenu.replaceChildren(...table(ctxHeld.node).flatMap((item) => {
+      if (item.sep) return [el("div", "k-ctx-sep")];
+      const button = el("button", `k-ctx-item${item.danger ? " k-danger-item" : ""}`);
+      button.type = "button"; button.dataset.ctx = item.id; button.setAttribute("role", "menuitem");
+      button.disabled = Boolean(item.disabled);
+      button.append(el("span", null, item.label));
+      if (item.keys) button.append(el("span", "k-ctx-keys", item.keys));
+      // A greyed item says why it is greyed, since a press never reaches it.
+      if (item.disabled && item.hint) button.title = item.hint;
+      return [button];
+    }));
+    ctxMenu.hidden = false;
+    // Placed where the press was, and pulled back inside the window through the box it really drew.
+    const box = ctxMenu.getBoundingClientRect();
+    ctxMenu.style.left = `${Math.max(4, Math.min(event.clientX, window.innerWidth - box.width - 4))}px`;
+    ctxMenu.style.top = `${Math.max(4, Math.min(event.clientY, window.innerHeight - box.height - 4))}px`;
+    ctxMenu.querySelector("button:not(:disabled)")?.focus();
+  }
+  function ctxClose() {
+    if (ctxMenu.hidden) return;
+    ctxHeld = null;
+    ctxMenu.hidden = true;
+  }
+  /** One press of the node menu, by name, so the pointer and the keyboard share one path. */
+  function ctxRun(id) {
+    const held = ctxHeld;
+    if (!held) return;
+    const item = CTX_MENUS[held.kind]?.(held.node).find((one) => one.id === id);
+    ctxClose();
+    if (item && !item.disabled) item.run();
+  }
+  ctxMenu.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-ctx]");
+    if (button && !button.disabled) return ctxRun(button.dataset.ctx);
+  });
+  ctxMenu.addEventListener("keydown", (event) => {
+    const buttons = [...ctxMenu.querySelectorAll("button:not(:disabled)")];
+    const at = buttons.indexOf(document.activeElement);
+    if (event.key === "Tab") { ctxClose(); return; }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    buttons[(at + step + buttons.length) % buttons.length]?.focus();
+  });
+  // A press anywhere else puts the menu away; Escape reaches it through `handleEscape`.
+  document.addEventListener("pointerdown", (event) => {
+    if (ctxMenu.hidden) return;
+    if (event.target.closest?.("#kCtxMenu")) return;
+    ctxClose();
+  }, true);
+
   function buildImageCard(img, related) {
     const card = el("div", `k-card${isUnusedImg(img) ? " k-unused-img" : ""}`); card.dataset.nodeId = img.id; card.dataset.kind = "image";
     const top = el("div", "k-img-top");
@@ -701,14 +891,24 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
         actBtn("push", "", async () => { try { out.hidden = false; await postAction({ action: "image.push", image: q.value.trim() }, `pushed ${q.value}`); } catch (e) { out.hidden = false; out.classList.add("k-err"); out.textContent = e.message; } }),
         actBtn("login", "k-primary", async () => { try { out.hidden = false; await postAction({ action: "registry.login", server: loginServer.value.trim(), username: loginUser.value.trim(), password: loginPass.value }, "logged in"); } catch (e) { out.hidden = false; out.classList.add("k-err"); out.textContent = e.message; } }));
     } else if (tool === "prune") {
-      title.textContent = "housekeeping · prune unused";
-      const unused = images().filter(isUnusedImg);
-      const note = el("div", null, unused.length ? `Reclaim ${fmtBytes(unused.reduce((a, i) => a + (i.sizeBytes || 0), 0))} from ${unused.length} unused image(s). Running containers are never touched.` : "Nothing to prune — workspace is clean.");
+      // The sheet prunes one kind of thing: unused images unless the volume menu asks for volumes.
+      const target = preset?.target === "volumes" ? "volumes" : "images";
+      const unused = target === "volumes"
+        ? (wiring().volumes || []).filter((v) => v.kind === "volume" && !(v.containerIds || []).length)
+        : images().filter(isUnusedImg);
+      title.textContent = target === "volumes" ? "housekeeping · prune unused volumes" : "housekeeping · prune unused";
+      const note = el("div", null, unused.length
+        ? target === "volumes"
+          ? `Prune ${unused.length} unused volume(s). Running containers are never touched.`
+          : `Reclaim ${fmtBytes(unused.reduce((a, i) => a + (i.sizeBytes || 0), 0))} from ${unused.length} unused image(s). Running containers are never touched.`
+        : target === "volumes" ? "Nothing to prune — no unused volume." : "Nothing to prune — workspace is clean.");
       note.style.color = "var(--k-muted)"; body.append(note);
       const list = el("div", "k-kv-list");
-      unused.forEach((i) => list.append(kvRow(`${fmtBytes(i.sizeBytes)} · ${fmtDate(i.created)}`, `${i.repo || "<none>"}:${i.tag || "<none>"} (${i.shortId || i.id})`)));
+      if (target === "volumes") unused.forEach((v) => list.append(kvRow(v.destination || "—", v.source || v.id)));
+      else unused.forEach((i) => list.append(kvRow(`${fmtBytes(i.sizeBytes)} · ${fmtDate(i.created)}`, `${i.repo || "<none>"}:${i.tag || "<none>"} (${i.shortId || i.id})`)));
       body.append(list, out);
-      finish(`prune ${unused.length} image(s)`, () => postAction({ action: "prune", target: "images" }, "pruned unused images"));
+      finish(target === "volumes" ? `prune ${unused.length} volume(s)` : `prune ${unused.length} image(s)`,
+        () => postAction({ action: "prune", target }, target === "volumes" ? "pruned unused volumes" : "pruned unused images"));
     } else if (tool === "df") {
       title.textContent = "system df";
       body.append(out);
@@ -829,6 +1029,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   function handleEscape() {
     if (!sliding.isOpen()) return false;
     if (!sheet.hidden) { sheet.hidden = true; return true; }
+    if (!ctxMenu.hidden) { const id = ctxHeld?.id ?? state.selected?.id; ctxClose(); focusNode(id); return true; }
     if (!toolsMenu.hidden) { toolsMenu.hidden = true; toolsBtn.setAttribute("aria-expanded", "false"); return true; }
     if (document.activeElement === searchInput) { searchInput.blur(); return true; }
     if (state.selected) { state.selected = null; state.armedKill = null; render(); return true; }

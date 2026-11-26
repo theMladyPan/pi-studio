@@ -119,6 +119,49 @@ test("the drawer reads a 200 that says ok:false as the failure it is", () => {
 	assert.match(kontainerCss, /#kontainerDrawer \* \{ animation: none !important; \}/, "and every animation inside it");
 });
 
+test("a right press on a card opens the node menu its kind answers to", () => {
+	// The menu is a body element of its own, beside the tools popover, and it starts hidden.
+	assert.match(kontainerSource, /<div class="k-ctx-menu" id="kCtxMenu" hidden role="menu" aria-label="node actions"><\/div>/, "the skeleton carries the menu");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-menu \{[^}]*position:fixed/, "the menu is placed on the window, not inside a column");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-menu\[hidden\] \{ display:none; \}/, "a closed menu draws nothing");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-sep \{[^}]*background:var\(--k-border\)/, "the items are parted by a hairline");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-item:disabled \{ color:var\(--k-muted\)/, "an item that cannot act reads muted");
+	assert.match(kontainerCss, /#kontainerDrawer \.k-ctx-item\.k-danger-item \{ color:var\(--k-red\); \}/, "and the one that removes reads red in the drawer's own palette");
+	// One listener on the shared card decorator serves all three builders; no builder adds its own.
+	assert.match(kontainerSource, /function focusClasses\(card, id, related\) \{[\s\S]*?card\.addEventListener\("contextmenu"/, "the shared card decorator listens for the right press");
+	assert.equal(kontainerSource.match(/"contextmenu"/g)?.length, 1, "and no builder listens a second time");
+	// The five tables speak the inspector's words, and the kind of a node picks its own.
+	for (const kind of ["image", "container", "port", "network", "volume"]) {
+		assert.match(kontainerSource, new RegExp(`\\b${kind}Ctx\\b`), `a ${kind} node has a menu of its own`);
+	}
+	assert.match(kontainerSource, /const CTX_MENUS = \{ image: imageCtx, container: containerCtx, port: portCtx, network: networkCtx, volume: volumeCtx \};/, "the kind of a node picks its table");
+	// Placed where the press was, pulled back inside the window by the box the menu really drew.
+	assert.match(kontainerSource, /const box = ctxMenu\.getBoundingClientRect\(\);/, "the menu is measured before it is placed");
+	assert.match(kontainerSource, /Math\.max\(4, Math\.min\(event\.clientX, window\.innerWidth - box\.width - 4\)\)/, "the left edge stays on the window");
+	assert.match(kontainerSource, /Math\.max\(4, Math\.min\(event\.clientY, window\.innerHeight - box\.height - 4\)\)/, "and so does the top");
+	assert.match(kontainerSource, /ctxMenu\.querySelector\("button:not\(:disabled\)"\)\?\.focus\(\);/, "the first item that can act takes the keyboard");
+});
+
+test("Escape and a press outside put the node menu away before the tools and the selection", () => {
+	// The drawer's own Escape order: a sheet, then the node menu, then the tools, the filter, the selection.
+	assert.match(kontainerSource, /if \(!sheet\.hidden\) \{ sheet\.hidden = true; return true; \}\n\s*if \(!ctxMenu\.hidden\) \{[^\n]*ctxClose\(\);[^\n]*return true; \}\n\s*if \(!toolsMenu\.hidden\)/, "the sheet goes first, the node menu second, the tools third");
+	assert.match(kontainerSource, /if \(!ctxMenu\.hidden\) \{[^\n]*const id = ctxHeld\?\.id \?\? state\.selected\?\.id;[^\n]*focusNode\(id\);[^\n]*return true; \}/, "and the keyboard comes back to the card the menu was opened on");
+	assert.match(kontainerSource, /document\.addEventListener\("pointerdown", \(event\) => \{\n\s*if \(ctxMenu\.hidden\) return;\n\s*if \(event\.target\.closest\?\.\("#kCtxMenu"\)\) return;\n\s*ctxClose\(\);/, "a press anywhere else closes it, the files menu's own shape");
+	assert.match(kontainerSource, /if \(event\.key === "Tab"\) \{ ctxClose\(\); return; \}/, "Tab puts it away");
+	assert.match(kontainerSource, /const step = event\.key === "ArrowDown" \? 1 : -1;\n\s*buttons\[\(at \+ step \+ buttons\.length\) % buttons\.length\]\?\.focus\(\);/, "the two arrows walk the items that can act");
+});
+
+test("the menu copies through the browser's clipboard, and the volume menu prunes volumes", () => {
+	// A board opened over the network is not a secure context, so a missing or refused clipboard shows the value.
+	assert.match(kontainerSource, /if \(!navigator\.clipboard\?\.writeText\) \{ toast\(value\); return; \}/, "there is one guarded clipboard call");
+	assert.match(kontainerSource, /navigator\.clipboard\.writeText\(value\)\.then\(\(\) => toast\("copied"\), \(\) => toast\(value\)\);/, "and a refusal carries the value it could not copy");
+	// The sheet takes the target it is asked for, and every caller that names none keeps the images it had.
+	assert.match(kontainerSource, /run: \(\) => openSheet\("prune", \{ target: "volumes" \}\)/, "the volume menu asks the sheet for volumes");
+	assert.match(kontainerSource, /const target = preset\?\.target === "volumes" \? "volumes" : "images";/, "and the sheet defaults to images");
+	assert.equal(kontainerSource.match(/openSheet\("prune"\)/g)?.length, 3, "the tray, the tools menu and `> prune` still ask for the image sheet");
+	assert.match(kontainerSource, /disabled: w\.mountKind !== "volume", hint: "a bind mount has no volume to prune"/, "a bind mount offers no prune, and says why");
+});
+
 /** The terminal drawer's `runCommand`, on the page it reads and the socket it writes to. */
 class FakeElement {
 	textContent = "";

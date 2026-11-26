@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- feat: Add a right-click menu to every kontainer drawer node — images, containers, ports, networks and volumes each offer the actions and the copies their inspector already carries, an item the node's own state rules out is greyed with its reason in the tooltip, and `Esc` puts the keyboard back on the card the menu was opened on. [t-181fd5fb]
+
 ## [0.10.0] - 2026-11-26
 
 - fix: Keep localhost working after TLS — `npm run start`, `npm run dev` and `npm run dev:alt` now name loopback and switch TLS off, so a stored publish choice or a generated certificate cannot turn a local start into a self-signed HTTPS page a browser warns on; a generated certificate only serves HTTPS beyond loopback, `--no-tls` (or `PI_STUDIO_TLS=0`) switches TLS off anywhere, and with TLS on the printed local link is plain http on the port below the HTTPS one instead of the HTTPS link, with plain probes of the HTTPS port logged at most once a minute.

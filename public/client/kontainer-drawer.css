@@ -202,6 +202,17 @@ body.kontainer-inspecting { cursor:col-resize; user-select:none; }
 #kontainerDrawer .k-tools-menu .k-tm-hint { font-size:10px; color:var(--k-muted); }
 #kontainerDrawer .k-tools-menu button.k-danger-item { color:var(--k-red-soft); }
 
+/* node context menu */
+#kontainerDrawer .k-ctx-menu { position:fixed; z-index:2050; min-width:200px; max-width:320px; padding:5px; background:var(--k-card); border:1px solid var(--k-border-bright); border-radius:8px; box-shadow:0 14px 36px rgba(1,4,9,.72); }
+#kontainerDrawer .k-ctx-menu[hidden] { display:none; }
+#kontainerDrawer .k-ctx-sep { height:1px; background:var(--k-border); margin:4px 2px; }
+#kontainerDrawer .k-ctx-item { width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; font:12px var(--k-mono); color:var(--k-text); background:transparent; border:0; border-radius:5px; padding:6px 8px; cursor:pointer; text-align:left; }
+#kontainerDrawer .k-ctx-item:hover { background:#1a2230; }
+#kontainerDrawer .k-ctx-item:disabled { color:var(--k-muted); cursor:default; }
+#kontainerDrawer .k-ctx-item:disabled:hover { background:transparent; }
+#kontainerDrawer .k-ctx-item.k-danger-item { color:var(--k-red); }
+#kontainerDrawer .k-ctx-keys { font-size:10px; color:var(--k-muted); }
+
 /* sheets + toast */
 #kontainerDrawer .k-sheet-backdrop { position:fixed; inset:0; z-index:2200; background:rgba(1,4,9,.62); display:flex; align-items:center; justify-content:center; padding:16px; }
 #kontainerDrawer .k-sheet-backdrop[hidden] { display:none; }
