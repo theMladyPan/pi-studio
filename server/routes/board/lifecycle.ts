@@ -122,7 +122,7 @@ export function killChild(board, thread) {
 	update(board, thread);
 	scheduleSave(board);
 	// A killed child is the end of its run, so whoever waits on it stops waiting.
-	finished(thread);
+	finished(thread, turn);
 	// A plugin subscribed to the board's events hears this run end the way it hears any other. A child
 	// killed between two runs ended none, so there is nothing to announce.
 	if (turn) threadSettled(board, thread, turn);

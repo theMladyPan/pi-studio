@@ -46,8 +46,38 @@ export function isCompacting(thread) {
 
 
 
+/** A settled note is a glance like a reported one, so it keeps the same ceiling; kept here to keep this module import-free. */
+const NOTE_CHARS = 140;
+
+
+/**
+ * A report that outlives its run is a lie, so a settled thread keeps no phase: done clears it, and an end
+ * that was not an answer leaves the reason as its note, so a failed thread still says why (a 429, a cut)
+ * where the board status can be read. A stopped thread needs a report to leave one: a kill on a thread
+ * that never claimed anything would otherwise fill the board with stops. What ended the run is the turn
+ * passed in — a hidden thread's own turn list sits empty while its card carries the turns — so the
+ * newest turn is only a fallback. Kept here, beside finished, so every settle — end of run, kill,
+ * error — clears through one place.
+ */
+function settleActivity(thread, ended = null) {
+	const said = thread.activity;
+	const turns = Array.isArray(thread.turns) ? thread.turns : [];
+	const last = ended ?? turns[turns.length - 1];
+	const failed = thread.status === "dead" || (last?.status === "stopped" && last.error);
+	if (thread.status === "dead" || failed) {
+		const reason = last?.error ? String(last.error).replace(/\s+/g, " ").trim().slice(0, NOTE_CHARS) : "";
+		thread.activity = { status: "idle", at: Date.now(), ...(reason ? { note: reason } : {}) };
+	} else if (last?.status === "stopped" && said) {
+		thread.activity = { status: "idle", note: "stopped", at: Date.now() };
+	} else {
+		delete thread.activity;
+	}
+}
+
+
 /** Wake whoever waits on this thread. Called where a run ends, never where one starts. */
-export function finished(thread) {
+export function finished(thread, ended = null) {
+	settleActivity(thread, ended);
 	const waiting = settleWaiters.get(thread.id);
 	if (!waiting) return;
 	settleWaiters.delete(thread.id);
