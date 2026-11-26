@@ -20,7 +20,7 @@ import { closedCards } from "./bus.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
 import { onDefaults, onForgetWorkspace, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults, onSettingsGeneral, onSettingsTlsGenerate } from "./routes/crossroads.ts";
 import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
-import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead, onFileRename, onFileWrite, onFilesFind, onFilesList } from "./routes/board/files.ts";
+import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead, onFileRename, onFileWrite, onFilesFind, onFilesList, onFilesReplace, onFilesSearch } from "./routes/board/files.ts";
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
 import { extensionsDir } from "./child/argv.ts";
@@ -664,6 +664,14 @@ function requestHandler(req, res) {
 			await onFilesFind(url, res, board);
 			return;
 		}
+		// File contents holding a text: a walk that reads, like `/files`, so `threadRefusal` keeps it
+		// to the human; a child reports in its last message instead of searching the human's files.
+		if (req.method === "GET" && url.pathname === "/files/search") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onFilesSearch(url, res, board);
+			return;
+		}
 		if (req.method === "GET" && url.pathname === "/files/read") {
 			const board = boardFrom(url, res);
 			if (!board) return;
@@ -989,6 +997,9 @@ function requestHandler(req, res) {
 				"/files/copy": onFileCopy,
 				"/files/delete": onFileDelete,
 				"/files/write": onFileWrite,
+				// The search drawer's batch replace. Not in THREAD_ROUTES: a child may draw a card,
+				// and may not write over the files of the folder a human opened.
+				"/files/replace": onFilesReplace,
 			};
 			const handler = routing[url.pathname];
 			if (handler) {

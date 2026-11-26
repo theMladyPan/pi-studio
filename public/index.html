@@ -1422,6 +1422,52 @@
   #filesPane .ex-search #exHiddenToggle:focus-visible { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
   .ex-row .ex-find-where { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; color: #7d8590; font-size: 11px; }
   .ex-row.ex-more { justify-content: center; color: #79c0ff; }
+  /* The search drawer: the files drawer's head and foot, the search box and its modes, and the
+     results grouped by file with the match picked out in each snippet. */
+  #searchPane { display: flex; flex-direction: column; flex: 1; min-height: 0;
+    font: 13px/18px system-ui, -apple-system, "Segoe UI", sans-serif; color: #e6edf3; }
+  #searchPane .ex-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 6px 4px 10px; }
+  #searchPane .ex-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e6edf3; font-size: 12px; }
+  #searchPane .ex-act { flex: none; display: flex; align-items: center; gap: 2px; }
+  #searchPane .ex-act button { width: 22px; height: 22px; padding: 0; display: grid; place-items: center;
+    background: transparent; border: 0; border-radius: 4px; color: #cccccc; cursor: pointer; }
+  #searchPane .ex-act button:hover { background: rgba(90, 93, 94, .31); color: #ffffff; }
+  #searchPane .ex-foot { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 10px;
+    border-top: 1px solid #21262d; color: #7d8590; font: 10px var(--mono); }
+  .sr-box { flex: none; padding: 4px 8px 6px; display: flex; flex-direction: column; gap: 6px; }
+  .sr-row { display: flex; gap: 6px; align-items: center; }
+  .sr-row input { flex: 1; min-width: 0; font: 12px system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: #cccccc; background: #0d1117; border: 1px solid #30363d; border-radius: 2px; padding: 2px 6px; }
+  .sr-row input:focus { outline: none; border-color: var(--accent-dim); }
+  .sr-modes { display: flex; gap: 2px; flex: none; }
+  .sr-modes button, .sr-mini { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; color: #7d8590;
+    background: transparent; border: 1px solid #30363d; border-radius: 2px; padding: 2px 6px; cursor: pointer; }
+  .sr-modes button:hover, .sr-mini:hover { color: #ffffff; }
+  .sr-modes button.on, .sr-mini.on { color: #79c0ff; border-color: var(--accent-dim); background: rgba(56, 139, 253, .12); }
+  .sr-modes button:focus-visible, .sr-mini:focus-visible { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
+  .sr-mini:disabled { opacity: .4; cursor: default; }
+  .sr-scope-label { flex: none; display: flex; align-items: center; gap: 6px; color: #7d8590; font-size: 11px; }
+  #srScope { flex: none; width: 34px; height: 18px; border-radius: 999px; border: 1px solid #30363d;
+    background: #161b22; position: relative; cursor: pointer; padding: 0; }
+  #srScope::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #7d8590; }
+  #srScope[aria-checked="true"] { background: rgba(56, 139, 253, .35); border-color: var(--accent-dim); }
+  #srScope[aria-checked="true"]::after { left: 18px; background: #79c0ff; }
+  .sr-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #7d8590; font: 11px var(--mono); }
+  .sr-status.bad { color: var(--red); }
+  #srList { flex: 1; min-height: 0; overflow: auto; outline: none; padding-bottom: 6px; }
+  .sr-file { font-weight: 600; }
+  .sr-file.dim { opacity: .45; }
+  .sr-file .sr-badge { flex: none; margin-left: auto; background: #30363d; border-radius: 999px; padding: 0 7px; font-size: 11px; color: #e6edf3; }
+  .sr-file .sr-chk { flex: none; accent-color: #388bfd; }
+  .sr-snip { display: flex; gap: 8px; padding: 1px 8px 1px 28px; color: #8b949e; cursor: pointer; }
+  .sr-snip:hover { background: rgba(90, 93, 94, .1); }
+  .sr-snip .sr-line { flex: none; color: #6e7681; font: 11px var(--mono); }
+  .sr-snip .sr-text { flex: 1; min-width: 0; font: 12px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .sr-snip mark { background: rgba(210, 153, 34, .35); color: #e6edf3; }
+  .sr-snip .sr-del { color: #f85149; text-decoration: line-through; }
+  .sr-snip .sr-ins { color: #3fb950; }
+  #srList .ex-note { padding: 6px 10px; color: #7d8590; font: 11px var(--mono); white-space: normal; }
+  #srList .ex-note.bad { color: var(--red); }
   #exTree { flex: 1; min-height: 0; overflow: auto; outline: none; padding-bottom: 6px; }
   #exTree:focus-visible { outline: none; }
   .ex-row { display: flex; align-items: center; gap: 4px; height: 22px; padding-right: 8px;
@@ -1613,6 +1659,7 @@
   <!-- The two drawers that stay in the header. One drawer is open at a time, and each door names the key that opens it. -->
   <button id="activityBtn" type="button" aria-controls="drawerActivity" aria-expanded="false" title="show the activity drawer (a)">activity</button>
   <button id="cardsBtn" type="button" aria-controls="drawerCards" aria-expanded="false" title="show the cards drawer (c)">cards</button>
+  <button id="searchBtn" type="button" aria-controls="drawerSearch" aria-expanded="false" title="show the search drawer (ctrl+f)">search</button>
   <!-- One door per plugin whose panel lives in the left drawers, filled in by board.js. The header's
        own buttons are the style, so a door stands here exactly like activity and cards do. -->
   <span id="pluginDrawerDoors" hidden></span>
@@ -1735,6 +1782,37 @@
     <div class="sc-list" id="scStaged"></div>
     <div class="sc-group"><span>Changes</span><b id="scChangesCount"></b><button type="button" id="scStageAll" title="stage every changed file">+ all</button></div>
     <div class="sc-list" id="scChanges"></div>
+  </section>
+  <section class="drawer" id="drawerSearch" aria-label="search" tabindex="-1">
+    <div id="searchPane">
+      <div class="ex-head">
+        <span class="ex-title">search</span>
+        <span class="ex-act">
+          <button type="button" id="srRefresh" class="codicon codicon-refresh" aria-label="search again" title="search again"></button>
+          <button type="button" id="srCollapse" class="codicon codicon-collapse-all" aria-label="collapse every file" title="collapse every file"></button>
+        </span>
+      </div>
+      <div class="sr-box">
+        <div class="sr-row">
+          <input id="srQuery" type="text" spellcheck="false" autocomplete="off" placeholder="search…" aria-label="search file contents" />
+          <span class="sr-modes">
+            <button type="button" id="srCase" aria-pressed="false" title="match case">Aa</button><button type="button" id="srWord" aria-pressed="false" title="whole word">ab</button><button type="button" id="srRegex" aria-pressed="false" title="regular expression">.*</button>
+          </span>
+        </div>
+        <div class="sr-row" id="srReplaceRow" hidden>
+          <input id="srReplace" type="text" spellcheck="false" autocomplete="off" placeholder="replace…" aria-label="replace with" />
+          <label class="sr-scope-label" title="off: replace in every file shown; on: only in the files ticked below"><span>checked only</span><button type="button" id="srScope" role="switch" aria-checked="false" aria-label="replace only in checked files"></button></label>
+          <button type="button" id="srReplaceBtn" class="sr-mini" disabled>replace</button>
+        </div>
+        <div class="sr-row" id="srTopBar">
+          <button type="button" id="srReplaceToggle" class="sr-mini" aria-pressed="false" title="show the replace field">replace</button>
+          <button type="button" id="srHiddenToggle" class="sr-mini on" aria-pressed="true" title="show hidden files (dotfiles) in the search">hidden</button>
+          <span class="sr-status" id="srStatus" role="status"></span>
+        </div>
+      </div>
+      <div id="srList" role="tree" aria-label="search results" tabindex="0"></div>
+      <div class="ex-foot"><span id="srCount">nothing searched</span></div>
+    </div>
   </section>
   <div id="railGrip" class="drawer-grip" title="drag to resize"></div>
 </div>
