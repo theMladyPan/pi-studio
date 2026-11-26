@@ -7,6 +7,9 @@ import { createGitDrawer } from "./git-drawer.js";
 // The terminal drawer is a module of its own beside it: the panel, the socket to the daemon's
 // shell and the vendored terminal screen are a single subject, served by the same one rule.
 import { createTerminalDrawer } from "./terminal-drawer.js";
+// The kontainer drawer is the third of its kind: the Docker/Podman topology, the stats cadence the
+// human picked and the sheets that act on a container are one subject, behind the same one rule.
+import { createKontainerDrawer } from "./kontainer-drawer.js";
 // The tokenizer and the text surface are shared with the git graph's reader, so both pages colour a
 // file the same way: one implementation, imported by each.
 import { createTextPreview, escapeHtml, highlight } from "./text-preview.js";
@@ -39,6 +42,7 @@ let pendingJump = new URLSearchParams(location.search).get("jump") || "";
 const gitDrawer = createGitDrawer({ workspace, typingSomewhere });
 document.getElementById("gitBtn").addEventListener("click", () => {
   closeHeaderMenus();
+  kontainerDrawer.close();
   gitDrawer.toggle();
 });
 // One terminal drawer for the life of the page, beside the git one: the shell and the screen
@@ -46,8 +50,30 @@ document.getElementById("gitBtn").addEventListener("click", () => {
 const terminalDrawer = createTerminalDrawer({ workspace, typingSomewhere });
 document.getElementById("termBtn").addEventListener("click", () => {
   closeHeaderMenus();
+  kontainerDrawer.close();
   closeDocks("bottom");
   terminalDrawer.toggle();
+});
+// One kontainer drawer for the life of the page, beside the two above: it keeps no topology between
+// rolls, because a container that changed while it was down is not worth remembering — every fact is
+// read again from `/kontainer/*` on the way up.
+const kontainerDrawer = createKontainerDrawer({
+  workspace,
+  typingSomewhere,
+  // `exec ↗`, `logs ↗` and `compose logs -f` open the shell the terminal drawer owns: the topology
+  // rolls back down, the bottom strip rolls up, and the command is typed into the shell there.
+  openTerminalCommand: (cmd) => {
+    kontainerDrawer.close();
+    closeDocks("bottom");
+    terminalDrawer.runCommand(cmd);
+  },
+});
+document.getElementById("kontainerBtn").addEventListener("click", () => {
+  closeHeaderMenus();
+  closeDrawers();
+  gitDrawer.close();
+  terminalDrawer.close();
+  kontainerDrawer.toggle();
 });
 // The plugin panel: one sandboxed frame for the life of the page, the doors the toolbox lists for the
 // plugins that declared a panel, and the one call a panel is allowed to make.
@@ -279,6 +305,7 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
       paneFrame.src = panel.url;
     }
     if (gitDrawer.isOpen()) gitDrawer.close();
+    kontainerDrawer.close();
     if (side === "left") {
       closeDocks();
       explorerCore.drawerOpen(drawerState, key);
@@ -1211,7 +1238,7 @@ function exDrawerToggle(state, name) {
  * opens in stands over everything, a name being edited or a menu standing open goes before the drawer,
  * and the drawer goes before the card the board is reading.
  */
-const EX_ESCAPE_ORDER = ["editor", "confirm", "menu", "rename", "create", "sheet", "plugin", "git", "terminal", "drawer", "card"];
+const EX_ESCAPE_ORDER = ["editor", "confirm", "menu", "rename", "create", "sheet", "plugin", "git", "kontainer", "terminal", "drawer", "card"];
 
 function exEscapeTarget(open) {
   for (const one of EX_ESCAPE_ORDER) if (open?.[one]) return one;
@@ -6020,8 +6047,10 @@ function paintDrawers() {
 
 /** Show one drawer. The door in the header and the keys toggle; this only opens. */
 function showDrawer(name) {
-  // The git graph covers the whole board, so it cannot stand over a drawer and be alive at both ends.
+  // The git graph and the kontainer topology cover the whole board, so neither can stand over a
+  // drawer and be alive at both ends.
   if (gitDrawer.isOpen()) gitDrawer.close();
+  kontainerDrawer.close();
   closeDocks();
   if (name === "files") exPrime();
   if (name === "source") scPrime();
@@ -6032,6 +6061,7 @@ function showDrawer(name) {
 function toggleDrawer(name) {
   const open = drawerState.open === name;
   if (gitDrawer.isOpen()) gitDrawer.close();
+  kontainerDrawer.close();
   if (!open) closeDocks();
   explorerCore.drawerToggle(drawerState, name);
   if (!open && name === "files") exPrime();
@@ -9641,13 +9671,14 @@ const SHORTCUTS = [
       { keys: "o", does: "flip the thread order, newest first or oldest first" },
       { keys: "g", does: "roll the git graph down, and press it again to roll it up" },
       { keys: "x", does: "roll the terminal drawer up from the bottom, and press it again to roll it down" },
+      { keys: "k", does: "roll the kontainer topology down, and press it again to roll it up" },
       { keys: "one letter per plugin", does: "open that plugin's panel — assigned in the crossroads settings under plugins" },
       { keys: "t", does: "start a new thread, on a board of threads with no card selected" },
       { keys: "r", does: "name the card you are reading in the message you were writing" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
       { keys: "q", does: "close the card you are reading" },
       { keys: "delete", does: "delete the thread card you are reading — it first says what would go" },
-      { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the plugin panel, then the git graph, then the terminal, then the files drawer, or with nothing open, let go of the selected card" },
+      { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the plugin panel, then the git graph, then the kontainer topology, then the terminal, then the files drawer, or with nothing open, let go of the selected card" },
       { keys: "ctrl+z", does: "undo a close and put the card back" },
       { keys: "ctrl+m", does: "cycle the mode of the card you are reading: agent, plan, boss, discuss, then back on" },
     ],
@@ -9767,7 +9798,7 @@ function paintShortcuts() {
  * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too, and so does
  * a plugin's panel, whose page is the only thing the keyboard can reach while it is down.
  */
-const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen();
+const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen() || kontainerDrawer.isOpen();
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
@@ -13823,6 +13854,7 @@ function exOpenSurfaces() {
     create: Boolean(exState.draft),
     sheet: Boolean(sheet),
     git: gitDrawer.isOpen(),
+    kontainer: kontainerDrawer.isOpen(),
     plugin: pluginPanel.isOpen(),
     terminal: terminalDrawer.isOpen(),
     drawer: Boolean(drawerState.open) || dockOpen(),
@@ -13869,6 +13901,7 @@ document.addEventListener("keydown", (event) => {
   // inside its page never reaches this handler, and comes back as the page's own `close` message.
   if (target === "plugin") return pluginPanel.close();
   if (target === "git") return gitDrawer.close();
+  if (target === "kontainer") return kontainerDrawer.handleEscape();
   if (target === "terminal") return terminalDrawer.close();
   // The files drawer is an overlay of the left column, so Escape rolls it up before it lets go of the
   // card the board is reading.
@@ -14134,6 +14167,28 @@ document.addEventListener("keydown", (event) => {
   terminalDrawer.toggle();
 });
 
+// `k` rolls the kontainer topology down over the board. It is the one drawer letter that also rolls its
+// own drawer up, because the topology covers the board and takes the letters for its own filter and
+// tools while it is up: `panelUp` counts it, so this handler is the only place the letter still lands.
+// Every other way round keeps the guards the letters above keep — a field, a panel, a sheet or a
+// drawer's own surface keeps its keys — and the three drawers cover the same board, so the graph and
+// the terminal roll up as the topology comes down.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "k" || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (typingSomewhere()) return;
+  if (kontainerDrawer.isOpen()) {
+    event.preventDefault();
+    kontainerDrawer.close();
+    return;
+  }
+  if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
+  event.preventDefault();
+  closeDrawers();
+  gitDrawer.close();
+  terminalDrawer.close();
+  kontainerDrawer.open();
+});
+
 // ---------- transport ----------------------------------------------------
 // ---------- session header -----------------------------------------------
 const shortNum = (value) => {
@@ -14174,6 +14229,7 @@ function applyMeta(meta) {
   // where another one can be opened in a tab of its own.
   const folder = meta.workspace?.name || meta.folder || "session";
   terminalDrawer.setName(meta.workspace?.name);
+  kontainerDrawer.setName(meta.workspace?.name);
   const sess = document.getElementById("sess");
   sess.innerHTML = "";
   const name = document.createElement("b");
