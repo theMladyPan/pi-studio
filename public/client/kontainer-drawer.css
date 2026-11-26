@@ -268,6 +268,21 @@ body.kontainer-inspecting { cursor:col-resize; user-select:none; }
 #kontainerDrawer .k-toast { position:fixed; bottom:14px; right:14px; z-index:2500; font:12px/1.45 var(--k-mono); color:var(--k-text); background:var(--k-head); border:1px solid var(--k-accent-dim); border-radius:10px; padding:8px 12px; box-shadow:0 10px 28px rgba(0,0,0,.6); opacity:0; pointer-events:none; transition:opacity 160ms ease; max-width:min(560px,90vw); white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
 #kontainerDrawer .k-toast.k-show { opacity:1; }
 
+/* Task queue: every docker action pops in blue while it runs, then turns green or red and
+   leaves two seconds after it finishes. Each action owns one card, so parallel work stacks. */
+#kontainerDrawer .k-tasks { position:fixed; bottom:14px; right:14px; z-index:2500; display:flex; flex-direction:column; gap:8px; align-items:flex-end; }
+#kontainerDrawer .k-task { display:flex; flex-wrap:wrap; align-items:flex-start; gap:8px; font:12px/1.45 var(--k-mono); color:var(--k-text); background:var(--k-head); border:1px solid var(--k-accent-dim); border-radius:10px; padding:8px 12px; box-shadow:0 10px 28px rgba(0,0,0,.6); max-width:min(560px,90vw); white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
+#kontainerDrawer .k-task.k-running { border-color:var(--k-accent); background:#162030; }
+#kontainerDrawer .k-task.k-running .k-task-dot { color:var(--k-accent); animation:kTaskPulse 1s ease-in-out infinite; }
+@keyframes kTaskPulse { 0%, 100% { opacity:1; } 50% { opacity:.35; } }
+#kontainerDrawer .k-task.k-done { border-color:rgba(63,185,80,.55); }
+#kontainerDrawer .k-task.k-done .k-task-dot { color:var(--k-green); }
+#kontainerDrawer .k-task.k-failed { border-color:rgba(248,81,73,.55); }
+#kontainerDrawer .k-task.k-failed .k-task-dot { color:var(--k-red); }
+#kontainerDrawer .k-task-dot { flex:none; font-weight:700; line-height:1.45; }
+#kontainerDrawer .k-task-label { min-width:0; }
+#kontainerDrawer .k-task-detail { flex:1 1 100%; margin-top:2px; font-size:11px; color:var(--k-red-soft); }
+
 @media (max-width:1120px) { #kontainerDrawer .k-inspector { width:var(--k-insp-w, 300px); } #kontainerDrawer .k-grid { gap:32px; } }
 @media (max-width:960px) {
   #kontainerDrawer .k-inspector { position:absolute; top:0; right:0; bottom:0; width:min(var(--k-insp-w, 340px), 92vw); box-shadow:-12px 0 32px rgba(0,0,0,.65); }
