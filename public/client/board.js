@@ -4477,7 +4477,10 @@ function cardChanged(before, after) {
   // A mode or a flow is repainted too: `/mode` and `/thread/path` change nothing else on the card.
   // `modeAtRun` is in the list because a mode lands when the next child starts: that broadcast carries the
   // corrected badge and nothing else, and a card that ignores it keeps the wrong colour for the whole run.
-  const fields = ["title", "markdown", "details", "text", "question", "reply", "status", "mode", "modeAtRun", "path", "pathChosenBy", "paused"];
+  // `content` and `line` are in the list because a file is opened again into the card it already holds with
+  // the same name and path, and new words are the whole point of opening it again: a card that skips them
+  // keeps the old page (or the old code) standing in for what the daemon no longer holds.
+  const fields = ["title", "markdown", "details", "text", "question", "reply", "status", "mode", "modeAtRun", "path", "pathChosenBy", "paused", "content", "line"];
   if (fields.some((field) => before[field] !== after[field])) return true;
   if (JSON.stringify(before.worktree ?? null) !== JSON.stringify(after.worktree ?? null)) return true;
   // A follow-up's answer settles into the turn it was asked with, so the thread changes without

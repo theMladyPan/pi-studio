@@ -8,7 +8,9 @@ import { test } from "node:test";
  * The frame lives in the board's page, so there is no module to import. Instead the block from
  * `htmlFrame` to the code-view banner is read out of `public/client/board.js` and run here, with the
  * page's node maker stood in: what is checked is the real frame the card and the editor draw, not a
- * copy of it — its sandbox, its document and the cache a repaint reads back.
+ * copy of it — its sandbox, its document and the cache a repaint reads back. The changed gate that
+ * decides whether a card is repainted at all is read out the same way, so the words a file reopened
+ * into its card carries are checked against the real gate too.
  *
  * What that leaves uncovered is the paint: the card's body taking the frame and the page's own
  * rendering inside it. Those are checked by eye, and this file says so rather than pretending otherwise.
@@ -26,6 +28,7 @@ type Frame = {
 };
 type Entry = { htmlFrame?: Frame; htmlContent?: string };
 type Data = { content: string; path?: string; title?: string };
+type Card = Record<string, unknown>;
 
 /** The frame block, as the page loads it, over a node maker that makes nothing. */
 function load(): { htmlFrame: (content: string, title: string) => Frame; htmlBody: (data: Data, entry: Entry) => Frame } {
@@ -42,6 +45,15 @@ function load(): { htmlFrame: (content: string, title: string) => Frame; htmlBod
 		},
 	});
 	return new Function("el", `${source.slice(start, end)}\nreturn { htmlFrame, htmlBody };`)(el);
+}
+
+/** The gate a repaint passes through, as the page loads it: a card is repainted only when this says so. */
+function loadGate(): { cardChanged: (before: Card, after: Card) => boolean } {
+	const source = readFileSync(BOARD, "utf8");
+	const start = source.indexOf("function cardChanged(");
+	const end = source.indexOf("function markUpdated");
+	assert.ok(start >= 0 && end > start, "the card-changed gate is marked off in public/client/board.js");
+	return new Function(`${source.slice(start, end)}\nreturn { cardChanged };`)();
 }
 
 // ---------------------------------------------------------------- the frame
@@ -77,4 +89,17 @@ test("a card with no path names the frame by its title, and the kind decides the
 	const entry: Entry = {};
 	const frame = htmlBody({ content: "<p>x</p>", title: "page" }, entry);
 	assert.equal(frame.title, "page");
+});
+
+// ------------------------------------------------------- the changed gate
+
+test("a file re-opened into its card is news when its words or its hit line moved", () => {
+	const { cardChanged } = loadGate();
+	// A file is opened again into the card it already holds with the same title and path, and only
+	// its words or the line it lands on moved — the whole point of opening it again.
+	const held: Card = { type: "source", title: "page.html", path: "page.html", content: "<p>first</p>", line: 5 };
+	assert.equal(cardChanged(held, { ...held, content: "<p>second</p>" }), true, "new words are redrawn");
+	assert.equal(cardChanged(held, { ...held, line: 9 }), true, "a new hit line is redrawn");
+	// A broadcast that moved nothing on the card is still not news, and no repaint wipes a selection.
+	assert.equal(cardChanged(held, { ...held, updatedAt: Date.now() }), false, "a stamp alone is not news");
 });
