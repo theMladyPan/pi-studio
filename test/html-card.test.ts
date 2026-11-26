@@ -10,7 +10,8 @@ import { test } from "node:test";
  * page's node maker stood in: what is checked is the real frame the card and the editor draw, not a
  * copy of it — its sandbox, its document and the cache a repaint reads back. The changed gate that
  * decides whether a card is repainted at all is read out the same way, so the words a file reopened
- * into its card carries are checked against the real gate too.
+ * into its card carries are checked against the real gate too. So is the choice of body, so a page
+ * is drawn as a page and a script as code in the same run.
  *
  * What that leaves uncovered is the paint: the card's body taking the frame and the page's own
  * rendering inside it. Those are checked by eye, and this file says so rather than pretending otherwise.
@@ -89,6 +90,61 @@ test("a card with no path names the frame by its title, and the kind decides the
 	const entry: Entry = {};
 	const frame = htmlBody({ content: "<p>x</p>", title: "page" }, entry);
 	assert.equal(frame.title, "page");
+});
+
+// ----------------------------------------------------------- the body choice
+
+/** What a body looks like to the choice: a body is a node with the class the card wears. */
+type Body = { node: unknown; cls: string };
+
+/**
+ * The kind decision and the body choice, as the page loads them, over frame maker and stub bodies:
+ * only the frame is the real one here, so the choice is checked against the frame a reader would see.
+ */
+function loadBodyFor(): (data: Record<string, unknown>, entry: Entry) => Body {
+	const source = readFileSync(BOARD, "utf8");
+	const kindStart = source.indexOf("function exPreviewKind(");
+	const kindEnd = source.indexOf("function exPressOpens(");
+	const bodyStart = source.indexOf("function bodyFor(");
+	const bodyEnd = source.indexOf("// ---------- cards ---");
+	assert.ok(kindStart >= 0 && kindEnd > kindStart && bodyStart >= 0 && bodyEnd > bodyStart, "the kind and choice blocks are marked off in public/client/board.js");
+	const { htmlBody } = load();
+	const sourceBody = () => "code";
+	const stickyBody = () => "sticky";
+	const questionBody = () => "question";
+	const renderMarkdown = () => "note";
+	const detailsBlock = () => "details";
+	return new Function(
+		"sourceBody",
+		"stickyBody",
+		"questionBody",
+		"renderMarkdown",
+		"detailsBlock",
+		"htmlBody",
+		`${source.slice(kindStart, kindEnd)}${source.slice(bodyStart, bodyEnd)}\nreturn bodyFor;`,
+	)(sourceBody, stickyBody, questionBody, renderMarkdown, detailsBlock, htmlBody);
+}
+
+test("a source card draws the frame only when its file is a page", () => {
+	const bodyFor = loadBodyFor();
+	// A page is drawn as the page: the card wears the code body's class with the frame inside.
+	const page = bodyFor({ type: "source", path: "page.html", content: "<h1>x</h1>", title: "page.html" }, {});
+	assert.equal(page.cls, "source-body");
+	assert.equal((page.node as Frame).attrs.sandbox, "allow-scripts");
+	assert.equal((page.node as Frame).srcdoc, "<h1>x</h1>");
+	// A script keeps the code view, under any case and extension the editor treats as a page.
+	for (const path of ["main.ts", "index.htm", "PAGE.HTML"]) {
+		const body = bodyFor({ type: "source", path, content: "x" }, {});
+		assert.equal(body.cls, "source-body");
+		const isFrame = typeof body.node === "object" && body.node !== null && "attrs" in body.node;
+		assert.equal(isFrame, path !== "main.ts", path);
+	}
+	// A card that is not a file never draws a frame at all.
+	const note = bodyFor({ type: "note", markdown: "hi" }, {});
+	assert.equal(note.cls, "note-body");
+	assert.equal(note.node, "note");
+	// A file with no extension is text, so a source card keeps its code view for it.
+	assert.equal(bodyFor({ type: "source", path: "Makefile", content: "x" }, {}).node, "code");
 });
 
 // ------------------------------------------------------- the changed gate
