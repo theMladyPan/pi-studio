@@ -102,6 +102,7 @@ function status(message, state = "ready") {
 
 function notice(title, detail) {
 	$("topBar").hidden = true;
+	$("statusStrip").hidden = true;
 	$("commitGraph").hidden = true;
 	$("footer").replaceChildren();
 	$("ggNoticeTitle").textContent = title;
@@ -306,6 +307,7 @@ async function init() {
 		setRepo(config.lastActiveRepo || Object.keys(repos)[0]);
 		$("ggNotice").hidden = true;
 		$("topBar").hidden = false;
+		$("statusStrip").hidden = false;
 		$("commitGraph").hidden = false;
 		await refresh();
 	} catch (error) {
@@ -748,6 +750,20 @@ document.addEventListener("keydown", (event) => {
 		if (next) void expand(next.hash, null).catch(showError);
 	} else return;
 	event.preventDefault();
+});
+
+// The drawer's two presses, now in this page's own toolbar. In a standalone tab there is no drawer to
+// roll up and the page is already in a tab of its own, so both hide there. `open in tab` opens this
+// page directly: a click is a user gesture, so it opens where a message to the parent might not.
+const drawerActions = $("drawerActions");
+if (!framed) drawerActions.hidden = true;
+$("gdTab").addEventListener("click", () => {
+	if (!workspace) return;
+	// The same named window the crossroads uses for boards: asking twice focuses the tab already open.
+	window.open(`/git/${encodeURIComponent(workspace)}`, `pi-studio-gitgraph-${workspace}`);
+});
+$("gdClose").addEventListener("click", () => {
+	if (framed) window.parent.postMessage({ source: "pi-gitgraph", type: "close" }, location.origin);
 });
 
 void init();
