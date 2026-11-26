@@ -577,7 +577,8 @@
   .drawer-shell { position: fixed; display: flex; flex-direction: column; }
   .drawer-slide { visibility: hidden;
     transition: transform 140ms cubic-bezier(.4,0,1,1), visibility 0s linear 140ms; }
-  body.git-open #gitDrawer, body.term-open #termDrawer, body:not(.rail-off) #drawers,
+  body.git-open #gitDrawer, body.term-open #termDrawer, body.kontainer-open #kontainerDrawer,
+  body:not(.rail-off) #drawers,
   #drawersRight.dock-on, #pluginDockTop.dock-on, #pluginDockBottom.dock-on {
     transform: none; visibility: visible;
     transition: transform 170ms cubic-bezier(.2,.9,.25,1); }
@@ -1608,9 +1609,12 @@
   @media (prefers-reduced-motion: reduce) {
     .card.fresh, .card.flash, header .live.working b, .act.running .dot, .composer .ctx-btn.hot::after { animation: none; }
     /* A roll down with no motion: the class still decides what is visible, it just arrives at once. */
-    #gitDrawer, #gitScrim, #drawers, #drawersRight, #pluginDockTop, #pluginDockBottom { transition: none; }
+    #gitDrawer, #gitScrim, #kontainerDrawer, #kontainerScrim, #drawers, #drawersRight, #pluginDockTop, #pluginDockBottom { transition: none; }
   }
 </style>
+<!-- The kontainer drawer's own sheet: every rule in it hangs off its drawer, its scrim or the body
+     class, so the board carries it without the two surfaces being able to reach each other. -->
+<link rel="stylesheet" href="/client/kontainer-drawer.css" />
 </head>
 <body>
 <header>
@@ -1657,6 +1661,7 @@
   <button id="sourceBtn" type="button" role="menuitem" aria-controls="drawerSource" aria-expanded="false" title="show the source control drawer (d)"><span>source control</span><span class="hm-key">d</span></button>
   <button id="gitBtn" type="button" role="menuitem" aria-expanded="false" aria-controls="gitDrawer" title="roll the git graph down (g)"><span>git graph</span><span class="hm-key">g</span></button>
   <button id="termBtn" type="button" role="menuitem" aria-expanded="false" aria-controls="termDrawer" title="roll the terminal drawer up from the bottom (x)"><span>terminal</span><span class="hm-key">x</span></button>
+  <button id="kontainerBtn" type="button" role="menuitem" aria-expanded="false" aria-controls="kontainerDrawer" title="roll the kontainer topology down (k)"><span>kontainer</span><span class="hm-key">k</span></button>
   <!-- One item per plugin that declared a panel, filled in by /client/board.js. The menu's own arrow keys
        walk whatever buttons it finds, so a door the daemon reports lands in the same list as these. -->
   <span id="pluginDoors" hidden></span>
@@ -2008,6 +2013,13 @@
 <section id="gitDrawer" class="drawer-shell drawer-slide" aria-label="git graph" inert>
   <div class="gd-body drawer-body"><iframe id="gdFrame" title="git graph"></iframe></div>
 </section>
+
+<!-- The kontainer drawer: the Docker/Podman topology in a panel that rolls down under the header with
+     `k`. Nothing is inside it here, because the topology is the module's own markup and every fact in
+     it comes from `/kontainer/*`: /client/kontainer-drawer.js makes the bar, the three strata and the
+     sheets, and keeps what the human picked between rolls. -->
+<div id="kontainerScrim" hidden></div>
+<section id="kontainerDrawer" class="drawer-shell drawer-slide" aria-label="kontainer" inert></section>
 
 <!-- The plugin panel: a plugin's own page in a frame that rolls down under the header, opened from the
      door the toolbox lists for it. The frame is sandboxed with scripts and nothing else, so its document

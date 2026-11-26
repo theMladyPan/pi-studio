@@ -38,6 +38,7 @@ import { onClean, onCleanClosed, onClose, onFragmentRemove, onFragments, onKill,
 import { onShell } from "./routes/board/shell.ts";
 import { onGitInit, onGitMsg, onGitPage } from "./routes/gitgraph.ts";
 import { onPluginRegistry, onPluginReload, onVisualFile, onVisualPanels, onVisualRequest, VISUAL_PREFIX } from "./routes/plugins.ts";
+import { onKontainerAction, onKontainerDetail, onKontainerDf, onKontainerEvents, onKontainerState, onKontainerStats } from "./routes/kontainer.ts";
 import { onCommand } from "./routes/board/command.ts";
 import { onSourceControlCommit, onSourceControlConflict, onSourceControlContinue, onSourceControlDiff, onSourceControlDiscard, onSourceControlFileAtHead, onSourceControlIgnore, onSourceControlMessage, onSourceControlResolve, onSourceControlStage, onSourceControlStatus, onSourceControlUnstage } from "./routes/board/source-control.ts";
 import { attachTerminal, stopAllTerminals, terminalSize } from "./terminal.ts";
@@ -841,6 +842,39 @@ function requestHandler(req, res) {
 			await onGitInit(res, board);
 			return;
 		}
+		// The kontainer drawer's five reads: the topology, the live stats of the containers on screen, one
+		// detail tab, the disk usage and the events stream. All behind the caller check like `/git/init`,
+		// because what they hand back is what this machine's Docker or Podman socket says.
+		if (req.method === "GET" && url.pathname === "/kontainer/state") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onKontainerState(req, res, url, board);
+			return;
+		}
+		if (req.method === "GET" && url.pathname === "/kontainer/stats") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onKontainerStats(req, res, url, board);
+			return;
+		}
+		if (req.method === "GET" && url.pathname === "/kontainer/detail") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onKontainerDetail(req, res, url, board);
+			return;
+		}
+		if (req.method === "GET" && url.pathname === "/kontainer/df") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onKontainerDf(req, res, url, board);
+			return;
+		}
+		if (req.method === "GET" && url.pathname === "/kontainer/events") {
+			const board = boardFrom(url, res);
+			if (!board) return;
+			await onKontainerEvents(req, res, url, board);
+			return;
+		}
 		// The source control drawer's two lists and branch, read per call: git's answer, not the board's.
 		if (req.method === "GET" && url.pathname === "/source-control/status") {
 			const board = boardFrom(url, res);
@@ -991,6 +1025,9 @@ function requestHandler(req, res) {
 				"/source-control/continue": onSourceControlContinue,
 				"/source-control/discard": onSourceControlDiscard,
 				"/source-control/ignore": onSourceControlIgnore,
+				// The kontainer drawer's one change: compose, build, tag, push, pull and prune. None is in
+				// THREAD_ROUTES: these run in the human's Docker or Podman, so a child reports instead.
+				"/kontainer/action": onKontainerAction,
 				// The Explorer's six changes. None is in THREAD_ROUTES: a child may draw a card, and may not
 				// rename, delete or save over the files of the folder a human opened.
 				"/files/new": onFileNew,

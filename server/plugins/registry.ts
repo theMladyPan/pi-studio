@@ -71,12 +71,12 @@ export type PluginVisual = {
 /**
  * The plain letters the board's own keys already answer to, from `SHORTCUTS` in `public/client/board.js`
  * (`f` files, `a` activity, `c` cards, `d` source control, `m` map, `n` next new, `o` order, `t` new
- * thread, `r` reply, `p` pin, `q` close, `g` git graph, `x` terminal, `0` real size, `1`–`4` on a
- * question). A plugin shortcut is one lowercase letter A plugin takes, and never one of these: a key
+ * thread, `r` reply, `p` pin, `q` close, `g` git graph, `x` terminal, `k` kontainer, `0` real size,
+ * `1`–`4` on a question). A plugin shortcut is one lowercase letter A plugin takes, and never one of these: a key
  * that belongs to the board is never also a plugin's, whichever side asks first. Keep this list beside
  * that one, so the two agree.
  */
-export const PLUGIN_SHORTCUT_TAKEN = ["f", "a", "c", "d", "m", "n", "o", "t", "r", "p", "q", "g", "x", "0", "1", "2", "3", "4"];
+export const PLUGIN_SHORTCUT_TAKEN = ["f", "a", "c", "d", "m", "n", "o", "t", "r", "p", "q", "g", "x", "k", "0", "1", "2", "3", "4"];
 
 /** One executable the daemon starts: what it is called, and what to run. */
 export type PluginEntry = {
