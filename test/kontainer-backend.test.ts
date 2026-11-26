@@ -9,11 +9,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
+import { EventEmitter } from "node:events";
 import { after, before, test } from "node:test";
 
 const { demuxDockerLogs, discoverRuntimes } = await import("../server/kontainer/socket.ts");
 const { buildTopology, fetchStats, statsFromPayload } = await import("../server/kontainer/topology.ts");
 const { buildExecCommand, handleAction } = await import("../server/kontainer/actions.ts");
+const { onKontainerAction, onKontainerEvents, onKontainerState } = await import("../server/routes/kontainer.ts");
 import type { Runtime } from "../server/kontainer/socket.ts";
 
 const NOW = 1_700_000_000;
@@ -22,6 +25,17 @@ const NOW = 1_700_000_000;
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-studio-kontainer-"));
 const sockPath = join(tmp, "engine.sock");
+const brokenSockPath = join(tmp, "broken.sock");
+
+/** A stack whose compose project lives somewhere this board does not own. */
+const OUTSIDE_LABELS = {
+	"com.docker.compose.project": "elsewhere",
+	"com.docker.compose.service": "web",
+	"com.docker.compose.project.working_dir": "/elsewhere/stack",
+};
+
+let eventsOpened = 0;
+let eventsClosed = 0;
 
 const IMAGES = [
 	{ Id: "sha256:aaa111", RepoTags: ["app:latest"], Size: 1000, Created: NOW - 100 },
@@ -83,6 +97,20 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
 	if (url.startsWith("/containers/json")) return json(CONTAINERS);
 	if (url === "/networks") return json([{ Name: "front", Driver: "bridge", IPAM: { Config: [{ Subnet: "172.20.0.0/16" }] } }]);
 	if (url === "/volumes") return json({ Volumes: [{ Name: "appdata" }] });
+	if (url.startsWith("/events")) {
+		eventsOpened += 1;
+		res.writeHead(200, { "Content-Type": "application/json" });
+		res.write('{"Type":"container","Action":"start"}\n');
+		res.on("close", () => {
+			eventsClosed += 1;
+		});
+		return;
+	}
+	if (url.startsWith("/containers/") && url.endsWith("/json")) {
+		const id = url.split("/")[2];
+		if (id === "444444dddddd") return json({ Config: { Labels: OUTSIDE_LABELS } });
+		return json({ Config: { Labels: CONTAINERS.find((c) => c.Id === id)?.Labels ?? {} } });
+	}
 	if (url.includes("/stats") && !url.includes("111111aaaaaa")) {
 		res.writeHead(404, { "Content-Type": "application/json" });
 		res.end(JSON.stringify({ message: "no such container" }));
@@ -104,12 +132,20 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
 	res.end(JSON.stringify({ message: "no such route" }));
 });
 
+/** An engine that refuses every request, so the events route has a failure to report. */
+const brokenServer = createServer((_req: IncomingMessage, res: ServerResponse) => {
+	res.writeHead(500, { "Content-Type": "application/json" });
+	res.end(JSON.stringify({ message: "engine is unhappy" }));
+});
+
 before(async () => {
 	await new Promise<void>((resolvePromise) => server.listen(sockPath, resolvePromise));
+	await new Promise<void>((resolvePromise) => brokenServer.listen(brokenSockPath, resolvePromise));
 });
 
 after(async () => {
 	await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+	await new Promise<void>((resolvePromise) => brokenServer.close(() => resolvePromise()));
 	rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -239,4 +275,172 @@ test("buildExecCommand makes safe terminal commands", () => {
 test("handleAction exec.cmd needs no engine and returns the command", async () => {
 	const result = await handleAction({ folder: "/ws/myproj" }, { action: "exec.cmd", mode: "exec", id: "111111aaaaaabbbb" }, { runtimes: [] });
 	assert.deepEqual(result, { ok: true, command: "docker exec -it 111111aaaaaa sh" });
+});
+
+// ---------- recreate and compose safety ----------
+
+test("recreate only runs a stack that lives inside the workspace folder", async () => {
+	const runtime = mockRuntime();
+	const outside = await handleAction({ folder: "/ws/myproj" }, { action: "recreate", id: "444444dddddd", runtime: runtime.id }, { runtimes: [runtime] });
+	assert.equal(outside.ok, false);
+	assert.equal(outside.error, "container compose working_dir is outside current workspace");
+
+	const calls: Array<{ cli: string; args: string[]; cwd: string }> = [];
+	const run = async (cli: string, args: string[], opts: { cwd: string }) => {
+		calls.push({ cli, args, cwd: opts.cwd });
+		return { code: 0, output: "" };
+	};
+	const inside = await handleAction({ folder: "/ws/myproj" }, { action: "recreate", id: "111111aaaaaa", runtime: runtime.id }, { runtimes: [runtime], run });
+	assert.equal(inside.ok, true);
+	assert.equal(calls[0]?.cwd, "/ws/myproj");
+	assert.deepEqual(calls[0]?.args, ["compose", "up", "-d", "--no-deps", "--force-recreate", "web"]);
+});
+
+test("compose actions name the project when the request carries one", async () => {
+	const runtime = mockRuntime();
+	const calls: string[][] = [];
+	const run = async (_cli: string, args: string[]) => {
+		calls.push(args);
+		return { code: 0, output: "" };
+	};
+	const named = await handleAction({ folder: "/ws/myproj" }, { action: "compose.restart", project: "myproj", runtime: runtime.id }, { runtimes: [runtime], run });
+	assert.equal(named.ok, true);
+	assert.deepEqual(calls[0], ["compose", "-p", "myproj", "restart"]);
+
+	const bad = await handleAction({ folder: "/ws/myproj" }, { action: "compose.restart", project: "--project-directory=/etc", runtime: runtime.id }, { runtimes: [runtime], run });
+	assert.equal(bad.ok, false);
+	assert.match(bad.error ?? "", /valid compose project name/);
+	assert.equal(calls.length, 1, "a rejected project name never reaches the CLI");
+
+	const unnamed = await handleAction({ folder: "/ws/myproj" }, { action: "compose.down", runtime: runtime.id }, { runtimes: [runtime], run });
+	assert.equal(unnamed.ok, true);
+	assert.deepEqual(calls[1], ["compose", "down"]);
+});
+
+// ---------- routes ----------
+
+type FakeResponse = EventEmitter & {
+	status: number;
+	body: string;
+	chunks: string[];
+	writableEnded: boolean;
+	writeHead: (status: number, headers?: Record<string, string>) => void;
+	write: (chunk: string | Buffer) => boolean;
+	end: (body?: string) => void;
+};
+
+function fakeResponse(): FakeResponse {
+	const res = new EventEmitter() as FakeResponse;
+	res.status = 0;
+	res.body = "";
+	res.chunks = [];
+	res.writableEnded = false;
+	res.writeHead = (status) => {
+		res.status = status;
+	};
+	res.write = (chunk) => {
+		res.chunks.push(String(chunk));
+		return true;
+	};
+	res.end = (body) => {
+		if (body !== undefined) res.body = String(body);
+		res.writableEnded = true;
+	};
+	return res;
+}
+
+function fakeRequest(body: unknown): IncomingMessage {
+	return Readable.from([Buffer.from(JSON.stringify(body))]) as unknown as IncomingMessage;
+}
+
+/** Point runtime discovery at the mock engine for the length of one call. */
+async function withEngine<T>(socketPath: string, work: () => Promise<T>): Promise<T> {
+	const previous = process.env.DOCKER_HOST;
+	process.env.DOCKER_HOST = `unix://${socketPath}`;
+	try {
+		return await work();
+	} finally {
+		if (previous === undefined) delete process.env.DOCKER_HOST;
+		else process.env.DOCKER_HOST = previous;
+	}
+}
+
+/** Wait for `check` to hold, so a stream test never races the socket. */
+async function until(check: () => boolean, what: string, ms = 4000): Promise<void> {
+	const deadline = Date.now() + ms;
+	while (Date.now() < deadline) {
+		if (check()) return;
+		await new Promise((done) => setTimeout(done, 20));
+	}
+	throw new Error(`timed out waiting for ${what}`);
+}
+
+test("onKontainerState answers the topology and its runtime", async () => {
+	const state = JSON.parse(
+		await withEngine(sockPath, async () => {
+			const res = fakeResponse();
+			await onKontainerState({} as IncomingMessage, res as unknown as ServerResponse, new URL("http://daemon/kontainer/state?workspace=/ws/myproj&scope=all&runtime=docker"), { folder: "/ws/myproj" });
+			assert.equal(res.status, 200);
+			return res.body;
+		}),
+	) as { available: boolean; activeRuntime: string | null; topology: { containers: unknown[] } };
+	assert.equal(state.available, true);
+	assert.equal(state.activeRuntime, "docker");
+	assert.equal(state.topology.containers.length, 3);
+});
+
+test("onKontainerAction reports a rejected action as ok:false on a 200", async () => {
+	const rejected = JSON.parse(
+		await withEngine(sockPath, async () => {
+			const res = fakeResponse();
+			await onKontainerAction(fakeRequest({ action: "start", id: "../../etc/passwd" }), res as unknown as ServerResponse, { folder: "/ws/myproj" });
+			assert.equal(res.status, 200, "the route still answers 200; the body carries the verdict");
+			return res.body;
+		}),
+	) as { ok: boolean; error?: string };
+	assert.equal(rejected.ok, false);
+	assert.match(rejected.error ?? "", /valid container id/);
+
+	const accepted = JSON.parse(
+		await withEngine(sockPath, async () => {
+			const res = fakeResponse();
+			await onKontainerAction(fakeRequest({ action: "start", id: "111111aaaaaa" }), res as unknown as ServerResponse, { folder: "/ws/myproj" });
+			assert.equal(res.status, 200);
+			return res.body;
+		}),
+	) as { ok: boolean; output?: string };
+	assert.equal(accepted.ok, true);
+	assert.equal(accepted.output, "");
+});
+
+test("onKontainerEvents streams engine events and closes the upstream socket when the tab goes", async () => {
+	eventsOpened = 0;
+	eventsClosed = 0;
+	const opened = await withEngine(sockPath, async () => {
+		const req = new EventEmitter() as unknown as IncomingMessage;
+		const res = fakeResponse();
+		await onKontainerEvents(req, res as unknown as ServerResponse, new URL("http://daemon/kontainer/events?runtime=docker"), { folder: "/ws/myproj" });
+		await until(() => res.chunks.join("").includes("event: change"), "the first engine event");
+		assert.equal(eventsOpened, 1);
+		assert.equal(eventsClosed, 0, "the engine stream stays open while the tab is there");
+		(req as unknown as EventEmitter).emit("close");
+		(req as unknown as EventEmitter).emit("close");
+		await until(() => eventsClosed === 1, "the engine stream to be destroyed");
+		await new Promise((done) => setTimeout(done, 50));
+		return { closed: eventsClosed, ended: res.writableEnded, chunks: res.chunks.join("") };
+	});
+	assert.equal(opened.closed, 1, "one close tears the upstream down once");
+	assert.equal(opened.ended, false, "the client's own disconnect is not answered with an end");
+	assert.doesNotMatch(opened.chunks, /event: error/);
+});
+
+test("onKontainerEvents tells the tab when the engine fails mid-stream", async () => {
+	const failed = await withEngine(brokenSockPath, async () => {
+		const req = new EventEmitter() as unknown as IncomingMessage;
+		const res = fakeResponse();
+		await onKontainerEvents(req, res as unknown as ServerResponse, new URL("http://daemon/kontainer/events?runtime=docker"), { folder: "/ws/myproj" });
+		await until(() => res.writableEnded, "the error event to end the feed");
+		return res.chunks.join("");
+	});
+	assert.match(failed, /event: error\ndata: \{"error":"engine request failed \(500\): engine is unhappy"\}\n\n/);
 });

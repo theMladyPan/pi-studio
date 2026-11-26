@@ -11,14 +11,13 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   const scrim = document.getElementById("kontainerScrim");
   const btn = document.getElementById("kontainerBtn");
 
-  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const $ = (id) => drawer.querySelector(`#${id}`);
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
   const fmtBytes = (b) => { if (b == null || !Number.isFinite(b)) return "—"; if (b < 1024) return `${b} B`; const u = ["KB", "MB", "GB", "TB"]; const i = Math.min(u.length - 1, Math.floor(Math.log(b) / Math.log(1024))); return `${(b / 1024 ** (i + 1)).toFixed(i ? 1 : 0)} ${u[i]}`; };
   const fmtDate = (t) => { if (!t) return "—"; const d = new Date(t); return Number.isNaN(d) ? String(t) : d.toLocaleString(); };
   const store = { get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
 
-  /* ---------- DOM skeleton (own markup only; untrusted strings go through textContent/esc) ---------- */
+  /* ---------- DOM skeleton (own markup only; untrusted strings go through textContent) ---------- */
   drawer.innerHTML = `
     <div class="k-bar">
       <span class="k-title">kontainer</span><span class="k-ws" id="kWs"></span>
@@ -67,7 +66,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     data: null, filter: "all", search: "", scope: "workspace",
     runtime: store.get("kontainer.runtime", ""), mode: ["eco", "balanced", "live"].includes(store.get("kontainer.mode", "balanced")) ? store.get("kontainer.mode", "balanced") : "balanced",
     selected: null, hovered: null, tab: "logs", armedKill: null,
-    stats: new Map(), history: new Map(),
+    stats: new Map(), history: new Map(), details: new Map(),
   };
   $("kMode").value = state.mode;
   let es = null, statsTimer = null, logsTimer = null, debounceTimer = null, toastTimer = null, rafPending = false, liveOn = false;
@@ -148,6 +147,8 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   }
   async function postAction(payload, okMsg) {
     const data = await apiText(`/kontainer/action?workspace=${encodeURIComponent(workspace || "")}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ runtime: state.runtime || undefined, ...payload }) });
+    // The action route answers 200 either way, so its `ok` is the only verdict a failure carries.
+    if (data?.ok === false) throw new Error(data?.error || "action failed");
     if (okMsg) toast(okMsg);
     await loadState();
     return data;
@@ -163,8 +164,8 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
         if (s && Number.isFinite(s.memUsed)) { h.mem.push(s.memUsed); if (h.mem.length > 30) h.mem.shift(); }
         state.history.set(id, h);
       }
-      if (state.selected?.kind === "container" && state.tab === "logs") renderInspector(false);
-      else paintMetrics(ids);
+      paintTelemetry(state.selected?.kind === "container" ? state.selected.id : null);
+      paintMetrics(ids);
     } catch { /* stats are best-effort */ }
   }
 
@@ -180,13 +181,14 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const runtimes = state.data?.runtimes || [];
     if (runtimes.length > 1) {
       const sel = el("select", "k-runtime-sel"); sel.setAttribute("aria-label", "runtime");
-      const rid = (r) => (typeof r === "string" ? r : r.id || r.name);
-      for (const r of runtimes) { const o = el("option", null, rid(r)); o.value = rid(r); sel.append(o); }
+      const rid = (r) => (typeof r === "string" ? r : r.id);
+      const rlabel = (r) => (typeof r === "string" ? r : r.label || r.id);
+      for (const r of runtimes) { const o = el("option", null, rlabel(r)); o.value = rid(r); sel.append(o); }
       sel.value = state.runtime || state.data.activeRuntime || rid(runtimes[0]);
       sel.onchange = () => { state.runtime = sel.value; store.set("kontainer.runtime", state.runtime); loadState(); };
       host.append(sel);
     } else if (runtimes.length === 1) {
-      host.append(el("span", "k-badge k-b-muted", (typeof runtimes[0] === "string" ? runtimes[0] : runtimes[0].name || runtimes[0].id) || "docker"));
+      host.append(el("span", "k-badge k-b-muted", (typeof runtimes[0] === "string" ? runtimes[0] : runtimes[0].label || runtimes[0].id) || "docker"));
     } else if (state.runtime) {
       host.append(el("span", "k-badge k-b-muted", state.runtime));
     }
@@ -221,9 +223,13 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     $("kMetaWiring").textContent = `${(wiring().ports || []).length} ports · ${(wiring().networks || []).length} nets · ${(wiring().volumes || []).length} vols`;
     renderRuntimeHost(); renderChips();
     const hint = $("kHint");
-    const emptyWorkspace = state.scope === "workspace" && (s.workspaceContainers ?? 0) === 0 && (s.allContainers ?? 0) > 0;
-    hint.hidden = !emptyWorkspace;
-    if (emptyWorkspace) {
+    const unavailable = state.data?.available === false;
+    const emptyWorkspace = !unavailable && state.scope === "workspace" && (s.workspaceContainers ?? 0) === 0 && (s.allContainers ?? 0) > 0;
+    hint.hidden = !unavailable && !emptyWorkspace;
+    if (unavailable) {
+      const retry = el("button", "k-mini-btn", "retry"); retry.type = "button"; retry.onclick = () => loadState();
+      hint.replaceChildren(el("span", null, state.data.reason || "Docker/Podman socket unavailable"), retry);
+    } else if (emptyWorkspace) {
       hint.replaceChildren(el("span", null, "no containers in this workspace — every container on the host is shown instead"), (() => { const b = el("button", "k-mini-btn", "show all host"); b.type = "button"; b.onclick = () => { state.scope = "all"; loadState(); }; return b; })());
     }
   }
@@ -303,6 +309,21 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   }
   function paintMetrics(ids) {
     for (const id of ids) { const host = stage.querySelector(`[data-metrics-for="${CSS.escape(id)}"]`); const c = findCtr(id); if (host && c) paintMetricsInto(host, c); }
+  }
+  function paintTelemetryInto(host, id) {
+    const s = state.stats.get(id); const h = state.history.get(id) || { cpu: [], mem: [] };
+    host.replaceChildren();
+    const cpuBox = el("div", "k-tele-box"); cpuBox.append(el("div", "k-tele-label", "CPU Usage"), el("div", "k-tele-val", s ? `${s.cpuPct?.toFixed(1) ?? "—"}%` : "—"));
+    cpuBox.insertAdjacentHTML("beforeend", sparkSvg(h.cpu, 100, (s?.cpuPct || 0) > 35 ? "#d29922" : "#3fb950"));
+    const memBox = el("div", "k-tele-box"); memBox.append(el("div", "k-tele-label", "Memory"), el("div", "k-tele-val", s ? `${fmtBytes(s.memUsed)} / ${fmtBytes(s.memLimit)}` : "—"));
+    memBox.insertAdjacentHTML("beforeend", sparkSvg(h.mem, s?.memLimit || 0, "#58a6ff"));
+    host.append(cpuBox, memBox);
+  }
+  /** Repaint the inspector's two metric cards in place; the log box under them is left alone. */
+  function paintTelemetry(id) {
+    if (!id) return;
+    const host = inspector.querySelector(`[data-tele-for="${CSS.escape(id)}"]`);
+    if (host) paintTelemetryInto(host, id);
   }
   function buildWireCard(w, related) {
     const card = el("div", "k-card k-wire-card"); card.dataset.nodeId = w.id; card.dataset.kind = "wire";
@@ -444,16 +465,16 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     for (const n of names) { const b = el("button", `k-tab${state.tab === n ? " k-active" : ""}`, n); b.type = "button"; b.onclick = () => { state.tab = n; renderInspector(); }; t.append(b); }
     return t;
   }
-  function renderInspector(refetch = true) {
+  function renderInspector(refresh = false) {
     inspector.replaceChildren();
     if (!state.selected) { inspector.classList.add("k-collapsed"); scheduleWires(); return; }
     inspector.classList.remove("k-collapsed");
     const { kind, id } = state.selected;
-    if (kind === "container") return renderContainerInspector(findCtr(id), refetch);
-    if (kind === "image") return renderImageInspector(findImage(id), refetch);
+    if (kind === "container") return renderContainerInspector(findCtr(id), refresh);
+    if (kind === "image") return renderImageInspector(findImage(id), refresh);
     if (kind === "wire") return renderWireInspector(wireNode(id));
   }
-  function renderContainerInspector(c, refetch) {
+  function renderContainerInspector(c, refresh) {
     if (!c) { state.selected = null; return renderInspector(false); }
     const running = isRunning(c); const armed = state.armedKill === c.id;
     const actions = [];
@@ -477,29 +498,19 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     }
     inspector.append(tabs(["logs", "inspect", "layers"]));
     const body = el("div", "k-insp-body"); inspector.append(body);
-    if (state.tab === "logs") {
-      const s = state.stats.get(c.id); const h = state.history.get(c.id) || { cpu: [], mem: [] };
-      const tele = el("div", "k-tele-strip");
-      const cpuBox = el("div", "k-tele-box"); cpuBox.append(el("div", "k-tele-label", "CPU Usage"), el("div", "k-tele-val", s ? `${s.cpuPct?.toFixed(1) ?? "—"}%` : "—"));
-      cpuBox.insertAdjacentHTML("beforeend", sparkSvg(h.cpu, 100, (s?.cpuPct || 0) > 35 ? "#d29922" : "#3fb950"));
-      const memBox = el("div", "k-tele-box"); memBox.append(el("div", "k-tele-label", "Memory"), el("div", "k-tele-val", s ? `${fmtBytes(s.memUsed)} / ${fmtBytes(s.memLimit)}` : "—"));
-      memBox.insertAdjacentHTML("beforeend", sparkSvg(h.mem, s?.memLimit || 0, "#58a6ff"));
-      tele.append(cpuBox, memBox); body.append(tele);
+    const tab = state.tab;
+    if (tab === "logs") {
+      const tele = el("div", "k-tele-strip"); tele.dataset.teleFor = c.id;
+      paintTelemetryInto(tele, c.id); body.append(tele);
       const row = el("div", "k-row-between"); row.append(el("span", "k-kv-k", "live stdout / stderr"));
       const tail = el("button", "k-link-act", "tail in terminal (x) ↗"); tail.type = "button";
       tail.onclick = () => execToTerminal({ mode: "logs", id: c.id });
       row.append(tail); body.append(row);
-      const logBox = el("div", "k-log-box", "loading…"); body.append(logBox);
-      if (refetch) fetchDetail("container", c.id, "logs", (data) => fillLogs(logBox, data.lines));
-    } else if (state.tab === "inspect") {
-      const box = el("div", "k-log-box", "loading…"); body.append(box);
-      if (refetch) fetchDetail("container", c.id, "inspect", (data) => fillJson(box, data.inspect ?? data));
-    } else {
-      const box = el("div", "k-log-box", "loading…"); body.append(box);
-      if (refetch) fetchDetail("container", c.id, "layers", (data) => fillLayers(box, data.layers ?? data));
     }
+    const box = el("div", tab === "inspect" ? "k-json" : "k-log-box"); body.append(box);
+    paintDetail(box, "container", c.id, tab, refresh);
   }
-  function renderImageInspector(img, refetch) {
+  function renderImageInspector(img, refresh) {
     if (!img) { state.selected = null; return renderInspector(false); }
     const label = `${img.repo || "<none>"}:${img.tag || "<none>"}`;
     const actions = [
@@ -511,8 +522,8 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     inspector.append(tabs(["layers", "inspect"]));
     const body = el("div", "k-insp-body"); inspector.append(body);
     const tab = state.tab === "inspect" ? "inspect" : "layers";
-    const box = el("div", "k-log-box", "loading…"); body.append(box);
-    if (refetch) fetchDetail("image", img.id, tab, (data) => tab === "inspect" ? fillJson(box, data.inspect ?? data) : fillLayers(box, data.layers ?? data));
+    const box = el("div", tab === "inspect" ? "k-json" : "k-log-box"); body.append(box);
+    paintDetail(box, "image", img.id, tab, refresh);
   }
   function renderWireInspector(w) {
     if (!w) { state.selected = null; return renderInspector(false); }
@@ -533,11 +544,30 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       body.append(b);
     }
   }
-  async function fetchDetail(kind, id, tab, fill) {
+  const detailKey = (kind, id, tab) => `${kind}:${id}:${tab}`;
+  /** The last detail an entry fetched, so a re-render can draw it again instead of an empty box. */
+  function rememberDetail(kind, id, tab, data) {
+    state.details.set(detailKey(kind, id, tab), data);
+    if (state.details.size > 48) state.details.delete(state.details.keys().next().value);
+  }
+  function fillDetail(box, tab, data) {
+    if (tab === "logs") return fillLogs(box, data.lines);
+    if (tab === "inspect") return fillJson(box, data.inspect ?? data);
+    return fillLayers(box, data.layers ?? data);
+  }
+  /** Draw the cached detail at once, and fetch it when there is none to draw (or a refresh was asked). */
+  function paintDetail(box, kind, id, tab, refresh) {
+    const cached = state.details.get(detailKey(kind, id, tab));
+    if (cached !== undefined) fillDetail(box, tab, cached);
+    else box.textContent = "loading…";
+    if (cached === undefined || refresh) fetchDetail(kind, id, tab, box);
+  }
+  async function fetchDetail(kind, id, tab, box) {
     try {
       const data = await apiText(`/kontainer/detail?workspace=${encodeURIComponent(workspace || "")}&runtime=${encodeURIComponent(state.runtime || "")}&kind=${kind}&id=${encodeURIComponent(id)}&tab=${tab}&tail=200`);
       if (state.selected?.id !== id) return;
-      fill(data);
+      rememberDetail(kind, id, tab, data);
+      fillDetail(box, tab, data);
     } catch (e) { toast(`detail: ${e.message}`); }
   }
   function logLineText(l) {
@@ -575,8 +605,10 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   /* ---------- terminal handoff ---------- */
   async function execToTerminal(payload) {
     try {
-      const data = await postAction({ action: "exec.cmd", ...payload }, null).catch((e) => { throw e; });
-      const cmd = data?.command || data?.cmd || (payload.mode === "logs" ? `docker logs -f ${payload.id}` : payload.mode === "compose-logs" ? "docker compose logs -f" : `docker exec -it ${payload.id} sh`);
+      const data = await postAction({ action: "exec.cmd", ...payload }, null);
+      // Only the command the server built and validated is run; a failure never becomes one made up here.
+      const cmd = data?.command;
+      if (typeof cmd !== "string" || !cmd) { toast("kontainer: the server returned no command to run"); return; }
       if (typeof openTerminalCommand === "function") openTerminalCommand(cmd);
       else toast(cmd);
     } catch (e) { toast(e.message); }
@@ -713,7 +745,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     if (state.mode === "balanced") statsTimer = setInterval(pollStats, 3000);
     if (state.mode === "live") {
       statsTimer = setInterval(pollStats, 1000);
-      logsTimer = setInterval(() => { if (state.selected?.kind === "container" && state.tab === "logs") renderInspector(); }, 2000);
+      logsTimer = setInterval(() => { if (state.selected?.kind === "container" && state.tab === "logs") renderInspector(true); }, 2000);
     }
     pollStats();
   }
