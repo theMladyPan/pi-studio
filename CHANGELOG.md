@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- feat: Add a right-click menu to every kontainer drawer node — images, containers, ports, networks and volumes each offer the actions and the copies their inspector already carries, an item the node's own state rules out is greyed with its reason in the tooltip, and `Esc` puts the keyboard back on the card the menu was opened on. [t-181fd5fb]
+- feat: Add a right-click menu to every kontainer drawer node — images, containers, ports, networks and volumes each offer the actions and the copies their inspector already carries, an item the node's own state rules out is greyed with its reason in the tooltip, a right press leaves the selection and the details panel as they stand — only `inspect` and `layers` open the panel — and `Esc` puts the keyboard back on the card the menu was opened on. [t-181fd5fb]
 
 ## [0.10.0] - 2026-11-26
 

@@ -269,11 +269,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       const cardKind = card.dataset.kind;
       const node = cardKind === "wire" ? wireNode(id) : cardKind === "image" ? findImage(id) : findCtr(id);
       if (!node) return;
-      // The inspector follows the press, and an arming on another node does not outlive it.
-      state.selected = { kind: cardKind, id };
-      state.tab = cardKind === "image" ? "layers" : "logs";
-      if (state.armedKill && state.armedKill !== id) state.armedKill = null;
-      render();
+      // The press opens the menu and nothing else: the selection and the inspector are left as they were.
       ctxOpen(cardKind === "wire" ? { port: "port", net: "network", vol: "volume" }[node.kind] : cardKind, node, event);
     });
     card.addEventListener("click", (e) => { e.stopPropagation(); state.selected = { kind: card.dataset.kind, id }; state.tab = card.dataset.kind === "image" ? "layers" : "logs"; state.armedKill = null; if (state.mode === "eco") fetchStats([id]); render(); });

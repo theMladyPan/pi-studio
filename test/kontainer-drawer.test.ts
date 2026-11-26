@@ -142,6 +142,30 @@ test("a right press on a card opens the node menu its kind answers to", () => {
 	assert.match(kontainerSource, /ctxMenu\.querySelector\("button:not\(:disabled\)"\)\?\.focus\(\);/, "the first item that can act takes the keyboard");
 });
 
+test("a right press opens the menu without the selection or the inspector following it", () => {
+	// The press belongs to the menu alone: it selects nothing, so a shut inspector stays shut and an
+	// open one stays open, and `inspect`/`layers` are the only items that mean "show me this node".
+	const handler = kontainerSource.match(/card\.addEventListener\("contextmenu", \(event\) => \{[\s\S]*?\n    \}\);/)?.[0];
+	assert.ok(handler, "the card decorator's right-press listener is found whole");
+	assert.doesNotMatch(handler, /state\.selected/, "a right press assigns no selection");
+	assert.doesNotMatch(handler, /render\(|renderInspector\(|showTab\(/, "and repaints no panel");
+	assert.match(handler, /ctxOpen\(/, "it opens the menu on the node it read");
+	// Every item runs against the copy the menu held at the press, never against a selection.
+	assert.match(kontainerSource, /ctxHeld = \{ kind, id: entity\.id, node: \{ \.\.\.entity \} \};/, "the menu keeps its own snapshot of the node");
+	assert.match(kontainerSource, /const item = CTX_MENUS\[held\.kind\]\?\.\(held\.node\)\.find\(\(one\) => one\.id === id\);/, "and every press runs against that snapshot");
+	for (const kind of ["image", "container", "port", "network", "volume"]) {
+		const table = kontainerSource.match(new RegExp(`function ${kind}Ctx\\([^)]*\\) \\{[\\s\\S]*?\\n  \\}`))?.[0];
+		assert.ok(table, `the ${kind} table is found whole`);
+		assert.doesNotMatch(table, /state\.selected/, `the ${kind} menu reads no selection`);
+	}
+	// The two items that name the inspector are the only ones that select, and they say which tab.
+	assert.match(kontainerSource, /function showTab\(kind, id, tab\) \{ state\.selected = \{ kind, id \}; state\.tab = tab; renderInspector\(\); \}/, "one helper opens the inspector on the node the item names");
+	assert.equal(kontainerSource.match(/run: \(\) => showTab\(/g)?.length, 3, "and only the inspect and layers items call it");
+	assert.match(kontainerSource, /\{ id: "inspect", label: "inspect", run: \(\) => showTab\("image", img\.id, "inspect"\) \}/, "the image inspect item selects and opens the inspector");
+	assert.match(kontainerSource, /\{ id: "layers", label: "layers", run: \(\) => showTab\("image", img\.id, "layers"\) \}/, "so does the image layers item");
+	assert.match(kontainerSource, /\{ id: "inspect", label: "inspect", run: \(\) => showTab\("container", c\.id, "inspect"\) \}/, "and the container inspect item");
+});
+
 test("Escape and a press outside put the node menu away before the tools and the selection", () => {
 	// The drawer's own Escape order: a sheet, then the node menu, then the tools, the filter, the selection.
 	assert.match(kontainerSource, /if \(!sheet\.hidden\) \{ sheet\.hidden = true; return true; \}\n\s*if \(!ctxMenu\.hidden\) \{[^\n]*ctxClose\(\);[^\n]*return true; \}\n\s*if \(!toolsMenu\.hidden\)/, "the sheet goes first, the node menu second, the tools third");
