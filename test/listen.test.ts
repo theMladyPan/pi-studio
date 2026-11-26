@@ -4,7 +4,7 @@ import { createPrivateKey, X509Certificate } from "node:crypto";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LOOPBACK, bindHost, bindHosts, bindSource, boardUrls, childBaseUrl, generateTlsPair, isLoopback, localAddresses, tlsConfig, validatePublishHost, validatePublishHosts } from "../server/listen.ts";
+import { LOOPBACK, bindHost, bindHosts, bindSource, boardLinks, boardUrls, childBaseUrl, generateTlsPair, isLoopback, localAddresses, tlsApplies, tlsConfig, tlsOff, validatePublishHost, validatePublishHosts } from "../server/listen.ts";
 
 /**
  * Which address the daemon opens decides who can reach the board, so each way of asking is pinned here:
@@ -117,6 +117,20 @@ test("a stored publish address is this machine's own or nowhere", () => {
 
 const MISSING_PAIR = { cert: "/nonexistent-dir/cert.pem", key: "/nonexistent-dir/key.pem" };
 
+test("the npm commands pin their own address and TLS, so a stored publish choice cannot hijack localhost", () => {
+	const scripts = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8")).scripts;
+	// The local commands name loopback and switch TLS off: they answer on this machine over plain
+	// http whatever `daemon.json` or the shell environment say, which is what a browser opening
+	// the printed link needs. The LAN command names every interface and leaves TLS to the config.
+	for (const name of ["start", "dev", "dev:alt"]) {
+		assert.match(scripts[name], /--host 127\.0\.0\.1/, `${name} does not pin loopback`);
+		assert.match(scripts[name], /--no-tls/, `${name} does not switch TLS off`);
+	}
+	assert.match(scripts.server, /--host 0\.0\.0\.0/, "server does not publish on every interface");
+	assert.doesNotMatch(scripts.server, /--no-tls/, "server switches TLS off, so the LAN loses https");
+	assert.match(scripts.server, /--no-open/, "server opens a browser");
+});
+
 test("TLS is off until both files are named, and a half pair is one sentence", () => {
 	assert.equal(tlsConfig([], {}, MISSING_PAIR).enabled, false);
 	assert.throws(() => tlsConfig(["--tls-cert", "/tmp/cert.pem"], {}), /TLS needs both/);
@@ -126,6 +140,47 @@ test("TLS is off until both files are named, and a half pair is one sentence", (
 
 test("the printed links follow the scheme the daemon speaks", () => {
 	assert.deepEqual(boardUrls("127.0.0.1", 4801, "abc123", undefined, "https"), ["https://127.0.0.1:4801/?token=abc123"]);
+});
+
+test("--no-tls and PI_STUDIO_TLS=0 switch TLS off even when a pair exists", () => {
+	assert.equal(tlsOff(["--no-tls"], {}), true);
+	assert.equal(tlsOff([], { PI_STUDIO_TLS: "0" }), true);
+	assert.equal(tlsOff([], { PI_STUDIO_TLS: "false" }), true);
+	assert.equal(tlsOff([], { PI_STUDIO_TLS: "1" }), false);
+	assert.equal(tlsOff([], {}), false);
+	// A generated pair on disk does not turn TLS back on once it was switched off.
+	const dir = mkdtempSync(join(tmpdir(), "pi-studio-tls-off-"));
+	const made = generateTlsPair(dir, ["localhost"]);
+	assert.equal(tlsConfig(["--no-tls"], {}, made).enabled, false);
+	assert.equal(tlsConfig([], { PI_STUDIO_TLS: "0" }, made).enabled, false);
+});
+
+test("a generated pair serves beyond loopback only; a named pair serves anywhere", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-studio-tls-applies-"));
+	const generated = generateTlsPair(dir, ["localhost"]);
+	const fromGenerated = tlsConfig([], {}, generated);
+	assert.equal(fromGenerated.explicit, false);
+	assert.equal(tlsApplies(fromGenerated, ["127.0.0.1"]), false);
+	assert.equal(tlsApplies(fromGenerated, ["0.0.0.0"]), true);
+	assert.equal(tlsApplies(fromGenerated, ["192.168.1.20"]), true);
+	const named = tlsConfig(["--tls-cert", generated.cert, "--tls-key", generated.key], {});
+	assert.equal(named.explicit, true);
+	assert.equal(tlsApplies(named, ["127.0.0.1"]), true);
+	assert.equal(tlsApplies(tlsConfig([], {}, MISSING_PAIR), ["0.0.0.0"]), false);
+});
+
+test("with TLS beyond loopback the printed local link is plain http on the neighbour", () => {
+	const interfaces = {
+		lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+		wlan0: [{ address: "192.168.1.20", family: "IPv4", internal: false }],
+	};
+	const links = boardLinks(["0.0.0.0"], 4801, "abc123", true, interfaces);
+	assert.equal(links[0], "http://127.0.0.1:4800/?token=abc123");
+	assert.ok(links.includes("https://192.168.1.20:4801/?token=abc123"), links.join(", "));
+	assert.ok(!links.some((one) => one.startsWith("https://127.0.0.1")), links.join(", "));
+	// Without TLS, and on an explicitly-HTTPS loopback start, the scheme follows the listener.
+	assert.deepEqual(boardLinks(["127.0.0.1"], 4801, "abc123", false), ["http://127.0.0.1:4801/?token=abc123"]);
+	assert.deepEqual(boardLinks(["127.0.0.1"], 4801, "abc123", true), ["https://127.0.0.1:4801/?token=abc123"]);
 });
 
 test("a generated pair parses, matches, and covers the names it was asked for", () => {

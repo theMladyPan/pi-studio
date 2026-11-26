@@ -62,7 +62,19 @@ started from. The graph needs none of them to be found: its page and its client 
 npm ci                    # the locked development dependencies, for the checks and the build
 node server.ts            # prints the URL and opens the crossroads in your browser
 node server.ts --no-open  # for a service, or when you open it yourself
+
+npm run start             # this machine only, plain http, opens the browser (127.0.0.1, --no-tls)
+npm run dev               # the same, watching the code and not opening a browser
+npm run dev:alt           # the same, against a second state folder (pi-studio-dev)
+npm run server            # every interface (--host 0.0.0.0), for another computer on the network
 ```
+
+The `npm` commands name their own address and TLS, so a publish choice saved in the settings page or a
+certificate generated for the LAN cannot turn a local start into an HTTPS one that a browser warns on.
+`npm run start`, `npm run dev` and `npm run dev:alt` always answer on `127.0.0.1` over plain http;
+`npm run server` publishes beyond loopback and uses TLS there when a certificate is configured. A plain
+`node server.ts` still reads the settings publish choice, but a generated certificate alone no longer
+forces HTTPS on a loopback-only start; `--no-tls` (or `PI_STUDIO_TLS=0`) switches TLS off anywhere.
 
 With the repository in `PATH`, `./bin/pi-studio` is the same start in one word.
 `npm run install:local` builds the release tree from your own source and installs it the way the
@@ -152,14 +164,16 @@ plain http may be spoken there. Both take effect the next time the daemon starts
 an existing NetBird/RPC setup keeps working until you turn it off deliberately. Loopback always serves
 plain http, so the printed local link never breaks.
 
-With plain http off and a TLS certificate configured, the main port speaks HTTPS: either your own pair
-(`--tls-cert`/`--tls-key` or `PI_STUDIO_TLS_CERT`/`PI_STUDIO_TLS_KEY`) or the self-signed pair the
-**generate certificate** button in that same group writes for this machine's addresses — no
-environment needed. A generated pair takes effect at the next start and a browser may ask to trust
-it; generating again replaces it. and the port below it answers
-plain http with a `308` redirect to HTTPS for every non-loopback request. With plain http off and no
-TLS, the daemon refuses to start beyond loopback rather than serving the board in the clear. The
-daemon needs no reverse proxy for this: Node's own HTTPS is the TLS endpoint.
+With plain http off and a TLS certificate configured, the main port speaks HTTPS beyond loopback:
+either your own pair (`--tls-cert`/`--tls-key` or `PI_STUDIO_TLS_CERT`/`PI_STUDIO_TLS_KEY`) or the
+self-signed pair the **generate certificate** button in that same group writes for this machine's
+addresses — no environment needed. A generated pair takes effect at the next start and a browser may
+ask to trust it; generating again replaces it. The port below it answers plain http on this machine
+only, and that plain link is the one printed first, so opening the board on this machine never asks a
+browser to trust the self-signed certificate; plain http from other addresses answers with a `308`
+redirect to HTTPS. With plain http off and no TLS, the daemon refuses to start beyond loopback rather
+than serving the board in the clear. The daemon needs no reverse proxy for this: Node's own HTTPS is
+the TLS endpoint.
 
 `update` refuses a downgrade, and refuses to replace a custom build unless you ask it to with
 `--replace-custom`. The new version is unpacked and tried before anything is switched over, the earlier
@@ -247,8 +261,12 @@ node server.ts --no-open --host 0.0.0.0
 
 or `npm run server`, which is that same line.
 
-The console prints the local link first and then one link per address (`also on http://192.168.…`), so
-the line to open on the other machine is already there, token and all. Nothing else changes: the agents,
+The console prints the local link first and then one link per address (`also on https://192.168.…` when
+TLS is on, `also on http://192.168.…` when it is not), so the line to open on the other machine is
+already there, token and all. On this machine the printed local link is plain http on the port below
+the HTTPS one; the HTTPS port itself answers plain http with nothing at all, so typing it there needs
+the `https://` and a browser that trusts the certificate, or the printed local link instead. Nothing
+else changes: the agents,
 the files and the saved conversations stay on the machine that runs the daemon, and a tab on any device
 watches the same board.
 
