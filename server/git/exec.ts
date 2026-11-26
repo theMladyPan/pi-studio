@@ -11,6 +11,7 @@
  */
 // ---------- environment ----------
 import { spawn } from "node:child_process";
+import { log } from "../logs.ts";
 
 /** What a command may do: reads nothing, writes to the checkout, or talks to a remote. */
 export type GitExecKind = "read" | "write" | "network";
@@ -91,6 +92,8 @@ function environmentFor(kind: GitExecKind, extra?: Record<string, string>): Reco
  * reason, because every caller is a route that has a reply to send either way.
  */
 export function runGit(cwd: string, args: readonly string[], options: GitExecOptions): Promise<GitExecResult> {
+	const command = ["git", ...args].join(" ");
+	const startedAt = Date.now();
 	return new Promise((resolve) => {
 		const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 		const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUTS[options.kind];
@@ -107,6 +110,16 @@ export function runGit(cwd: string, args: readonly string[], options: GitExecOpt
 			settled = true;
 			clearTimeout(timeoutTimer);
 			options.signal?.removeEventListener("abort", onAbort);
+			// The command, where it ran and what came of it, in the drawer's own line: a git that refused
+			// is otherwise only visible to whoever started the daemon. A run that printed to stderr and
+			// still succeeded is a warning, because that is usually the interesting one.
+			const said = stderrText.trim().split("\n")[0]?.slice(0, 300) ?? "";
+			log(ok ? (said ? "warning" : "info") : "error", "git", `${command}${said ? ` · ${said}` : ""}`, {
+				cmd: command,
+				cwd,
+				exit: code ?? (timedOut ? "timed out" : "no code"),
+				dur: Date.now() - startedAt,
+			});
 			resolve({ ok, code, stdout: Buffer.concat(stdout, stdoutBytes), stderr: stderrText.trim(), timedOut, truncated });
 		};
 

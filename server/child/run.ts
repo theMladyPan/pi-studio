@@ -18,6 +18,7 @@ import { helperModel } from "../workspaces.ts";
 import { broadcast, card, threadStream, update, updateCard } from "../bus.ts";
 import { compacted } from "../waiters.ts";
 import { modeChangeNote } from "./modes.ts";
+import { logChild } from "../logs.ts";
 import { beginCommand, flushCommands, settleCommand } from "./command.ts";
 import { cancelDialogs } from "./dialog.ts";
 import { randomUUID } from "node:crypto";
@@ -92,6 +93,9 @@ export function ensureChild(board, thread) {
 		const text = String(chunk);
 		thread.stderrTail = `${thread.stderrTail ?? ""}${text}`.slice(-1000);
 		process.stderr.write(`[${board.name}/${thread.title}] ${text}`);
+		// The same words in the daemon's log, under this thread's own source: a child's complaints are
+		// what a stopped run is explained by, and they were only ever visible in the daemon's terminal.
+		logChild(thread.id, text);
 	});
 	// A child replaced by a fresh one is not this thread's voice any more: its exit is its own business.
 	const mine = () => board.children.get(thread.id) === child;
@@ -121,6 +125,7 @@ export function ensureChild(board, thread) {
 				: `child exited (${signal ?? code}) before it settled`;
 		// A child that dies at startup says why on stderr, and that line is the whole explanation.
 		const said = lastLine(thread.stderrTail);
+		logChild(thread.id, said ? `${reason}: ${said}` : reason, "error", { exit: signal ?? code ?? "no code" });
 		threadError(board, thread, said ? `${reason}: ${said}` : reason);
 	});
 	// RPC mode emits no session header, so get_state is the only place a session id can come from.
