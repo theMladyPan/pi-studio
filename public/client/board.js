@@ -515,9 +515,6 @@ for (const { menu } of headerMenus) {
 // one-session board whenever the stream was slow, stale or dead.
 if (workspace) document.body.classList.add("threads");
 
-// Kept in step with the code font size in index.html: 13px text, 20px rows.
-const LINE_HEIGHT = 20;
-const GUTTER = 56;
 const view = { x: 0, y: 0, k: 1 };
 const cards = [];
 const byId = new Map();
@@ -549,9 +546,8 @@ let freshCount = 0;
 const GAP = 18;
 const STEP = 24;
 
-// Cards are sized in columns rather than pixels: code reads at 120 monospace columns, prose and
-// chat at 120 characters. Both are measured from the fonts actually in use.
-const SOURCE_COLS = 120;
+// Cards are sized in columns rather than pixels: prose and chat at 120 characters,
+// measured from the fonts actually in use.
 const NOTE_COLS = 120;
 let charWidths;
 
@@ -581,7 +577,6 @@ function measureCharWidths() {
  */
 function defaultWidth(kind) {
   const widths = measureCharWidths();
-  if (kind === "source") return Math.round(52 + 24 + 2 + widths.mono * SOURCE_COLS);
   return Math.round(24 + 2 + widths.prose * NOTE_COLS);
 }
 
@@ -1514,7 +1509,7 @@ const explorerCore = {
 // ---------- explorer: the decisions end ----------------------------------
 /** The card dot's colour, in one place so the card and its rail row cannot drift apart. */
 const dotKind = (kind) =>
-  kind === "source" ? "code" : kind === "question" ? "question" : kind === "sticky" ? "sticky" : "note";
+  kind === "html" ? "code" : kind === "question" ? "question" : kind === "sticky" ? "sticky" : "note";
 /**
  * The world is zoomed with the CSS `zoom` property, so text is laid out at the size it is
  * shown at and never softens the way a scaled bitmap does. `zoom` scales the element's own
@@ -1709,6 +1704,9 @@ function inlineMd(text, notes = null) {
   out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/(^|\W)\*([^*]+)\*/g, "$1<em>$2</em>");
+  // A file link reveals the file in the files drawer instead of leaving the board: the href is a
+  // `file:` name the daemon wrote, and the click handler below reads it back off the link.
+  out = out.replace(/\[([^\]]+)\]\(file:([^)]+)\)/g, '<a class="file-link" href="#" data-path="$2">$1</a>');
   out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
   return out;
 }
@@ -2356,7 +2354,7 @@ function renderMarkdown(markdown) {
 
 // ---------- bodies -------------------------------------------------------
 /**
- * The frame a whole HTML page is drawn in — the editor's preview and a source card's body share it.
+ * The frame a whole HTML page is drawn in — the editor's preview and an html card's body share it.
  *
  * One shape is the point: `allow-scripts` and nothing else, so the page has no origin of its own and
  * cannot read this page, carry its session or ask the daemon as it. What the page writes for itself —
@@ -2371,68 +2369,84 @@ function htmlFrame(content, title) {
 }
 
 /**
- * The frame a source card draws when its file is a page: the file's own content, never the code view.
- * The frame is kept on the card and handed back while the content stands, so a repaint of anything else
- * on the card does not load the page again and lose its place.
+ * The frames an html card may ask through, by the secret each load made for itself. The secret is
+ * sent only to that frame, by message, and never written into the page, so a frame a page put inside
+ * itself cannot know it and a stale load cannot reuse it.
+ */
+const htmlBridges = new Map();
+
+/** A secret for one frame load: the platform's random id where there is one, a plain pair otherwise. */
+function htmlNonce() {
+  try {
+    if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+  } catch {}
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+/**
+ * The frame an html card draws: the page the card carries, inline or read from a file by the daemon.
+ * The frame is kept on the card and handed back while the page stands, so a repaint of anything else
+ * on the card does not load the page again and lose its place. A new page is a new load and a new
+ * secret, so the old one stops being believed the moment it is replaced.
  */
 function htmlBody(data, entry) {
-  if (entry.htmlFrame && entry.htmlContent === data.content) return entry.htmlFrame;
-  const frame = htmlFrame(data.content, data.path || data.title || "");
+  const content = data.html ?? "";
+  if (entry.htmlFrame && entry.htmlContent === content) return entry.htmlFrame;
+  if (entry.htmlNonce) htmlBridges.delete(entry.htmlNonce);
+  const frame = htmlFrame(content, data.title || "");
+  const nonce = htmlNonce();
   entry.htmlFrame = frame;
-  entry.htmlContent = data.content;
+  entry.htmlContent = content;
+  entry.htmlNonce = nonce;
+  htmlBridges.set(nonce, { frame, cardId: data.id || "", nonce });
+  frame.addEventListener("load", () => {
+    if (frame.contentWindow) frame.contentWindow.postMessage({ type: "pi-studio.html.hello", nonce, cardId: data.id || "" }, "*");
+  });
   return frame;
 }
 
-/** Virtualized code view: only visible lines exist in the DOM. */
-function sourceBody(data) {
-  const lines = data.content.split("\n");
-  const scroll = el("div", "code-scroll");
-  const inner = el("div", "code-inner");
-  const width = lines.reduce((max, line) => Math.max(max, line.length), 0);
-  inner.style.height = `${lines.length * LINE_HEIGHT}px`;
-  inner.style.width = `${GUTTER + Math.min(width, 260) * measureCharWidths().mono + 30}px`;
-  scroll.appendChild(inner);
-
-  let first = -1;
-  let last = -1;
-  const hit = data.line;
-
-  const renderWindow = () => {
-    const height = scroll.clientHeight || 320;
-    const start = Math.max(0, Math.floor(scroll.scrollTop / LINE_HEIGHT) - 6);
-    const end = Math.min(lines.length - 1, Math.ceil((scroll.scrollTop + height) / LINE_HEIGHT) + 6);
-    if (start === first && end === last) return;
-    first = start;
-    last = end;
-    const fragment = document.createDocumentFragment();
-    for (let i = start; i <= end; i++) {
-      const row = el("div", "row" + (hit === i + 1 ? " hit" : ""));
-      row.style.top = `${i * LINE_HEIGHT}px`;
-      row.innerHTML = `<span class="n">${i + 1}</span><span class="t">${highlight(lines[i])}</span>`;
-      fragment.appendChild(row);
-    }
-    inner.replaceChildren(fragment);
-  };
-
-  let scheduled = false;
-  scroll.addEventListener("scroll", () => {
-    if (scheduled) return;
-    scheduled = true;
-    requestAnimationFrame(() => {
-      scheduled = false;
-      renderWindow();
-    });
-  });
-  new ResizeObserver(() => renderWindow()).observe(scroll);
-  renderWindow();
-  requestAnimationFrame(() => {
-    if (hit && hit > 0) {
-      scroll.scrollTop = Math.max(0, (hit - 1) * LINE_HEIGHT - (scroll.clientHeight / 2 - LINE_HEIGHT / 2));
-    }
-    renderWindow();
-  });
-  return scroll;
+/** One message back into a frame, to the secret that load made. "*" because a sandboxed document has no origin of its own to name. */
+function htmlSay(held, message) {
+  if (!held?.frame?.contentWindow) return;
+  held.frame.contentWindow.postMessage({ ...message, nonce: held.nonce }, "*");
 }
+
+/**
+ * What an html card asks of the board, relayed by this page with the human's session: the frame
+ * cannot call the daemon itself, and the daemon offers ping, reveal and note and nothing else.
+ * A message is believed only from a known frame's own window, with that load's secret, and with the
+ * opaque origin a sandboxed document has. Neither direction carries a token or a cookie.
+ */
+window.addEventListener("message", (event) => {
+  if (event.origin !== "null") return;
+  const data = event.data;
+  if (!data || typeof data !== "object" || data.type !== "pi-studio.html.request") return;
+  const held = htmlBridges.get(data.nonce);
+  if (!held || !held.frame.contentWindow || event.source !== held.frame.contentWindow) return;
+  const id = data.id;
+  if (id === undefined || id === null) return;
+  const method = typeof data.method === "string" ? data.method : "";
+  if (!method) {
+    htmlSay(held, { type: "pi-studio.html.error", id, error: { code: -32600, message: "a card call names the method it wants" } });
+    return;
+  }
+  fetch(`/card/html/bridge?${auth}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ method, params: data.params ?? {}, cardId: held.cardId }),
+  })
+    .then(async (response) => {
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || (payload && payload.error)) {
+        htmlSay(held, { type: "pi-studio.html.error", id, error: { code: response.status, message: (payload && payload.error) || `the daemon refused: ${response.status}` } });
+      } else {
+        htmlSay(held, { type: "pi-studio.html.result", id, result: payload ?? null });
+      }
+    })
+    .catch((error) => {
+      htmlSay(held, { type: "pi-studio.html.error", id, error: { code: -32000, message: `the daemon did not answer: ${error.message || error}` } });
+    });
+});
 
 /**
  * The questions a card asks, in the one shape that draws them.
@@ -3436,12 +3450,7 @@ function detailsBlock(details, entry) {
 }
 
 function bodyFor(data, entry) {
-  if (data.type === "source") {
-    // A source card whose file is a page draws the page, not its source: opening the file again is what
-    // brings the code view back, in the editor the card's head hands it to.
-    if (exPreviewKind(data.path) === "html") return { node: htmlBody(data, entry), cls: "source-body" };
-    return { node: sourceBody(data), cls: "source-body" };
-  }
+  if (data.type === "html") return { node: htmlBody(data, entry), cls: "html-body" };
   if (data.type === "sticky") return { node: stickyBody(data), cls: "" };
   if (data.type === "question") return { node: questionBody(data, entry), cls: "" };
   const note = renderMarkdown(data.markdown || "");
@@ -3542,13 +3551,6 @@ const TRASH_GLYPH =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 3.2h8M4.6 3.2V2.1h2.8v1.1M3.3 3.2l.6 6.6h4.2l.6-6.6M5 4.9v3.2M7 4.9v3.2"/></svg>';
 
 /**
- * A file leaving a box: what a source card's head offers, a press that hands its file to the text editor.
- * Drawn for the same reason the pin and the bin are, so it is one monochrome shape at every size.
- */
-const OPEN_GLYPH =
-  '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6.4 1.8H1.9v8.3h8.3V5.6M7.2 1.8h3v3M10.2 1.8 5.4 6.6"/></svg>';
-
-/**
  * An arrow going down into a tray: the press that downloads a note. A page drawn around it at eleven
  * pixels reads as a smudge, so the shape is the plain one every file manager uses for "save this", and the
  * button's own title says what the files are. Drawn for the reason the pin and the bin are.
@@ -3564,7 +3566,7 @@ const DUPLICATE_GLYPH =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4.2 4.2h5.6v5.6H4.2zM2 7.8V2.2h5.6"/></svg>';
 
 function makeCard(data, quiet = false) {
-  const isSource = data.type === "source";
+  const isHtml = data.type === "html";
   const isQuestion = data.type === "question";
   const kind = data.type;
   const isNote = data.type === "note";
@@ -3573,7 +3575,7 @@ function makeCard(data, quiet = false) {
   // card is taller than a note because the field at its foot takes a share of the height, and the
   // conversation above it still has to be readable.
   const delegate = isDelegate(data);
-  const defaultHeight = isSource ? 430 : isQuestion ? 300 : isNote ? (delegate ? 220 : 420) : 440;
+  const defaultHeight = isHtml ? 430 : isQuestion ? 300 : isNote ? (delegate ? 220 : 420) : 440;
   const height = data.rect ? data.rect.h : defaultHeight;
   // An agent knows the shape of what it wrote, not how wide a card is, so `size` is a preset on the
   // defaults above rather than a size. A rect the user dragged always wins over the preset.
@@ -3617,7 +3619,6 @@ function makeCard(data, quiet = false) {
     <button type="button" class="ask-pill" aria-label="centre this question">answer needed</button>
     <span class="chip"></span>
     ${kind === "sticky" ? `<span class="short-id" title="${data.id}">${String(data.id).slice(0, 8)}</span>` : ""}
-    <button type="button" class="open-editor" title="open this file in the text editor" aria-label="open this file in the text editor">${OPEN_GLYPH}</button>
     <button type="button" class="download-note" title="download this note as .md and .pdf" aria-label="download this note as .md and .pdf">${DOWNLOAD_GLYPH}</button>
     <button type="button" class="duplicate" title="duplicate this card" aria-label="duplicate this card">${DUPLICATE_GLYPH}</button>
     <button class="pin" title="pin this card" aria-label="pin this card">${PIN_GLYPH}</button>
@@ -3684,7 +3685,7 @@ function makeCard(data, quiet = false) {
   };
   byId.set(data.id, entry);
   // A thread's card is where its conversation is written and read, so it carries the field. A note, a
-  // source and a question are read through the thread above them and never grow one.
+  // html and a question are read through the thread above them and never grow one.
   if (kind === "sticky") {
     const inst = makeComposer(entry);
     entry.composer = inst;
@@ -3710,12 +3711,6 @@ function makeCard(data, quiet = false) {
         .catch(() => footNote(`the clipboard refused, so the thread id is here · ${entry.id}`));
     });
   }
-  // A source card holds a file, so its head offers the press that hands it to the editor the settings
-  // page names. The daemon holds both the setting and the launch, so a refusal is its sentence to say.
-  head.querySelector(".open-editor").addEventListener("click", (event) => {
-    event.stopPropagation();
-    void openCardFile(entry);
-  });
   // A note leaves as two files: the daemon lays its markdown out and answers with the pdf, and the tab
   // holds the markdown itself, which the browser saves the way it saves anything. The press only asks, so
   // a refusal is the daemon's sentence to say.
@@ -4336,7 +4331,7 @@ function pausedOnly(before, after) {
 }
 
 function paintCard(entry, data) {
-  const isSource = data.type === "source";
+  const isHtml = data.type === "html";
   const isOpenQuestion = questionWants(data);
   if (pausedOnly(entry.data, data)) {
     entry.data = data;
@@ -4353,14 +4348,14 @@ function paintCard(entry, data) {
   // human has to unlearn.
   const shownTitle =
     data.title ||
-    (isSource ? data.path : data.type === "question" ? "question" : data.type === "sticky" ? "" : "note");
+    (data.type === "question" ? "question" : data.type === "sticky" ? "" : "note");
   entry.titleEl.textContent = shownTitle;
   entry.titleEl.title = shownTitle;
   // The thread is remembered before the sub line is written: a boss's line asks which of its children is
   // still running, and that answer comes from what the cards have said so far.
   rememberThread(data);
-  entry.subEl.textContent = isSource
-    ? `${data.content.split("\n").length} lines`
+  entry.subEl.textContent = isHtml
+    ? `${(data.html ?? "").split("\n").length} lines`
     : data.type === "question"
       ? questionSub(data)
       : data.type === "sticky"
@@ -4403,9 +4398,6 @@ function paintCard(entry, data) {
   entry.askPill.style.display = isOpenQuestion ? "" : "none";
   const editBtn = entry.head.querySelector(".edit");
   if (editBtn) editBtn.style.display = data.type === "note" ? "" : "none";
-  // Only a source card holds a file, so only a source card offers the press that opens one.
-  const openBtn = entry.head.querySelector(".open-editor");
-  if (openBtn) openBtn.style.display = isSource ? "" : "none";
   // A note is the one card that is a document, so it is the one that leaves as md and pdf.
   const downloadBtn = entry.head.querySelector(".download-note");
   if (downloadBtn) downloadBtn.style.display = data.type === "note" ? "" : "none";
@@ -4418,8 +4410,8 @@ function paintCard(entry, data) {
   // Closing an open question would leave the agent waiting for an answer with nothing on
   // screen to click, so the button appears only once it has been answered or has expired.
   if (closeBtn) closeBtn.style.display = isOpenQuestion ? "none" : "";
-  entry.chipEl.textContent = isSource && data.line ? `line ${data.line}` : "";
-  entry.chipEl.style.display = entry.chipEl.textContent ? "" : "none";
+  entry.chipEl.textContent = "";
+  entry.chipEl.style.display = "none";
 
   const { node, cls } = bodyFor(data, entry);
   entry.body.className = cls ? `body ${cls}` : "body";
@@ -4477,10 +4469,10 @@ function cardChanged(before, after) {
   // A mode or a flow is repainted too: `/mode` and `/thread/path` change nothing else on the card.
   // `modeAtRun` is in the list because a mode lands when the next child starts: that broadcast carries the
   // corrected badge and nothing else, and a card that ignores it keeps the wrong colour for the whole run.
-  // `content` and `line` are in the list because a file is opened again into the card it already holds with
-  // the same name and path, and new words are the whole point of opening it again: a card that skips them
-  // keeps the old page (or the old code) standing in for what the daemon no longer holds.
-  const fields = ["title", "markdown", "details", "text", "question", "reply", "status", "mode", "modeAtRun", "path", "pathChosenBy", "paused", "content", "line"];
+  // `html` is in the list because a page is revised into the card it already holds with the same name,
+  // and new words are the whole point of revising it again: a card that skips them keeps the old page
+  // standing in for what the daemon no longer holds.
+  const fields = ["title", "markdown", "details", "text", "question", "reply", "status", "mode", "modeAtRun", "path", "pathChosenBy", "paused", "html"];
   if (fields.some((field) => before[field] !== after[field])) return true;
   if (JSON.stringify(before.worktree ?? null) !== JSON.stringify(after.worktree ?? null)) return true;
   // A follow-up's answer settles into the turn it was asked with, so the thread changes without
@@ -4702,7 +4694,7 @@ function releaseSpot(card) {
 /** Deliberate re-pack of everything, only ever triggered by the user. */
 function tidy() {
   occupied.length = 0;
-  const ordered = [...cards].sort((a, b) => (a.dataset.kind === "source" ? -1 : 0) - (b.dataset.kind === "source" ? -1 : 0));
+  const ordered = [...cards].sort((a, b) => (a.dataset.kind === "html" ? -1 : 0) - (b.dataset.kind === "html" ? -1 : 0));
   let cursor = { x: 60, y: 60 };
   for (const card of ordered) {
     const rect = findFreeSpot(card.offsetWidth, card.offsetHeight, cursor);
@@ -4939,22 +4931,6 @@ async function saveNote(entry, markdown) {
     });
   } catch {
     // A failed save leaves the text on screen; the next reload shows the server's copy.
-  }
-}
-
-/** Hand a source card's file to the text editor the settings page names, and say what the daemon said. */
-async function openCardFile(entry) {
-  try {
-    const response = await fetch(`/card/open?${auth}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cardId: entry.id }),
-    });
-    if (!response.ok) throw new Error((await response.text()).slice(0, 120) || response.statusText);
-    const data = await response.json();
-    footNote(`opened ${data.file ?? "the card's file"} in the text editor`);
-  } catch (error) {
-    footNote(`could not open the file: ${error.message || error}`, true);
   }
 }
 
@@ -5544,6 +5520,16 @@ viewport.addEventListener("click", (event) => {
     }
     return;
   }
+  const fileLink = event.target.closest(".file-link");
+  if (fileLink) {
+    event.preventDefault();
+    let path = String(fileLink.dataset.path ?? "");
+    try {
+      path = decodeURIComponent(path);
+    } catch {}
+    if (path) void exReveal(path);
+    return;
+  }
   const link = event.target.closest(".xref");
   if (!link) return;
   // A cross-board link carries its own address now, so the browser goes there itself on a new tab.
@@ -5581,11 +5567,9 @@ viewport.addEventListener("wheel", (event) => {
     // keeps still while you scroll that card, and a board with nothing selected pans.
     const selected = document.querySelector(".card.active");
     const step = wheelPixels(event, event.deltaY) || wheelPixels(event, event.deltaX);
-    // A source card's code view is absolutely positioned inside the body, so it adds nothing to the
-    // column's scroll height: the innermost box that actually overflows is the one to scroll. A box
-    // that has nothing left to give in this direction hands the wheel to the next holder inside the
-    // same card, so a code view that ends and the messages under it are read in one gesture.
-    const holders = selected ? [selected.querySelector(".code-scroll"), selected.querySelector(".card-scroll")] : [];
+    // The card's own column is the holder that scrolls: it is the one box that overflows, so the
+    // wheel turns it while it has anything left, and the board pans only once it is spent.
+    const holders = selected ? [selected.querySelector(".card-scroll")] : [];
     const overflows = (box) => Boolean(box) && box.scrollHeight - box.clientHeight > 1;
     const moves = (box) =>
       overflows(box) && (step < 0 ? box.scrollTop > 1 : box.scrollHeight - box.clientHeight - box.scrollTop > 1);
@@ -8760,7 +8744,7 @@ function restoreDraft(inst) {
 
 /**
  * The card that stands for the thread which answers this card: a thread card is its own window, and a note,
- * source or question is read on the window of the thread that wrote it. The thread that answers comes first,
+ * html or question is read on the window of the thread that wrote it. The thread that answers comes first,
  * because that is the thread the server sends the message to; a thread with no card of its own is read
  * through the card it answers, so the walk carries on from there. A card with no thread card above it at
  * all — one whose thread was closed — stays its own window.
@@ -8867,7 +8851,7 @@ function focusComposer(inst) {
 /**
  * What `r` and the `↩` in a card's head do: name that card in a field. A thread card named while
  * another message is being written joins that message; otherwise the caret goes to the thread's own
- * field. A note, source or question joins the message being written, then the message the human last
+ * field. A note, html or question joins the message being written, then the message the human last
  * wrote in, then the one of the thread that answers it. A card nothing answers for — one a plugin
  * wrote, or one whose thread has gone — has no field of its own, and the message being written is
  * still somewhere to name it: the agent is handed the card quoted.
@@ -15476,6 +15460,9 @@ function connect() {
       }
     } else if (payload.type === "closed") {
       applyClosed(payload.closed);
+    } else if (payload.type === "reveal") {
+      // A file the agent asked to show: the drawer opens on it, selected, and no card copies it.
+      if (payload.path) void exReveal(payload.path);
     } else if (payload.type === "hint") {
       hintLine(payload.text || "");
     } else if (payload.type === "clear") {

@@ -130,7 +130,7 @@ export function childPrompt(board, thread) {
 	return [
 		`You are thread "${thread.title}" on a board, working in the folder ${workdir}.`,
 		`The workspace this board opened is ${board.folder}, which is where the rest of the board reads files from.`,
-		"You draw nothing on that board: no note, no source card, no question to the human. The thread that spawned you reads your last message and decides what belongs in its reply or on a card, so that message is the whole report.",
+		"You draw nothing on that board: no note, no html card, no question to the human. The thread that spawned you reads your last message and decides what belongs in its reply or on a card, so that message is the whole report.",
 		"Say what you found, where it is, what you changed, and what you would do next, in short prose or bullets, with paths and line numbers where they matter. Quote the exact text when the exact text is the finding.",
 		worktreePrompt(board, thread),
 	].join("\n");

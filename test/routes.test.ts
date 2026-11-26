@@ -582,57 +582,51 @@ describe("routes", { concurrency: 8 }, () => {
 		}
 	});
 
-	test("a code card's file is opened in the editor the crossroads holds, and refused when it cannot be", async () => {
-		const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-open-"));
+	test("a reveal names a workspace file and leaves a link card, and an html card takes the page inline or from a file", async () => {
+		const folder = mkdtempSync(join(tmpdir(), "pi-studio-routes-reveal-"));
 		writeFileSync(join(folder, "note.ts"), "export const note = 1;\n");
+		writeFileSync(join(folder, "page.html"), "<p>from a file</p>\n");
 		const daemon = await boot(folder);
 		try {
 			const opened = await post(daemon, "/workspace", { folder });
 			assert.equal(opened.status, 200);
 			const board = JSON.parse(opened.body).board;
-			const source = await postTo(daemon, board.id, "/card/source", { path: "note.ts" });
-			assert.equal(source.status, 200, source.body.slice(0, 200));
-			const cardId = JSON.parse(source.body).cardId;
 
-			// Nobody has chosen an editor yet, and the refusal says where to choose one.
-			const unset = await postTo(daemon, board.id, "/card/open", { cardId });
-			assert.equal(unset.status, 409);
-			assert.equal(unset.body, "no text editor is set yet: choose one on the settings page");
+			const revealed = await postTo(daemon, board.id, "/card/reveal", { path: "note.ts" });
+			assert.equal(revealed.status, 200, revealed.body.slice(0, 200));
+			const revealedBody = JSON.parse(revealed.body);
+			assert.equal(revealedBody.revealed, true);
+			assert.equal(revealedBody.path, "note.ts");
+			assert.equal(revealedBody.card.markdown, "[note.ts](file:note.ts)");
+			assert.equal(revealedBody.card.type, "note");
 
-			// A program name node cannot find on the search path starts nothing, and says so.
-			assert.equal((await post(daemon, "/defaults", { editor: "pi-studio-no-such-editor" })).status, 200);
-			const missing = await postTo(daemon, board.id, "/card/open", { cardId });
-			assert.equal(missing.status, 409);
-			assert.match(missing.body, /could not start pi-studio-no-such-editor/);
+			// A second reveal of the same file revises the same link card instead of stacking another.
+			const again = JSON.parse((await postTo(daemon, board.id, "/card/reveal", { path: "note.ts" })).body);
+			assert.equal(again.cardId, revealedBody.cardId);
+			assert.equal(again.updated, true);
 
-			// A value that names the binary itself is checked before anything is started: a path nobody can run is
-			// a setting that cannot work, and it says which path it read.
-			const unrunnable = join(folder, "not-a-program");
-			assert.equal((await post(daemon, "/defaults", { editor: unrunnable })).status, 200);
-			const cannot = await postTo(daemon, board.id, "/card/open", { cardId });
-			assert.equal(cannot.status, 409);
-			assert.equal(cannot.body, `${unrunnable} is not a program this machine can run`);
+			assert.equal((await postTo(daemon, board.id, "/card/reveal", { path: "../outside.ts" })).status, 409);
+			assert.equal((await postTo(daemon, board.id, "/card/reveal", { path: "gone.ts" })).status, 409);
+			assert.equal((await postTo(daemon, board.id, "/card/reveal", {})).status, 400);
 
-			// A card whose file is gone is refused before anything is launched: `true` is a program that runs and
-			// opens nothing, so the branch under test is the file rather than the editor.
-			assert.equal((await post(daemon, "/defaults", { editor: "true" })).status, 200);
-			rmSync(join(folder, "note.ts"));
-			const gone = await postTo(daemon, board.id, "/card/open", { cardId });
-			assert.equal(gone.status, 409);
-			assert.match(gone.body, /not a file on disk any more/);
+			const inline = await postTo(daemon, board.id, "/card/html", { html: "<button>hi</button>", key: "inline" });
+			assert.equal(inline.status, 200, inline.body.slice(0, 200));
+			assert.equal(JSON.parse(inline.body).card.html, "<button>hi</button>");
+			assert.equal(JSON.parse(inline.body).card.type, "html");
 
-			// A note is not a file, so there is nothing to open.
-			const note = JSON.parse((await postTo(daemon, board.id, "/card/note", { markdown: "a note" })).body).cardId;
-			assert.equal((await postTo(daemon, board.id, "/card/open", { cardId: note })).status, 409);
-			assert.equal((await postTo(daemon, board.id, "/card/open", { cardId: "nope" })).status, 409);
+			const fromFile = await postTo(daemon, board.id, "/card/html", { path: "page.html" });
+			assert.equal(fromFile.status, 200, fromFile.body.slice(0, 200));
+			assert.equal(JSON.parse(fromFile.body).card.html, "<p>from a file</p>\n");
 
-			// An editor that is there and runs answers with the file it was handed. `true` exits at once, so what
-			// this checks is the launch, not the program.
-			writeFileSync(join(folder, "note.ts"), "export const note = 2;\n");
-			const again = JSON.parse((await postTo(daemon, board.id, "/card/source", { path: "note.ts" })).body).cardId;
-			const launched = await postTo(daemon, board.id, "/card/open", { cardId: again });
-			assert.equal(launched.status, 200, launched.body.slice(0, 200));
-			assert.deepEqual(JSON.parse(launched.body), { opened: true, file: join(realpathSync(folder), "note.ts") });
+			assert.equal((await postTo(daemon, board.id, "/card/html", {})).status, 400);
+			assert.equal((await postTo(daemon, board.id, "/card/html", { html: "   " })).status, 400);
+			assert.equal((await postTo(daemon, board.id, "/card/html", { path: "../outside.html" })).status, 409);
+
+			// The frame bridge answers ping and refuses anything it was not offered.
+			const ping = await postTo(daemon, board.id, "/card/html/bridge", { method: "ping", params: {} });
+			assert.equal(ping.status, 200, ping.body.slice(0, 200));
+			assert.deepEqual(JSON.parse(ping.body), { ok: true });
+			assert.equal((await postTo(daemon, board.id, "/card/html/bridge", { method: "shell", params: {} })).status, 400);
 		} finally {
 			daemon.child.kill();
 			await removeTree(folder);
@@ -1946,9 +1940,8 @@ describe("routes", { concurrency: 8 }, () => {
 
 			// Two threads hold a card keyed `plan`, and the key resolves to the caller's own: a board-wide match
 			// would hand back whichever card was inserted first, which is how one thread closed another's.
-			writeFileSync(join(folder, "plan.ts"), "export const plan = 1;\n");
 			const theirPlan = JSON.parse((await postTo(daemon, board.id, "/card/note", { key: "plan", markdown: "their plan", threadRoot: otherThread })).body).cardId;
-			const myPlan = JSON.parse((await postTo(daemon, board.id, "/card/source", { path: "plan.ts", key: "plan", threadRoot: threadId })).body).cardId;
+			const myPlan = JSON.parse((await postTo(daemon, board.id, "/card/html", { html: "<p>my plan</p>", key: "plan", threadRoot: threadId })).body).cardId;
 			const plan = await postAs(daemon, child.token, board.id, "/close", { cardId: "plan" });
 			assert.equal(plan.status, 200);
 			assert.equal(JSON.parse(plan.body).closed, myPlan, "the key resolved to another thread's card");

@@ -46,7 +46,7 @@ export function pdfName(title: string, id: string): string {
 
 /**
  * The press on a note's pdf button: read the card, draw whatever pictures its browser can, and answer with the
- * page. Only a note answers: a source card holds a file, and a thread is not a document.
+ * page. Only a note answers: an html card is a page, and a thread is not a document.
  */
 export async function onCardPdf(req: Asked, res: Answered, board: Board) {
 	const body = await readJson(req, res);

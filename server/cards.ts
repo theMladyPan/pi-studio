@@ -132,7 +132,7 @@ export function cardFor(thread, board = null): ThreadCard {
 
 
 
-/** A plain card as the browser draws it: markdown under a title, or a file, with no run behind it. */
+/** A plain card as the browser draws it: markdown under a title, or a page, with no run behind it. */
 export function plainCardFor(card, board = null) {
 	const shown = {
 		id: card.id,
@@ -149,8 +149,8 @@ export function plainCardFor(card, board = null) {
 		...(card.turns?.length ? { turns: card.turns } : {}),
 		...(card.type === "note"
 			? { markdown: card.markdown }
-			: card.type === "source"
-				? { path: card.path, content: card.content, ...(Number.isFinite(card.line) ? { line: card.line } : {}) }
+			: card.type === "html"
+				? { html: card.html }
 				: {
 						question: card.question,
 						options: card.options,

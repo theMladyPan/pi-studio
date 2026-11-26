@@ -131,13 +131,12 @@ const sourceTool = defineTool({
 	name: "board_source",
 	label: "Board source",
 	description:
-		"Open a file from the workspace on the user's board, scrolled to a line, so they read the real text rather than a description of it. Use it when the human asks to see a file on the board or needs to keep it open during the work. A path and line number in the thread are enough when only citing evidence. Passing the same path again refreshes that card after the file changes." +
+		"Reveal a file from the workspace in the user's files drawer, with its row selected and scrolled into view, so they read the real file rather than a description of it. Use it when the human asks to see a file. It also leaves a small note card on the board whose one markdown link points at the file: clicking that link reveals the file again. No card ever copies the file's text. A path and line number in the thread are enough when only citing evidence." +
 		(RULES ? ` ${RULES}` : ""),
 	parameters: Type.Object({
 		path: Type.String({ description: "File path, relative to the workspace folder." }),
-		line: Type.Optional(Type.Number({ description: "Line to centre the view on." })),
 		title: Type.Optional(Type.String({ description: "Optional card title, defaults to the file name." })),
-		key: Type.Optional(Type.String({ description: "Stable name for this card. Defaults to the path." })),
+		key: Type.Optional(Type.String({ description: "Stable name for the link card. Defaults to the file path." })),
 		size: Type.Optional(
 			Type.Union(["compact", "normal", "wide", "tall"].map((size) => Type.Literal(size)), {
 				description:
@@ -148,17 +147,66 @@ const sourceTool = defineTool({
 	async execute(_id, params) {
 		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
 		try {
-			const result = await call("/card/source", {
+			const result = await call("/card/reveal", {
 				path: params.path,
-				...(Number.isFinite(params.line) ? { line: params.line } : {}),
 				...(params.title ? { title: params.title } : {}),
 				...(params.key ? { key: params.key } : {}),
 				...(params.size ? { size: params.size } : {}),
 			});
-			const card = result.card ?? {};
-			const lines = Number.isFinite(card.lines) ? ` (${card.lines} lines)` : "";
 			return {
-				content: [{ type: "text", text: `Opened ${params.path}${lines} on the board.` }],
+				content: [{ type: "text", text: `Revealed ${result.path ?? params.path} in the files drawer, with a link card for it.` }],
+				details: { cardId: result.cardId },
+			};
+		} catch (error) {
+			return failure(error);
+		}
+	},
+});
+
+const htmlTool = defineTool({
+	name: "board_html",
+	label: "Board html",
+	description:
+		"Put an interactive html page on the user's board as its own card. The page renders in a sandboxed frame and its scripts run, so buttons and other interactive pieces work. Send the page inline in `html`, or name a workspace file in `path` and the daemon reads it. The frame has no origin of its own: the page cannot read the board, cookies or storage. It may ask the board three things by posting a message to its parent and waiting for the board's hello first: { type: 'pi-studio.html.request', nonce, id, method: 'ping' } answers { ok: true }; method 'reveal' with params { path } reveals a workspace file in the files drawer; method 'note' with params { markdown, title?, key? } writes a note card. Nothing else is offered." +
+		(RULES ? ` ${RULES}` : ""),
+	parameters: Type.Object({
+		html: Type.Optional(Type.String({ description: "The page itself, inline. Takes precedence over path." })),
+		path: Type.Optional(Type.String({ description: "Workspace file to read the page from, when html is not sent." })),
+		title: Type.Optional(Type.String({ description: "Short card title, for example the step name." })),
+		key: Type.Optional(
+			Type.String({
+				description:
+					"Stable name for this card, e.g. 'plan'. Reusing it revises the same card. A [[key]] in your chat answer points at this card, so give every card one and use the same string in both places.",
+			}),
+		),
+		size: Type.Optional(
+			Type.Union(["compact", "normal", "wide", "tall"].map((size) => Type.Literal(size)), {
+				description:
+					"Card size for the form, not for emphasis: 'wide' for a chart or table with more than ten columns or points, 'compact' for a three-line note, 'tall' for a long checklist or trace. Leave it out on almost every card.",
+			}),
+		),
+		after: Type.Optional(
+			Type.Array(Type.String(), {
+				description: "Keys or ids of the cards this one builds on. The board draws an arrow from each.",
+			}),
+		),
+	}),
+	async execute(_id, params) {
+		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
+		try {
+			const result = await call("/card/html", {
+				...(params.html ? { html: params.html } : {}),
+				...(params.path ? { path: params.path } : {}),
+				...(params.title ? { title: params.title } : {}),
+				...(params.key ? { key: params.key } : {}),
+				...(params.size ? { size: params.size } : {}),
+				...(params.after?.length ? { after: params.after } : {}),
+			});
+			const what = result.updated ? "Revised" : "Added";
+			const key = result.card?.key ?? params.key ?? "";
+			const said = `${what} board html${params.title ? `: ${params.title}` : ""}${key ? ` (key [[${key}]])` : ""}.`;
+			return {
+				content: [{ type: "text", text: said }],
 				details: { cardId: result.cardId },
 			};
 		} catch (error) {
@@ -480,6 +528,7 @@ export default function boardBridge(pi) {
 	if (!attached()) return;
 	pi.registerTool(noteTool);
 	pi.registerTool(sourceTool);
+	pi.registerTool(htmlTool);
 	pi.registerTool(askTool);
 	pi.registerTool(threadTool);
 	pi.registerTool(skillTool);

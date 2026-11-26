@@ -315,10 +315,12 @@ const CARD_SIZES = ["compact", "normal", "wide", "tall"];
 /** Rebuild a plain card from its file. One without the body its type needs is nothing, so it goes. */
 export function restoredPlainCard(raw) {
 	if (!raw || typeof raw !== "object" || typeof raw.id !== "string") return null;
-	// Files written before source cards existed carried notes under their own key and no type.
-	const type = raw.type === "source" || raw.type === "question" ? raw.type : "note";
+	// Source cards are retired: a saved one is dropped on load, its file lives in the drawer now.
+	if (raw.type === "source") return null;
+	// Files written before html cards existed carried notes under their own key and no type.
+	const type = raw.type === "html" || raw.type === "question" ? raw.type : "note";
 	if (type === "note" && typeof raw.markdown !== "string") return null;
-	if (type === "source" && (typeof raw.path !== "string" || typeof raw.content !== "string")) return null;
+	if (type === "html" && typeof raw.html !== "string") return null;
 	// A question is a card with words on it: several of them, or the one the flat fields carry.
 	const asked = Array.isArray(raw.questions) ? restoredQuestions(raw.questions) : [];
 	if (type === "question" && typeof raw.question !== "string" && !asked.length) return null;
@@ -330,12 +332,8 @@ export function restoredPlainCard(raw) {
 		at: Number.isFinite(raw.at) ? raw.at : Date.now(),
 		...(type === "note"
 			? { markdown: raw.markdown }
-			: type === "source"
-				? {
-						path: raw.path,
-						content: raw.content,
-						...(typeof raw.file === "string" && raw.file ? { file: raw.file } : {}),
-					}
+			: type === "html"
+				? { html: raw.html }
 				: asked.length
 					? { questions: asked }
 					: { question: raw.question, options: Array.isArray(raw.options) ? raw.options.filter((one) => typeof one === "string") : [] }),

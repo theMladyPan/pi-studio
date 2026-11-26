@@ -1,22 +1,22 @@
 // @ts-nocheck -- lifted byte for byte; annotating it is its own commit.
 /**
- * What a card is made of: a note, a source, an edited body, a rename, and the folder browser that
- * attaches paths to a message.
+ * What a card is made of: a note, an html page, a drawer reveal, an edited body, a rename, and the
+ * folder browser that attaches paths to a message.
  */
 import { auditMarkdown } from "../../chart-audit.ts";
 import { answer, fail, readJson } from "../../http.ts";
-import { BROWSE_LIMIT, CONTROL_CHARS, MAX_NOTE_CHARS, MAX_SOURCE_CHARS, MAX_TITLE_CHARS, SHELL_OUTPUT_CHARS } from "../../limits.ts";
+import { BROWSE_LIMIT, CONTROL_CHARS, MAX_HTML_CHARS, MAX_NOTE_CHARS, MAX_TITLE_CHARS, SHELL_OUTPUT_CHARS } from "../../limits.ts";
 import { anchorOf, cardByKey, field, placedRect, rootOf } from "./thread.ts";
 import { broadcast, card, update, updateCard } from "../../bus.ts";
 import { cardFor, plainCardFor } from "../../cards.ts";
 import { boardFor, scheduleSave } from "../../store.ts";
 import { makeRoom, threadForRuntime } from "./lifecycle.ts";
 import { randomUUID } from "node:crypto";
-import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
 import { accessSync, constants, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { workdirOf } from "../../worktrees/make.ts";
-import { activeHomeDefaults, workspaceById } from "../../workspaces.ts";
+import { workspaceById } from "../../workspaces.ts";
 import { start } from "../../main.ts";
 import { homedir } from "node:os";
 import { commandShell } from "../../command-shell.ts";
@@ -184,7 +184,7 @@ export function readInsideWorkspace(folder, wanted) {
 	const stat = statSync(target, { throwIfNoEntry: false });
 	if (!stat) throw new Error(`${wanted} does not exist`);
 	if (!stat.isFile()) throw new Error(`${wanted} is not a file`);
-	if (stat.size > MAX_SOURCE_CHARS) throw new Error(`${wanted} is larger than ${MAX_SOURCE_CHARS} bytes`);
+	if (stat.size > MAX_HTML_CHARS) throw new Error(`${wanted} is larger than ${MAX_HTML_CHARS} bytes`);
 	const content = readFileSync(target, "utf8");
 	// A binary file read as text is a card full of replacement characters, so say so instead.
 	if (content.includes("\u0000")) throw new Error(`${wanted} is not a text file`);
@@ -193,64 +193,81 @@ export function readInsideWorkspace(folder, wanted) {
 
 
 
-export async function onSource(req, res, board) {
-	const body = await readJson(req, res);
-	if (!body) return;
-	const wanted = field(body.path, 400);
-	if (!wanted) return void fail(res, 400, "path is required");
-	// A child works in its own tree, and what it asks to show is relative to where it stands. The card
-	// is still the board's, so the path is resolved and named against that thread's folder.
-	const owner = board.threads.get(field(body.threadRoot, 100));
-	const folder = owner ? workdirOf(board, owner) : board.folder;
-	let content;
-	try {
-		content = readInsideWorkspace(folder, wanted);
-	} catch (error) {
-		return void fail(res, 409, error.message);
+/** The folder a card's paths are read against: its owner's tree, or the board's own folder. */
+function folderFor(board, body) {
+	const owner = board.threads.get(field(body?.threadRoot ?? body?.ownerThread, 100));
+	return owner ? workdirOf(board, owner) : board.folder;
+}
+
+/** A file inside the workspace, named as the drawer knows it, or a refusal naming what was asked. */
+function fileInWorkspace(board, body, wanted) {
+	const folder = folderFor(board, body);
+	const target = resolve(folder, String(wanted ?? ""));
+	if (!insideFolder(resolve(folder), target)) throw new Error(`${wanted} is outside the workspace`);
+	const stat = statSync(target, { throwIfNoEntry: false });
+	if (!stat) throw new Error(`${wanted} does not exist`);
+	if (!stat.isFile()) throw new Error(`${wanted} is not a file`);
+	return relative(folder, target) || basename(wanted) || wanted;
+}
+
+/**
+ * Write an html card on a board: a fresh card, or a revision of the one its `key` names. The page
+ * travels inline in `html`, or is read from a workspace file named by `path` — both are one card,
+ * because what the human sees is the rendered page either way. The service behind `POST /card/html`,
+ * behind the `cards.html` a plugin calls, and behind `board_html`.
+ */
+export function htmlOnBoard(board, body) {
+	const folder = folderFor(board, body);
+	let html = "";
+	if (typeof body?.html === "string" && body.html.trim()) html = body.html;
+	else if (field(body?.path, 400)) {
+		try {
+			html = readInsideWorkspace(folder, field(body.path, 400));
+		} catch (error) {
+			const refused = new Error(error.message);
+			refused.status = 409;
+			throw refused;
+		}
+	} else {
+		const refused = new Error("html or path is required");
+		refused.status = 400;
+		throw refused;
 	}
-	const key = field(body.key, 400) || wanted;
-	// The head says which file first, so a card is recognisable without opening it, then what the caller
-	// called the place in it. The absolute path is what the body came from, kept because the relative one
-	// means a different file in every tree that answers for the same key.
-	const file = resolve(folder, wanted);
-	const named = relative(folder, file) || basename(wanted) || wanted;
-	const label = field(body.title, 200);
-	const title = label ? `${named} - ${label}` : named;
-	const line = Number.isFinite(body.line) && body.line > 0 ? Math.round(body.line) : undefined;
+	if (!html.trim()) {
+		const refused = new Error("empty html");
+		refused.status = 400;
+		throw refused;
+	}
+	if (html.length > MAX_HTML_CHARS) {
+		const refused = new Error(`an html card holds at most ${MAX_HTML_CHARS} characters`);
+		refused.status = 413;
+		throw refused;
+	}
+	const title = field(body.title) || "html";
+	const key = field(body.key);
 	const size = CARD_SIZES.includes(body.size) ? body.size : "";
 	const after = predecessors(board, body.after);
 	const root = rootOf(board, body);
-	const held = cardByKey(board, key, "source");
+	const held = cardByKey(board, key, "html");
 	if (held) {
-		// The file may have changed since the card was opened, which is the point of opening it again.
-		held.path = wanted;
-		held.file = file;
-		held.content = content;
-		held.title = title;
+		held.html = html;
 		held.updatedAt = Date.now();
-		if (line) held.line = line;
-		else delete held.line;
-		// Absent from the request means "as it was": a refresh of the file says nothing about the shape.
+		if (title) held.title = title;
 		if (size) held.size = size;
 		if (after.length) held.after = after;
 		if (root && !held.ownerThread) held.ownerThread = root;
 		broadcast(board, { type: "update", card: plainCardFor(held, board) });
 		scheduleSave(board);
-		const lines = content.split("\n").length;
-		answer(res, 200, { cardId: held.id, card: { ...plainCardFor(held, board), lines }, updated: true });
-		return;
+		return { cardId: held.id, card: plainCardFor(held, board), updated: true };
 	}
 	makeRoom(board);
 	const card = {
 		id: randomUUID(),
-		type: "source",
+		type: "html",
 		title,
-		path: wanted,
-		file,
-		content,
-		key,
+		html,
 		at: Date.now(),
-		...(line ? { line } : {}),
+		...(key ? { key } : {}),
 		...(after.length ? { after } : {}),
 		...(size ? { size } : {}),
 		...(root ? { threadRoot: anchorOf(board, root), ownerThread: root } : {}),
@@ -258,7 +275,88 @@ export async function onSource(req, res, board) {
 	board.cards.set(card.id, card);
 	broadcast(board, { type: "card", card: plainCardFor(card, board) });
 	scheduleSave(board);
-	answer(res, 200, { cardId: card.id, card: { ...plainCardFor(card, board), lines: content.split("\n").length } });
+	return { cardId: card.id, card: plainCardFor(card, board) };
+}
+
+export async function onHtml(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	let written;
+	try {
+		written = htmlOnBoard(board, body);
+	} catch (error) {
+		return void fail(res, error.status ?? 500, error.message);
+	}
+	answer(res, 200, written);
+}
+
+/** A markdown link to a file, segment-encoded so a space or a bracket in the name cannot break it. */
+function fileLink(rel) {
+	const href = rel.split("/").map(encodeURIComponent).join("/");
+	return `[${basename(rel)}](file:${href})`;
+}
+
+/**
+ * Reveal a file in the files drawer, and leave a small artefact behind: a note whose one link, when
+ * clicked, reveals the file again. The drawer is the board's file viewer; a card never copies it.
+ */
+export function revealOnBoard(board, body) {
+	const wanted = field(body?.path, 400);
+	if (!wanted) {
+		const refused = new Error("path is required");
+		refused.status = 400;
+		throw refused;
+	}
+	const rel = fileInWorkspace(board, body, wanted);
+	broadcast(board, { type: "reveal", path: rel });
+	const held = noteOnBoard(board, {
+		markdown: fileLink(rel),
+		title: field(body.title) || basename(rel),
+		key: field(body.key) || `file:${rel}`,
+		size: CARD_SIZES.includes(body.size) ? body.size : "compact",
+		after: body.after,
+		threadRoot: body.threadRoot,
+	});
+	return { revealed: true, path: rel, cardId: held.cardId, card: held.card, updated: Boolean(held.updated) };
+}
+
+export async function onReveal(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	let revealed;
+	try {
+		revealed = revealOnBoard(board, body);
+	} catch (error) {
+		return void fail(res, error.status ?? 409, error.message);
+	}
+	answer(res, 200, revealed);
+}
+
+/**
+ * What an html card may ask of the board through its frame: a ping, a drawer reveal, a note. The
+ * frame is sandboxed with an opaque origin, so it cannot call this route itself — the board page
+ * relays its messages here with the human's session, and nothing else is offered: no token, no
+ * cookie, no shell, no editor. This route is not in `THREAD_ROUTES`: it belongs to the page.
+ */
+export async function onHtmlBridge(req, res, board) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const method = typeof body.method === "string" ? body.method : "";
+	const params = body.params && typeof body.params === "object" ? body.params : {};
+	const held = body.cardId ? board.cards.get(String(body.cardId)) : undefined;
+	const from = held ? { threadRoot: held.ownerThread ?? held.threadRoot } : {};
+	try {
+		if (method === "ping") return answer(res, 200, { ok: true });
+		if (method === "reveal") return answer(res, 200, revealOnBoard(board, { ...from, path: params.path }));
+		if (method === "note") {
+			if (typeof params.markdown !== "string" || !params.markdown.trim()) return void fail(res, 400, "markdown is required");
+			const written = noteOnBoard(board, { ...from, markdown: params.markdown, title: params.title, key: params.key });
+			return answer(res, 200, { cardId: written.cardId, card: written.card });
+		}
+		return void fail(res, 400, `unknown method ${method || "(none)"}: a card may ping, reveal or note`);
+	} catch (error) {
+		return void fail(res, error.status ?? 409, error.message);
+	}
 }
 
 
@@ -304,74 +402,6 @@ export async function onRename(req, res, board) {
 	thread.title = title;
 	update(board, thread);
 	answer(res, 200, { cardId: thread.id, card: cardFor(thread, board) });
-}
-
-
-
-/**
- * Open a code card's file in the editor the human set on the crossroads. The program is spawned with the
- * file and nothing else, so what it does with it is its own business.
- *
- * This route is not in `THREAD_ROUTES`: launching a program on the human's desktop is the human's, and a
- * child that could do it could start anything on this machine.
- */
-export async function onOpenCard(req, res, board) {
-	const body = await readJson(req, res);
-	if (!body) return;
-	const id = field(body.cardId, 200);
-	if (!id) return void fail(res, 400, "cardId is required");
-	const held = board.cards.get(id);
-	if (!held) return void fail(res, 409, "no such card");
-	if (held.type !== "source") return void fail(res, 409, "only a code card holds a file to open");
-	// The path was written against the tree the card was read in, and that tree may be gone: `ownerThread` is
-	// the thread that read it, which is what `onSource` resolved the path against. `threadRoot` is only the
-	// card it hangs under — and may name a card rather than a thread — so it is the second choice.
-	const owner = board.threads.get(held.ownerThread ?? held.threadRoot ?? "");
-	const folder = owner ? workdirOf(board, owner) : board.folder;
-	const root = resolve(folder);
-	// The card records the absolute path its body was read from, because a key is the board's: a second child
-	// working in another tree revises the same card, and the relative path would open a different file than
-	// the one on the card. A card written before that field existed is resolved the way it always was.
-	const recorded = typeof held.file === "string" && isAbsolute(held.file) ? held.file : "";
-	const file = recorded || resolve(root, String(held.path ?? ""));
-	// A recorded path was refused at read time if it left the tree it was read in, so it is taken as it
-	// stands; only a path this route resolves itself is checked against the folder it resolves against.
-	if (!recorded && !insideFolder(root, file)) return void fail(res, 409, `${held.path} is outside the workspace`);
-	let stat;
-	try {
-		stat = statSync(file, { throwIfNoEntry: false });
-	} catch {
-		stat = undefined;
-	}
-	if (!stat?.isFile()) return void fail(res, 409, `${held.path} is not a file on disk any more`);
-	const editor = activeHomeDefaults().editor;
-	if (!editor) return void fail(res, 409, "no text editor is set yet: choose one on the settings page");
-	// A value with a slash names the binary itself, and a binary nobody can run is a setting that cannot
-	// work. A bare name is left to node, which searches the same PATH a shell would.
-	if (editor.includes("/")) {
-		try {
-			accessSync(editor, constants.X_OK);
-		} catch {
-			return void fail(res, 409, `${editor} is not a program this machine can run`);
-		}
-	}
-	let child;
-	try {
-		child = spawn(editor, [file], { detached: true, stdio: "ignore" });
-	} catch (error) {
-		return void fail(res, 409, `could not start ${editor}: ${error.message || error}`);
-	}
-	// A program that is not there answers on `error` rather than by throwing, so the answer to the human
-	// arrives from whichever event lands first — and only once, whichever it is.
-	let answered = false;
-	const once = (say) => {
-		if (answered) return;
-		answered = true;
-		say();
-	};
-	child.on("error", (error) => once(() => fail(res, 409, `could not start ${editor}: ${error.message || error}`)));
-	child.on("spawn", () => once(() => answer(res, 200, { opened: true, file })));
-	child.unref();
 }
 
 

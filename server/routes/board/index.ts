@@ -8,7 +8,7 @@
  */
 
 /** The types a thread may read: the plain cards. A thread card is a thread, not an artifact of one. */
-const PLAIN = new Set(["note", "source"]);
+const PLAIN = new Set(["note", "html"]);
 
 /** Newest first, and this many at most. A long board is named by its tail, which is what a thread builds on. */
 const MAX_ENTRIES = 40;

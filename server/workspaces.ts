@@ -56,11 +56,11 @@ import { spawnSync } from "node:child_process";
  */
 
 /**
- * A card with no child behind it: markdown a note carries, or a file a source card shows. The daemon
+ * A card with no child behind it: markdown a note carries, or a page an html card shows. The daemon
  * keeps them beside the threads and the client draws them by `type`.
  * @typedef {object} PlainCard
  * @property {string} id
- * @property {"note"|"source"|"question"} type
+ * @property {"note"|"html"|"question"} type
  * @property {string} title
  * @property {string} [question]
  * @property {string[]} [options]

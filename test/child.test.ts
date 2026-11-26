@@ -145,6 +145,7 @@ test("the prompts tell the child which board it is drawing on", () => {
 	// The board prompt is what a thread is told about the cards it draws on.
 	assert.ok(plain.includes("board_note"), "the board prompt does not mention board_note");
 	assert.ok(plain.includes("board_source"), "the board prompt does not mention board_source");
+	assert.ok(plain.includes("board_html"), "the board prompt does not mention board_html");
 	// The card draws mermaid itself, so a thread that is never told leaves the cheaper drawing on the
 	// table and hand-places an svg instead: both words belong in the prompt, mermaid first.
 	assert.ok(plain.includes("mermaid") && plain.indexOf("mermaid") < plain.indexOf("svg"), "the board prompt does not put mermaid ahead of svg");

@@ -93,6 +93,7 @@ A plugin asks the daemon over the same pipe, and each answer is a call into the 
 | `workspace.list` | `{}` | `{ workspaces: [ { id, name, folder, missing, scratch } ] }` |
 | `workspace.read` | `{ workspace }` | `{ workspace, open, cards }` |
 | `cards.note` | `{ workspace, markdown, title?, key?, size?, after? }` | `{ cardId, card, updated?, report? }` |
+| `cards.html` | `{ workspace, html?, path?, title?, key?, size?, after? }` | `{ cardId, card, updated? }` |
 | `cards.remove` | `{ workspace, key }` | `{ removed }` — off the board when the problem it carried is gone |
 | `threads.list` | `{ workspace }` | `{ workspace, threads: [ … ] }` |
 | `threads.create` | `{ workspace, title?, mode?, provider?, model?, thinking?, type?, after? }` | `{ workspace, threadId, thread }` |
@@ -101,13 +102,13 @@ A plugin asks the daemon over the same pipe, and each answer is a call into the 
 | `events.subscribe` | `{ types: [ … ] }` | `{ types }` |
 
 A workspace is always an id the daemon already knows, resolved from its own list; a plugin never names a
-folder and never receives one it asked for by path. `cards.note`, `threads.create`, `threads.prompt` and
+folder and never receives one it asked for by path. `cards.note`, `cards.html`, `threads.create`, `threads.prompt` and
 `threads.stop` write what the human's own routes write, and are refused what those routes refuse. The
 `turn` in `threads.prompt`'s answer is the index of the turn the words landed on: for a steer joining a
 live run that is the turn the run is answering, whose reply follows the steered words. The
 exact params, the events and the refusal codes are documented at the top of `server/plugins/service.ts`.
 
-The shapes of those nine methods, the two events and `initialize` are frozen while the protocol version
+The shapes of those ten methods, the two events and `initialize` are frozen while the protocol version
 is 1: they may gain fields and new methods, but a field may never be removed, renamed or reshaped
 without a protocol 2. Unknown keys on either side are ignored, which is what makes that promise keepable.
 

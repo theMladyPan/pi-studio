@@ -177,21 +177,17 @@ test("duplicating a note clones it under a new id, with no key and no rect, and 
 	assert.equal(board.cards.size, 2);
 });
 
-test("duplicating a source card keeps its file, and a settled question keeps its answer", () => {
+test("duplicating an html card keeps its page, and a settled question keeps its answer", () => {
 	const board = fakeBoard();
-	board.cards.set("source-1", {
-		id: "source-1",
-		type: "source",
-		title: "note.ts",
-		path: "note.ts",
-		file: "/tmp/board/note.ts",
-		content: "let a = 1;\n",
-		line: 1,
+	board.cards.set("html-1", {
+		id: "html-1",
+		type: "html",
+		title: "page",
+		html: "<p>hi</p>",
 		at: 1_700_000_000_000,
 	});
-	const source: any = duplicateOnBoard(board, { cardId: "source-1" });
-	assert.equal(board.cards.get(source.cardId).path, "note.ts");
-	assert.equal(board.cards.get(source.cardId).content, "let a = 1;\n");
+	const html: any = duplicateOnBoard(board, { cardId: "html-1" });
+	assert.equal(board.cards.get(html.cardId).html, "<p>hi</p>");
 
 	board.cards.set("question-1", {
 		id: "question-1",

@@ -19,7 +19,7 @@ import { boardMeta, cardsFor } from "./cards.ts";
 import { closedCards } from "./bus.ts";
 import { BUILTIN_TOOLS, CHILD_EXTENSIONS, THINKING_LEVELS, modelCatalog, readScope, resolveScope, saidScopeProblems } from "./models.ts";
 import { onDefaults, onForgetWorkspace, onOpenWorkspace, onPickFile, onPickFolder, onScratchEmpty, onSettingsDefaults, onSettingsGeneral, onSettingsTlsGenerate } from "./routes/crossroads.ts";
-import { onBrowse, onEdit, onNote, onOpenCard, onPrograms, onRename, onSource } from "./routes/board/content.ts";
+import { onBrowse, onEdit, onHtml, onHtmlBridge, onNote, onPrograms, onRename, onReveal } from "./routes/board/content.ts";
 import { onFileCopy, onFileDelete, onFileMove, onFileNew, onFileRaw, onFileRead, onFileRename, onFileWrite, onFilesFind, onFilesList, onFilesReplace, onFilesSearch } from "./routes/board/files.ts";
 import { rowWithThought } from "./thought.ts";
 import { sessionFile, sessionImage, transcriptOf } from "./session.ts";
@@ -64,7 +64,7 @@ export { token };
 
 
 /** The routes a child may reach. Everything else on this daemon belongs to the human. */
-export const THREAD_ROUTES = new Set(["/card/note", "/card/source", "/card/ask", "/thread/spawn", "/thread/wait", "/thread/status", "/thread/board-status", "/thread/collect", "/skill", "/close", "/log"]);
+export const THREAD_ROUTES = new Set(["/card/note", "/card/html", "/card/reveal", "/card/ask", "/thread/spawn", "/thread/wait", "/thread/status", "/thread/board-status", "/thread/collect", "/skill", "/close", "/log"]);
 
 
 
@@ -90,7 +90,7 @@ export function callerOf(given) {
 /**
  * The refusal a thread earns for asking what only the human may do, or null when it may go ahead.
  *
- * A thread that answers for a card the human started may write cards on its own board — notes, sources,
+ * A thread that answers for a card the human started may write cards on its own board — notes, html,
  * the question it puts to the human — and ask for work of its own, which the depth rule then decides.
  * A spawned child may do none of it: it reports in its last message and the thread that spawned it draws,
  * which is what keeps a flow of six children from leaving eighteen cards behind. Closing a card that is
@@ -995,10 +995,11 @@ function requestHandler(req, res) {
 				"/thread/path": onPath,
 				"/mode": onMode,
 				"/card/note": onNote,
-				"/card/source": onSource,
-				// Opening a file in the human's editor starts a program on their desktop, so this one is not in
-				// THREAD_ROUTES: a child may draw a card, and may not run what a card names.
-				"/card/open": onOpenCard,
+				"/card/html": onHtml,
+				"/card/reveal": onReveal,
+				// An html card's frame asks through the board page, with the human's session, so this one is
+				// not in THREAD_ROUTES: a child may draw a card, and may not relay for one.
+				"/card/html/bridge": onHtmlBridge,
 				// The press that downloads a note. What answers is the pdf itself, which the browser takes as a
 				// download, so this is not in THREAD_ROUTES: a child may write a card, and may not take a document
 				// out of the studio.
