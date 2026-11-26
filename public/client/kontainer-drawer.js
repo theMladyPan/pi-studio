@@ -73,6 +73,11 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
 
   const viewport = $("kViewport"), stage = $("kStage"), wires = $("kWireLayer"), inspector = $("kInspector"), grip = $("kInspGrip");
   const searchInput = $("kSearch"), toolsBtn = $("kToolsBtn"), toolsMenu = $("kToolsMenu"), sheet = $("kSheet"), ctxMenu = $("kCtxMenu");
+  // The node menu hangs on the page body, where the tools that float over the board already live: a
+  // drawer mid-roll carries a transform, and a transformed box is the containing block for its
+  // `position:fixed` children, so a right press during the slide would place the menu 44px off against
+  // the wrong box. On the body it is placed against the window it clamps itself to.
+  document.body.append(ctxMenu);
 
   /* ---------- state ---------- */
   const state = {
@@ -1137,17 +1142,19 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
         ? (wiring().volumes || []).filter((v) => v.kind === "volume" && !(v.containerIds || []).length)
         : images().filter(isUnusedImg);
       title.textContent = target === "volumes" ? "housekeeping · prune unused volumes" : "housekeeping · prune unused";
-      const note = el("div", null, unused.length
-        ? target === "volumes"
-          ? `Prune ${unused.length} unused volume(s). Running containers are never touched.`
-          : `Reclaim ${fmtBytes(unused.reduce((a, i) => a + (i.sizeBytes || 0), 0))} from ${unused.length} unused image(s). Running containers are never touched.`
-        : target === "volumes" ? "Nothing to prune — no unused volume." : "Nothing to prune — workspace is clean.");
+      // The topology only carries volumes a container mounts, so a count of them would always read
+      // zero however many dangling volumes the engine holds. The sheet names what Docker will do instead.
+      const note = el("div", null, target === "volumes"
+        ? "Docker will remove anonymous and unused volumes not referenced by any container. This cannot be undone."
+        : unused.length
+          ? `Reclaim ${fmtBytes(unused.reduce((a, i) => a + (i.sizeBytes || 0), 0))} from ${unused.length} unused image(s). Running containers are never touched.`
+          : "Nothing to prune — workspace is clean.");
       note.style.color = "var(--k-muted)"; body.append(note);
       const list = el("div", "k-kv-list");
       if (target === "volumes") unused.forEach((v) => list.append(kvRow(v.destination || "—", v.source || v.id)));
       else unused.forEach((i) => list.append(kvRow(`${fmtBytes(i.sizeBytes)} · ${fmtDate(i.created)}`, `${i.repo || "<none>"}:${i.tag || "<none>"} (${i.shortId || i.id})`)));
       body.append(list, out);
-      finish(target === "volumes" ? `prune ${unused.length} volume(s)` : `prune ${unused.length} image(s)`,
+      finish(target === "volumes" ? "prune unused volumes" : `prune ${unused.length} image(s)`,
         () => postAction({ action: "prune", target }, target === "volumes" ? "pruned unused volumes" : "pruned unused images"));
     } else if (tool === "df") {
       title.textContent = "system df";
@@ -1256,7 +1263,8 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       await loadState(); if (!sliding.isOpen()) return; startLive(); scheduleWires();
     },
     afterClose() {
-      scrim.hidden = true; stopLive();
+      // The menu is a page element now, so the roll has to take it down itself.
+      scrim.hidden = true; stopLive(); ctxClose();
       if (!panelNameBefore) return;
       panelName.textContent = panelNameBefore.text;
       panelName.hidden = panelNameBefore.hidden;
