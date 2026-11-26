@@ -137,8 +137,8 @@ test("a right press on a card opens the node menu its kind answers to", () => {
 	assert.match(kontainerSource, /const CTX_MENUS = \{ image: imageCtx, container: containerCtx, port: portCtx, network: networkCtx, volume: volumeCtx \};/, "the kind of a node picks its table");
 	// Placed where the press was, pulled back inside the window by the box the menu really drew.
 	assert.match(kontainerSource, /const box = ctxMenu\.getBoundingClientRect\(\);/, "the menu is measured before it is placed");
-	assert.match(kontainerSource, /Math\.max\(4, Math\.min\(event\.clientX, window\.innerWidth - box\.width - 4\)\)/, "the left edge stays on the window");
-	assert.match(kontainerSource, /Math\.max\(4, Math\.min\(event\.clientY, window\.innerHeight - box\.height - 4\)\)/, "and so does the top");
+	assert.match(kontainerSource, /Math\.max\(4, Math\.min\(at\.x, window\.innerWidth - box\.width - 4\)\)/, "the left edge stays on the window");
+	assert.match(kontainerSource, /Math\.max\(4, Math\.min\(at\.y, window\.innerHeight - box\.height - 4\)\)/, "and so does the top");
 	assert.match(kontainerSource, /ctxMenu\.querySelector\("button:not\(:disabled\)"\)\?\.focus\(\);/, "the first item that can act takes the keyboard");
 });
 
@@ -184,6 +184,44 @@ test("the menu copies through the browser's clipboard, and the volume menu prune
 	assert.match(kontainerSource, /const target = preset\?\.target === "volumes" \? "volumes" : "images";/, "and the sheet defaults to images");
 	assert.equal(kontainerSource.match(/openSheet\("prune"\)/g)?.length, 3, "the tray, the tools menu and `> prune` still ask for the image sheet");
 	assert.match(kontainerSource, /disabled: w\.mountKind !== "volume", hint: "a bind mount has no volume to prune"/, "a bind mount offers no prune, and says why");
+});
+
+test("the menu's kill arm repaints the inspector it armed, and only for the node it names", () => {
+	// The menu puts itself away before the item runs, so the press that arms the kill would otherwise leave
+	// the inspector's button reading `kill` while it waits for its second press. The arming is one helper
+	// the inspector's own button and the menu share, and it repaints only the node the panel already shows.
+	const arm = kontainerSource.match(/function armKill\(c\) \{[\s\S]*?\n  \}/)?.[0];
+	assert.ok(arm, "the kill arming is one helper the inspector and the menu share");
+	assert.equal(arm.match(/renderInspector\(false\)/g)?.length, 2, "the press and its three-second reset both repaint the button");
+	assert.match(arm, /state\.selected\?\.kind === "container" && state\.selected\.id === c\.id/, "and only when the panel is on that container");
+	assert.match(kontainerSource, /if \(state\.armedKill !== c\.id\) \{ armKill\(c\); toast\(/, "the menu's kill item arms through it");
+	assert.match(kontainerSource, /if \(!armed\) return armKill\(c\);/, "and so does the inspector's own button");
+});
+
+test("a wire card and its inspector name a mount's own kind, not the column it is drawn in", () => {
+	// `volume` and `bind` ride beside the `vol` column, so a mounted folder never reads as a volume.
+	assert.match(kontainerSource, /const items = list\.map\(\(n\) => \(\{ \.\.\.n, kind, mountKind: n\.kind \}\)\)/, "the mount's kind survives the spread that paints the column's");
+	assert.match(kontainerSource, /`\$\{w\.mountKind \|\| w\.kind \|\| ""\} · \$\{w\.destination/, "the card names the mount's kind");
+	assert.match(kontainerSource, /kvRow\("kind", w\.mountKind \|\| w\.kind \|\| "—"\)/, "and so does the inspector's kind row");
+});
+
+test("open in browser reaches the port through a host a browser can dial", () => {
+	// An any-interface bind and an IPv6 literal are not authorities a browser resolves, so the first reads
+	// as `localhost` and the second gets its brackets back; the tab it opens cannot reach back into the board.
+	const open = kontainerSource.match(/const openHost = \(ip\) => \{[\s\S]*?\n  \};/)?.[0];
+	assert.ok(open, "the host is mapped in one place");
+	assert.match(open, /if \(host === "0\.0\.0\.0" \|\| host === "::"\) return "localhost";/, "a wildcard bind is dialled at localhost");
+	assert.match(open, /host\.includes\(":"\) \? `\[\$\{host\}\]` : host;/, "and an IPv6 literal keeps the brackets a URL needs");
+	assert.match(kontainerSource, /window\.open\(`http:\/\/\$\{openHost\(w\.hostIp\)\}:\$\{w\.hostPort\}`, "_blank", "noopener"\)/, "the port opens through it, and the tab is opened without a handle back");
+});
+
+test("a keyboard press opens the menu on the card it was pressed on", () => {
+	// `Shift+F10` and the menu key fire a `contextmenu` with no point of their own, so the menu opens at the
+	// card's corner instead of pinned to the window's.
+	const open = kontainerSource.match(/function ctxOpen\(kind, entity, event, card\) \{[\s\S]*?\n  \}/)?.[0];
+	assert.ok(open, "the menu takes the card it was opened on");
+	assert.match(open, /const at = !event\.clientX && !event\.clientY \? \{ x: rect\.left \+ 16, y: rect\.top \+ 16 \}/, "a press with no point is placed on the card");
+	assert.match(kontainerSource, /ctxOpen\(cardKind === "wire" \? \{ port: "port", net: "network", vol: "volume" \}\[node\.kind\] : cardKind, node, event, card\);/, "and the one card decorator hands its card in");
 });
 
 /** The terminal drawer's `runCommand`, on the page it reads and the socket it writes to. */

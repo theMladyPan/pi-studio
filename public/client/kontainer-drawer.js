@@ -270,7 +270,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       const node = cardKind === "wire" ? wireNode(id) : cardKind === "image" ? findImage(id) : findCtr(id);
       if (!node) return;
       // The press opens the menu and nothing else: the selection and the inspector are left as they were.
-      ctxOpen(cardKind === "wire" ? { port: "port", net: "network", vol: "volume" }[node.kind] : cardKind, node, event);
+      ctxOpen(cardKind === "wire" ? { port: "port", net: "network", vol: "volume" }[node.kind] : cardKind, node, event, card);
     });
     card.addEventListener("click", (e) => { e.stopPropagation(); state.selected = { kind: card.dataset.kind, id }; state.tab = card.dataset.kind === "image" ? "layers" : "logs"; state.armedKill = null; if (state.mode === "eco") fetchStats([id]); render(); });
     card.addEventListener("mouseenter", () => { if (state.hovered?.id !== id) { state.hovered = { kind: card.dataset.kind, id }; paintFocus(); } });
@@ -295,6 +295,13 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   function showTab(kind, id, tab) { state.selected = { kind, id }; state.tab = tab; renderInspector(); }
   /** The card the menu was opened on, where Escape puts the keyboard back. */
   function focusNode(id) { stage.querySelector(`[data-node-id="${CSS.escape(String(id ?? ""))}"]`)?.focus(); }
+  /** Arm the kill on a container: the button that asks again is the inspector's, so it is repainted for
+      the press and for the three-second reset, and only while the panel is on the node it armed. */
+  function armKill(c) {
+    state.armedKill = c.id;
+    if (state.selected?.kind === "container" && state.selected.id === c.id) renderInspector(false);
+    setTimeout(() => { if (state.armedKill === c.id) { state.armedKill = null; if (state.selected?.kind === "container" && state.selected.id === c.id) renderInspector(false); } }, 3000);
+  }
 
   function imageCtx(img) {
     const ref = `${img.repo || "<none>"}:${img.tag || "<none>"}`;
@@ -334,12 +341,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     items.push({ id: "restart", label: "restart", run: run({ action: "restart", id: c.id }, `restarted ${c.name}`) });
     if (running) items.push({ id: "kill", label: armed ? "confirm kill" : "kill", danger: true, run: () => {
       // The arming is the inspector's, so a press here arms the same one it would.
-      if (state.armedKill !== c.id) {
-        state.armedKill = c.id;
-        toast(`press kill again to kill ${c.name}`);
-        setTimeout(() => { if (state.armedKill === c.id) state.armedKill = null; }, 3000);
-        return;
-      }
+      if (state.armedKill !== c.id) { armKill(c); toast(`press kill again to kill ${c.name}`); return; }
       state.armedKill = null;
       postAction({ action: "kill", id: c.id }, `killed ${c.name}`).catch((e) => toast(e.message));
     } });
@@ -355,13 +357,21 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     return items;
   }
 
+  /** The host a browser can dial: a port bound to every interface reads as `localhost`, and an IPv6
+      literal needs its brackets back before it is a URL's authority. */
+  const openHost = (ip) => {
+    const host = ip || "localhost";
+    if (host === "0.0.0.0" || host === "::") return "localhost";
+    return host.includes(":") ? `[${host}]` : host;
+  };
+
   function portCtx(w) {
     return [
       { id: "copyEndpoint", label: "copy endpoint", run: () => copyText(wireLabel(w)) },
       { id: "copyHostPort", label: "copy host port", disabled: !w.listening, run: () => copyText(String(w.hostPort)) },
       { id: "copyContainerPort", label: "copy container port", run: () => copyText(`${w.containerPort}${w.proto ? `/${w.proto}` : ""}`) },
       { sep: true },
-      { id: "open", label: "open in browser", disabled: !(w.listening && w.proto === "tcp"), hint: "only a listening tcp port opens", run: () => window.open(`http://${w.hostIp || "localhost"}:${w.hostPort}`) },
+      { id: "open", label: "open in browser", disabled: !(w.listening && w.proto === "tcp"), hint: "only a listening tcp port opens", run: () => window.open(`http://${openHost(w.hostIp)}:${w.hostPort}`, "_blank", "noopener") },
       { sep: true },
       { id: "copyId", label: "copy id", run: () => copyText(w.id) },
     ];
@@ -392,7 +402,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
 
   const CTX_MENUS = { image: imageCtx, container: containerCtx, port: portCtx, network: networkCtx, volume: volumeCtx };
 
-  function ctxOpen(kind, entity, event) {
+  function ctxOpen(kind, entity, event, card) {
     const table = CTX_MENUS[kind];
     if (!table || !entity) return;
     ctxHeld = { kind, id: entity.id, node: { ...entity } };
@@ -408,10 +418,13 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       return [button];
     }));
     ctxMenu.hidden = false;
-    // Placed where the press was, and pulled back inside the window through the box it really drew.
+    // Placed where the press was, and pulled back inside the window through the box it really drew. A
+    // keyboard press — `Shift+F10`, the menu key — carries no point of its own, so it opens on the card.
     const box = ctxMenu.getBoundingClientRect();
-    ctxMenu.style.left = `${Math.max(4, Math.min(event.clientX, window.innerWidth - box.width - 4))}px`;
-    ctxMenu.style.top = `${Math.max(4, Math.min(event.clientY, window.innerHeight - box.height - 4))}px`;
+    const rect = card.getBoundingClientRect();
+    const at = !event.clientX && !event.clientY ? { x: rect.left + 16, y: rect.top + 16 } : { x: event.clientX, y: event.clientY };
+    ctxMenu.style.left = `${Math.max(4, Math.min(at.x, window.innerWidth - box.width - 4))}px`;
+    ctxMenu.style.top = `${Math.max(4, Math.min(at.y, window.innerHeight - box.height - 4))}px`;
     ctxMenu.querySelector("button:not(:disabled)")?.focus();
   }
   function ctxClose() {
@@ -537,7 +550,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const title = wireLabel(w);
     const meta = w.kind === "port" ? `${w.listening ? "listening" : "not listening"} · ${(w.containerIds || []).length} container(s)`
       : w.kind === "net" ? `${w.driver || ""} · ${w.subnet || ""} · ${(w.containerIds || []).length} container(s)`
-      : `${w.kind || ""} · ${w.destination || ""}${w.rw === false ? " · ro" : ""} · ${(w.containerIds || []).length} container(s)`;
+      : `${w.mountKind || w.kind || ""} · ${w.destination || ""}${w.rw === false ? " · ro" : ""} · ${(w.containerIds || []).length} container(s)`;
     info.append(el("div", "k-wire-title", title), el("div", "k-wire-meta", meta));
     const jack = el("span", "k-jack k-jack-l"); jack.dataset.jack = `${w.id}-in`;
     card.append(icon, info, jack);
@@ -588,7 +601,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const groups = [["port", "host ports", wiring().ports || []], ["net", "networks", wiring().networks || []], ["vol", "volumes & mounts", wiring().volumes || []]];
     let anyWire = false;
     for (const [kind, label, list] of groups) {
-      const items = list.map((n) => ({ ...n, kind })).filter((n) => matches(n, "wire"));
+      const items = list.map((n) => ({ ...n, kind, mountKind: n.kind })).filter((n) => matches(n, "wire"));
       if (!items.length) continue;
       anyWire = true;
       wHost.append(el("div", "k-wire-subhead", label));
@@ -716,7 +729,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     actions.push(actBtn("restart", "", () => postAction({ action: "restart", id: c.id }, `restarted ${c.name}`).catch((e) => toast(e.message))));
     if (running) actions.push(actBtn("exec ↗", "", () => execToTerminal({ mode: "exec", id: c.id })));
     const kill = actBtn(armed ? "confirm kill" : "kill", `k-danger${armed ? " k-armed" : ""}`, () => {
-      if (!armed) { state.armedKill = c.id; renderInspector(false); setTimeout(() => { if (state.armedKill === c.id) { state.armedKill = null; renderInspector(false); } }, 3000); return; }
+      if (!armed) return armKill(c);
       state.armedKill = null; postAction({ action: "kill", id: c.id }, `killed ${c.name}`).catch((e) => toast(e.message));
     });
     actions.push(kill);
@@ -765,7 +778,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const list = el("div", "k-kv-list");
     if (w.kind === "port") { list.append(kvRow("listening", w.listening ? "yes" : "no"), kvRow("protocol", w.proto || "tcp")); }
     if (w.kind === "net") list.append(kvRow("driver", w.driver || "—"), kvRow("subnet", w.subnet || "—"));
-    if (w.kind === "vol") list.append(kvRow("kind", w.kind || "—"), kvRow("source", w.source || "—"), kvRow("destination", w.destination || "—"), kvRow("read-only", w.rw === false ? "yes" : "no"));
+    if (w.kind === "vol") list.append(kvRow("kind", w.mountKind || w.kind || "—"), kvRow("source", w.source || "—"), kvRow("destination", w.destination || "—"), kvRow("read-only", w.rw === false ? "yes" : "no"));
     body.append(list);
     body.append(el("div", "k-wire-subhead", "attached containers"));
     const attached = containers().filter((c) => (w.containerIds || []).includes(c.id) || ctrWires(c).includes(w.id));
