@@ -8,6 +8,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import { discoverRuntimes, requestJson, resolveRuntime } from "./socket.ts";
 import type { Runtime } from "./socket.ts";
 import { asRecord, asString } from "./topology.ts";
+import { log } from "../logs.ts";
 
 export interface KontainerBoardLike {
 	folder: string;
@@ -93,29 +94,46 @@ export interface RunResult {
 export type Runner = (cli: string, args: string[], opts: { cwd: string; timeoutMs: number }) => Promise<RunResult>;
 
 export function execFileRunner(cli: string, args: string[], opts: { cwd: string; timeoutMs: number }): Promise<RunResult> {
+	const command = [cli, ...args].join(" ");
+	const startedAt = Date.now();
 	return new Promise((resolvePromise) => {
 		execFile(cli, args, { cwd: opts.cwd, timeout: opts.timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
 			const output = [stdout, stderr].filter((part) => part && part.length > 0).join("");
-			if (error) {
-				const exit = asRecord(error as unknown);
-				const code = typeof exit.code === "number" ? exit.code : 1;
-				resolvePromise({ code, output: output || error.message });
-			} else {
-				resolvePromise({ code: 0, output });
-			}
+			const code = error ? (typeof asRecord(error as unknown).code === "number" ? (asRecord(error as unknown).code as number) : 1) : 0;
+			// What the human's Docker or Podman was asked and what it answered. A failure carries the
+			// engine's own sentence, which is the whole reason to look in the drawer.
+			log(code === 0 ? "info" : "error", cli, `${command}${code === 0 ? "" : ` · ${(output || command).trim().split("\n")[0]?.slice(0, 300) ?? ""}`}`, {
+				cmd: command,
+				cwd: opts.cwd,
+				exit: code,
+				dur: Date.now() - startedAt,
+			});
+			resolvePromise({ code, output: code === 0 ? output : output || (error as Error).message });
 		});
 	});
 }
 
 /** `login` with the password on stdin only — never in argv, never in logs. */
 function loginRunner(cli: string, args: string[], password: string, cwd: string, timeoutMs: number): Promise<RunResult> {
+	// What the drawer shows is the command as it was written; the password rides stdin and never argv.
+	const command = [cli, ...args].join(" ");
+	const startedAt = Date.now();
+	const answered = (code: number, output: string) => {
+		log(code === 0 ? "info" : "error", cli, `${command}${code === 0 ? "" : ` · ${output.trim().split("\n")[0]?.slice(0, 300) ?? ""}`}`, {
+			cmd: command,
+			cwd,
+			exit: code,
+			dur: Date.now() - startedAt,
+		});
+		return { code, output };
+	};
 	return new Promise((resolvePromise) => {
 		const child = spawn(cli, args, { cwd, timeout: timeoutMs });
 		let output = "";
 		child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
 		child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
-		child.on("error", (error) => resolvePromise({ code: 1, output: output || error.message }));
-		child.on("close", (code) => resolvePromise({ code: code ?? 1, output }));
+		child.on("error", (error) => resolvePromise(answered(1, output || error.message)));
+		child.on("close", (code) => resolvePromise(answered(code ?? 1, output)));
 		child.stdin.on("error", () => {});
 		child.stdin.end(password);
 	});

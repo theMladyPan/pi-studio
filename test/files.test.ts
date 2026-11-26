@@ -131,7 +131,7 @@ describe("the explorer's routes belong to the human", () => {
 		const routes = [...reads, ...changes];
 		for (const path of routes) assert.equal(THREAD_ROUTES.has(path), false, `${path} is in THREAD_ROUTES`);
 		// The list is compared whole too: a route added to THREAD_ROUTES widens what a child may reach.
-		assert.equal(THREAD_ROUTES.size, 10);
+		assert.equal(THREAD_ROUTES.size, 11);
 		for (const path of changes) assert.equal(threadRefusal(child, "POST", path, "board-a"), "a thread may not use that", path);
 		for (const path of reads) assert.equal(threadRefusal(child, "GET", path, "board-a"), "a thread may not use that", path);
 		assert.equal(threadRefusal({ human: true }, "GET", "/files", ""), null);

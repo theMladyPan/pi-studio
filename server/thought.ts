@@ -20,6 +20,7 @@ import { finished, compacted, statsArrived } from "./waiters.ts";
 import { COMMAND_PREFIX, settleCommand } from "./child/command.ts";
 import { onExtensionUi } from "./child/dialog.ts";
 import { reportText } from "./child/report.ts";
+import { log } from "./logs.ts";
 
 
 
@@ -437,6 +438,9 @@ export function handleChildLine(board, thread, line) {
 		// Why a run stopped belongs on the turn. A card that reads only "stopped" sends the human looking
 		// through session files for the reason, and a connection error is the common case.
 		const reason = failed ? headline(message.errorMessage) : undefined;
+		// The card carries one line of a failure; the drawer carries what the provider actually said, so a
+		// refused model, a spent quota or a context over its window is read rather than guessed at.
+		if (failed) log("error", "llm", String(message.errorMessage ?? reason ?? "the run failed"), { thread: thread.id, provider: thread.provider, model: thread.model });
 		afterMessage(thread, text, wantedTool, failed);
 		thread.streamParts = new Map();
 		stopStream(thread);
