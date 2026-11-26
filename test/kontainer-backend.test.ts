@@ -6,17 +6,18 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { EventEmitter } from "node:events";
 import { after, before, test } from "node:test";
 
-const { demuxDockerLogs, discoverRuntimes } = await import("../server/kontainer/socket.ts");
-const { buildTopology, fetchStats, statsFromPayload } = await import("../server/kontainer/topology.ts");
+const { demuxDockerLogs, discoverRuntimes, requestJson } = await import("../server/kontainer/socket.ts");
+const { buildSources, buildTopology, cleanLogText, fetchStats, getState, scanWorkspaceFiles, statsFromPayload } = await import("../server/kontainer/topology.ts");
 const { buildExecCommand, handleAction } = await import("../server/kontainer/actions.ts");
-const { onKontainerAction, onKontainerEvents, onKontainerState } = await import("../server/routes/kontainer.ts");
+const { logEngineEvent, onKontainerAction, onKontainerEvents, onKontainerState } = await import("../server/routes/kontainer.ts");
+const { snapshot } = await import("../server/logs.ts");
 import type { Runtime } from "../server/kontainer/socket.ts";
 
 const NOW = 1_700_000_000;
@@ -106,9 +107,11 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
 		});
 		return;
 	}
+	if (url.startsWith("/images/") && url.endsWith("/json")) return json({ RepoTags: ["app:latest"] });
 	if (url.startsWith("/containers/") && url.endsWith("/json")) {
 		const id = url.split("/")[2];
 		if (id === "444444dddddd") return json({ Config: { Labels: OUTSIDE_LABELS } });
+		if (id === "999999aaaaaa") return json({ Name: "/chatbot_chatbot_1", Config: { Labels: {} } });
 		return json({ Config: { Labels: CONTAINERS.find((c) => c.Id === id)?.Labels ?? {} } });
 	}
 	if (url.includes("/stats") && !url.includes("111111aaaaaa")) {
@@ -173,6 +176,16 @@ test("demuxDockerLogs parses multiplexed frames", () => {
 test("demuxDockerLogs treats a non-header buffer as raw TTY output", () => {
 	assert.equal(demuxDockerLogs(Buffer.from("plain line\nsecond\n")), "plain line\nsecond\n");
 	assert.equal(demuxDockerLogs(Buffer.from("short")), "short");
+});
+
+test("cleanLogText strips ANSI, collapses carriage returns and backspaces", () => {
+	// The Python REPL from the screenshot: coloured prompt, bracketed paste, cursor hide.
+	assert.equal(cleanLogText("\u001b[?2004h\u001b[?25l\u001b[1;35m>>> \u001b[0m\u001b[36mprint\u001b[0m"), ">>> print");
+	assert.equal(cleanLogText("\u001b]8;;https://example.com\u0007link\u001b]8;;\u0007"), "link");
+	assert.equal(cleanLogText("pytjon\b\b\b\b\bython\n"), "python\n");
+	assert.equal(cleanLogText("10%\r20%\r30%\ndone\r\n"), "30%\ndone\n");
+	assert.equal(cleanLogText("plain\ttext\n"), "plain\ttext\n");
+	assert.equal(cleanLogText("a\u0000b\u007fc\n"), "abc\n");
 });
 
 // ---------- topology ----------
@@ -244,6 +257,30 @@ test("statsFromPayload computes CPU percentage and memory", () => {
 	assert.equal(statsFromPayload({}).cpuPct, 0);
 });
 
+test("statsFromPayload measures CPU between samples by wall time", () => {
+	// Podman-shaped payload: precpu zero, system counter busy-only. Between samples it must still read 8 cores as 800%.
+	const payload = {
+		cpu_stats: { cpu_usage: { total_usage: 9_000_000_000 }, system_cpu_usage: 28_400_000_000, online_cpus: 16 },
+		precpu_stats: { cpu_usage: { total_usage: 0 } },
+		memory_stats: { usage: 512, limit: 2048 },
+	};
+	assert.equal(statsFromPayload(payload, { total: 1_000_000_000, atMs: 0 }, 1000).cpuPct, 800);
+	assert.equal(statsFromPayload(payload, { total: 1_000_000_000, atMs: 0 }, 2000).cpuPct, 400);
+	// A counter reset (container recreated) or a zero-length interval reads 0, never a spike.
+	assert.equal(statsFromPayload(payload, { total: 99_000_000_000, atMs: 0 }, 1000).cpuPct, 0);
+	assert.equal(statsFromPayload(payload, { total: 1_000_000_000, atMs: 1000 }, 1000).cpuPct, 0);
+});
+
+test("fetchStats measures CPU between its own polls", async () => {
+	const runtime = mockRuntime();
+	const samples = new Map<string, { total: number; atMs: number }>();
+	const first = await fetchStats(runtime, ["111111aaaaaa"], samples);
+	const second = await fetchStats(runtime, ["111111aaaaaa"], samples);
+	// The mock payload never advances, so the second poll has no CPU time delta.
+	assert.equal(first["111111aaaaaa"]?.cpuPct, 80);
+	assert.equal(second["111111aaaaaa"]?.cpuPct, 0);
+});
+
 test("fetchStats reads stats over the socket and skips failures", async () => {
 	const runtime = mockRuntime();
 	const stats = await fetchStats(runtime, ["111111aaaaaa", "missing-id"]);
@@ -282,6 +319,12 @@ test("buildExecCommand makes safe terminal commands", () => {
 	assert.deepEqual(buildExecCommand({ mode: "exec", id: "111111aaaaaabbbb" }), { ok: true, command: "docker exec -it 111111aaaaaa sh" });
 	assert.deepEqual(buildExecCommand({ mode: "logs", id: "111111aaaaaabbbb" }), { ok: true, command: "docker logs -f --tail 100 111111aaaaaa" });
 	assert.deepEqual(buildExecCommand({ mode: "compose-logs" }), { ok: true, command: "docker compose logs -f" });
+	assert.deepEqual(buildExecCommand({ mode: "run", image: "ghcr.io/astral-sh/uv:0.12.24" }), { ok: true, command: "docker run --rm -it 'ghcr.io/astral-sh/uv:0.12.24' sh" });
+	assert.deepEqual(buildExecCommand({ mode: "run", image: "sha256:111111aaaaaabbbb" }), { ok: true, command: "docker run --rm -it 'sha256:111111aaaaaabbbb' sh" });
+	assert.equal(buildExecCommand({ mode: "run", image: "<none>:<none>" }).ok, false);
+	assert.equal(buildExecCommand({ mode: "run", image: "--rm evil; rm -rf /" }).ok, false);
+	assert.equal(buildExecCommand({ mode: "run", image: "-evil" }).ok, false);
+	assert.equal(buildExecCommand({ mode: "run" }).ok, false);
 	assert.equal(buildExecCommand({ mode: "exec", id: "bad/../../id" }).ok, false);
 	assert.equal(buildExecCommand({ mode: "compose-logs", composeFile: "../compose.yaml" }, { folder: "/ws/myproj" }).ok, false);
 	assert.equal(buildExecCommand({ mode: "nope" }).ok, false);
@@ -290,6 +333,10 @@ test("buildExecCommand makes safe terminal commands", () => {
 test("handleAction exec.cmd needs no engine and returns the command", async () => {
 	const result = await handleAction({ folder: "/ws/myproj" }, { action: "exec.cmd", mode: "exec", id: "111111aaaaaabbbb" }, { runtimes: [] });
 	assert.deepEqual(result, { ok: true, command: "docker exec -it 111111aaaaaa sh" });
+	const runResult = await handleAction({ folder: "/ws/myproj" }, { action: "exec.cmd", mode: "run", image: "docker.io/library/debian:trixie-slim" }, { runtimes: [] });
+	assert.deepEqual(runResult, { ok: true, command: "docker run --rm -it 'docker.io/library/debian:trixie-slim' sh" });
+	const badRun = await handleAction({ folder: "/ws/myproj" }, { action: "exec.cmd", mode: "run", image: "x; rm -rf /" }, { runtimes: [] });
+	assert.equal(badRun.ok, false);
 });
 
 // ---------- recreate and compose safety ----------
@@ -330,6 +377,193 @@ test("compose actions name the project when the request carries one", async () =
 	const unnamed = await handleAction({ folder: "/ws/myproj" }, { action: "compose.down", runtime: runtime.id }, { runtimes: [runtime], run });
 	assert.equal(unnamed.ok, true);
 	assert.deepEqual(calls[1], ["compose", "down"]);
+});
+
+// ---------- workspace sources ----------
+
+function writeWorkspace(): string {
+	const root = mkdtempSync(join(tmpdir(), "pi-studio-sources-"));
+	const folder = join(root, "myproj");
+	mkdirSync(join(folder, "services", "worker"), { recursive: true });
+	mkdirSync(join(folder, "services", "api"), { recursive: true });
+	writeFileSync(join(folder, "compose.yaml"), [
+		"name: myproj",
+		"services:",
+		"  web:",
+		"    image: app:latest",
+		"    build:",
+		"      context: .",
+		"      dockerfile: Dockerfile",
+		"  worker:",
+		"    build: ./services/worker",
+		"volumes:",
+		"  appdata:",
+		"networks:",
+		"  front:",
+		"",
+	].join("\n"));
+	writeFileSync(join(folder, "Dockerfile"), ["FROM node:20 AS build", "FROM node:20-slim", "EXPOSE 3000", ""].join("\n"));
+	writeFileSync(join(folder, "services", "worker", "Containerfile"), ["FROM python:3.12-slim AS base", "FROM base AS runtime", "EXPOSE 8080 9090", ""].join("\n"));
+	writeFileSync(join(folder, "services", "api", "Dockerfile"), "FROM alpine\n");
+	// Dockerfile is older than its image; the worker Containerfile is newer than its image.
+	utimesSync(join(folder, "Dockerfile"), new Date((NOW - 1000) * 1000), new Date((NOW - 1000) * 1000));
+	utimesSync(join(folder, "services", "worker", "Containerfile"), new Date(NOW * 1000), new Date(NOW * 1000));
+	return folder;
+}
+
+test("scanWorkspaceFiles recognizes compose variants and build files to depth 2", () => {
+	const folder = writeWorkspace();
+	try {
+		writeFileSync(join(folder, "compose.e2e.yml"), "services: {}\n");
+		writeFileSync(join(folder, "Containerfile.cli"), "FROM alpine\n");
+		mkdirSync(join(folder, ".git"));
+		writeFileSync(join(folder, ".git", "compose.yaml"), "services: {}\n");
+		mkdirSync(join(folder, "node_modules", "pkg"), { recursive: true });
+		writeFileSync(join(folder, "node_modules", "pkg", "Dockerfile"), "FROM alpine\n");
+		mkdirSync(join(folder, "a", "b", "c"), { recursive: true });
+		writeFileSync(join(folder, "a", "b", "c", "compose.yaml"), "services: {}\n");
+		mkdirSync(join(folder, "linkfile"));
+		symlinkSync(join(folder, "Dockerfile"), join(folder, "linkfile", "Dockerfile"));
+		symlinkSync(join(folder, "services"), join(folder, "linked-services"));
+		const { composeFiles, dockerfiles } = scanWorkspaceFiles(folder);
+		const rel = (paths: string[]) => paths.map((p) => p.slice(folder.length + 1)).sort();
+		assert.deepEqual(rel(composeFiles), ["compose.e2e.yml", "compose.yaml"]);
+		assert.deepEqual(rel(dockerfiles), ["Containerfile.cli", "Dockerfile", "services/api/Dockerfile", "services/worker/Containerfile"]);
+	} finally {
+		rmSync(folder, { recursive: true, force: true });
+		rmSync(join(folder, ".."), { recursive: true, force: true });
+	}
+});
+
+test("buildSources parses compose and build files and links them to topology", () => {
+	const folder = writeWorkspace();
+	try {
+		const imagesRaw = [
+			{ Id: "sha256:aaa111", RepoTags: ["app:latest"], Size: 1000, Created: NOW - 100 },
+			{ Id: "sha256:ccc333", RepoTags: ["myproj-worker:latest"], Size: 1000, Created: NOW - 100 },
+		];
+		const containersRaw = [
+			{
+				Id: "111111aaaaaa",
+				Names: ["/myproj-web-1"],
+				Image: "app:latest",
+				ImageID: "sha256:aaa111",
+				State: "running",
+				Status: "Up 2 hours",
+				Created: NOW - 7200,
+				Labels: { "com.docker.compose.project": "myproj", "com.docker.compose.service": "web", "com.docker.compose.project.working_dir": folder, "com.docker.compose.project.config_files": join(folder, "compose.yaml") },
+				Ports: [],
+				NetworkSettings: { Networks: {} },
+				Mounts: [],
+			},
+		];
+		const topology = buildTopology({ imagesRaw, containersRaw, folder, scope: "all" });
+		assert.equal(topology.containers[0]?.composeConfigFiles.length, 1);
+		const sources = buildSources({ folder, topology });
+		const compose = sources.find((source) => source.id === "src:compose.yaml");
+		assert.ok(compose);
+		assert.equal(compose.kind, "compose");
+		assert.equal(compose.dir, "./");
+		assert.equal(compose.file, "compose.yaml");
+		assert.equal(compose.meta, "2 services · 1 vol · 1 net");
+		assert.equal(compose.badge, "active");
+		assert.equal(compose.statusText, "stack running (1/2 up)");
+		assert.equal(compose.unbuilt, false);
+		assert.deepEqual(compose.services, [
+			{ name: "web", image: "app:latest", dockerfile: "Dockerfile", state: "up" },
+			{ name: "worker", image: null, dockerfile: "services/worker/Containerfile", state: "down" },
+		]);
+		assert.deepEqual(compose.containerIds, ["111111aaaaaa"]);
+		assert.ok(compose.imageIds.includes("sha256:aaa111"));
+		assert.ok(compose.preview.startsWith("name: myproj"));
+		const dockerfile = sources.find((source) => source.id === "src:Dockerfile");
+		assert.ok(dockerfile);
+		assert.equal(dockerfile.kind, "dockerfile");
+		assert.deepEqual(dockerfile.stages, ["build", "node:20-slim"]);
+		assert.equal(dockerfile.baseImage, "node:20");
+		assert.deepEqual(dockerfile.exposedPorts, ["3000"]);
+		assert.equal(dockerfile.meta, "FROM node:20 · 2 stages · EXPOSE 3000");
+		assert.equal(dockerfile.badge, "multi-stage");
+		assert.equal(dockerfile.statusText, "built → app:latest");
+		assert.equal(dockerfile.edited, false);
+		assert.deepEqual(dockerfile.imageIds, ["sha256:aaa111"]);
+		assert.deepEqual(dockerfile.containerIds, ["111111aaaaaa"]);
+		const containerfile = sources.find((source) => source.id === "src:services/worker/Containerfile");
+		assert.ok(containerfile);
+		assert.equal(containerfile.kind, "containerfile");
+		assert.equal(containerfile.dir, "services/worker/");
+		assert.deepEqual(containerfile.stages, ["base", "runtime"]);
+		assert.equal(containerfile.baseImage, "python:3.12-slim");
+		assert.deepEqual(containerfile.exposedPorts, ["8080", "9090"]);
+		assert.equal(containerfile.meta, "FROM python:3.12-slim · 2 stages · EXPOSE 8080, 9090");
+		assert.equal(containerfile.edited, true);
+		assert.equal(containerfile.badge, "edited");
+		assert.equal(containerfile.statusText, "modified after last build (drift)");
+		assert.deepEqual(containerfile.imageIds, ["sha256:ccc333"]);
+		const unbuilt = sources.find((source) => source.id === "src:services/api/Dockerfile");
+		assert.ok(unbuilt);
+		assert.equal(unbuilt.badge, "unbuilt");
+		assert.equal(unbuilt.statusText, "not built yet");
+		assert.equal(unbuilt.unbuilt, true);
+	} finally {
+		rmSync(join(folder, ".."), { recursive: true, force: true });
+	}
+});
+
+test("buildSources without topology marks compose down and build files unbuilt", () => {
+	const folder = writeWorkspace();
+	try {
+		const sources = buildSources({ folder, topology: null });
+		const compose = sources.find((source) => source.id === "src:compose.yaml");
+		assert.equal(compose?.badge, "stopped");
+		assert.equal(compose?.statusText, "0 containers up");
+		assert.equal(compose?.unbuilt, true);
+		assert.ok(compose?.services.every((service) => service.state === "down"));
+		const dockerfile = sources.find((source) => source.id === "src:Dockerfile");
+		assert.equal(dockerfile?.badge, "unbuilt");
+		assert.equal(dockerfile?.statusText, "not built yet");
+	} finally {
+		rmSync(join(folder, ".."), { recursive: true, force: true });
+	}
+});
+
+test("getState returns sources even when no runtime socket is available", async () => {
+	const folder = writeWorkspace();
+	try {
+		const state = await getState({ folder, scope: "workspace", runtimes: [] });
+		assert.equal(state.available, false);
+		assert.equal(state.topology, null);
+		assert.ok(state.sources.some((source) => source.id === "src:compose.yaml"));
+		assert.ok(state.sources.some((source) => source.id === "src:services/worker/Containerfile"));
+		assert.ok(state.composeFiles.length >= 1);
+		assert.ok(state.dockerfiles.length >= 2);
+	} finally {
+		rmSync(join(folder, ".."), { recursive: true, force: true });
+	}
+});
+
+test("handleAction build honours dockerfile and context inside the workspace", async () => {
+	const runtime = mockRuntime();
+	const folder = writeWorkspace();
+	try {
+		const calls: string[][] = [];
+		const run = async (_cli: string, args: string[]) => {
+			calls.push(args);
+			return { code: 0, output: "" };
+		};
+		const inside = await handleAction({ folder }, { action: "build", tag: "app:1", dockerfile: "services/api/Dockerfile", context: "services/api", runtime: runtime.id }, { runtimes: [runtime], run });
+		assert.equal(inside.ok, true);
+		assert.deepEqual(calls[0], ["build", "-f", join(folder, "services/api/Dockerfile"), "-t", "app:1", join(folder, "services/api")]);
+		const defaulted = await handleAction({ folder }, { action: "build", tag: "app:1", runtime: runtime.id }, { runtimes: [runtime], run });
+		assert.equal(defaulted.ok, true);
+		assert.deepEqual(calls[1], ["build", "-t", "app:1", "."]);
+		const outside = await handleAction({ folder }, { action: "build", tag: "app:1", context: "../outside", runtime: runtime.id }, { runtimes: [runtime], run });
+		assert.equal(outside.ok, false);
+		assert.equal(outside.error, "build context must be inside the workspace folder");
+		assert.equal(calls.length, 2, "a rejected context never reaches the CLI");
+	} finally {
+		rmSync(join(folder, ".."), { recursive: true, force: true });
+	}
 });
 
 // ---------- routes ----------
@@ -449,6 +683,24 @@ test("onKontainerEvents streams engine events and closes the upstream socket whe
 	assert.doesNotMatch(opened.chunks, /event: error/);
 });
 
+test("onKontainerState includes workspace sources", async () => {
+	const folder = writeWorkspace();
+	try {
+		const state = JSON.parse(
+			await withEngine(sockPath, async () => {
+				const res = fakeResponse();
+				await onKontainerState({} as IncomingMessage, res as unknown as ServerResponse, new URL("http://daemon/kontainer/state?scope=all&runtime=docker"), { folder });
+				assert.equal(res.status, 200);
+				return res.body;
+			}),
+		) as { sources: Array<{ id: string }> };
+		assert.ok(state.sources.some((source) => source.id === "src:compose.yaml"));
+		assert.ok(state.sources.some((source) => source.id === "src:Dockerfile"));
+	} finally {
+		rmSync(join(folder, ".."), { recursive: true, force: true });
+	}
+});
+
 test("onKontainerEvents tells the tab when the engine fails mid-stream", async () => {
 	const failed = await withEngine(brokenSockPath, async () => {
 		const req = new EventEmitter() as unknown as IncomingMessage;
@@ -458,4 +710,74 @@ test("onKontainerEvents tells the tab when the engine fails mid-stream", async (
 		return res.chunks.join("");
 	});
 	assert.match(failed, /event: error\ndata: \{"error":"engine request failed \(500\): engine is unhappy"\}\n\n/);
+	assert.ok(snapshot().some((entry) => entry.level === "error" && entry.message.startsWith("events stream · engine request failed (500)")), "the mid-stream failure is one daemon line");
+});
+
+// ---------- engine calls and events in the daemon log ----------
+
+test("a container lifecycle write lands in the daemon log as the command a developer would type", async () => {
+	const runtime = mockRuntime();
+	const result = await handleAction({ folder: "/ws/myproj" }, { action: "start", id: "999999aaaaaa", runtime: runtime.id }, { runtimes: [runtime] });
+	assert.equal(result.ok, true);
+	const line = snapshot().find((entry) => entry.message === "cd /ws/myproj docker start chatbot_chatbot_1");
+	assert.ok(line, "the start is in the ring, as a command");
+	assert.equal(line.level, "info");
+	assert.equal(line.source, "docker");
+	assert.equal(line.meta?.cmd, "cd /ws/myproj docker start chatbot_chatbot_1");
+	assert.equal(line.meta?.exit, 204);
+	assert.equal(line.meta?.cwd, "/ws/myproj");
+	assert.equal(line.output, undefined, "a 204 answers nothing, so the view falls back to the command");
+	assert.ok(!snapshot().some((entry) => entry.message.startsWith("docker start 999999aaaaaa")), "the name lookup leaves no line of its own");
+});
+
+test("a failed engine read is debug and a failed write is error, so polls stay out of the default view", async () => {
+	const brokenRuntime = { socketPath: brokenSockPath, cli: "docker" };
+	await assert.rejects(requestJson(brokenRuntime, "/containers/json?all=1"), /engine request failed \(500\)/);
+	await assert.rejects(requestJson(brokenRuntime, "/containers/abc/start", { method: "POST" }), /engine request failed \(500\)/);
+	const readFailure = snapshot().find((entry) => entry.message.startsWith("docker ps -a"));
+	const writeFailure = snapshot().find((entry) => entry.message.startsWith("docker start abc"));
+	assert.ok(readFailure && readFailure.level === "debug" && readFailure.meta?.exit === 500);
+	assert.ok(writeFailure && writeFailure.level === "error" && writeFailure.meta?.exit === 500);
+	assert.ok(writeFailure.output?.includes("engine is unhappy"), "the engine's own sentence rides on the line");
+});
+
+test("an image removal is logged with its tag and its forced flag", async () => {
+	const runtime = mockRuntime();
+	const result = await handleAction({ folder: "/ws/myproj" }, { action: "image.remove", id: "sha256:aaa111", force: true, runtime: runtime.id }, { runtimes: [runtime] });
+	assert.equal(result.ok, false, "the mock engine refuses image deletion");
+	const line = snapshot().find((entry) => entry.message.startsWith("cd /ws/myproj docker rmi -f app:latest"));
+	assert.ok(line, "the removal is in the ring, as a command");
+	assert.equal(line.level, "error");
+});
+
+test("logEngineEvent says a death out loud and ordinary churn at debug, and drops a line it cannot read", () => {
+	const beforeSeen = snapshot().length;
+	logEngineEvent('{"Type":"container","Action":"start","id":"abcdef1234567890","Actor":{"Attributes":{"name":"web"}}}', "docker");
+	logEngineEvent('{"Type":"container","Action":"die","id":"abcdef1234567890","Actor":{"Attributes":{"name":"web","exitCode":"1"}}}', "docker");
+	logEngineEvent("not json at all", "docker");
+	logEngineEvent("{}", "docker");
+	assert.equal(snapshot().length - beforeSeen, 2, "only the two readable events were written");
+	const churn = snapshot()[snapshot().length - 2];
+	const death = snapshot()[snapshot().length - 1];
+	assert.equal(churn.level, "debug");
+	assert.equal(churn.message, "container start web");
+	assert.equal(churn.source, "docker");
+	assert.equal(death.level, "error");
+	assert.match(death.message, /^container die web/);
+	assert.match(death.message, /exit 1/);
+});
+
+test("the events feed writes what the engine did as it forwards it", async () => {
+	const beforeSeen = snapshot().length;
+	const closedBefore = eventsClosed;
+	const req = new EventEmitter() as unknown as IncomingMessage;
+	const res = fakeResponse();
+	await withEngine(sockPath, async () => {
+		await onKontainerEvents(req, res as unknown as ServerResponse, new URL("http://daemon/kontainer/events?runtime=docker"), { folder: "/ws/myproj" });
+		await until(() => res.chunks.join("").includes("event: change"), "the first engine event");
+		(req as unknown as EventEmitter).emit("close");
+		await until(() => eventsClosed > closedBefore, "the engine stream to be destroyed");
+	});
+	const seen = snapshot().slice(beforeSeen);
+	assert.ok(seen.some((entry) => entry.level === "debug" && entry.message === "container start" && entry.source === "docker"), "the forwarded start is one debug line");
 });

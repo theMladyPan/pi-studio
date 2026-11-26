@@ -8,6 +8,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import { discoverRuntimes, requestJson, resolveRuntime } from "./socket.ts";
 import type { Runtime } from "./socket.ts";
 import { asRecord, asString } from "./topology.ts";
+import { log } from "../logs.ts";
 
 export interface KontainerBoardLike {
 	folder: string;
@@ -71,6 +72,11 @@ export function buildExecCommand(body: Record<string, unknown>, opts: ExecComman
 		const command = mode === "exec" ? `${cli} exec -it ${short} sh` : `${cli} logs -f --tail 100 ${short}`;
 		return { ok: true, command };
 	}
+	if (mode === "run") {
+		const image = body.image;
+		if (typeof image !== "string" || image.startsWith("-") || (!isValidImageRef(image) && !isValidImageId(image))) return { ok: false, error: "a valid image reference is required" };
+		return { ok: true, command: `${cli} run --rm -it ${shellQuote(image as string)} sh` };
+	}
 	if (mode === "compose-logs") {
 		const composeFile = typeof body.composeFile === "string" ? body.composeFile : "";
 		if (composeFile) {
@@ -93,29 +99,46 @@ export interface RunResult {
 export type Runner = (cli: string, args: string[], opts: { cwd: string; timeoutMs: number }) => Promise<RunResult>;
 
 export function execFileRunner(cli: string, args: string[], opts: { cwd: string; timeoutMs: number }): Promise<RunResult> {
+	const command = [cli, ...args].join(" ");
+	const startedAt = Date.now();
 	return new Promise((resolvePromise) => {
 		execFile(cli, args, { cwd: opts.cwd, timeout: opts.timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
 			const output = [stdout, stderr].filter((part) => part && part.length > 0).join("");
-			if (error) {
-				const exit = asRecord(error as unknown);
-				const code = typeof exit.code === "number" ? exit.code : 1;
-				resolvePromise({ code, output: output || error.message });
-			} else {
-				resolvePromise({ code: 0, output });
-			}
+			const code = error ? (typeof asRecord(error as unknown).code === "number" ? (asRecord(error as unknown).code as number) : 1) : 0;
+			// What the human's Docker or Podman was asked and what it answered. A failure carries the
+			// engine's own sentence, which is the whole reason to look in the drawer.
+			log(code === 0 ? "info" : "error", cli, `${command}${code === 0 ? "" : ` · ${(output || command).trim().split("\n")[0]?.slice(0, 300) ?? ""}`}`, {
+				cmd: command,
+				cwd: opts.cwd,
+				exit: code,
+				dur: Date.now() - startedAt,
+			}, output || undefined);
+			resolvePromise({ code, output: code === 0 ? output : output || (error as Error).message });
 		});
 	});
 }
 
 /** `login` with the password on stdin only — never in argv, never in logs. */
 function loginRunner(cli: string, args: string[], password: string, cwd: string, timeoutMs: number): Promise<RunResult> {
+	// What the drawer shows is the command as it was written; the password rides stdin and never argv.
+	const command = [cli, ...args].join(" ");
+	const startedAt = Date.now();
+	const answered = (code: number, output: string) => {
+		log(code === 0 ? "info" : "error", cli, `${command}${code === 0 ? "" : ` · ${output.trim().split("\n")[0]?.slice(0, 300) ?? ""}`}`, {
+			cmd: command,
+			cwd,
+			exit: code,
+			dur: Date.now() - startedAt,
+		}, output || undefined);
+		return { code, output };
+	};
 	return new Promise((resolvePromise) => {
 		const child = spawn(cli, args, { cwd, timeout: timeoutMs });
 		let output = "";
 		child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
 		child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
-		child.on("error", (error) => resolvePromise({ code: 1, output: output || error.message }));
-		child.on("close", (code) => resolvePromise({ code: code ?? 1, output }));
+		child.on("error", (error) => resolvePromise(answered(1, output || error.message)));
+		child.on("close", (code) => resolvePromise(answered(code ?? 1, output)));
 		child.stdin.on("error", () => {});
 		child.stdin.end(password);
 	});
@@ -143,6 +166,28 @@ const LIFECYCLE: Record<string, { method: string; suffix: string }> = {
 	remove: { method: "DELETE", suffix: "" },
 };
 
+/** The container's name, so the daemon log can say `restart container chatbot (9935864b)` instead of an id. Best effort: a container already gone simply has no name to give. */
+async function containerName(runtime: Runtime, id: string): Promise<string | null> {
+	try {
+		const inspected = asRecord(await requestJson(runtime, `/containers/${encodeURIComponent(id)}/json`));
+		const name = asString(inspected.Name) || asString(inspected.name);
+		return name ? name.replace(/^\//, "") : null;
+	} catch {
+		return null;
+	}
+}
+
+/** An image's first tag, so the daemon log says `remove image app:latest` instead of a digest. Best effort, like the container name above. */
+async function imageTag(runtime: Runtime, id: string): Promise<string | null> {
+	try {
+		const inspected = asRecord(await requestJson(runtime, `/images/${encodeURIComponent(id)}/json`));
+		const tags = Array.isArray(inspected.RepoTags) ? inspected.RepoTags.filter((tag): tag is string => typeof tag === "string") : [];
+		return tags.find((tag) => tag !== "<none>:<none>") ?? null;
+	} catch {
+		return null;
+	}
+}
+
 export async function handleAction(board: KontainerBoardLike, rawBody: unknown, opts: HandleActionOptions = {}): Promise<ActionResult> {
 	const body = asRecord(rawBody);
 	const action = asString(body.action);
@@ -165,8 +210,9 @@ export async function handleAction(board: KontainerBoardLike, rawBody: unknown, 
 		const id = body.id;
 		if (!isValidId(id)) return { ok: false, error: "a valid container id is required" };
 		const spec = LIFECYCLE[action];
+		const name = await containerName(runtime, id as string);
 		try {
-			const payload = await requestJson(runtime, `/containers/${encodeURIComponent(id as string)}${spec.suffix}`, { method: spec.method });
+			const payload = await requestJson(runtime, `/containers/${encodeURIComponent(id as string)}${spec.suffix}`, { method: spec.method, label: name ?? undefined, cwd: folder || undefined });
 			return { ok: true, output: typeof payload === "string" ? payload : payload === null ? "" : JSON.stringify(payload) };
 		} catch (error) {
 			return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -226,7 +272,13 @@ export async function handleAction(board: KontainerBoardLike, rawBody: unknown, 
 			args.push("-f", inside);
 		}
 		if (body.noCache === true) args.push("--no-cache");
-		args.push("-t", tag as string, ".");
+		let buildContext = ".";
+		if (typeof body.context === "string" && body.context) {
+			const insideContext = resolveInsideFolder(folder, body.context);
+			if (!insideContext) return { ok: false, error: "build context must be inside the workspace folder" };
+			buildContext = insideContext;
+		}
+		args.push("-t", tag as string, buildContext);
 		if (!folder) return { ok: false, error: "this workspace has no folder" };
 		return cliResult(await run(cli, args, { cwd: folder, timeoutMs: 120_000 }));
 	}
@@ -253,8 +305,9 @@ export async function handleAction(board: KontainerBoardLike, rawBody: unknown, 
 		const id = body.id;
 		if (!isValidImageId(id)) return { ok: false, error: "a valid image id is required" };
 		const query = body.force === true ? "?force=1" : "";
+		const label = typeof body.image === "string" && body.image ? body.image : (await imageTag(runtime, id as string)) ?? undefined;
 		try {
-			const payload = await requestJson(runtime, `/images/${encodeURIComponent(id as string)}${query}`, { method: "DELETE" });
+			const payload = await requestJson(runtime, `/images/${encodeURIComponent(id as string)}${query}`, { method: "DELETE", label, cwd: folder || undefined });
 			return { ok: true, output: payload === null ? "" : JSON.stringify(payload) };
 		} catch (error) {
 			return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -287,7 +340,7 @@ export async function handleAction(board: KontainerBoardLike, rawBody: unknown, 
 		const parts: string[] = [];
 		try {
 			for (const name of targets) {
-				const payload = asRecord(await requestJson(runtime, `/${name}/prune`, { method: "POST", body: "{}" }));
+				const payload = asRecord(await requestJson(runtime, `/${name}/prune`, { method: "POST", body: "{}", cwd: folder || undefined }));
 				const space = payload.SpaceReclaimed;
 				if (typeof space === "number") reclaimedBytes += space;
 				parts.push(`${name}: ${JSON.stringify(payload)}`);

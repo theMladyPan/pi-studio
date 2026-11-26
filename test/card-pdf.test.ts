@@ -84,12 +84,16 @@ test("the file is a pdf a reader can open, with one page per sheet and a footer 
 	assert.ok(text.includes("1 0 obj"), "the catalog is an object");
 	assert.ok(text.includes("/MediaBox [0 0 595.28 841.89]"), "the page is A4");
 	assert.ok(text.includes("(page 1 / 1) Tj"), "the footer counts the pages");
+	assert.ok(text.includes("pi-studio") && text.includes("2025-03-14"), "and the foot names the workspace and the day");
 });
 
 test("the card's words are the page's words: title, headings, prose and list items", () => {
 	const text = textOf(card("## What the scan found\n\nThe sweep names the leftovers.\n\n- a card nobody read"));
-	assert.ok(text.includes("(a note) Tj"), "the title is drawn");
-	assert.ok(text.includes("(pi-studio \\(2025-03-14\\)") || text.includes("pi-studio"), "the line under the title says where the card came from");
+	assert.ok(text.includes("(a note) Tj"), "the card's name is carried in the foot of the page");
+	assert.equal((text.match(/\(a note\) Tj/g) ?? []).length, 1, "but not again as a heading over the words");
+	// The workspace and the day sit in the foot of every page now, and the card's own id sits nowhere.
+	assert.ok(text.includes("pi-studio") && text.includes("2025-03-14"), "the foot says where the card came from");
+	assert.ok(!text.includes("abcdef01"), "the card id is not drawn");
 	assert.ok(text.includes("(scan) Tj") && text.includes("(found) Tj"), "a heading keeps its words");
 	assert.ok(text.includes("(sweep) Tj") && text.includes("(leftovers.) Tj"), "prose keeps its words");
 	assert.ok(text.includes("(nobody) Tj") && text.includes("(read) Tj"), "a list item keeps its words");
@@ -99,6 +103,15 @@ test("emphasis is drawn in the face it asked for, and inline code in the monospa
 	const text = textOf(card("a **bold** word and a `fixed` one"));
 	assert.match(text, /\/F2 [\d.]+ Tf\n1 0 0 1 [\d.]+ [\d.]+ Tm\n\(bold\) Tj/, "bold is the bold face");
 	assert.match(text, /\/F5 [\d.]+ Tf\n1 0 0 1 [\d.]+ [\d.]+ Tm\n\(fixed\) Tj/, "code is the monospaced face");
+});
+
+test("a link is drawn as its label alone, underlined and clickable, and its address is not text on the page", () => {
+	const text = textOf(card("see [the docs](https://example.com/docs) for more"));
+	assert.ok(text.includes("(the) Tj") && text.includes("(docs) Tj"), "the label is drawn");
+	// The address lives in the link annotation, the way it lives in the board's anchor, not after the label.
+	assert.ok(text.includes("/Subtype /Link"), "the link is an annotation");
+	assert.ok(text.includes("/URI (https://example.com/docs)"), "and it names the address");
+	assert.ok(!/\(https:\/\/example\.com\/docs\) Tj/.test(text), "but the address is not drawn as text");
 });
 
 test("a table keeps its header and every cell, and its rules line up", () => {
@@ -138,15 +151,20 @@ test("a marker with no definition stays as it was typed rather than becoming a n
 	assert.ok(!text.includes("(1) Tj"), "and nothing is numbered");
 });
 
-test("a letter the standard font has no byte for is folded to the letter it is built on", () => {
-	// The words a page in Polish or Czech is made of. Dropping the diacritic instead of folding it would turn
-	// `Przegląd` into `Przegld`, which reads as a typo rather than as the word.
+test("a letter the standard font has no byte for is drawn with its own glyph from the embedded face", () => {
+	// The words a page in Polish or Czech is made of. Folding them to the letter they are built on would
+	// turn `Przegląd` into `Przeglad` and the letter itself would vanish from the words: the page now
+	// draws them from the embedded subset face, so a reader sees the letters as written, and plain text
+	// taken from the page keeps them too, through the map from glyphs back to words.
 	const text = textOf(card("Przegląd čísel a řádků, Łódź"));
-	assert.ok(text.includes("(Przeglad) Tj"), "a letter with a tail is folded to the letter it is built on");
-	assert.ok(text.includes("(císel) Tj"), "and the word around it is whole");
-	assert.ok(text.includes("(rádku,) Tj") && text.includes("(Lódz) Tj"), "a stroked letter becomes the letter it is");
-	// A letter the Latin set already holds keeps its own byte, so the word is drawn with its accent whole.
-	assert.ok(text.includes("císel"), "a letter the font does hold is kept as it is");
+	assert.ok(text.includes("/Subtype /Type0"), "the embedded face is a composite font on the page");
+	assert.ok(!text.includes("(Przeglad) Tj"), "nothing is folded to its base letter any more");
+	// The ToUnicode map hands the glyphs back as the words they were: ą U+0105, č U+010D, ř U+0159, ů U+016F, Ł U+0141.
+	for (const unicode of ["0105", "010D", "0141", "0159", "016F"]) {
+		assert.ok(text.includes(`<${unicode}>`), `${unicode} has a glyph mapped back to its word`);
+	}
+	// The plain letters around them stay plain text, and the words survive whole.
+	assert.ok(text.includes("(Przegl"), "the plain letters stay plain text");
 });
 
 test("characters the standard font has no glyph for are said in characters it does", () => {

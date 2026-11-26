@@ -412,5 +412,5 @@ export function threadError(board, thread, message) {
 	board.children.get(thread.id)?.stdin?.end();
 	// A dead thread is an ended run too: the caller waiting on it must not wait for a settle that will
 	// never come.
-	finished(thread);
+	finished(thread, last);
 }

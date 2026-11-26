@@ -4,7 +4,8 @@
  */
 import { answer, fail, readJson } from "../../http.ts";
 import { randomUUID } from "node:crypto";
-import { MAX_TITLE_CHARS, SPAWN_TIMEOUT_MS } from "../../limits.ts";
+import { MAX_TITLE_CHARS, SPAWN_REPLY_CHARS, SPAWN_TIMEOUT_MS } from "../../limits.ts";
+import { whenFinished } from "../../waiters.ts";
 import { WORK_TYPES } from "../../worktrees/make.ts";
 import { runtimeDefaults } from "../../workspaces.ts";
 import { card, update } from "../../bus.ts";
@@ -240,6 +241,108 @@ export async function onThreadSpawn(req, res, board, caller = { human: true }) {
 	clearInterval(keep);
 	if (gone || res.writableEnded) return;
 	res.end(JSON.stringify(result));
+}
+
+
+/**
+ * The thread a wait names: the whole id, or a prefix that names one thread only.
+ *
+ * A wait names a thread the caller spawned or the human showed it, and a thread's own words carry the
+ * first characters rather than forty. The full id wins over any prefix, so a prefix that happens to be
+ * a whole id reads as that thread; the rest have to be unique, because two threads sharing eight
+ * characters would wait on whichever was found first.
+ */
+export function waitTarget(board, raw) {
+	const wanted = field(raw, 100);
+	if (!wanted) return { error: "a thread to wait for is needed" };
+	if (board.threads.has(wanted)) return { thread: board.threads.get(wanted) };
+	const named = [...board.threads.values()].filter((one) => one.id.startsWith(wanted));
+	if (named.length === 1) return { thread: named[0] };
+	return { error: named.length ? "that prefix names more than one thread" : "no such thread" };
+}
+
+
+/**
+ * What a wait answers with, once there is nothing left to wait for — or on a timeout, still is.
+ *
+ * Done is an answer, failed an error, stopped a cut: an error turn reads stopped with its reason on
+ * it, so the words decide, and an idle thread that never answered is failed rather than done. The raw
+ * thread and turn words ride along, so the caller never has to guess which case this was.
+ */
+function waitOutcome(thread, timedOut, waitedMs) {
+	const turns = Array.isArray(thread.turns) ? thread.turns : [];
+	const last = turns[turns.length - 1];
+	let status;
+	// A timeout is the caller's to interpret, so it keeps its own word rather than "failed".
+	if (timedOut) status = "timeout";
+	else if (thread.status === "dead" || (last?.status === "stopped" && last.error)) status = "failed";
+	else if (last?.status === "answered") status = "done";
+	else if (last?.status === "stopped") status = "stopped";
+	else status = "failed";
+	return {
+		threadId: thread.id,
+		title: thread.title ?? "",
+		status,
+		timedOut,
+		waitedMs,
+		// Reserved for when a thread reports its own goal: 0 would be achieved, anything else would not.
+		exitCode: null,
+		threadStatus: thread.status,
+		turnStatus: last?.status ?? "",
+		...(last?.reply ? { output: String(last.reply).slice(-SPAWN_REPLY_CHARS) } : {}),
+		...(last?.error ? { error: String(last.error).slice(0, 500) } : {}),
+	};
+}
+
+
+/**
+ * Wait for another thread to finish, so a caller can chain on it: "merge to dev after 1a2b3c is done".
+ *
+ * The answer is held until the thread settles or the timeout lapses. A timeout is a normal answer with
+ * `timedOut`, never an error: the caller waits again, alerts the human, or takes the safe route, and the
+ * thread itself is left running. A thread with no run in flight is already at its answer.
+ */
+export async function onThreadWait(req, res, board, caller = { human: true }) {
+	const body = await readJson(req, res);
+	if (!body) return;
+	const found = waitTarget(board, body.threadId);
+	if (found.error) return void fail(res, 409, found.error);
+	const thread = found.thread;
+	if (caller.thread?.id === thread.id) return void fail(res, 409, "a thread cannot wait for itself");
+	const seconds = Number(body.timeoutSeconds);
+	const timeoutMs = Number.isFinite(seconds) && seconds >= 0 ? Math.min(seconds, 3600) * 1000 : SPAWN_TIMEOUT_MS;
+	const started = Date.now();
+	if (thread.status !== "running") return void answer(res, 200, waitOutcome(thread, false, 0));
+	// Held open like a spawn: headers at once, then a space every half minute, because a client gives
+	// up on silent headers and on a body that goes quiet after five minutes.
+	res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+	const keep = setInterval(() => {
+		try {
+			res.write(" ");
+		} catch {
+			// A closed socket is noticed by the close handler below.
+		}
+	}, 30_000);
+	keep.unref?.();
+	let gone = false;
+	res.on("close", () => {
+		if (res.writableFinished) return;
+		gone = true;
+		// The waiter left: the thread it waited on keeps running, and nobody is left to tell.
+	});
+	// The waiter registers before the first await, so a settle sailing past between the status check
+	// and the wait cannot be missed: between the two no other code runs.
+	const ended = whenFinished(thread);
+	let timer;
+	const lapsed = new Promise((resolve) => {
+		timer = setTimeout(() => resolve(true), timeoutMs);
+		timer.unref?.();
+	});
+	const timedOut = await Promise.race([ended.then(() => false), lapsed]);
+	clearTimeout(timer);
+	clearInterval(keep);
+	if (gone || res.writableEnded || res.destroyed) return;
+	res.end(JSON.stringify(waitOutcome(thread, timedOut, Date.now() - started)));
 }
 
 

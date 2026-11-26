@@ -20,6 +20,7 @@ import { finished, compacted, statsArrived } from "./waiters.ts";
 import { COMMAND_PREFIX, settleCommand } from "./child/command.ts";
 import { onExtensionUi } from "./child/dialog.ts";
 import { reportText } from "./child/report.ts";
+import { log } from "./logs.ts";
 
 
 
@@ -437,6 +438,9 @@ export function handleChildLine(board, thread, line) {
 		// Why a run stopped belongs on the turn. A card that reads only "stopped" sends the human looking
 		// through session files for the reason, and a connection error is the common case.
 		const reason = failed ? headline(message.errorMessage) : undefined;
+		// The card carries one line of a failure; the drawer carries what the provider actually said, so a
+		// refused model, a spent quota or a context over its window is read rather than guessed at.
+		if (failed) log("error", "llm", String(message.errorMessage ?? reason ?? "the run failed"), { thread: thread.id, provider: thread.provider, model: thread.model });
 		afterMessage(thread, text, wantedTool, failed);
 		thread.streamParts = new Map();
 		stopStream(thread);
@@ -517,6 +521,9 @@ export function handleChildLine(board, thread, line) {
 		// The cards this thread answers through carried `answersWith.running` while it ran, and a card
 		// still offering a stop for a run that has finished is a button that cannot work.
 		refreshOwned(board, thread);
+		// A run that settles with a message waiting behind it is not the end of the thread: the next
+		// message starts at once, so the thread keeps running and keeps its phase and its waiters until
+		// it is truly idle — finished() would settle a report a follower is still working under.
 		if (drainQueue(board, thread)) return;
 		// A run that died of the provider's own weather is sent again before the card is left reading
 		// stopped, and the same words go out up to three times before the human is told it failed.
@@ -539,7 +546,7 @@ function endRun(board, thread, reached) {
 		update(board, thread);
 	}
 	// The run is over for anyone waiting on it.
-	finished(thread);
+	finished(thread, reached);
 	// And for whoever subscribed to the board's events: a settled run is the one moment a plugin that
 	// asked for work is told about.
 	threadSettled(board, thread, reached);

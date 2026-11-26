@@ -21,7 +21,7 @@ from a branch: pushing an annotated version tag to GitHub is what publishes.
    `[Unreleased]` empty. A missing, undated or impossible date, an empty section
    or a leftover watermark makes the release run refuse instead of publishing.
 
-4. Run the full gate: `npm run check`. It must pass end to end before any merge.
+4. Run the full gate: `npm run check -- --full`. It must pass end to end before any merge.
 
 5. Commit only the release files (the two package files, the changelog, and any
    README version display if there is one):

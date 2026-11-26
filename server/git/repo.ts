@@ -6,15 +6,28 @@
 import { execFile, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { log } from "../logs.ts";
 
 
 
 /** One git command, short enough to wait for while a message is being sent. */
 export function gitIn(folder, args, timeout = 5000) {
+	const command = ["git", "-C", folder, ...args].join(" ");
+	const startedAt = Date.now();
 	try {
 		const out = spawnSync("git", ["-C", folder, ...args], { encoding: "utf8", timeout });
-		return { ok: out.status === 0, out: (out.stdout ?? "").trim(), err: (out.stderr ?? "").trim() };
+		const err = (out.stderr ?? "").trim();
+		// The small reads are many, so they land at debug and a failure at error: the drawer's info
+		// level stays readable while a broken repository is still said out loud.
+		log(out.status === 0 ? "debug" : "error", "git", `${command}${out.status === 0 ? "" : ` · ${err.split("\n")[0]?.slice(0, 300) ?? ""}`}`, {
+			cmd: command,
+			cwd: folder,
+			exit: out.status ?? "no code",
+			dur: Date.now() - startedAt,
+		}, [out.stdout ?? "", err].filter((part) => part.trim()).join("\n") || undefined);
+		return { ok: out.status === 0, out: (out.stdout ?? "").trim(), err };
 	} catch (error) {
+		log("error", "git", `${command} · ${error.message}`, { cmd: command, cwd: folder, dur: Date.now() - startedAt });
 		return { ok: false, out: "", err: error.message };
 	}
 }
@@ -27,6 +40,8 @@ export function gitIn(folder, args, timeout = 5000) {
  * add up — the leftovers scan, the facts a folder's row is drawn from — come through here.
  */
 export function gitSoon(folder, args, timeout = 5000) {
+	const command = ["git", "-C", folder, ...args].join(" ");
+	const startedAt = Date.now();
 	return new Promise<{ ok: boolean; out: string; err: string }>((done) => {
 		execFile(
 			"git",
@@ -34,6 +49,12 @@ export function gitSoon(folder, args, timeout = 5000) {
 			{ encoding: "utf8", timeout, maxBuffer: 32 * 1024 * 1024 },
 			(error, stdout, stderr) => {
 				const err = String(stderr ?? "").trim() || (error ? error.message : "");
+				log(error ? "error" : "debug", "git", `${command}${error ? ` · ${err.split("\n")[0]?.slice(0, 300) ?? ""}` : ""}`, {
+					cmd: command,
+					cwd: folder,
+					exit: error ? (typeof error.code === "number" ? error.code : "failed") : 0,
+					dur: Date.now() - startedAt,
+				}, [String(stdout ?? ""), err].filter((part) => part.trim()).join("\n") || undefined);
 				done({ ok: !error, out: String(stdout ?? "").trim(), err });
 			},
 		);

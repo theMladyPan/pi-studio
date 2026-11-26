@@ -4,9 +4,9 @@
  * It keeps no state of its own beyond the session: every fact comes from `/kontainer/*` on the
  * daemon, refreshed over SSE plus the stats cadence the human picked (Eco/Balanced/Live).
  */
-import { bindDragHeight, createSlidingDrawer } from "./drawer-common.js";
+import { bindDragHeight, createDetailSheet, createSlidingDrawer, detailSection } from "./drawer-common.js";
 
-export function createKontainerDrawer({ workspace, typingSomewhere, openTerminalCommand }) {
+export function createKontainerDrawer({ workspace, typingSomewhere, openTerminalCommand, openWorkspaceFile }) {
   const drawer = document.getElementById("kontainerDrawer");
   const scrim = document.getElementById("kontainerScrim");
   const btn = document.getElementById("kontainerBtn");
@@ -50,26 +50,40 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
         <div class="k-stage" id="kStage">
           <svg class="k-wires" id="kWireLayer" aria-hidden="true"></svg>
           <div class="k-grid">
-            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label"><span class="k-idx">01</span> Images · Lineage</span><span class="k-stratum-meta" id="kMetaImages"></span></div>
+            <div class="k-stratum"><div class="k-stratum-head k-stratum-sources"><span class="k-stratum-label">Sources</span><span class="k-stratum-meta" id="kMetaSources"></span></div>
+              <div class="k-col-list" id="kSources"></div></div>
+            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label">Images</span><span class="k-stratum-meta" id="kMetaImages"></span></div>
               <div class="k-col-list" id="kImages"></div><div class="k-unused-tray" id="kUnusedTray" hidden></div></div>
-            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label"><span class="k-idx">02</span> Runtime · Containers</span><span class="k-stratum-meta" id="kMetaRuntime"></span></div>
+            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label">Containers</span><span class="k-stratum-meta" id="kMetaRuntime"></span></div>
               <div class="k-col-list" id="kRuntime"></div></div>
-            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label"><span class="k-idx">03</span> Wiring · Exposure &amp; State</span><span class="k-stratum-meta" id="kMetaWiring"></span></div>
+            <div class="k-stratum"><div class="k-stratum-head"><span class="k-stratum-label">Wiring</span><span class="k-stratum-meta" id="kMetaWiring"></span></div>
               <div class="k-col-list" id="kWiring"></div></div>
           </div>
         </div>
       </div>
       <aside class="k-inspector k-collapsed" id="kInspector" aria-label="selected node inspector"><div class="k-insp-grip" id="kInspGrip" role="separator" aria-orientation="vertical" tabindex="0" title="drag to resize inspector"></div></aside>
       <div class="k-tools-menu" id="kToolsMenu" hidden role="menu"></div>
+      <div class="k-ctx-menu" id="kCtxMenu" hidden role="menu" aria-label="node actions"></div>
     </div>
     <div class="k-sheet-backdrop" id="kSheet" hidden><div class="k-sheet-panel" role="dialog" aria-modal="true">
       <div class="k-sheet-head"><span class="k-sheet-title" id="kSheetTitle"></span><span class="k-grow"></span><button class="k-insp-close" id="kSheetClose" type="button" title="close (esc)">×</button></div>
       <div class="k-sheet-body" id="kSheetBody"></div><div class="k-sheet-foot" id="kSheetFoot"></div>
     </div></div>
+    <div class="k-detail" id="kTaskDetail" role="dialog" aria-modal="true" aria-labelledby="kTaskDetailName" tabindex="-1" hidden><div class="k-detail-panel">
+      <div class="k-detail-head"><span class="k-detail-name" id="kTaskDetailName"></span><span class="k-detail-meta" id="kTaskDetailMeta"></span><button class="k-insp-close" id="kTaskDetailClose" type="button" title="close (esc)">×</button></div>
+      <div class="k-detail-body" id="kTaskDetailBody" tabindex="0"></div>
+    </div></div>
+    <div class="k-tasks" id="kTasks" role="status" aria-live="polite"></div>
     <div class="k-toast" id="kToast" role="status"></div>`;
 
   const viewport = $("kViewport"), stage = $("kStage"), wires = $("kWireLayer"), inspector = $("kInspector"), grip = $("kInspGrip");
-  const searchInput = $("kSearch"), toolsBtn = $("kToolsBtn"), toolsMenu = $("kToolsMenu"), sheet = $("kSheet");
+  const searchInput = $("kSearch"), toolsBtn = $("kToolsBtn"), toolsMenu = $("kToolsMenu"), sheet = $("kSheet"), ctxMenu = $("kCtxMenu");
+  const taskDetail = createDetailSheet({ root: $("kTaskDetail"), name: $("kTaskDetailName"), meta: $("kTaskDetailMeta"), body: $("kTaskDetailBody"), close: $("kTaskDetailClose") });
+  // The node menu hangs on the page body, where the tools that float over the board already live: a
+  // drawer mid-roll carries a transform, and a transformed box is the containing block for its
+  // `position:fixed` children, so a right press during the slide would place the menu 44px off against
+  // the wrong box. On the body it is placed against the window it clamps itself to.
+  document.body.append(ctxMenu);
 
   /* ---------- state ---------- */
   const state = {
@@ -88,6 +102,47 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   const summary = () => topo().summary || {};
   const findImage = (id) => images().find((i) => i.id === id);
   const findCtr = (id) => containers().find((c) => c.id === id);
+  // Recognized workspace sources (Sources stratum). Older payloads carry only the file lists,
+  // so basic entries are synthesized from them rather than leaving the stratum empty.
+  const synthSource = (full, kind) => {
+    const folder = String(state.data?.workspaceFolder || "").replace(/\\/g, "/").replace(/\/+$/, "");
+    let rel = String(full || "").replace(/\\/g, "/");
+    if (folder && rel.startsWith(folder + "/")) rel = rel.slice(folder.length + 1);
+    else if (folder && rel.includes("/")) rel = rel.split("/").slice(-2).join("/");
+    const slash = rel.lastIndexOf("/");
+    const dir = slash >= 0 ? rel.slice(0, slash + 1) : "./";
+    const file = slash >= 0 ? rel.slice(slash + 1) : rel;
+    return {
+      id: `src:${rel}`, kind, relPath: rel, dir, file, mtimeMs: 0,
+      meta: kind === "compose" ? "compose file" : "dockerfile",
+      badge: kind === "compose" ? "stopped" : "unbuilt",
+      statusText: kind === "compose" ? "not started" : "not built yet",
+      unbuilt: true, edited: false, services: [], stages: [], baseImage: null,
+      exposedPorts: [], imageIds: [], containerIds: [], preview: "",
+    };
+  };
+  const sources = () => {
+    if (Array.isArray(state.data?.sources)) return state.data.sources;
+    const out = [];
+    for (const f of state.data?.composeFiles || []) out.push(synthSource(f, "compose"));
+    for (const f of state.data?.dockerfiles || []) out.push(synthSource(f, /containerfile/i.test(f.split("/").pop() || "") ? "containerfile" : "dockerfile"));
+    return out;
+  };
+  const findSource = (id) => sources().find((s) => s.id === id);
+  // A build sheet preset tag: a Dockerfile in `services/api/` builds `api:latest`.
+  const suggestedTag = (src) => {
+    const dirParts = String(src.dir || "./").split("/").filter(Boolean);
+    let stem = String(src.file || "app");
+    if (stem === "Dockerfile" || stem === "Containerfile") stem = dirParts.pop() || "app";
+    else stem = stem.replace(/\..+$/, "");
+    const slug = stem.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "app";
+    return `${slug}:latest`;
+  };
+  // Open a source file on the board, or say its path when the board gave no door.
+  function openSourceFile(relPath) {
+    if (typeof openWorkspaceFile === "function") openWorkspaceFile(relPath);
+    else toast(relPath);
+  }
   // A container's own id first, then the image its tag now names: a stale container still points at a
   // build this engine no longer holds under that id, and the local image with its name is its lineage.
   const imageOfCtr = (c) => findImage(c.imageId) || images().find((i) => i.name === c.imageName) || null;
@@ -108,7 +163,9 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   };
   const wireNode = (id) => {
     for (const [kind, list] of [["port", wiring().ports || []], ["net", wiring().networks || []], ["vol", wiring().volumes || []]]) {
-      const n = list.find((x) => x.id === id); if (n) return { ...n, kind };
+      // `kind` is the column the wire is drawn in; a volume's own volume/bind kind rides beside it, so a
+      // bind mount is never pruned as a volume.
+      const n = list.find((x) => x.id === id); if (n) return { ...n, kind, mountKind: n.kind };
     } return null;
   };
   // The label the backend carries, so an unpublished port reads as one instead of `0.0.0.0:null`.
@@ -117,12 +174,21 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   function relatedSet(id) {
     if (!id) return null;
     const set = new Set([id]);
+    const src = findSource(id);
+    if (src) {
+      for (const imgId of src.imageIds || []) {
+        set.add(imgId);
+        containers().filter((c) => imageIdOfCtr(c) === imgId || (src.containerIds || []).includes(c.id)).forEach((c) => { set.add(c.id); ctrWires(c).forEach((w) => set.add(w)); });
+      }
+      for (const cid of src.containerIds || []) { const c = findCtr(cid); if (c) { set.add(c.id); ctrWires(c).forEach((w) => set.add(w)); } }
+      return set;
+    }
     const c = findCtr(id);
-    if (c) { const imgId = imageIdOfCtr(c); if (imgId) set.add(imgId); ctrWires(c).forEach((w) => set.add(w)); return set; }
+    if (c) { const imgId = imageIdOfCtr(c); if (imgId) set.add(imgId); ctrWires(c).forEach((w) => set.add(w)); sources().filter((s) => (s.containerIds || []).includes(c.id) || (s.imageIds || []).includes(imgId)).forEach((s) => set.add(s.id)); return set; }
     const img = findImage(id);
-    if (img) { containers().filter((x) => x.imageId === img.id || imgNameOf(x) === `${img.repo}:${img.tag}`).forEach((x) => { set.add(x.id); ctrWires(x).forEach((w) => set.add(w)); }); return set; }
+    if (img) { containers().filter((x) => x.imageId === img.id || imgNameOf(x) === `${img.repo}:${img.tag}`).forEach((x) => { set.add(x.id); ctrWires(x).forEach((w) => set.add(w)); }); sources().filter((s) => (s.imageIds || []).includes(img.id)).forEach((s) => set.add(s.id)); return set; }
     const w = wireNode(id);
-    if (w) containers().filter((x) => ctrWires(x).includes(id)).forEach((x) => { set.add(x.id); const imgId = imageIdOfCtr(x); if (imgId) set.add(imgId); });
+    if (w) containers().filter((x) => ctrWires(x).includes(id)).forEach((x) => { set.add(x.id); const imgId = imageIdOfCtr(x); if (imgId) set.add(imgId); sources().filter((s) => (s.containerIds || []).includes(x.id) || (s.imageIds || []).includes(imgId)).forEach((s) => set.add(s.id)); });
     return set;
   }
   function matches(node, kind) {
@@ -130,10 +196,17 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     if (q && !q.startsWith(">")) {
       const hay = kind === "image" ? `${node.repo}:${node.tag} ${node.name || ""} ${node.shortId || ""}`
         : kind === "container" ? `${node.name || ""} ${node.shortId || ""} ${node.statusText || ""} ${node.state || ""} ${imgNameOf(node)} ${node.composeProject || ""}`
+        : kind === "source" ? `${node.relPath || ""} ${node.kind || ""} ${node.meta || ""} ${node.statusText || ""} ${(node.services || []).map((s) => s.name).join(" ")} ${node.baseImage || ""}`
         : `${node.label || node.name || node.id} ${node.hostPort || ""} ${node.containerPort || ""} ${node.subnet || ""} ${node.source || ""}`;
       if (!hay.toLowerCase().includes(q)) return false;
     }
     if (state.filter === "all") return true;
+    if (kind === "source") {
+      if (state.filter === "running") return !node.unbuilt && (node.kind === "compose" ? node.services.some(s => s.state !== "down") || node.containerIds.some(cid => { const c = findCtr(cid); return c && isRunning(c); }) : node.imageIds.some(iid => containers().some(c => imageIdOfCtr(c) === iid && isRunning(c))));
+      if (state.filter === "issues") return node.edited || node.badge === "drift" || node.services?.some(s => s.state === "warn") || node.imageIds.some(iid => findImage(iid)?.drift);
+      if (state.filter === "unused") return !!node.unbuilt;
+      return true;
+    }
     if (state.filter === "running") return kind === "container" ? isRunning(node) : containers().some((c) => (kind === "image" ? (c.imageId === node.id || imgNameOf(c) === `${node.repo}:${node.tag}`) : ctrWires(c).includes(node.id)) && isRunning(c));
     if (state.filter === "issues") return kind === "container" ? isIssue(node) : kind === "image" ? (node.drift || containers().some((c) => (c.imageId === node.id || imgNameOf(c) === `${node.repo}:${node.tag}`) && isIssue(c))) : containers().some((c) => ctrWires(c).includes(node.id) && isIssue(c));
     if (state.filter === "unused") return kind === "image" ? isUnusedImg(node) : kind === "container" ? !isRunning(node) : false;
@@ -154,22 +227,37 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     try {
       const data = await apiText(qs());
       state.data = data;
-      if (data.available === false) { showUnavailable(data.reason || "no container runtime is available"); return; }
+      if (data.available === false) { showUnavailable(data.reason || "no container runtime is available", data); return; }
       if (data.activeRuntime && !state.runtime) state.runtime = data.activeRuntime;
       render();
     } catch (e) { toast(`kontainer: ${e.message}`); }
   }
-  function showUnavailable(reason) {
-    state.data = { available: false, reason, runtimes: [], topology: { images: [], containers: [], wiring: { ports: [], networks: [], volumes: [] }, summary: {} } };
+  function showUnavailable(reason, existing = null) {
+    state.data = {
+      available: false, reason, runtimes: existing?.runtimes || [],
+      workspaceFolder: existing?.workspaceFolder || "",
+      composeFiles: existing?.composeFiles || [],
+      dockerfiles: existing?.dockerfiles || [],
+      sources: Array.isArray(existing?.sources) ? existing.sources : [],
+      topology: { images: [], containers: [], wiring: { ports: [], networks: [], volumes: [] }, summary: {} },
+    };
     render();
   }
   async function postAction(payload, okMsg) {
-    const data = await apiText(`/kontainer/action?workspace=${encodeURIComponent(workspace || "")}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ runtime: state.runtime || undefined, ...payload }) });
-    // The action route answers 200 either way, so its `ok` is the only verdict a failure carries.
-    if (data?.ok === false) throw new Error(data?.error || "action failed");
-    if (okMsg) toast(okMsg);
-    await loadState();
-    return data;
+    // A docker action is a task: it pops in blue while it runs, then turns green or red and
+    // stays five seconds (longer while hovered). `exec.cmd` only builds a command string, so it never pops.
+    const task = payload?.action === "exec.cmd" ? null : startTask(okMsg || String(payload?.action || "action"), payload);
+    try {
+      const data = await apiText(`/kontainer/action?workspace=${encodeURIComponent(workspace || "")}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ runtime: state.runtime || undefined, ...payload }) });
+      // The action route answers 200 either way, so its `ok` is the only verdict a failure carries.
+      if (data?.ok === false) throw new Error(data?.error || "action failed");
+      await loadState();
+      finishTask(task, true, data?.output);
+      return data;
+    } catch (error) {
+      finishTask(task, false, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
   }
   async function fetchStats(ids) {
     if (!ids.length || !workspace) return;
@@ -187,10 +275,61 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     } catch { /* stats are best-effort */ }
   }
 
-  /* ---------- toasts ---------- */
+  /* ---------- toasts & task queue ---------- */
+  let lastTaskFailure = null;
+  function scheduleTaskRemoval(task) {
+    clearTimeout(task.timer);
+    task.timer = setTimeout(() => task.card.remove(), 5000);
+  }
+  function startTask(label, payload) {
+    const host = $("kTasks");
+    if (!host) return null;
+    const card = el("div", "k-task k-running");
+    card.title = "click for command and output";
+    const dot = el("span", "k-task-dot", "●");
+    const labelEl = el("span", "k-task-label", `${label}…`);
+    card.append(dot, labelEl);
+    host.append(card);
+    const task = { card, dot, labelEl, label, payload, output: null, status: "running", started: Date.now(), done: false, hovered: false, timer: null };
+    card.addEventListener("mouseenter", () => { task.hovered = true; clearTimeout(task.timer); });
+    card.addEventListener("mouseleave", () => { task.hovered = false; if (task.done) scheduleTaskRemoval(task); });
+    card.addEventListener("click", () => openTaskDetail(task));
+    return task;
+  }
+  function finishTask(task, ok, output) {
+    if (!task) return;
+    const secs = ((Date.now() - task.started) / 1000).toFixed(1);
+    task.secs = secs;
+    task.status = ok ? "done" : "failed";
+    task.output = typeof output === "string" ? output : null;
+    task.card.classList.remove("k-running");
+    task.card.classList.add(ok ? "k-done" : "k-failed");
+    task.dot.textContent = ok ? "✓" : "✗";
+    task.labelEl.textContent = `${task.label} · ${secs}s`;
+    if (!ok) {
+      lastTaskFailure = { msg: String(output || ""), at: Date.now() };
+      if (output) task.card.append(el("div", "k-task-detail", String(output)));
+    }
+    task.done = true;
+    if (!task.hovered) scheduleTaskRemoval(task);
+  }
+  /** The card's full record, in the shared detail sheet: what was asked, then what the engine said. */
+  function openTaskDetail(task) {
+    if (!task) return;
+    const input = JSON.stringify({ runtime: state.runtime || undefined, ...(task.payload ?? {}) }, null, 2);
+    const raw = task.status === "running" ? "still running" : (task.output || "(no output)");
+    const cut = raw.length > 64000;
+    const shown = cut ? raw.slice(-64000) : raw;
+    taskDetail.show({ name: task.label, meta: `${task.status}${task.secs ? ` · ${task.secs}s` : ""}` });
+    taskDetail.setBody([detailSection("input", input), detailSection(task.status === "failed" ? "error" : "output", shown, cut)]);
+  }
   function toast(msg) {
+    // A failed task already carries its error in red, so the caller's copy would be a second bubble.
+    if (lastTaskFailure && String(msg) === lastTaskFailure.msg && Date.now() - lastTaskFailure.at < 2000) return;
     const t = $("kToast"); t.textContent = msg; t.classList.add("k-show");
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("k-show"), 3200);
+    $("kTasks")?.classList.add("k-lift");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.classList.remove("k-show"); $("kTasks")?.classList.remove("k-lift"); }, 3200);
   }
 
   /* ---------- render: bar ---------- */
@@ -235,6 +374,9 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     $("kIssues").textContent = `${s.issues ?? containers().filter(isIssue).length} alerts`;
     $("kDisk").textContent = fmtBytes(s.totalImageBytes ?? images().reduce((a, i) => a + (i.sizeBytes || 0), 0));
     $("kDot").classList.toggle("bad", (s.issues ?? 0) > 0);
+    const composeCount = sources().filter((s) => s.kind === "compose").length;
+    const buildFileCount = sources().filter((s) => s.kind === "dockerfile" || s.kind === "containerfile").length;
+    $("kMetaSources").textContent = sources().length ? `${composeCount} compose · ${buildFileCount} file${buildFileCount === 1 ? "" : "s"}` : "0 files";
     $("kMetaImages").textContent = `${images().length} local`;
     const stacks = new Set(containers().map((c) => c.composeProject).filter(Boolean)).size;
     $("kMetaRuntime").textContent = `${stacks ? `${stacks} stack${stacks > 1 ? "s" : ""} · ` : ""}${containers().length} total`;
@@ -242,7 +384,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     renderRuntimeHost(); renderChips();
     const hint = $("kHint");
     const unavailable = state.data?.available === false;
-    const emptyWorkspace = !unavailable && state.scope === "workspace" && (s.workspaceContainers ?? 0) === 0 && (s.allContainers ?? 0) > 0;
+    const emptyWorkspace = !unavailable && state.scope === "workspace" && (s.workspaceContainers ?? 0) === 0 && (s.allContainers ?? 0) > 0 && sources().length === 0;
     hint.hidden = !unavailable && !emptyWorkspace;
     if (unavailable) {
       const retry = el("button", "k-mini-btn", "retry"); retry.type = "button"; retry.onclick = () => loadState();
@@ -255,12 +397,235 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   /* ---------- render: topology ---------- */
   const LAYER_COLORS = ["#3d444d", "#1f6feb", "#58a6ff", "#3fb950", "#d29922", "#d2a8ff", "#f85149"];
   function focusClasses(card, id, related) {
+    // A card keeps no place in the tab order, but the context menu's Escape puts the keyboard back on
+    // the card the menu was opened on.
+    card.tabIndex = -1;
     if (state.selected?.id === id) card.classList.add("k-selected");
     if (related) card.classList.toggle("k-related", related.has(id)), card.classList.toggle("k-dimmed", !related.has(id));
-    card.addEventListener("click", (e) => { e.stopPropagation(); state.selected = { kind: card.dataset.kind, id }; state.tab = card.dataset.kind === "image" ? "layers" : "logs"; state.armedKill = null; if (state.mode === "eco") fetchStats([id]); render(); });
+    // One listener here serves every card the three builders make; the wiring kinds are resolved by id.
+    card.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      const cardKind = card.dataset.kind;
+      const node = cardKind === "wire" ? wireNode(id) : cardKind === "image" ? findImage(id) : cardKind === "source" ? findSource(id) : findCtr(id);
+      if (!node) return;
+      // The press opens the menu and nothing else: the selection and the inspector are left as they were.
+      ctxOpen(cardKind === "wire" ? { port: "port", net: "network", vol: "volume" }[node.kind] : cardKind, node, event, card);
+    });
+    card.addEventListener("click", (e) => { e.stopPropagation(); state.selected = { kind: card.dataset.kind, id }; state.tab = card.dataset.kind === "source" ? "preview" : card.dataset.kind === "image" ? "layers" : "logs"; state.armedKill = null; if (state.mode === "eco" && card.dataset.kind === "container") fetchStats([id]); render(); });
     card.addEventListener("mouseenter", () => { if (state.hovered?.id !== id) { state.hovered = { kind: card.dataset.kind, id }; paintFocus(); } });
     card.addEventListener("mouseleave", () => { if (state.hovered?.id === id) { state.hovered = null; paintFocus(); } });
   }
+
+  /* ---------- node context menu ---------- */
+  /* A right press on a card offers what that node's kind can do, in the inspector's own words. The
+     press is held as `{kind, id}` plus the node as it read then, so a menu still runs against the row
+     the human pressed after a repaint has replaced every card. */
+  let ctxHeld = null;
+
+  /** Text onto the clipboard. A board reached over the network is not a secure context, where the
+      modern call is missing or refused, so the value itself is shown rather than lost. */
+  function copyText(text) {
+    const value = String(text ?? "");
+    if (!value) { toast("nothing to copy"); return; }
+    if (!navigator.clipboard?.writeText) { toast(value); return; }
+    navigator.clipboard.writeText(value).then(() => toast("copied"), () => toast(value));
+  }
+  /** The inspector, on the node the menu names and the tab the item asked for. */
+  function showTab(kind, id, tab) { state.selected = { kind, id }; state.tab = tab; renderInspector(); }
+  /** The card the menu was opened on, where Escape puts the keyboard back. */
+  function focusNode(id) { stage.querySelector(`[data-node-id="${CSS.escape(String(id ?? ""))}"]`)?.focus(); }
+  /** Arm the kill on a container: the button that asks again is the inspector's, so it is repainted for
+      the press and for the three-second reset, and only while the panel is on the node it armed. */
+  function armKill(c) {
+    state.armedKill = c.id;
+    if (state.selected?.kind === "container" && state.selected.id === c.id) renderInspector(false);
+    setTimeout(() => { if (state.armedKill === c.id) { state.armedKill = null; if (state.selected?.kind === "container" && state.selected.id === c.id) renderInspector(false); } }, 3000);
+  }
+
+  function imageCtx(img) {
+    const ref = `${img.repo || "<none>"}:${img.tag || "<none>"}`;
+    // An untagged build has no repository to push to or pull from.
+    const tagged = !img.dangling && img.repo !== "<none>";
+    // A run names the tag when there is one and the id otherwise, so a dangling build still runs.
+    const runTarget = tagged ? ref : img.id;
+    const run = (payload, okMsg) => () => postAction(payload, okMsg).catch((e) => toast(e.message));
+    return [
+      { id: "inspect", label: "inspect", run: () => showTab("image", img.id, "inspect") },
+      { id: "layers", label: "layers", run: () => showTab("image", img.id, "layers") },
+      { id: "run", label: "run shell ↗", disabled: !runTarget, hint: "this image has no id to run", run: () => execToTerminal({ mode: "run", image: runTarget }) },
+      { sep: true },
+      { id: "pull", label: "pull", disabled: !tagged, hint: "an untagged build has no reference to pull", run: run({ action: "image.pull", image: ref }, `pulling ${ref}`) },
+      { id: "push", label: "push", disabled: !tagged, hint: "an untagged build has no reference to push", run: run({ action: "image.push", image: ref }, `pushing ${ref}`) },
+      { sep: true },
+      { id: "copyTag", label: "copy tag", run: () => copyText(ref) },
+      { id: "copyId", label: "copy id", run: () => copyText(img.id) },
+      { id: "copyShortId", label: "copy short id", run: () => copyText(img.shortId) },
+      { sep: true },
+      { id: "remove", label: "remove", disabled: !!img.inUse, hint: "a container still runs this image", run: run({ action: "image.remove", id: img.id, force: false }, `removed ${ref}`) },
+      // Force is the second press a container still holding the image needs, and the item carries it.
+      { id: "removeForce", label: "remove (force)", keys: "force", disabled: !img.inUse, run: run({ action: "image.remove", id: img.id, force: true }, `force removed ${ref}`) },
+    ];
+  }
+
+  function containerCtx(c) {
+    const running = isRunning(c);
+    const armed = state.armedKill === c.id;
+    const run = (payload, okMsg) => () => postAction(payload, okMsg).catch((e) => toast(e.message));
+    const items = [
+      { id: "inspect", label: "inspect", run: () => showTab("container", c.id, "inspect") },
+      { id: "logs", label: "logs ↗", run: () => execToTerminal({ mode: "logs", id: c.id }) },
+      { id: "exec", label: "exec sh ↗", disabled: !running, hint: "a stopped container has no shell", run: () => execToTerminal({ mode: "exec", id: c.id }) },
+      { sep: true },
+    ];
+    // Start and stop each stand only when they can act, the way the inspector shows one of the two.
+    if (running) items.push({ id: "stop", label: "stop", run: run({ action: "stop", id: c.id }, `stopped ${c.name}`) });
+    else items.push({ id: "start", label: "start", disabled: c.state === "dead", hint: "a dead container cannot be started", run: run({ action: "start", id: c.id }, `started ${c.name}`) });
+    items.push({ id: "restart", label: "restart", run: run({ action: "restart", id: c.id }, `restarted ${c.name}`) });
+    if (running) items.push({ id: "kill", label: armed ? "confirm kill" : "kill", danger: true, run: () => {
+      // The arming is the inspector's, so a press here arms the same one it would.
+      if (state.armedKill !== c.id) { armKill(c); toast(`press kill again to kill ${c.name}`); return; }
+      state.armedKill = null;
+      postAction({ action: "kill", id: c.id }, `killed ${c.name}`).catch((e) => toast(e.message));
+    } });
+    items.push({ sep: true });
+    // Recreating runs the stack the container belongs to, which the board must own the folder of.
+    items.push({ id: "recreate", label: "recreate on latest build", disabled: !(c.staleImage && c.composeProject && c.inWorkspace), hint: "needs a stale compose container inside this workspace", run: run({ action: "recreate", id: c.id }, `recreated ${c.name}`) });
+    items.push({ sep: true },
+      { id: "copyId", label: "copy id", run: () => copyText(c.id) },
+      { id: "copyName", label: "copy name", run: () => copyText(c.name) },
+      { id: "copyImage", label: "copy image ref", run: () => copyText(imgNameOf(c)) },
+      { sep: true },
+      { id: "remove", label: "remove", danger: true, disabled: running, hint: "stop it first", run: run({ action: "remove", id: c.id }, `removed ${c.name}`) });
+    return items;
+  }
+
+  /** The host a browser can dial: a port bound to every interface reads as `localhost`, and an IPv6
+      literal needs its brackets back before it is a URL's authority. */
+  const openHost = (ip) => {
+    const host = ip || "localhost";
+    if (host === "0.0.0.0" || host === "::") return "localhost";
+    return host.includes(":") ? `[${host}]` : host;
+  };
+
+  function portCtx(w) {
+    return [
+      { id: "copyEndpoint", label: "copy endpoint", run: () => copyText(wireLabel(w)) },
+      { id: "copyHostPort", label: "copy host port", disabled: !w.listening, run: () => copyText(String(w.hostPort)) },
+      { id: "copyContainerPort", label: "copy container port", run: () => copyText(`${w.containerPort}${w.proto ? `/${w.proto}` : ""}`) },
+      { sep: true },
+      { id: "open", label: "open in browser", disabled: !(w.listening && w.proto === "tcp"), hint: "only a listening tcp port opens", run: () => window.open(`http://${openHost(w.hostIp)}:${w.hostPort}`, "_blank", "noopener") },
+      { sep: true },
+      { id: "copyId", label: "copy id", run: () => copyText(w.id) },
+    ];
+  }
+
+  // A wiring node carries the ids of what it reaches; the names are the containers the drawer holds.
+  const attachedText = (w) => (w.containerIds || []).map((id) => findCtr(id)?.name || id).join("\n");
+
+  function networkCtx(w) {
+    return [
+      { id: "copyName", label: "copy name", run: () => copyText(w.name) },
+      { id: "copySubnet", label: "copy subnet", disabled: w.subnet === null, run: () => copyText(w.subnet) },
+      { id: "copyAttached", label: "copy attached containers", disabled: !(w.containerIds || []).length, run: () => copyText(attachedText(w)) },
+    ];
+  }
+
+  function volumeCtx(w) {
+    const mount = `${w.source}:${w.destination}${w.rw === false ? ":ro" : ""}`;
+    return [
+      { id: "copySource", label: "copy source", run: () => copyText(w.source) },
+      { id: "copyDestination", label: "copy destination", run: () => copyText(w.destination) },
+      { id: "copyMount", label: "copy mount", run: () => copyText(mount) },
+      { id: "copyAttached", label: "copy attached containers", disabled: !(w.containerIds || []).length, run: () => copyText(attachedText(w)) },
+      { sep: true },
+      { id: "prune", label: "prune unused volumes", disabled: w.mountKind !== "volume", hint: "a bind mount has no volume to prune", run: () => openSheet("prune", { target: "volumes" }) },
+    ];
+  }
+
+  function sourceCtx(src) {
+    const run = (payload, okMsg) => () => postAction(payload, okMsg).catch((e) => toast(e.message));
+    const items = [
+      { id: "preview", label: "inspect", run: () => showTab("source", src.id, "preview") },
+      { id: "openFile", label: "open file", run: () => openSourceFile(src.relPath) },
+      { sep: true },
+    ];
+    if (src.kind === "compose") {
+      items.push(
+        { id: "up", label: "compose up -d", run: run({ action: "compose.up", file: src.relPath }, "compose up") },
+        { id: "restart", label: "compose restart", run: run({ action: "compose.restart", file: src.relPath }, "compose restarted") },
+        { id: "down", label: "compose down", danger: true, disabled: src.unbuilt, hint: "no stack containers are up", run: run({ action: "compose.down", file: src.relPath }, "compose down") },
+        { id: "logs", label: "compose logs ↗", run: () => execToTerminal({ mode: "compose-logs", composeFile: src.relPath }) },
+      );
+    } else {
+      items.push(
+        { id: "build", label: "build image…", run: () => openSheet("build", { dockerfile: src.relPath, context: src.dir === "./" ? "." : src.dir.replace(/\/$/, ""), tag: suggestedTag(src) }) },
+        { id: "buildNoCache", label: "build (no cache)…", run: () => openSheet("build", { dockerfile: src.relPath, context: src.dir === "./" ? "." : src.dir.replace(/\/$/, ""), tag: suggestedTag(src), noCache: true }) },
+      );
+    }
+    items.push({ sep: true }, { id: "copyPath", label: "copy path", run: () => copyText(src.relPath) });
+    return items;
+  }
+
+  const CTX_MENUS = { image: imageCtx, container: containerCtx, port: portCtx, network: networkCtx, volume: volumeCtx, source: sourceCtx };
+
+  function ctxOpen(kind, entity, event, card) {
+    const table = CTX_MENUS[kind];
+    if (!table || !entity) return;
+    ctxHeld = { kind, id: entity.id, node: { ...entity } };
+    ctxMenu.replaceChildren(...table(ctxHeld.node).flatMap((item) => {
+      if (item.sep) return [el("div", "k-ctx-sep")];
+      const button = el("button", `k-ctx-item${item.danger ? " k-danger-item" : ""}`);
+      button.type = "button"; button.dataset.ctx = item.id; button.setAttribute("role", "menuitem");
+      button.disabled = Boolean(item.disabled);
+      button.append(el("span", null, item.label));
+      if (item.keys) button.append(el("span", "k-ctx-keys", item.keys));
+      // A greyed item says why it is greyed, since a press never reaches it.
+      if (item.disabled && item.hint) button.title = item.hint;
+      return [button];
+    }));
+    ctxMenu.hidden = false;
+    // Placed where the press was, and pulled back inside the window through the box it really drew. A
+    // keyboard press — `Shift+F10`, the menu key — carries no point of its own, so it opens on the card.
+    const box = ctxMenu.getBoundingClientRect();
+    const rect = card.getBoundingClientRect();
+    const at = !event.clientX && !event.clientY ? { x: rect.left + 16, y: rect.top + 16 } : { x: event.clientX, y: event.clientY };
+    ctxMenu.style.left = `${Math.max(4, Math.min(at.x, window.innerWidth - box.width - 4))}px`;
+    ctxMenu.style.top = `${Math.max(4, Math.min(at.y, window.innerHeight - box.height - 4))}px`;
+    ctxMenu.querySelector("button:not(:disabled)")?.focus();
+  }
+  function ctxClose() {
+    if (ctxMenu.hidden) return;
+    ctxHeld = null;
+    ctxMenu.hidden = true;
+  }
+  /** One press of the node menu, by name, so the pointer and the keyboard share one path. */
+  function ctxRun(id) {
+    const held = ctxHeld;
+    if (!held) return;
+    const item = CTX_MENUS[held.kind]?.(held.node).find((one) => one.id === id);
+    ctxClose();
+    if (item && !item.disabled) item.run();
+  }
+  ctxMenu.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-ctx]");
+    if (button && !button.disabled) return ctxRun(button.dataset.ctx);
+  });
+  ctxMenu.addEventListener("keydown", (event) => {
+    const buttons = [...ctxMenu.querySelectorAll("button:not(:disabled)")];
+    const at = buttons.indexOf(document.activeElement);
+    if (event.key === "Tab") { ctxClose(); return; }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    buttons[(at + step + buttons.length) % buttons.length]?.focus();
+  });
+  // A press anywhere else puts the menu away; Escape reaches it through `handleEscape`.
+  document.addEventListener("pointerdown", (event) => {
+    if (ctxMenu.hidden) return;
+    if (event.target.closest?.("#kCtxMenu")) return;
+    ctxClose();
+  }, true);
+
   function buildImageCard(img, related) {
     const card = el("div", `k-card${isUnusedImg(img) ? " k-unused-img" : ""}`); card.dataset.nodeId = img.id; card.dataset.kind = "image";
     const top = el("div", "k-img-top");
@@ -273,8 +638,56 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const n = Math.max(1, img.layersCount || 1);
     for (let i = 0; i < n; i++) { const seg = el("span", "k-layer-seg"); seg.style.width = `${100 / n}%`; seg.style.background = LAYER_COLORS[i % LAYER_COLORS.length]; bar.append(seg); }
     card.append(top, sub, bar);
+    const jackL = el("span", "k-jack k-jack-l"); jackL.dataset.jack = `${img.id}-in`; card.append(jackL);
     const jack = el("span", "k-jack k-jack-r"); jack.dataset.jack = `${img.id}-out`; card.append(jack);
     focusClasses(card, img.id, related);
+    return card;
+  }
+  const srcBadgeCls = (src) => {
+    const b = String(src.badge || "");
+    if (b === "active" || b === "built") return "k-b-green";
+    if (b === "multi-stage") return "k-b-blue";
+    if (b === "edited" || b === "drift") return "k-b-amber";
+    return "k-b-muted";
+  };
+  function buildSourceCard(src, related) {
+    const card = el("div", `k-card k-src-card k-src-${src.kind}${src.unbuilt ? " k-src-unbuilt" : ""}`); card.dataset.nodeId = src.id; card.dataset.kind = "source";
+    const top = el("div", "k-src-top");
+    top.append(el("span", "k-src-icon", src.kind === "compose" ? "C" : src.kind === "dockerfile" ? "D" : "CF"));
+    const path = el("span", "k-src-path"); path.append(el("span", "k-src-dir", src.dir), document.createTextNode(src.file)); top.append(path);
+    top.append(el("span", "k-grow"), el("span", `k-badge ${srcBadgeCls(src)}`, src.badge || ""));
+    card.append(top, el("div", "k-src-meta", src.meta || ""));
+    if ((src.services || []).length) {
+      const pills = el("div", "k-src-pills");
+      for (const s of src.services) { const pill = el("span", "k-svc-pill"); pill.append(el("span", `k-mini-dot ${s.state}`), document.createTextNode(s.name)); pills.append(pill); }
+      card.append(pills);
+    }
+    const foot = el("div", "k-src-foot");
+    const stateText = el("span", `k-src-state${src.edited || src.badge === "drift" || src.badge === "edited" ? " k-warn" : src.badge === "active" || src.badge === "built" ? " k-ok" : ""}`, src.statusText || "");
+    const acts = el("span", "k-src-acts");
+    const openBtn = el("button", "k-mini-btn", "open"); openBtn.type = "button";
+    openBtn.onclick = (e) => { e.stopPropagation(); openSourceFile(src.relPath); };
+    acts.append(openBtn);
+    if (src.kind === "compose") {
+      if (src.unbuilt) {
+        const up = el("button", "k-mini-btn k-primary-mini", "up -d"); up.type = "button";
+        up.onclick = (e) => { e.stopPropagation(); postAction({ action: "compose.up", file: src.relPath }, "compose up").catch((err) => toast(err.message)); };
+        acts.append(up);
+      } else {
+        const restart = el("button", "k-mini-btn", "restart"); restart.type = "button";
+        restart.onclick = (e) => { e.stopPropagation(); postAction({ action: "compose.restart", file: src.relPath }, "compose restarted").catch((err) => toast(err.message)); };
+        const down = el("button", "k-mini-btn", "down"); down.type = "button";
+        down.onclick = (e) => { e.stopPropagation(); postAction({ action: "compose.down", file: src.relPath }, "compose down").catch((err) => toast(err.message)); };
+        acts.append(restart, down);
+      }
+    } else {
+      const build = el("button", "k-mini-btn k-primary-mini", src.unbuilt ? "build" : "rebuild"); build.type = "button";
+      build.onclick = (e) => { e.stopPropagation(); openSheet("build", { dockerfile: src.relPath, context: src.dir === "./" ? "." : src.dir.replace(/\/$/, ""), tag: suggestedTag(src) }); };
+      acts.append(build);
+    }
+    foot.append(stateText, acts); card.append(foot);
+    const jack = el("span", "k-jack k-jack-r"); jack.dataset.jack = `${src.id}-out`; card.append(jack);
+    focusClasses(card, src.id, related);
     return card;
   }
   function ctrStateClass(c) { return isIssue(c) && !isRunning(c) ? (c.exitCode > 0 || c.oomKilled ? "k-st-failed" : "k-st-warn") : isRunning(c) ? "k-st-running" : "k-st-stopped"; }
@@ -351,7 +764,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const title = wireLabel(w);
     const meta = w.kind === "port" ? `${w.listening ? "listening" : "not listening"} · ${(w.containerIds || []).length} container(s)`
       : w.kind === "net" ? `${w.driver || ""} · ${w.subnet || ""} · ${(w.containerIds || []).length} container(s)`
-      : `${w.kind || ""} · ${w.destination || ""}${w.rw === false ? " · ro" : ""} · ${(w.containerIds || []).length} container(s)`;
+      : `${w.mountKind || w.kind || ""} · ${w.destination || ""}${w.rw === false ? " · ro" : ""} · ${(w.containerIds || []).length} container(s)`;
     info.append(el("div", "k-wire-title", title), el("div", "k-wire-meta", meta));
     const jack = el("span", "k-jack k-jack-l"); jack.dataset.jack = `${w.id}-in`;
     card.append(icon, info, jack);
@@ -360,6 +773,17 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
   }
   function renderTopology() {
     const related = relatedSet(state.hovered?.id || state.selected?.id);
+    const srcHost = $("kSources"); srcHost.replaceChildren();
+    const visibleSources = sources().filter((s) => matches(s, "source"));
+    if (!visibleSources.length) srcHost.append(el("div", "k-empty", sources().length ? "no sources match" : "no compose or containerfiles"));
+    else {
+      const groups = [["compose stacks", visibleSources.filter((s) => s.kind === "compose")], ["dockerfiles & containerfiles", visibleSources.filter((s) => s.kind === "dockerfile" || s.kind === "containerfile")]];
+      for (const [label, list] of groups) {
+        if (!list.length) continue;
+        srcHost.append(el("div", "k-wire-subhead", label));
+        list.forEach((s) => srcHost.append(buildSourceCard(s, related)));
+      }
+    }
     const imgHost = $("kImages"); imgHost.replaceChildren();
     const active = images().filter((i) => !isUnusedImg(i) && matches(i, "image"));
     const unused = images().filter((i) => isUnusedImg(i) && matches(i, "image"));
@@ -402,7 +826,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const groups = [["port", "host ports", wiring().ports || []], ["net", "networks", wiring().networks || []], ["vol", "volumes & mounts", wiring().volumes || []]];
     let anyWire = false;
     for (const [kind, label, list] of groups) {
-      const items = list.map((n) => ({ ...n, kind })).filter((n) => matches(n, "wire"));
+      const items = list.map((n) => ({ ...n, kind, mountKind: n.kind })).filter((n) => matches(n, "wire"));
       if (!items.length) continue;
       anyWire = true;
       wHost.append(el("div", "k-wire-subhead", label));
@@ -431,6 +855,26 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       wires.append(path);
     };
     const jack = (id) => stage.querySelector(`[data-jack="${CSS.escape(id)}"]`);
+    for (const s of sources().filter((one) => matches(one, "source"))) {
+      const srcOut = jack(`${s.id}-out`); if (!srcOut) continue;
+      const targets = [];
+      for (const imgId of s.imageIds || []) {
+        const imgIn = jack(`${imgId}-in`);
+        if (imgIn) targets.push({ img: findImage(imgId), node: imgIn, id: imgId });
+        else containers().filter((c) => imageIdOfCtr(c) === imgId).forEach((c) => { const ctrIn = jack(`${c.id}-in`); if (ctrIn) targets.push({ img: findImage(imgId), node: ctrIn, id: c.id }); });
+      }
+      if (!targets.length) for (const cid of s.containerIds || []) { const ctrIn = jack(`${cid}-in`); if (ctrIn) targets.push({ img: null, node: ctrIn, id: cid }); }
+      for (const { img, node, id } of targets) {
+        const hit = !related || (related.has(s.id) && related.has(id));
+        let stroke;
+        if (s.edited || img?.drift) stroke = "#d29922";
+        else if (s.kind === "compose") stroke = "#56d4dd";
+        else if (s.kind === "containerfile") stroke = "#d2a8ff";
+        else stroke = "#58a6ff";
+        const drift = s.edited || img?.drift ? "k-drift" : "";
+        mk(pointOf(srcOut), pointOf(node), stroke, hit && related ? "2.1" : "1.4", `k-src ${drift} ${related ? (hit ? "k-lit" : "k-dimmed") : ""}`);
+      }
+    }
     for (const c of containers()) {
       const ctrIn = jack(`${c.id}-in`), ctrOut = jack(`${c.id}-out`);
       if (!ctrIn || !ctrOut) continue;
@@ -516,9 +960,63 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     if (!state.selected) { inspector.classList.add("k-collapsed"); scheduleWires(); return; }
     inspector.classList.remove("k-collapsed");
     const { kind, id } = state.selected;
+    if (kind === "source") return renderSourceInspector(findSource(id));
     if (kind === "container") return renderContainerInspector(findCtr(id), refresh);
     if (kind === "image") return renderImageInspector(findImage(id), refresh);
     if (kind === "wire") return renderWireInspector(wireNode(id));
+  }
+  function renderSourceInspector(src) {
+    if (!src) { state.selected = null; return renderInspector(false); }
+    const actions = [];
+    if (src.kind === "compose") {
+      actions.push(actBtn("compose up -d", "k-primary", () => postAction({ action: "compose.up", file: src.relPath }, "compose up").catch((e) => toast(e.message))));
+      actions.push(actBtn("restart", "", () => postAction({ action: "compose.restart", file: src.relPath }, "compose restarted").catch((e) => toast(e.message))));
+      actions.push(actBtn("down", "", () => postAction({ action: "compose.down", file: src.relPath }, "compose down").catch((e) => toast(e.message))));
+      actions.push(actBtn("logs ↗", "", () => execToTerminal({ mode: "compose-logs", composeFile: src.relPath })));
+    } else {
+      actions.push(actBtn(src.unbuilt ? "build image" : "rebuild image", "k-primary", () => openSheet("build", { dockerfile: src.relPath, context: src.dir === "./" ? "." : src.dir.replace(/\/$/, ""), tag: suggestedTag(src) })));
+      actions.push(actBtn("no-cache build", "", () => openSheet("build", { dockerfile: src.relPath, context: src.dir === "./" ? "." : src.dir.replace(/\/$/, ""), tag: suggestedTag(src), noCache: true })));
+    }
+    actions.push(actBtn("open file", "", () => openSourceFile(src.relPath)));
+    inspector.append(inspHead(src.kind, src.relPath, actions));
+    inspector.append(tabs(["preview", "details"]));
+    const body = el("div", "k-insp-body"); inspector.append(body);
+    const linkedImages = (src.imageIds || []).map((imgId) => findImage(imgId)).filter(Boolean);
+    const linkedContainers = [...new Set([...(src.containerIds || []), ...containers().filter((c) => (src.imageIds || []).includes(imageIdOfCtr(c))).map((c) => c.id)])].map((cid) => findCtr(cid)).filter(Boolean);
+    const imageLink = (img) => { const b = el("button", "k-ctr-link", `${img.repo || "<none>"}:${img.tag || "<none>"}`); b.type = "button"; b.onclick = () => { state.selected = { kind: "image", id: img.id }; state.tab = "layers"; render(); }; return b; };
+    const ctrLink = (c) => { const b = el("button", "k-ctr-link", `${c.name || c.shortId} · ${c.statusText || c.state || ""}`); b.type = "button"; b.onclick = () => { state.selected = { kind: "container", id: c.id }; state.tab = "logs"; render(); }; return b; };
+    if (state.tab === "preview") {
+      const list = el("div", "k-kv-list");
+      list.append(kvRow("workspace path", src.relPath), kvRow("summary", src.meta || "—"), kvRow("modified", src.mtimeMs ? fmtDate(src.mtimeMs) : "—"), kvRow("status", src.statusText || "—"));
+      body.append(list);
+      const box = el("div", "k-json"); box.textContent = src.preview || "(empty file)"; body.append(box);
+      if (linkedImages.length) { body.append(el("div", "k-wire-subhead", "linked images")); linkedImages.forEach((img) => body.append(imageLink(img))); }
+      return;
+    }
+    if (src.kind === "compose") {
+      body.append(el("div", "k-wire-subhead", "services"));
+      if (!(src.services || []).length) body.append(el("div", "k-empty", "no services detected"));
+      for (const s of src.services || []) {
+        const label = `${s.name} · ${s.state || ""}${s.image ? ` · ${s.image}` : ""}${s.dockerfile ? ` · ${s.dockerfile}` : ""}`;
+        const buildSrc = s.dockerfile ? findSource(`src:${s.dockerfile}`) : null;
+        if (buildSrc) {
+          const b = el("button", "k-ctr-link", label); b.type = "button";
+          b.onclick = () => { state.selected = { kind: "source", id: buildSrc.id }; state.tab = "preview"; render(); };
+          body.append(b);
+        } else {
+          const row = el("div", "k-ctr-link", label); row.style.cursor = "default";
+          body.append(row);
+        }
+      }
+    } else {
+      const list = el("div", "k-kv-list");
+      list.append(kvRow("base image", src.baseImage || "—"));
+      list.append(kvRow("build stages", (src.stages || []).length ? src.stages.join(", ") : "—"));
+      list.append(kvRow("exposed ports", (src.exposedPorts || []).length ? src.exposedPorts.join(", ") : "—"));
+      body.append(list);
+    }
+    if (linkedContainers.length) { body.append(el("div", "k-wire-subhead", "linked containers")); linkedContainers.forEach((c) => body.append(ctrLink(c))); }
+    if (linkedImages.length && state.tab === "details") { body.append(el("div", "k-wire-subhead", "linked images")); linkedImages.forEach((img) => body.append(imageLink(img))); }
   }
   function renderContainerInspector(c, refresh) {
     if (!c) { state.selected = null; return renderInspector(false); }
@@ -530,7 +1028,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     actions.push(actBtn("restart", "", () => postAction({ action: "restart", id: c.id }, `restarted ${c.name}`).catch((e) => toast(e.message))));
     if (running) actions.push(actBtn("exec ↗", "", () => execToTerminal({ mode: "exec", id: c.id })));
     const kill = actBtn(armed ? "confirm kill" : "kill", `k-danger${armed ? " k-armed" : ""}`, () => {
-      if (!armed) { state.armedKill = c.id; renderInspector(false); setTimeout(() => { if (state.armedKill === c.id) { state.armedKill = null; renderInspector(false); } }, 3000); return; }
+      if (!armed) return armKill(c);
       state.armedKill = null; postAction({ action: "kill", id: c.id }, `killed ${c.name}`).catch((e) => toast(e.message));
     });
     actions.push(kill);
@@ -579,7 +1077,7 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
     const list = el("div", "k-kv-list");
     if (w.kind === "port") { list.append(kvRow("listening", w.listening ? "yes" : "no"), kvRow("protocol", w.proto || "tcp")); }
     if (w.kind === "net") list.append(kvRow("driver", w.driver || "—"), kvRow("subnet", w.subnet || "—"));
-    if (w.kind === "vol") list.append(kvRow("kind", w.kind || "—"), kvRow("source", w.source || "—"), kvRow("destination", w.destination || "—"), kvRow("read-only", w.rw === false ? "yes" : "no"));
+    if (w.kind === "vol") list.append(kvRow("kind", w.mountKind || w.kind || "—"), kvRow("source", w.source || "—"), kvRow("destination", w.destination || "—"), kvRow("read-only", w.rw === false ? "yes" : "no"));
     body.append(list);
     body.append(el("div", "k-wire-subhead", "attached containers"));
     const attached = containers().filter((c) => (w.containerIds || []).includes(c.id) || ctrWires(c).includes(w.id));
@@ -680,14 +1178,19 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       wrap.append(input, document.createTextNode(label)); body.append(wrap); return input;
     };
     if (tool === "build") {
-      title.textContent = "build Dockerfile";
       const files = [...(state.data?.dockerfiles || []), ...(state.data?.composeFiles || [])];
-      const df = field("Dockerfile", "kBuildFile", preset || files[0] || "./Dockerfile");
+      const presetObj = preset && typeof preset === "object" ? preset : null;
+      const presetFile = presetObj ? String(presetObj.dockerfile || "") : typeof preset === "string" ? preset : "";
+      const chosenFile = presetFile || files[0] || "./Dockerfile";
+      const isCf = /containerfile/i.test(chosenFile.split("/").pop() || "");
+      title.textContent = isCf ? "build Containerfile" : "build Dockerfile";
+      const df = field(isCf ? "Containerfile / Dockerfile" : "Dockerfile", "kBuildFile", chosenFile);
       if (files.length > 1) { const dl = el("datalist"); dl.id = "kFiles"; files.forEach((f) => { const o = el("option"); o.value = f; dl.append(o); }); body.append(dl); df.setAttribute("list", "kFiles"); }
-      const tag = field("Image tag", "kBuildTag", preset && preset.includes(":") ? preset : "");
-      const noCache = check("no cache", "kBuildNoCache", false);
+      const ctx = field("Build Context", "kBuildContext", presetObj?.context || ".");
+      const tag = field("Image tag", "kBuildTag", presetObj?.tag || (presetFile && presetFile.includes(":") ? presetFile : ""));
+      const noCache = check("no cache", "kBuildNoCache", !!presetObj?.noCache);
       body.append(out);
-      finish("build image", () => postAction({ action: "build", dockerfile: df.value.trim(), tag: tag.value.trim() || undefined, noCache: noCache.checked }, `built ${tag.value || "image"}`));
+      finish("build image", () => postAction({ action: "build", dockerfile: df.value.trim(), context: ctx.value.trim() || ".", tag: tag.value.trim() || undefined, noCache: noCache.checked }, `built ${tag.value || "image"}`));
     } else if (tool === "registry") {
       title.textContent = "registry · search, pull, push, login";
       const q = field("Image reference or search term", "kRegQuery", preset || "");
@@ -701,14 +1204,26 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
         actBtn("push", "", async () => { try { out.hidden = false; await postAction({ action: "image.push", image: q.value.trim() }, `pushed ${q.value}`); } catch (e) { out.hidden = false; out.classList.add("k-err"); out.textContent = e.message; } }),
         actBtn("login", "k-primary", async () => { try { out.hidden = false; await postAction({ action: "registry.login", server: loginServer.value.trim(), username: loginUser.value.trim(), password: loginPass.value }, "logged in"); } catch (e) { out.hidden = false; out.classList.add("k-err"); out.textContent = e.message; } }));
     } else if (tool === "prune") {
-      title.textContent = "housekeeping · prune unused";
-      const unused = images().filter(isUnusedImg);
-      const note = el("div", null, unused.length ? `Reclaim ${fmtBytes(unused.reduce((a, i) => a + (i.sizeBytes || 0), 0))} from ${unused.length} unused image(s). Running containers are never touched.` : "Nothing to prune — workspace is clean.");
+      // The sheet prunes one kind of thing: unused images unless the volume menu asks for volumes.
+      const target = preset?.target === "volumes" ? "volumes" : "images";
+      const unused = target === "volumes"
+        ? (wiring().volumes || []).filter((v) => v.kind === "volume" && !(v.containerIds || []).length)
+        : images().filter(isUnusedImg);
+      title.textContent = target === "volumes" ? "housekeeping · prune unused volumes" : "housekeeping · prune unused";
+      // The topology only carries volumes a container mounts, so a count of them would always read
+      // zero however many dangling volumes the engine holds. The sheet names what Docker will do instead.
+      const note = el("div", null, target === "volumes"
+        ? "Docker will remove anonymous and unused volumes not referenced by any container. This cannot be undone."
+        : unused.length
+          ? `Reclaim ${fmtBytes(unused.reduce((a, i) => a + (i.sizeBytes || 0), 0))} from ${unused.length} unused image(s). Running containers are never touched.`
+          : "Nothing to prune — workspace is clean.");
       note.style.color = "var(--k-muted)"; body.append(note);
       const list = el("div", "k-kv-list");
-      unused.forEach((i) => list.append(kvRow(`${fmtBytes(i.sizeBytes)} · ${fmtDate(i.created)}`, `${i.repo || "<none>"}:${i.tag || "<none>"} (${i.shortId || i.id})`)));
+      if (target === "volumes") unused.forEach((v) => list.append(kvRow(v.destination || "—", v.source || v.id)));
+      else unused.forEach((i) => list.append(kvRow(`${fmtBytes(i.sizeBytes)} · ${fmtDate(i.created)}`, `${i.repo || "<none>"}:${i.tag || "<none>"} (${i.shortId || i.id})`)));
       body.append(list, out);
-      finish(`prune ${unused.length} image(s)`, () => postAction({ action: "prune", target: "images" }, "pruned unused images"));
+      finish(target === "volumes" ? "prune unused volumes" : `prune ${unused.length} image(s)`,
+        () => postAction({ action: "prune", target }, target === "volumes" ? "pruned unused volumes" : "pruned unused images"));
     } else if (tool === "df") {
       title.textContent = "system df";
       body.append(out);
@@ -816,7 +1331,8 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
       await loadState(); if (!sliding.isOpen()) return; startLive(); scheduleWires();
     },
     afterClose() {
-      scrim.hidden = true; stopLive();
+      // The menu is a page element now, so the roll has to take it down itself.
+      scrim.hidden = true; stopLive(); ctxClose(); taskDetail.hide();
       if (!panelNameBefore) return;
       panelName.textContent = panelNameBefore.text;
       panelName.hidden = panelNameBefore.hidden;
@@ -828,7 +1344,9 @@ export function createKontainerDrawer({ workspace, typingSomewhere, openTerminal
 
   function handleEscape() {
     if (!sliding.isOpen()) return false;
+    if (taskDetail.isOpen()) { taskDetail.hide(); return true; }
     if (!sheet.hidden) { sheet.hidden = true; return true; }
+    if (!ctxMenu.hidden) { const id = ctxHeld?.id ?? state.selected?.id; ctxClose(); focusNode(id); return true; }
     if (!toolsMenu.hidden) { toolsMenu.hidden = true; toolsBtn.setAttribute("aria-expanded", "false"); return true; }
     if (document.activeElement === searchInput) { searchInput.blur(); return true; }
     if (state.selected) { state.selected = null; state.armedKill = null; render(); return true; }

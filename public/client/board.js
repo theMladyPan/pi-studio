@@ -2,7 +2,7 @@
 // The git drawer is a module of its own: the panel, its focus and the two messages its page trades
 // with this one are a single subject, and this file is long enough already. The daemon serves every
 // `/client/*.js` by one rule, so a new module beside this one loads without a table to edit.
-import { bindDragHeight, setTermHeight } from "./drawer-common.js";
+import { bindDragHeight, createDetailSheet, detailBlock, detailSection, setTermHeight } from "./drawer-common.js";
 import { createGitDrawer } from "./git-drawer.js";
 // The terminal drawer is a module of its own beside it: the panel, the socket to the daemon's
 // shell and the vendored terminal screen are a single subject, served by the same one rule.
@@ -10,6 +10,9 @@ import { createTerminalDrawer } from "./terminal-drawer.js";
 // The kontainer drawer is the third of its kind: the Docker/Podman topology, the stats cadence the
 // human picked and the sheets that act on a container are one subject, behind the same one rule.
 import { createKontainerDrawer } from "./kontainer-drawer.js";
+// The logs drawer is the fourth of its kind: the daemon's own log, in a strip on the right edge, from a
+// stream the daemon publishes. It owns no keyboard of its own — `l` and Escape are answered here.
+import { createLogsDrawer } from "./logs-drawer.js";
 // The tokenizer and the text surface are shared with the git graph's reader, so both pages colour a
 // file the same way: one implementation, imported by each.
 import { createTextPreview, escapeHtml, highlight } from "./text-preview.js";
@@ -43,6 +46,7 @@ const gitDrawer = createGitDrawer({ workspace, typingSomewhere });
 document.getElementById("gitBtn").addEventListener("click", () => {
   closeHeaderMenus();
   kontainerDrawer.close();
+  logsDrawer.close();
   gitDrawer.toggle();
 });
 // One terminal drawer for the life of the page, beside the git one: the shell and the screen
@@ -51,6 +55,7 @@ const terminalDrawer = createTerminalDrawer({ workspace, typingSomewhere });
 document.getElementById("termBtn").addEventListener("click", () => {
   closeHeaderMenus();
   kontainerDrawer.close();
+  logsDrawer.close();
   closeDocks("bottom");
   terminalDrawer.toggle();
 });
@@ -67,13 +72,28 @@ const kontainerDrawer = createKontainerDrawer({
     closeDocks("bottom");
     terminalDrawer.runCommand(cmd);
   },
+  openWorkspaceFile: (relPath) => { kontainerDrawer.close(); exEditOpen(relPath, "edit"); },
 });
 document.getElementById("kontainerBtn").addEventListener("click", () => {
   closeHeaderMenus();
   closeDrawers();
   gitDrawer.close();
   terminalDrawer.close();
+  logsDrawer.close();
   kontainerDrawer.toggle();
+});
+// The logs drawer keeps nothing of its own between rolls but the lines it has drawn: the daemon's ring
+// is the buffer, and the stream is opened on the first roll in and kept. It stands on the right edge, so
+// the left column, the header and the card being read are all still reachable while it is up, and a
+// door for another surface rolls it back out rather than stacking two panels over the board.
+const logsDrawer = createLogsDrawer();
+document.getElementById("logsBtn").addEventListener("click", () => {
+  closeHeaderMenus();
+  gitDrawer.close();
+  terminalDrawer.close();
+  kontainerDrawer.close();
+  closeDocks("right");
+  logsDrawer.toggle();
 });
 // The plugin panel: one sandboxed frame for the life of the page, the doors the toolbox lists for the
 // plugins that declared a panel, and the one call a panel is allowed to make.
@@ -312,6 +332,7 @@ function createPluginPanelHost({ workspace, mode = "overlay" }) {
       paintDrawers();
     } else {
       if (side === "bottom" && terminalDrawer.isOpen()) terminalDrawer.close();
+      if (side === "right") logsDrawer.close();
       explorerCore.drawerClose(drawerState);
       paintDrawers();
       dockState[side] = key;
@@ -1257,7 +1278,7 @@ function exDrawerToggle(state, name) {
  * opens in stands over everything, a name being edited or a menu standing open goes before the drawer,
  * and the drawer goes before the card the board is reading.
  */
-const EX_ESCAPE_ORDER = ["editor", "confirm", "menu", "rename", "create", "sheet", "plugin", "git", "kontainer", "terminal", "drawer", "card"];
+const EX_ESCAPE_ORDER = ["editor", "confirm", "menu", "rename", "create", "sheet", "plugin", "git", "kontainer", "terminal", "logs", "drawer", "card"];
 
 function exEscapeTarget(open) {
   for (const one of EX_ESCAPE_ORDER) if (open?.[one]) return one;
@@ -2334,6 +2355,34 @@ function renderMarkdown(markdown) {
 }
 
 // ---------- bodies -------------------------------------------------------
+/**
+ * The frame a whole HTML page is drawn in — the editor's preview and a source card's body share it.
+ *
+ * One shape is the point: `allow-scripts` and nothing else, so the page has no origin of its own and
+ * cannot read this page, carry its session or ask the daemon as it. What the page writes for itself —
+ * forms, popups, storage — it gets none of, by the same token.
+ */
+function htmlFrame(content, title) {
+  const frame = el("iframe");
+  frame.title = title;
+  frame.setAttribute("sandbox", "allow-scripts");
+  frame.srcdoc = content;
+  return frame;
+}
+
+/**
+ * The frame a source card draws when its file is a page: the file's own content, never the code view.
+ * The frame is kept on the card and handed back while the content stands, so a repaint of anything else
+ * on the card does not load the page again and lose its place.
+ */
+function htmlBody(data, entry) {
+  if (entry.htmlFrame && entry.htmlContent === data.content) return entry.htmlFrame;
+  const frame = htmlFrame(data.content, data.path || data.title || "");
+  entry.htmlFrame = frame;
+  entry.htmlContent = data.content;
+  return frame;
+}
+
 /** Virtualized code view: only visible lines exist in the DOM. */
 function sourceBody(data) {
   const lines = data.content.split("\n");
@@ -3387,7 +3436,12 @@ function detailsBlock(details, entry) {
 }
 
 function bodyFor(data, entry) {
-  if (data.type === "source") return { node: sourceBody(data), cls: "source-body" };
+  if (data.type === "source") {
+    // A source card whose file is a page draws the page, not its source: opening the file again is what
+    // brings the code view back, in the editor the card's head hands it to.
+    if (exPreviewKind(data.path) === "html") return { node: htmlBody(data, entry), cls: "source-body" };
+    return { node: sourceBody(data), cls: "source-body" };
+  }
   if (data.type === "sticky") return { node: stickyBody(data), cls: "" };
   if (data.type === "question") return { node: questionBody(data, entry), cls: "" };
   const note = renderMarkdown(data.markdown || "");
@@ -3502,6 +3556,13 @@ const OPEN_GLYPH =
 const DOWNLOAD_GLYPH =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.7v5.4M3.8 5.2 6 7.4l2.2-2.2M2.2 8.4v2.1h7.6V8.4"/></svg>';
 
+/**
+ * Two squares, one behind the other: the duplicate press in a card head. Drawn for the same reason the
+ * pin and the bin are, so it is one monochrome shape at every size.
+ */
+const DUPLICATE_GLYPH =
+  '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4.2 4.2h5.6v5.6H4.2zM2 7.8V2.2h5.6"/></svg>';
+
 function makeCard(data, quiet = false) {
   const isSource = data.type === "source";
   const isQuestion = data.type === "question";
@@ -3555,9 +3616,10 @@ function makeCard(data, quiet = false) {
     <span class="spacer"></span>
     <button type="button" class="ask-pill" aria-label="centre this question">answer needed</button>
     <span class="chip"></span>
-    <button type="button" class="copy-id" title="copy this card's id">⧉</button>
+    ${kind === "sticky" ? `<span class="short-id" title="${data.id}">${String(data.id).slice(0, 8)}</span>` : ""}
     <button type="button" class="open-editor" title="open this file in the text editor" aria-label="open this file in the text editor">${OPEN_GLYPH}</button>
     <button type="button" class="download-note" title="download this note as .md and .pdf" aria-label="download this note as .md and .pdf">${DOWNLOAD_GLYPH}</button>
+    <button type="button" class="duplicate" title="duplicate this card" aria-label="duplicate this card">${DUPLICATE_GLYPH}</button>
     <button class="pin" title="pin this card" aria-label="pin this card">${PIN_GLYPH}</button>
     <button class="min" title="minimize this card" aria-label="minimize this card">▾</button>
     <button class="reply" title="ask a follow-up about this card" aria-label="ask a follow-up about this card">↩</button>
@@ -3634,17 +3696,20 @@ function makeCard(data, quiet = false) {
     event.stopPropagation();
     centreQuestion(entry);
   });
-  // The id is how a card is named in a message and in a bug report, and nothing on the board shows it:
-  // one press puts it on the clipboard, and the footer repeats it in case the clipboard is refused.
-  const copyId = head.querySelector(".copy-id");
-  copyId.title = `copy this card's id · ${data.id}`;
-  copyId.setAttribute("aria-label", `copy the id of ${data.title || "this card"}`);
-  copyId.addEventListener("click", (event) => {
-    event.stopPropagation();
-    copyText(entry.id)
-      .then(() => footNote(`card id copied · ${entry.id}`))
-      .catch(() => footNote(`the clipboard refused, so the card id is here · ${entry.id}`));
-  });
+  // The id is how a thread is named in a message and in a bug report, so its card head wears the
+  // first eight of it in the head's right-hand row, and one click on those eight letters puts the
+  // whole id on the clipboard; the tooltip is the whole id too, and the footer repeats it if the clipboard is refused.
+  const shortId = head.querySelector(".short-id");
+  if (shortId) {
+    shortId.title = String(data.id);
+    shortId.setAttribute("aria-label", `copy the thread id of ${data.title || "this card"}`);
+    shortId.addEventListener("click", (event) => {
+      event.stopPropagation();
+      copyText(entry.id)
+        .then(() => footNote(`thread id copied · ${entry.id}`))
+        .catch(() => footNote(`the clipboard refused, so the thread id is here · ${entry.id}`));
+    });
+  }
   // A source card holds a file, so its head offers the press that hands it to the editor the settings
   // page names. The daemon holds both the setting and the launch, so a refusal is its sentence to say.
   head.querySelector(".open-editor").addEventListener("click", (event) => {
@@ -3657,6 +3722,12 @@ function makeCard(data, quiet = false) {
   head.querySelector(".download-note").addEventListener("click", (event) => {
     event.stopPropagation();
     void downloadCard(entry);
+  });
+  // A duplicate is asked of the daemon and drawn from its broadcast, so the press only sends the id: a
+  // thread comes back as a new card with a new id, and a plain card as a copy of itself.
+  head.querySelector(".duplicate").addEventListener("click", (event) => {
+    event.stopPropagation();
+    void duplicateCard(entry);
   });
   if (data.mini) setMini(card, true);
   capField(card, height);
@@ -3955,7 +4026,7 @@ function selectCard(card) {
  * checkbox, the resize corner. Everything else is surface, which drags the card.
  */
 const INTERACTIVE =
-  ".close, .edit, .reply, .min, .ask-pill, .resize, input, textarea, button, a, [contenteditable], .xref, .tick, .q-options, .composer";
+  ".close, .edit, .reply, .min, .ask-pill, .short-id, .resize, input, textarea, button, a, [contenteditable], .xref, .tick, .q-options, .composer";
 
 /**
  * Which cards the selection holds, drawn as a ring on each. An id whose card has left the board goes
@@ -4352,7 +4423,9 @@ function paintCard(entry, data) {
 
   const { node, cls } = bodyFor(data, entry);
   entry.body.className = cls ? `body ${cls}` : "body";
-  entry.body.replaceChildren(node);
+  // A body already holding this very node stays: lifting a frame out and setting it down loads its page
+  // again, and a repaint is not a reason to start it over.
+  if (entry.body.firstElementChild !== node) entry.body.replaceChildren(node);
   paintThread(entry, data);
   fitContent(entry, data);
   syncRailCard(entry);
@@ -4404,7 +4477,10 @@ function cardChanged(before, after) {
   // A mode or a flow is repainted too: `/mode` and `/thread/path` change nothing else on the card.
   // `modeAtRun` is in the list because a mode lands when the next child starts: that broadcast carries the
   // corrected badge and nothing else, and a card that ignores it keeps the wrong colour for the whole run.
-  const fields = ["title", "markdown", "details", "text", "question", "reply", "status", "mode", "modeAtRun", "path", "pathChosenBy", "paused"];
+  // `content` and `line` are in the list because a file is opened again into the card it already holds with
+  // the same name and path, and new words are the whole point of opening it again: a card that skips them
+  // keeps the old page (or the old code) standing in for what the daemon no longer holds.
+  const fields = ["title", "markdown", "details", "text", "question", "reply", "status", "mode", "modeAtRun", "path", "pathChosenBy", "paused", "content", "line"];
   if (fields.some((field) => before[field] !== after[field])) return true;
   if (JSON.stringify(before.worktree ?? null) !== JSON.stringify(after.worktree ?? null)) return true;
   // A follow-up's answer settles into the turn it was asked with, so the thread changes without
@@ -4551,6 +4627,26 @@ function closeCard(entry) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ cardId: entry.id }),
   }).catch(() => {});
+}
+
+/**
+ * Duplicate a card: the daemon makes the copy and broadcasts it, so this only asks and says where the
+ * copy landed. A thread comes back as a new card of its own with a new id; the cards the original owns
+ * stay bound to it, and the copy carries the conversation it was forked with.
+ */
+async function duplicateCard(entry) {
+  try {
+    const response = await fetch(`/duplicate?${auth}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: entry.id }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const made = await response.json();
+    footNote(`duplicated · ${made.card?.title || entry.id}`);
+  } catch (error) {
+    footNote(`could not duplicate the card: ${error.message || error}`, true);
+  }
 }
 
 /** Remove a card from the board and let later cards fill the space it held. */
@@ -6049,15 +6145,13 @@ function paintDrawers() {
   // Files and source live in the toolbox menu, so the chip says when one of them is open.
   toolboxBtn.classList.toggle("has-open", drawerState.open === "files" || drawerState.open === "source");
   // The header names the open drawer beside the workspace, the way the git graph names itself:
-  // the search drawer says "Search and replace" and the activity drawer says "activity" while up,
-  // and nothing while no drawer is. The git graph owns the same label while it is up, so it is only
-  // written here when it is not.
-  if (openPanelName && !gitDrawer.isOpen()) {
-    if (drawerState.open === "search") {
-      openPanelName.textContent = "Search and replace";
-      openPanelName.hidden = false;
-    } else if (drawerState.open === "activity") {
-      openPanelName.textContent = "activity";
+  // each left drawer says its own name there while up, and nothing while no drawer is. The git graph
+  // owns the same label while it is up, so it is only written here when it is not.
+  const PANEL_NAMES = { files: "files", activity: "activity", source: "source control", search: "Search and replace" };
+  if (openPanelName && !gitDrawer.isOpen() && !kontainerDrawer.isOpen() && !logsDrawer.isOpen()) {
+    const name = PANEL_NAMES[drawerState.open];
+    if (name) {
+      openPanelName.textContent = name;
       openPanelName.hidden = false;
     } else {
       openPanelName.hidden = true;
@@ -6159,7 +6253,6 @@ const scMessage = document.getElementById("scMessage");
 const scDraftBtn = document.getElementById("scDraft");
 const scCommitBtn = document.getElementById("scCommit");
 const scNote = document.getElementById("scNote");
-const scCount = document.getElementById("scCount");
 const scStagedHead = document.getElementById("scStagedHead");
 const scStagedCount = document.getElementById("scStagedCount");
 const scChangesCount = document.getElementById("scChangesCount");
@@ -6263,7 +6356,6 @@ function scPaint() {
   scStagedCount.textContent = scState.staged.length ? String(scState.staged.length) : "";
   scChangesCount.textContent = scState.changes.length ? String(scState.changes.length) : "";
   scMergeCount.textContent = scState.conflicts.length ? String(scState.conflicts.length) : "";
-  scCount.textContent = scState.staged.length + scState.changes.length + scState.conflicts.length ? String(scState.staged.length + scState.changes.length + scState.conflicts.length) : "";
   scMergeHead.hidden = !scState.conflicts.length;
   scStagedHead.hidden = !scState.staged.length;
   scStageAll.disabled = !scState.changes.length || scBusy || Boolean(scState.merge);
@@ -7343,6 +7435,7 @@ const actPanelName = document.getElementById("actDetailName");
 const actPanelMeta = document.getElementById("actDetailMeta");
 const actPanelBody = document.getElementById("actDetailBody");
 const actPanelClose = document.getElementById("actDetailClose");
+const actSheet = createDetailSheet({ root: actPanel, name: actPanelName, meta: actPanelMeta, body: actPanelBody, close: actPanelClose });
 /** The row the panel belongs to, or null while it is closed. */
 let actPanelId = null;
 /** When the last fetch was sent, so a streaming row cannot ask faster than four times a second. */
@@ -7352,25 +7445,10 @@ let actPanelTimer = 0;
 const PANEL_CUT_NOTICE = "cut at 64 K characters by the board server";
 
 /** One titled block of monospace text, saying when the server cut it. */
-function panelSection(title, text, cut) {
-  const box = el("section");
-  box.appendChild(el("h4")).textContent = title;
-  const pre = el("pre");
-  pre.textContent = text;
-  box.appendChild(pre);
-  if (cut) box.appendChild(el("div", "cut")).textContent = PANEL_CUT_NOTICE;
-  return box;
-}
+const panelSection = detailSection;
 
 /** A titled block holding whatever a renderer built, so a diff, a picture or a note lands in the sheet. */
-function panelBlock(title, node, cut) {
-  if (!node) return null;
-  const box = el("section");
-  box.appendChild(el("h4")).textContent = title;
-  box.appendChild(node);
-  if (cut) box.appendChild(el("div", "cut")).textContent = PANEL_CUT_NOTICE;
-  return box;
-}
+const panelBlock = detailBlock;
 
 /** Argument rows: the name of the thing, then what it was. */
 function panelFields(pairs) {
@@ -7704,48 +7782,23 @@ function openActPanel(row) {
   if (!row) return;
   clearTimeout(actPanelTimer);
   actPanelId = row.id;
-  actPanel.hidden = false;
-  actPanelName.textContent = row.kind === "reply" ? "answer" : row.kind === "thinking" ? "thinking" : row.tool || "tool";
-  actPanelMeta.textContent = String(row.status || "");
+  actSheet.show({
+    name: row.kind === "reply" ? "answer" : row.kind === "thinking" ? "thinking" : row.tool || "tool",
+    meta: String(row.status || ""),
+  });
   actPanelBody.replaceChildren();
-  // The panel itself takes the focus, so a second Enter goes nowhere instead of closing what just
-  // opened. Tab walks in from here.
-  actPanel.focus();
   void fetchActDetail(row.id);
 }
 
 function closeActPanel() {
-  if (actPanel.hidden) return;
+  if (!actSheet.isOpen()) return;
   const id = actPanelId;
   actPanelId = null;
   clearTimeout(actPanelTimer);
-  actPanel.hidden = true;
-  actPanelBody.replaceChildren();
+  actSheet.hide();
   // The row may have been rebuilt while the panel was up, so the focus goes to the one there now.
   actEls.get(id)?.focus();
 }
-
-actPanelClose.addEventListener("click", closeActPanel);
-actPanel.addEventListener("click", (event) => {
-  if (event.target === actPanel) closeActPanel();
-});
-actPanel.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    event.stopPropagation();
-    closeActPanel();
-    return;
-  }
-  // The panel holds the keyboard while it is open, so tab cannot walk the board behind it. Two
-  // stops are inside: the close button and the body, and tab cycles between them both ways.
-  if (event.key === "Tab") {
-    event.preventDefault();
-    const stops = [actPanelClose, actPanelBody];
-    const at = stops.indexOf(document.activeElement);
-    const step = event.shiftKey ? stops.length - 1 : 1;
-    stops[at < 0 ? (event.shiftKey ? stops.length - 1 : 0) : (at + step) % stops.length].focus();
-  }
-});
 
 /**
  * A thought's count leads, then its rate while it runs or the time it took once it ends. A tilde
@@ -8167,6 +8220,7 @@ function makeComposer(entry) {
     send: root.querySelector(".send"),
     stopBtn: root.querySelector(".stop"),
     hintEl: root.querySelector(".hintline"),
+    usage: root.querySelector(".usage"),
     refRow: root.querySelector(".refs"),
     paths: root.querySelector(".paths"),
     shots: root.querySelector(".shots"),
@@ -8609,6 +8663,38 @@ function paintCtx(inst) {
   inst.ctxBtn.setAttribute("aria-label", known ? `context ${percent}% used, compact it` : `compact the context, ${compact(held.context)} tokens`);
 }
 
+/**
+ * The consumption figure in the field's own row: what the thread behind this field has spent, in
+ * input and output tokens, requests and money — the per-thread figure the activity drawer used to
+ * carry before the two drawers merged. pi reports no request counter of its own, so the count is
+ * the thread's messages, the same number the footer names. The bottom bar has no thread of its
+ * own and sums every thread instead. A thread that has not run yet still shows its zeros, so the
+ * row keeps its width and the figure never pops in mid-typing.
+ */
+function paintUsage(inst) {
+  const held = cardOf(inst);
+  let stats;
+  if (held) {
+    stats = held.data.stats ?? held.data.answersWith?.stats ?? {};
+  } else {
+    stats = { input: 0, output: 0, messages: 0, cost: 0 };
+    for (const thread of threadFacts.values()) {
+      const own = thread.stats ?? {};
+      stats.input += own.input ?? 0;
+      stats.output += own.output ?? 0;
+      stats.messages += own.messages ?? 0;
+      stats.cost += own.cost ?? 0;
+    }
+  }
+  const input = Number(stats.input) || 0;
+  const output = Number(stats.output) || 0;
+  const requests = Number(stats.messages) || 0;
+  const cost = Number(stats.cost) || 0;
+  const money = cost > 0 && cost < 0.01 ? `$${cost.toFixed(4)}` : `$${cost.toFixed(2)}`;
+  inst.usage.textContent = `${compact(input)}/${compact(output)} tok. (${compact(requests)} req.) ~ ${money}`;
+  inst.usage.title = `Input ${input} tok · Output ${output} tok · ${requests} requests · ${money}`;
+}
+
 async function compactField(inst) {
   const held = answeringCtx(inst);
   // One thread at a time, and only the button that is waiting says so: a compaction in another card
@@ -9044,6 +9130,7 @@ function paintRuntime(inst) {
   inst.modelBtn.title = `${where} ${runtime.provider ?? ""}/${runtime.model ?? ""}`;
   inst.thinkBtn.title = `${held ? "this card" : "a new thread"} thinks at ${runtime.thinking || "off"}`;
   paintCtx(inst);
+  paintUsage(inst);
   paintMode(inst);
   paintHint(inst);
 }
@@ -9081,6 +9168,10 @@ function paintBoardFacts() {
   paintSections();
   homeLiveRows();
   paintFooter();
+  // The bottom bar reads its figure from the threads just gathered, so it is repainted once they
+  // are known rather than from the pass that ran before them: the card fields read their own
+  // card's stats and are already right by then.
+  for (const inst of composers.values()) paintUsage(inst);
 }
 
 function closePick() {
@@ -9806,13 +9897,14 @@ const SHORTCUTS = [
       { keys: "g", does: "roll the git graph down, and press it again to roll it up" },
       { keys: "x", does: "roll the terminal drawer up from the bottom, and press it again to roll it down" },
       { keys: "k", does: "roll the kontainer topology down, and press it again to roll it up" },
+      { keys: "l", does: "roll the logs drawer in from the right, and press it again to roll it out" },
       { keys: "one letter per plugin", does: "open that plugin's panel — assigned in the crossroads settings under plugins" },
       { keys: "t", does: "start a new thread, on a board of threads with no card selected" },
       { keys: "r", does: "name the card you are reading in the message you were writing" },
       { keys: "p", does: "pin the card you are reading, or unpin it" },
       { keys: "q", does: "close the card you are reading" },
       { keys: "delete", does: "delete the thread card you are reading — it first says what would go" },
-      { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the plugin panel, then the git graph, then the kontainer topology, then the terminal, then the files drawer, or with nothing open, let go of the selected card" },
+      { keys: "esc", does: "close a menu, a name being typed or a sheet first, then the plugin panel, then the git graph, then the kontainer topology, then the terminal, then the logs drawer, then the files drawer, or with nothing open, let go of the selected card" },
       { keys: "ctrl+z", does: "undo a close and put the card back" },
       { keys: "ctrl+m", does: "cycle the mode of the card you are reading: agent, plan, boss, discuss, then back on" },
     ],
@@ -9932,7 +10024,7 @@ function paintShortcuts() {
  * the same way, and has its own `g` to roll it up, so the board's letters wait behind it too, and so does
  * a plugin's panel, whose page is the only thing the keyboard can reach while it is down.
  */
-const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen() || kontainerDrawer.isOpen();
+const panelUp = () => !configPanel.hidden || headerMenus.some(({ menu }) => !menu.hidden) || pluginPanel.isOpen() || logsDrawer.isOpen() || gitDrawer.isOpen() || terminalDrawer.isOpen() || kontainerDrawer.isOpen();
 
 // ---------- the settings tree ---------------------------------------------
 // One walk over the document, and a leaf that says what it is: a `toggle` writes the flip of what it
@@ -12380,11 +12472,7 @@ function exRenderMarkdownPreview() {
  * for anything as this page. A page that needs the workspace beside it is read as source instead.
  */
 function exRenderHtmlPreview() {
-  const frame = el("iframe");
-  frame.title = exEditorDoc.path;
-  frame.setAttribute("sandbox", "allow-scripts");
-  frame.srcdoc = exEditorPreview.getText();
-  exViewBody.replaceChildren(frame);
+  exViewBody.replaceChildren(htmlFrame(exEditorPreview.getText(), exEditorDoc.path));
 }
 
 /** Source or preview, for the two kinds that carry both. The text holds still either way. */
@@ -14652,6 +14740,7 @@ function exOpenSurfaces() {
     kontainer: kontainerDrawer.isOpen(),
     plugin: pluginPanel.isOpen(),
     terminal: terminalDrawer.isOpen(),
+    logs: logsDrawer.isOpen(),
     drawer: Boolean(drawerState.open) || dockOpen(),
     card: Boolean(document.querySelector(".card.active")) || selectedIds.size > 0,
   };
@@ -14698,6 +14787,7 @@ document.addEventListener("keydown", (event) => {
   if (target === "git") return gitDrawer.close();
   if (target === "kontainer") return kontainerDrawer.handleEscape();
   if (target === "terminal") return terminalDrawer.close();
+  if (target === "logs") return logsDrawer.close();
   // The files drawer is an overlay of the left column, so Escape rolls it up before it lets go of the
   // card the board is reading.
   if (target === "drawer") return closeDrawers();
@@ -14982,6 +15072,26 @@ document.addEventListener("keydown", (event) => {
   gitDrawer.close();
   terminalDrawer.close();
   kontainerDrawer.open();
+});
+
+// `l` rolls the logs drawer in from the right edge, and it is the second drawer letter that also rolls
+// its own drawer out: the strip stands over the board and takes the focus while it is up, and `panelUp`
+// counts it, so this handler is the only place the letter still lands. Every other way round keeps the
+// guards the letters above keep — a field, a panel, a sheet or a drawer's own surface keeps its keys.
+// It rolls nothing else: the left column, the git graph and the terminal are not its business, and the
+// drawers that would cover it out of its own door roll it out themselves.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "l" || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (typingSomewhere()) return;
+  if (logsDrawer.isOpen()) {
+    event.preventDefault();
+    logsDrawer.close();
+    return;
+  }
+  if (panelUp() || openSheet() || !atPick.hidden || drawerSurface()) return;
+  event.preventDefault();
+  closeDocks("right");
+  logsDrawer.open();
 });
 
 // ---------- transport ----------------------------------------------------

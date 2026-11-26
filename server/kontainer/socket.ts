@@ -10,6 +10,7 @@ import type { ClientRequest } from "node:http";
 import { realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { log } from "../logs.ts";
 
 export type RuntimeKind = "docker" | "podman";
 export type RuntimeCli = "docker" | "podman";
@@ -103,25 +104,156 @@ export interface SocketRequestOptions {
 	body?: string;
 	timeoutMs?: number;
 	headers?: Record<string, string>;
+	/** Display hints for the daemon log line, never for the request: the resource's human name and the workspace it was asked from. */
+	label?: string;
+	cwd?: string;
 }
 
-function engineError(status: number, body: Buffer): Error {
+/** What an engine caller may say about the runtime it talks to: the socket, and the CLI name when known. */
+export type EngineRuntime = { socketPath: string; cli?: string };
+
+/** The drawer's column for one engine line: the CLI name, so an API call reads beside the CLI call that would have made it. */
+function engineSource(runtime: EngineRuntime): string {
+	return runtime.cli ?? "kontainer";
+}
+
+/** The engine's own sentence in a body: the `message` field a refusal carries, or the trimmed body. */
+function engineDetail(body: Buffer): string {
 	let message = body.toString("utf8").trim();
 	try {
 		const parsed = JSON.parse(message) as { message?: string };
 		if (typeof parsed.message === "string" && parsed.message) message = parsed.message;
 	} catch {}
-	return new Error(`engine request failed (${status}): ${message || "empty response"}`);
+	return message;
 }
 
-/** One JSON request over the Engine socket. Throws on a non-2xx status. */
-export function requestJson(runtime: { socketPath: string }, path: string, opts: SocketRequestOptions = {}): Promise<unknown> {
+function engineError(status: number, body: Buffer): Error {
+	return new Error(`engine request failed (${status}): ${engineDetail(body) || "empty response"}`);
+}
+
+/** A 64-hex id or an image digest cut to the prefix every CLI prints; anything shorter is already a name. */
+function shortenId(segment: string): string {
+	if (segment.startsWith("sha256:")) return `sha256:${segment.slice(7, 19)}`;
+	if (/^[0-9a-f]{16,}$/.test(segment)) return segment.slice(0, 12);
+	return segment;
+}
+
+/**
+ * What an engine call did, in words a developer reads — `restart container chatbot (9935864b)` — instead of the
+ * wire path with its 64-hex id. The path itself survives in the line's `cmd` meta. `label` is the caller's
+ * human name for the resource when it knows one, so the short id becomes a parenthetical, not the headline.
+ */
+function engineDescription(method: string, path: string, label?: string): string {
+	const [pathname, query = ""] = path.split("?");
+	const segments = pathname.split("/").filter(Boolean).map((segment) => {
+		try {
+			return decodeURIComponent(segment);
+		} catch {
+			return segment;
+		}
+	});
+	const [head, name, tail] = segments;
+	const who = (id: string) => (label ? `${label} (${shortenId(id)})` : shortenId(id));
+	const forced = query.split("&").some((pair) => pair === "force=1" || pair === "force=true") ? " (forced)" : "";
+	// Collection endpoints have no resource in them: `GET /containers/json` lists, it inspects nothing.
+	if (method === "GET" && (name === "json" || !name)) {
+		return { containers: "list containers", images: "list images", networks: "list networks", volumes: "list volumes", events: "watch events" }[head] ?? `${method} ${pathname}`;
+	}
+	if (name === "prune" || tail === "prune") {
+		return `prune ${head === "system" ? "everything" : head}`;
+	}
+	if (head === "images" && name === "search") return "search images";
+	if (head === "containers" && name) {
+		if (method === "GET" && tail === "json") return `inspect container ${who(name)}`;
+		if (method === "GET" && tail === "logs") return `logs of container ${who(name)}`;
+		if (method === "GET" && !tail) return `inspect container ${who(name)}`;
+		const verb = { start: "start", stop: "stop", restart: "restart", kill: "kill", pause: "pause", unpause: "unpause", exec: "exec in" }[tail ?? ""];
+		if (verb && (method === "POST" || method === "DELETE")) return `${verb} container ${who(name)}`;
+		if (method === "DELETE" && !tail) return `remove container ${who(name)}`;
+		if (name === "create" && method === "POST") return `create container`;
+	}
+	if (head === "images" && name) {
+		if (method === "GET" && tail === "json") return `inspect image ${who(name)}`;
+		if (method === "GET" && tail === "history") return `history of image ${who(name)}`;
+		if (method === "DELETE" && !tail) return `remove image ${who(name)}${forced}`;
+		if (method === "GET" && !tail) return `inspect image ${who(name)}`;
+	}
+	if (head === "version") return "engine version";
+	if (head === "networks" && name && (tail === "connect" || tail === "disconnect")) return `${tail} network ${who(name)}`;
+	if (head === "volumes" && name && method === "GET") return `inspect volume ${who(name)}`;
+	return `${method} ${segments.map(shortenId).join("/")}`;
+}
+
+/** A folder that needs it, quoted the way a shell would: a space in a workspace path must survive the copy-paste. */
+function shellQuoted(value: string): string {
+	return /[\s'"]/.test(value) ? `'${value.replace(/'/g, `'\\''`)}'` : value;
+}
+
+/**
+ * The command a developer would have typed for this engine call — `podman restart chatbot` — so the line is
+ * copy-pasteable and reads like the git lines beside it. The daemon itself never spawns it; it speaks HTTP to
+ * the engine, and this is that call translated. Null when there is no honest translation (a `create` whose body
+ * carries the arguments), and the caller falls back to a description in words.
+ */
+function engineCommand(method: string, path: string, label: string | undefined, cli: string | undefined, cwd: string | undefined): string | null {
+	if (!cli) return null;
+	const [pathname, query = ""] = path.split("?");
+	const pairs = Object.fromEntries(query.split("&").filter(Boolean).map((pair) => {
+		const [key, value] = pair.split("=");
+		return [key, value ?? ""];
+	}));
+	const segments = pathname.split("/").filter(Boolean).map((segment) => {
+		try {
+			return decodeURIComponent(segment);
+		} catch {
+			return segment;
+		}
+	});
+	const [head, name, tail] = segments;
+	const target = (id: string) => label ?? shortenId(id);
+	const forced = pairs.force === "1" || pairs.force === "true";
+	let command: string | null = null;
+	if (head === "containers" && name) {
+		if (name === "json" && method === "GET") command = `${cli} ps${pairs.all === "1" ? " -a" : ""}`;
+		else if (method === "GET" && tail === "logs") command = `${cli} logs ${target(name)}`;
+		else if (method === "GET" && (tail === "json" || !tail)) command = `${cli} inspect ${target(name)}`;
+		else if (method === "POST" && ["start", "stop", "restart", "kill", "pause", "unpause"].includes(tail ?? "")) command = `${cli} ${tail} ${target(name)}`;
+		else if (method === "DELETE" && !tail) command = `${cli} rm${forced ? " -f" : ""} ${target(name)}`;
+	} else if (head === "images" && name) {
+		if (name === "json" && method === "GET") command = `${cli} images`;
+		else if (name === "search" && method === "GET") command = `${cli} search ${pairs.term ?? ""}`.trim();
+		else if (method === "GET" && tail === "history") command = `${cli} image history ${target(name)}`;
+		else if (method === "DELETE" && !tail) command = `${cli} rmi${forced ? " -f" : ""} ${target(name)}`;
+		else if (method === "GET" && (tail === "json" || !tail)) command = `${cli} inspect ${target(name)}`;
+	} else if (name === "prune" || tail === "prune") {
+		command = `${cli} ${{ images: "image", containers: "container", networks: "network", volumes: "volume", system: "system" }[head] ?? head} prune`;
+	} else if (head === "version" && method === "GET") command = `${cli} version`;
+	else if (head === "system" && name === "df" && method === "GET") command = `${cli} system df`;
+	else if (head === "volumes" && method === "GET") command = name ? `${cli} volume inspect ${target(name)}` : `${cli} volume ls`;
+	else if (head === "networks" && method === "GET") command = name ? `${cli} network inspect ${target(name)}` : `${cli} network ls`;
+	else if (head === "events" && method === "GET") command = `${cli} events`;
+	if (!command) return null;
+	return `${cwd ? `cd ${shellQuoted(cwd)} ` : ""}${command}`;
+}
+
+/**
+ * One JSON request over the Engine socket. Throws on a non-2xx status. The call lands in the daemon's
+ * log where a human can find it without the drawer open: a write is news (`info`, a failure is `error`),
+ * a read is only `debug` until it fails, because the drawer polls reads every second and a poll is not news.
+ */
+export function requestJson(runtime: EngineRuntime, path: string, opts: SocketRequestOptions = {}): Promise<unknown> {
+	const method = opts.method ?? "GET";
+	const what = engineCommand(method, path, opts.label, runtime.cli, opts.cwd) ?? engineDescription(method, path, opts.label);
+	const source = engineSource(runtime);
+	const startedAt = Date.now();
+	const isRead = method === "GET";
+	const meta = (exit: number | string, dur: number) => ({ cmd: what, exit, dur, ...(opts.cwd ? { cwd: opts.cwd } : {}) });
 	return new Promise((resolve, reject) => {
 		const req = request(
 			{
 				socketPath: runtime.socketPath,
 				path,
-				method: opts.method ?? "GET",
+				method,
 				timeout: opts.timeoutMs ?? 15_000,
 				headers: { "Content-Type": "application/json", ...(opts.headers ?? {}) },
 			},
@@ -130,10 +262,14 @@ export function requestJson(runtime: { socketPath: string }, path: string, opts:
 				res.on("data", (chunk: Buffer) => chunks.push(chunk));
 				res.on("end", () => {
 					const body = Buffer.concat(chunks);
-					if ((res.statusCode ?? 500) >= 400) {
-						reject(engineError(res.statusCode ?? 500, body));
+					const status = res.statusCode ?? 500;
+					const dur = Date.now() - startedAt;
+					if (status >= 400) {
+						log(isRead ? "debug" : "error", source, `${what} · ${engineDetail(body).slice(0, 300) || `failed with ${status}`}`, meta(status, dur), body.toString("utf8"));
+						reject(engineError(status, body));
 						return;
 					}
+					if (!isRead) log("info", source, what, meta(status, dur), body.toString("utf8"));
 					if (body.length === 0) {
 						resolve(null);
 						return;
@@ -147,20 +283,31 @@ export function requestJson(runtime: { socketPath: string }, path: string, opts:
 			},
 		);
 		req.on("timeout", () => req.destroy(new Error("engine request timed out")));
-		req.on("error", reject);
+		req.on("error", (error) => {
+			log(isRead ? "debug" : "error", source, `${what} · ${(error as Error).message}`, meta("failed", Date.now() - startedAt));
+			reject(error);
+		});
 		if (opts.body !== undefined) req.write(opts.body);
 		req.end();
 	});
 }
 
-/** One raw-buffer request over the Engine socket (container logs). */
-export function requestBuffer(runtime: { socketPath: string }, path: string, opts: SocketRequestOptions = {}): Promise<Buffer> {
+/**
+ * One raw-buffer request over the Engine socket (container logs). A container's own output is never
+ * logged — it would flood the ring in seconds — but a refusal to fetch it is worth a `debug` line.
+ */
+export function requestBuffer(runtime: EngineRuntime, path: string, opts: SocketRequestOptions = {}): Promise<Buffer> {
+	const method = opts.method ?? "GET";
+	const what = engineCommand(method, path, opts.label, runtime.cli, opts.cwd) ?? engineDescription(method, path, opts.label);
+	const source = engineSource(runtime);
+	const startedAt = Date.now();
+	const meta = (exit: number | string, dur: number) => ({ cmd: what, exit, dur, ...(opts.cwd ? { cwd: opts.cwd } : {}) });
 	return new Promise((resolve, reject) => {
 		const req = request(
 			{
 				socketPath: runtime.socketPath,
 				path,
-				method: opts.method ?? "GET",
+				method,
 				timeout: opts.timeoutMs ?? 15_000,
 				headers: { ...(opts.headers ?? {}) },
 			},
@@ -169,8 +316,10 @@ export function requestBuffer(runtime: { socketPath: string }, path: string, opt
 				res.on("data", (chunk: Buffer) => chunks.push(chunk));
 				res.on("end", () => {
 					const body = Buffer.concat(chunks);
-					if ((res.statusCode ?? 500) >= 400) {
-						reject(engineError(res.statusCode ?? 500, body));
+					const status = res.statusCode ?? 500;
+					if (status >= 400) {
+						log("debug", source, `${what} · ${engineDetail(body).slice(0, 300) || `failed with ${status}`}`, meta(status, Date.now() - startedAt), body.toString("utf8"));
+						reject(engineError(status, body));
 						return;
 					}
 					resolve(body);
@@ -178,7 +327,10 @@ export function requestBuffer(runtime: { socketPath: string }, path: string, opt
 			},
 		);
 		req.on("timeout", () => req.destroy(new Error("engine request timed out")));
-		req.on("error", reject);
+		req.on("error", (error) => {
+			log("debug", source, `${what} · ${(error as Error).message}`, meta("failed", Date.now() - startedAt));
+			reject(error);
+		});
 		req.end();
 	});
 }
@@ -193,7 +345,7 @@ export interface SocketStreamHandle {
  * `close()` destroys the upstream request; the SSE route calls it the moment
  * the browser goes away, so nothing leaks when the drawer closes.
  */
-export function openSocketStream(runtime: { socketPath: string }, path: string, onChunk: (chunk: Buffer) => void, onError?: (error: Error) => void): SocketStreamHandle {
+export function openSocketStream(runtime: EngineRuntime, path: string, onChunk: (chunk: Buffer) => void, onError?: (error: Error) => void): SocketStreamHandle {
 	const req = request({ socketPath: runtime.socketPath, path, method: "GET", headers: { Accept: "application/json" } }, (res) => {
 		if ((res.statusCode ?? 500) >= 400) {
 			const chunks: Buffer[] = [];

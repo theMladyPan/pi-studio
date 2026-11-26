@@ -135,6 +135,12 @@ export const SHELL_OUTPUT_CHARS = 20_000;
 
 
 /**
+ * A reported work phase carries a note for the threads it warns, so it is kept to a glance: one line that says why the thread is there, not what it has done.
+ */
+export const STATUS_NOTE_CHARS = 140;
+
+
+/**
  * How long emptying the scratch row waits between killing its writers and clearing the board a second time.
  * A killed process still has a `close` to handle, and the note it writes then would land on the board the
  * press just emptied. Short enough to press again, long enough for a signal to have done its work.

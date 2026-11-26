@@ -70,6 +70,12 @@ function failure(error) {
 	return { content: [{ type: "text", text: `The board refused that: ${error.message}` }] };
 }
 
+/** A timestamp as the reader walks it: seconds under a minute, then minutes. */
+function ageOf(at) {
+	const seconds = Math.max(0, Math.round((Date.now() - Number(at ?? Date.now())) / 1000));
+	return seconds < 60 ? `${seconds}s` : `${Math.round(seconds / 60)}m`;
+}
+
 const noteTool = defineTool({
 	name: "board_note",
 	label: "Board note",
@@ -384,6 +390,92 @@ const collectTool = defineTool({
 });
 
 
+const waitTool = defineTool({
+	name: "board_wait",
+	label: "Wait for a thread",
+	description:
+		"Wait for another thread on the same board to finish, then carry on — for chaining, like merging work after the thread that made it is done. Blocks this turn until that thread settles or `timeoutSeconds` lapses (default 600). Give the full thread id or its first few characters; a prefix that names one thread resolves to it. The answer says `done`, `failed`, `stopped` or `timeout`: on a timeout the thread is still running and you decide — wait again, alert the human, or take the safe route. A thread that already finished answers at once; idle and unanswered reads `failed`, never `done`.",
+	parameters: Type.Object({
+		threadId: Type.String({
+			description: "The thread to wait for: its full id, or a unique first part of it — the first 8 characters are enough.",
+		}),
+		timeoutSeconds: Type.Optional(
+			Type.Number({ description: "How long to wait before giving up, in seconds. Default 600, at most 3600." }),
+		),
+	}),
+	async execute(_id, params) {
+		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
+		try {
+			const result = await call("/thread/wait", {
+				threadId: params.threadId,
+				...(Number.isFinite(params.timeoutSeconds) ? { timeoutSeconds: params.timeoutSeconds } : {}),
+			});
+			const waited = Math.round((result.waitedMs ?? 0) / 1000);
+			const head = `Thread ${result.threadId} ${result.status} — waited ${waited}s`;
+			const still = result.timedOut ? " It is still running; wait again, alert the human, or take the safe route." : "";
+			const said = String(result.output ?? "").trim();
+			return {
+				content: [{ type: "text", text: `${head}.${still}${said ? `\n\n${said}` : ""}` }],
+				details: result,
+			};
+		} catch (error) {
+			return failure(error);
+		}
+	},
+});
+
+
+const reportStatusTool = defineTool({
+	name: "report_status",
+	label: "Report status",
+	description:
+		"Report the phase of the work in front of you, so other threads can cooperate without colliding — a fuzzy semaphore, not a lock. Use `reading` while scouting or reviewing, `writing` while producing code or docs in your own worktree, `merging` before a merge, rebase or other git operation that touches every worktree, and `system` before a network, docker or filesystem operation with global effect. Report when the phase changes, not on every step. Clearing comes automatically when this thread finishes: done clears silently, a failure leaves its error as the note. Pass `idle` to clear it yourself.",
+	parameters: Type.Object({
+		status: Type.Union(["reading", "writing", "merging", "system", "idle"].map((status) => Type.Literal(status)), {
+			description:
+				"The phase of the work: reading is scouting or reviewing, writing is producing in your own worktree, merging is a merge, rebase or other git operation touching every worktree, system is a global network, docker or filesystem operation, idle clears the report.",
+		}),
+		note: Type.Optional(Type.String({ description: "One line saying why the thread is there, for the threads it warns." })),
+	}),
+	async execute(_id, params) {
+		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
+		try {
+			const result = await call("/thread/status", {
+				status: params.status,
+				...(params.note ? { note: params.note } : {}),
+			});
+			const said = `${result.status}${result.note ? ` — ${result.note}` : ""}`;
+			return { content: [{ type: "text", text: `Reported ${said}.` }], details: result };
+		} catch (error) {
+			return failure(error);
+		}
+	},
+});
+
+
+const boardStatusTool = defineTool({
+	name: "get_board_status",
+	label: "Board status",
+	description:
+		"Read what every thread on this board is doing right now: the phase each running thread reported and a note where it left one. Pull it before a merge, rebase or other operation that touches every worktree — the first-message board status is stale by then. Running children carry no tools, so they read by their role and are marked default. A settled thread appears only with the error or the stop that ended it.",
+	parameters: Type.Object({}),
+	async execute(_id, _params) {
+		if (!attached()) return { content: [{ type: "text", text: DETACHED }] };
+		try {
+			const result = await call("/thread/board-status", {});
+			const threads = Array.isArray(result.threads) ? result.threads : [];
+			if (!threads.length) return { content: [{ type: "text", text: "Nobody is mid-phase on this board." }], details: result };
+			const lines = threads.map(
+				(one) => `- ${one.threadId.slice(0, 8)} — ${one.title || "this thread"} (${one.status})${one.reported ? ` · ${ageOf(one.at)}` : " (default)"}${one.note ? ` — ${String(one.note).replace(/\s+/g, " ").slice(0, 140)}` : ""}`,
+			);
+			return { content: [{ type: "text", text: `The board's phases:\n${lines.join("\n")}` }], details: result };
+		} catch (error) {
+			return failure(error);
+		}
+	},
+});
+
+
 export default function boardBridge(pi) {
 	if (!attached()) return;
 	pi.registerTool(noteTool);
@@ -393,4 +485,7 @@ export default function boardBridge(pi) {
 	pi.registerTool(skillTool);
 	pi.registerTool(closeTool);
 	pi.registerTool(collectTool);
+	pi.registerTool(waitTool);
+	pi.registerTool(reportStatusTool);
+	pi.registerTool(boardStatusTool);
 }

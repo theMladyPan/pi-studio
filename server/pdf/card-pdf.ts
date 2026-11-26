@@ -12,15 +12,18 @@ import { PAGE_HEIGHT, PAGE_WIDTH, documentOf, measure, sheet } from "./write.ts"
 import type { Face, Picture, Sheet } from "./write.ts";
 import { SCALE } from "./chrome.ts";
 
-/** What a note becomes: the card's own words, and enough about where they came from to find the card again. */
+/** What a note becomes: the card's own words, and enough about where it sits to find the page again. */
 export type PdfNote = {
 	title: string;
 	markdown: string;
-	/** The workspace the card sits on, named under the title. */
+	/** The workspace the card sits on, named in the foot of every page. */
 	board: string;
-	/** When the card was written, as the board counts time. */
+	/** When the card was written, as the board counts time, named in the foot of every page. */
 	at: number;
-	/** The card's id, shortened under the title: how its owner says which card this is. */
+	/**
+	 * The card's id, kept for callers. The page does not draw it: a reader has no use for it, so it
+	 * stands in the file name alone (see `pdfName` in the route).
+	 */
 	id?: string;
 	/**
 	 * The pictures a browser drew for the note's charts and diagrams, by the place the fence holds among them.
@@ -30,7 +33,7 @@ export type PdfNote = {
 };
 
 /** One stretch of words in one face. A line of the page is a row of these. */
-type Piece = { text: string; face: Face; sup?: boolean };
+type Piece = { text: string; face: Face; sup?: boolean; link?: string };
 
 /** A footnote number is drawn smaller and lifted, and measured the way it is drawn. */
 const SUP = 0.72;
@@ -180,9 +183,10 @@ function inline(text: string, notes: Notes, base: Face = "regular"): Piece[] {
 		if (char === "[") {
 			const match = /^\[([^\]]+)\]\(([^)\s]+)\)/.exec(rest);
 			if (match) {
+				// A link reads as its label alone: the label is underlined and clickable, and the
+				// address lives in the link itself, the way it does on the board, not after it.
 				flush();
-				pieces.push(...inline(match[1], notes, base));
-				pieces.push({ text: ` (${match[2]})`, face: base });
+				for (const piece of inline(match[1], notes, base)) pieces.push({ ...piece, link: match[2] });
 				index += match[0].length;
 				continue;
 			}
@@ -429,7 +433,15 @@ function drawPieces(page: Page, pieces: Piece[], size: number, x: number, y: num
 	let at = x;
 	for (const piece of pieces) {
 		const drawn = piece.sup ? size * SUP : size;
-		page.sheet.text(piece.face, drawn, at, piece.sup ? y + size * SUP_RISE : y, piece.text);
+		const baseline = piece.sup ? y + size * SUP_RISE : y;
+		page.sheet.text(piece.face, drawn, at, baseline, piece.text);
+		if (piece.link) {
+			const width = measure(piece.face, drawn, piece.text);
+			// The rule under a link is what says it is one, and the rectangle over it is what
+			// makes it clickable: a link that crosses a line break gets one of each per fragment.
+			page.sheet.line(at, baseline - drawn * 0.16, at + width, baseline - drawn * 0.16, 0.6);
+			page.sheet.link(piece.link, at, baseline - drawn * 0.3, at + width, baseline + drawn * 0.85);
+		}
 		at += measure(piece.face, drawn, piece.text);
 	}
 }
@@ -693,7 +705,7 @@ function drawTable(page: Page, head: Piece[][], rows: Piece[][][], align: Align[
 	page.y -= PARAGRAPH.after + 2;
 }
 
-/** The date on the title line, in the order a page reads it: 2025-03-14. */
+/** The date the foot carries, in the order a page reads it: 2025-03-14. */
 function dayOf(at: number): string {
 	const when = new Date(at);
 	const pad = (value: number) => String(value).padStart(2, "0");
@@ -701,9 +713,10 @@ function dayOf(at: number): string {
 }
 
 /**
- * The note as a PDF: a title line that says which card this is, the body in the card's own order, the
- * footnotes numbered where the body pointed at them, and a footer on every page so a printed stack can
- * be put back together.
+ * The note as a PDF: the body in the card's own order, the footnotes numbered where the body pointed
+ * at them, and a foot on every page — the card's name, the workspace and the day on the left and the
+ * page count on the right — so a printed stack can be put back together. The name lives in the foot only,
+ * where a stack carries it on every page, and not as a heading over the words.
  */
 export function notePdf(note: PdfNote): Buffer {
 	const page: Page = { sheets: [], sheet: sheet(), y: PAGE_HEIGHT - MARGIN };
@@ -712,22 +725,6 @@ export function notePdf(note: PdfNote): Buffer {
 	const notes: Notes = { defs: new Map(), order: [] };
 	const blocks = blocksOf(String(note.markdown ?? ""), notes);
 
-	page.sheet.paint(INK);
-	for (const line of wrap([{ text: title, face: "bold" }], HEADING[0].size, WIDTH)) {
-		page.y -= HEADING[0].lead;
-		drawPieces(page, line, HEADING[0].size, MARGIN, page.y + HEADING[0].lead * 0.3);
-	}
-
-	// Where this came from: the workspace, the day, and the card's own short name.
-	const short = String(note.id ?? "").slice(0, 8);
-	const about = [note.board, dayOf(note.at), short ? `card ${short}` : ""].filter(Boolean).join(" · ");
-	page.y -= 12;
-	page.sheet.paint(MUTED);
-	page.sheet.text("regular", 8.6, MARGIN, page.y, about);
-	page.y -= 7;
-	page.sheet.paint(0.8);
-	page.sheet.line(MARGIN, page.y, PAGE_WIDTH - MARGIN, page.y, 0.7);
-	page.y -= 6;
 	page.sheet.paint(INK);
 
 	for (const block of blocks) {
@@ -785,11 +782,13 @@ export function notePdf(note: PdfNote): Buffer {
 		}
 	}
 
-	// The footer is written after the body, because the count of pages is only known once it is done.
+	// The foot is written after the body, because the count of pages is only known once it is done.
 	const total = page.sheets.length;
+	const where = [String(note.board ?? "").trim(), dayOf(note.at)].filter(Boolean).join(" · ");
 	for (const [index, one] of page.sheets.entries()) {
 		one.paint(MUTED);
 		one.text("regular", 7.6, MARGIN, 26, title);
+		if (where) one.text("regular", 7.6, (PAGE_WIDTH - measure("regular", 7.6, where)) / 2, 26, where);
 		const count = `page ${index + 1} / ${total}`;
 		one.text("regular", 7.6, PAGE_WIDTH - MARGIN - measure("regular", 7.6, count), 26, count);
 	}
