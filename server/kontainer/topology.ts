@@ -1144,12 +1144,42 @@ export interface DetailOptions {
 	tail?: number;
 }
 
+/**
+ * Container log text as the drawer can draw it: plain lines, no terminal.
+ * A program that writes colours or redraws its own line (a REPL, a progress
+ * bar) emits a byte stream — ANSI sequences, carriage returns, backspaces —
+ * and a `textContent` line would show the sequences as literal `[1;35m`
+ * garbage. Strip the sequences and the stray control bytes, then collapse
+ * each line the way a terminal would: a carriage return starts the line
+ * over so only its last segment stands, and a backspace deletes backwards.
+ */
+export function cleanLogText(text: string): string {
+	const stripped = text
+		.replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
+		.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/\u001b[@-Z\\-_]/g, "")
+		.replace(/[\u0000-\u0007\u000b\u000c\u000e-\u001f\u007f]/g, "");
+	return stripped
+		.split("\n")
+		.map((line) => {
+			const withoutCr = line.endsWith("\r") ? line.slice(0, -1) : line;
+			const lastSegment = withoutCr.split("\r").pop() ?? "";
+			const chars: string[] = [];
+			for (const char of lastSegment) {
+				if (char === "\b") chars.pop();
+				else chars.push(char);
+			}
+			return chars.join("");
+		})
+		.join("\n");
+}
+
 export async function fetchDetail(runtime: Runtime, opts: DetailOptions): Promise<Record<string, unknown>> {
 	const id = encodeURIComponent(opts.id);
 	if (opts.kind === "container" && opts.tab === "logs") {
 		const tail = opts.tail !== undefined && Number.isFinite(opts.tail) ? Math.max(1, Math.min(10000, Math.floor(opts.tail))) : 200;
 		const buf = await requestBuffer(runtime, `/containers/${id}/logs?stdout=1&stderr=1&timestamps=1&tail=${tail}`);
-		const text = demuxDockerLogs(buf);
+		const text = cleanLogText(demuxDockerLogs(buf));
 		const lines = text.length === 0 ? [] : text.replace(/\n$/, "").split("\n");
 		return { lines };
 	}

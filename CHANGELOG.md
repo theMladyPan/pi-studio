@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- fix: Draw container logs as plain text — ANSI colour and cursor sequences, carriage returns and backspaces from programs that write a terminal stream (a Python REPL, a progress bar) are stripped and collapsed on the server, so the logs tab reads as lines instead of literal `[1;35m` garbage; the terminal drawer still takes the raw stream through `tail in terminal`. [t-ae0b80e5]
+
 - fix: Read the Git Graph's identity quietly — the repository info now lists the local and global config once each and picks `user.name` and `user.email` out of the lists, so a repository with no local identity answers `null` for it instead of logging an error row on every refresh. [t-f731fc5b]
 - feat: Run a disposable shell from an image's right-click menu — `run shell ↗` opens a `--rm -it` container from the image's tag (or its id when dangling) in the terminal drawer, so the shell lives in the board's own pty and exits with the container removed. [t-ae0b80e5]
 
