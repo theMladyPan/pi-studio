@@ -5527,7 +5527,7 @@ viewport.addEventListener("click", (event) => {
     try {
       path = decodeURIComponent(path);
     } catch {}
-    if (path) void exReveal(path);
+    if (path) void revealFileInDrawer(path);
     return;
   }
   const link = event.target.closest(".xref");
@@ -11776,6 +11776,15 @@ let exRevealSeq = 0;
  * result row before a second press inside the press-again window could open it, and that press
  * would land on whatever tree row sits under the cursor instead.
  */
+/**
+ * A file a card or the daemon names: the files drawer opens on it, selected. Opening is not a
+ * toggle, so a files drawer already up stays up, and every other drawer gives way to it.
+ */
+function revealFileInDrawer(path) {
+  showDrawer("files");
+  return exReveal(path);
+}
+
 async function exReveal(path, { expand = false } = {}) {
   const clean = explorerCore.cleanPath(path);
   if (!clean) return;
@@ -15462,7 +15471,7 @@ function connect() {
       applyClosed(payload.closed);
     } else if (payload.type === "reveal") {
       // A file the agent asked to show: the drawer opens on it, selected, and no card copies it.
-      if (payload.path) void exReveal(payload.path);
+      if (payload.path) void revealFileInDrawer(payload.path);
     } else if (payload.type === "hint") {
       hintLine(payload.text || "");
     } else if (payload.type === "clear") {
